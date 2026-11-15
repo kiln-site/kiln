@@ -89,7 +89,6 @@ const route = {
   httpsRedirect: true,
   name: "",
   path: null,
-  primary: false,
   redirect: null,
   stripPrefix: true,
   targetPort: 8080,

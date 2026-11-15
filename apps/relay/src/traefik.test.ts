@@ -12,7 +12,6 @@ const route: RelayStoredWebRoute = {
   path: "/map",
   stripPrefix: true,
   httpsRedirect: true,
-  primary: false,
   redirect: null,
   www: "none" as const,
   targetPort: 8080,

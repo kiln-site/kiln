@@ -16,7 +16,7 @@ function recoverFromLabels(labels: Record<string, string>) {
 }
 
 describe("Relay web route recovery labels", () => {
-  it("recovers a route's www, HTTP, primary, and redirect options", () => {
+  it("recovers a route's www, HTTP, and redirect options", () => {
     const routes = [
       {
         hostname: "donutsmp.com",
@@ -24,7 +24,6 @@ describe("Relay web route recovery labels", () => {
         id: "b00d4423",
         name: "",
         path: null,
-        primary: true,
         redirect: null,
         stripPrefix: true,
         targetPort: 8_080,
@@ -36,7 +35,6 @@ describe("Relay web route recovery labels", () => {
         id: "decafbad",
         name: "Old name",
         path: "/shop",
-        primary: false,
         redirect: {
           permanent: false,
           preservePath: false,
@@ -51,6 +49,28 @@ describe("Relay web route recovery labels", () => {
 
     expect(plan.warnings).toEqual([])
     expect(plan.recoveries[0]?.routes).toEqual(routes)
+  })
+
+  // Containers made before Hearth kept primary addresses carry the option.
+  it("reads a label that marks its route primary", () => {
+    const plan = recoverFromLabels({
+      "kiln.relay.web-routes.b00d4423": "donutsmp.com:8080|name=Shop,primary",
+    })
+
+    expect(plan.warnings).toEqual([])
+    expect(plan.recoveries[0]?.routes).toEqual([
+      {
+        hostname: "donutsmp.com",
+        httpsRedirect: true,
+        id: "b00d4423",
+        name: "Shop",
+        path: null,
+        redirect: null,
+        stripPrefix: true,
+        targetPort: 8_080,
+        www: "none",
+      },
+    ])
   })
 
   it("recovers routes from labels and ignores the revision marker", () => {
@@ -72,7 +92,6 @@ describe("Relay web route recovery labels", () => {
         path: "/map",
         stripPrefix: true,
         httpsRedirect: true,
-        primary: false,
         redirect: null,
         www: "none" as const,
         targetPort: 8_080,
@@ -84,7 +103,6 @@ describe("Relay web route recovery labels", () => {
         path: "/admin",
         stripPrefix: false,
         httpsRedirect: true,
-        primary: false,
         redirect: null,
         www: "none" as const,
         targetPort: 3_000,
@@ -102,7 +120,6 @@ describe("Relay web route recovery labels", () => {
         path: null,
         stripPrefix: true,
         httpsRedirect: true,
-        primary: false,
         redirect: null,
         www: "none" as const,
         targetPort: 8_080,

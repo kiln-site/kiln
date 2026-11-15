@@ -48,10 +48,23 @@ const insertAssignment = (assignment: InstanceDomainAssignment) =>
   ])
 
 const insertDomainRow = (assignment: InstanceDomainAssignment) =>
+  Effect.all([
+    insertDomainAddress(assignment),
+    assignment.primary
+      ? insertRows("instance_primary_address", {
+          address_kind: "join",
+          address_ref: assignment.id,
+          chosen_at: 0,
+          instance_id: assignment.instanceId,
+          instance_type: "instance",
+        })
+      : Effect.void,
+  ])
+
+const insertDomainAddress = (assignment: InstanceDomainAssignment) =>
   insertRows("instance_address", {
     id: assignment.id,
     game: true,
-    is_primary: assignment.primary,
     relay_id: assignment.relayId,
     resource_type: "instance",
     resource_id: assignment.instanceId,
@@ -124,7 +137,6 @@ const addressRows = Effect.map(
     game: number
     hostname: string
     id: string
-    is_primary: number
     relay_id: string
     resource_id: string
     status: string
@@ -137,7 +149,6 @@ const assignmentRows = Effect.map(addressRows, (rows) =>
   rows.map((row) => ({
     domain: row.vanity_domain,
     id: row.id,
-    is_primary: row.is_primary,
     vanity_label: row.hostname.slice(0, -(row.vanity_domain.length + 1)),
   }))
 )

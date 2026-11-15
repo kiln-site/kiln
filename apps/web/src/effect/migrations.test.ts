@@ -1910,7 +1910,7 @@ describeMysql("database migrations", () => {
 
           const rows = yield* sql<Record<string, unknown>>`
             SELECT id, hostname, resource_type, resource_id, zone_id,
-                   vanity_domain, game, routed, is_generated, is_primary,
+                   vanity_domain, game, routed, is_generated,
                    next_hostname, next_vanity_domain, public_port,
                    supports_srv, srv_record_id, record_id, record_type,
                    target, proxied, status
@@ -1931,7 +1931,6 @@ describeMysql("database migrations", () => {
           expect(kept["deep-moon.kiln.test"]).toMatchObject({
             game: 1,
             id: "primary".padEnd(36, "0"),
-            is_primary: 1,
             next_hostname: "new-moon.kiln.test",
             next_vanity_domain: "kiln.test",
             public_port: 25565,
@@ -1977,6 +1976,21 @@ describeMysql("database migrations", () => {
             resource_id: appId,
             resource_type: "app",
           })
+          // The address players join by stays the game server's primary,
+          // named by the one row that says which it is.
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT instance_type, instance_id, address_kind, address_ref
+                FROM ${sql(databaseTableName("instance_primary_address"))}
+            `
+          ).toEqual([
+            {
+              address_kind: "join",
+              address_ref: "primary".padEnd(36, "0"),
+              instance_id: serverId,
+              instance_type: "instance",
+            },
+          ])
           const old = yield* sql<{ name: string }>`
             SELECT table_name AS name FROM information_schema.tables
              WHERE table_schema = DATABASE()

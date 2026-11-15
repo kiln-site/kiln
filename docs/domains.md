@@ -17,8 +17,8 @@ a game server's address always is, since players connect to it directly.
 
 Every instance's Network page has one **Domains** table: each name the
 instance holds and where it goes, a port or a redirect to another URL. Each
-row is a web route, served through the Relay's proxy, and one of them is the
-instance's primary domain (★), the one an App's header and lists show. A
+row is a web route, served through the Relay's proxy, and one of them is an
+App's primary domain (★), the one its header and lists show. A
 name nothing serves yet, such as a new App's own address, is a row too,
 which says so and offers to point it somewhere.
 
@@ -26,6 +26,11 @@ A game server also has **Join address** above it: the addresses players
 type, which go straight to its game port and not through the proxy. Each
 shows what to type, its port left out when an SRV record carries it, and
 one is its primary (★).
+
+Either star is the instance's one primary address, which Hearth keeps in
+one row per instance, naming a join address or a web route. Until one is
+chosen, or when the one chosen is gone, the first that serves stands in.
+See [Instances](instances.md#one-primary-address).
 
 ## Web route hostnames
 

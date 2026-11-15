@@ -66,7 +66,7 @@ export function AppWebRouteSettings({
   )
   const routes = state.data?.routes ?? []
   const empty = !state.data || routes.length === 0
-  const primary = primaryWebRoute(routes)
+  const primary = primaryWebRoute(routes, state.data?.primaryRouteId)
   // The primary domain leads.
   const orderedRoutes = primary
     ? [primary, ...routes.filter((route) => route !== primary)]

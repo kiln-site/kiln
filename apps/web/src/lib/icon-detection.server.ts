@@ -11,6 +11,7 @@ import {
 import { logException } from "@workspace/telemetry"
 import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
 
+import { loadPrimaryAddressEffect } from "@/effect/primary-addresses"
 import {
   listDetectionsEffect,
   listLinkedIconsEffect,
@@ -255,8 +256,12 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
       )
     )
   )
+  const chosen = yield* loadPrimaryAddressEffect({ id: appId, type: "app" })
   // The primary route first; a redirect serves another site, not the app.
-  const primary = primaryWebRoute(state.routes)
+  const primary = primaryWebRoute(
+    state.routes,
+    chosen?.kind === "route" ? chosen.ref : null
+  )
   const serving = state.routes.filter(
     (route) => !route.redirect && route !== primary
   )

@@ -3,6 +3,8 @@ import {
   relayProxyConfigurationV1Feature,
 } from "@workspace/contracts"
 
+import { loadPrimaryAddressesEffect } from "@/effect/primary-addresses"
+import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -19,6 +21,7 @@ export interface RelayWebRoute {
   id: string
   owner: { id: string; kind: "app" | "server"; service: string | null }
   path: string | null
+  /** Whether its App's primary address names it. */
   primary: boolean
   // Where a redirect sends visitors; null for a route that serves.
   redirectTo: string | null
@@ -45,9 +48,14 @@ export async function relayWebRoutesHandler(
   const { routes } = relayProxyConfigurationSchema.parse(
     await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
   )
-  const grants = isPlatformAdmin(user)
-    ? []
-    : await listUserGrants(user.id, relayId)
+  const [grants, primaries] = await Promise.all([
+    isPlatformAdmin(user) ? [] : listUserGrants(user.id, relayId),
+    runAppEffect("primaryAddresses.list", loadPrimaryAddressesEffect("app")),
+  ])
+  const isPrimary = (id: string, owner: RelayWebRoute["owner"]) => {
+    const primary = owner.kind === "app" ? primaries.get(owner.id) : undefined
+    return primary?.kind === "route" && primary.ref === id
+  }
   const canRead = (owner: RelayWebRoute["owner"]) =>
     isPlatformAdmin(user) ||
     (owner.kind === "app"
@@ -57,7 +65,7 @@ export async function relayWebRoutesHandler(
           resourceType: "instance",
           resourceId: owner.id,
         }).has("instance.network.read"))
-  return routes.flatMap(({ hostname, id, owner, path, primary, redirect }) =>
+  return routes.flatMap(({ hostname, id, owner, path, redirect }) =>
     canRead(owner)
       ? [
           {
@@ -65,7 +73,7 @@ export async function relayWebRoutesHandler(
             id,
             owner,
             path,
-            primary,
+            primary: isPrimary(id, owner),
             redirectTo: redirect?.to ?? null,
           },
         ]

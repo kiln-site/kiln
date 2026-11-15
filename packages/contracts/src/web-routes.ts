@@ -12,7 +12,6 @@ export interface WebRouteRedirect {
 interface WebRouteShape {
   readonly hostname: string
   readonly path: string | null
-  readonly primary?: boolean
   readonly redirect?: WebRouteRedirect | null
   readonly www?: WebRouteWww
 }
@@ -59,13 +58,20 @@ export function webRouteUrl(route: WebRouteShape): string {
   return `https://${route.hostname}${route.path ?? ""}`
 }
 
-// The route people reach a server or app at: the one marked primary, or
-// the first that serves it when none is.
+// The route people reach a server or app at: the one its instance's primary
+// address names, or the first that serves it when none of them is.
 export function primaryWebRoute<
-  Route extends { readonly primary?: boolean; readonly redirect?: unknown },
->(routes: ReadonlyArray<Route>): Route | undefined {
+  Route extends { readonly id?: string; readonly redirect?: unknown },
+>(
+  routes: ReadonlyArray<Route>,
+  primaryRouteId: string | null | undefined
+): Route | undefined {
   const serving = routes.filter((route) => !route.redirect)
-  return serving.find((route) => route.primary) ?? serving[0]
+  return (
+    serving.find(
+      (route) => route.id !== undefined && route.id === primaryRouteId
+    ) ?? serving[0]
+  )
 }
 
 // Ports a container listens on that are never the website Kiln would route

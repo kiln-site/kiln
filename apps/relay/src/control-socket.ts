@@ -2108,6 +2108,11 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
         default:
           return null
       }
+    // Hearth taking the primary routes a Relay kept before it kept them.
+    case "instance.network.primaries.carried":
+      return "instance.network.read"
+    case "instance.network.primaries.forget":
+      return "instance.network.write"
     // Saving web routes takes one action, whatever kind's they are.
     case "instance.network.routes.write":
       return routeKind(objectString(request.payload, "kind"))

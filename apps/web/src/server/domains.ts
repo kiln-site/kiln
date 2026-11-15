@@ -4,6 +4,7 @@ import {
   instanceIdSchema,
   relayAppWebRouteInputsSchema,
   relayIdSchema,
+  relayInstanceWebRouteIdSchema,
   relayInstanceWebRouteInputsSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -36,7 +37,11 @@ import {
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
 } from "@/server/web-hostname-access.server"
-import { getWebRoutesHandler, saveWebRoutes } from "@/server/web-routes.server"
+import {
+  getWebRoutesHandler,
+  saveWebRoutes,
+  setPrimaryWebRoute,
+} from "@/server/web-routes.server"
 
 const apiTokenSchema = z.string().trim().min(20).max(512)
 const zoneIdSchema = z.string().regex(/^[a-f0-9]{32}$/u)
@@ -370,6 +375,21 @@ export const updateWebRoutes = createServerFn({ method: "POST" })
   .validator(saveWebRoutesInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(saveWebRoutes, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+/** Makes one of an App's web routes its primary address. */
+export const updatePrimaryWebRoute = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      appId: appIdSchema,
+      relayId: relayIdSchema,
+      routeId: relayInstanceWebRouteIdSchema,
+    })
+  )
+  .handler(async ({ data }) =>
+    runOperationPromise(setPrimaryWebRoute, data, {
       user: await requireEligibleResourceUser(),
     })
   )

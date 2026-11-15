@@ -405,7 +405,6 @@ const RelayWebRouteRowSchema = Schema.Struct({
   httpsRedirect: Schema.Number,
   id: Schema.String,
   instanceId: Schema.String,
-  isPrimary: Schema.Number,
   name: Schema.String,
   path: Schema.String,
   redirectPermanent: Schema.Number,
@@ -956,6 +955,17 @@ export class RelayStateStore extends Context.Service<
       ReadonlyArray<RelayStoredWebRoute>,
       RelayStateError
     >
+    /**
+     * Routes marked primary before Hearth kept primary addresses, until
+     * Hearth takes them.
+     */
+    readonly listCarriedPrimaryRoutes: () => Effect.Effect<
+      ReadonlyArray<{ readonly instanceId: string; readonly routeId: string }>,
+      RelayStateError
+    >
+    readonly forgetCarriedPrimaryRoutes: (
+      routeIds: ReadonlyArray<string>
+    ) => Effect.Effect<void, RelayStateError>
     readonly pairClient: (
       input: PairRelayClientInput
     ) => Effect.Effect<void, RelayStateError>
@@ -1914,6 +1924,27 @@ const migrations = SqliteMigrator.fromRecord({
   // Reading any kind of instance's logs takes one action. An App's and a
   // database's had their own.
   "46_instance_logs_action": moveCustomActions(migratedLogActions),
+  // Hearth keeps each instance's primary address. The routes marked primary
+  // wait here until Hearth has taken them.
+  "47_carried_primary_routes": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE IF NOT EXISTS relay_carried_primary_routes (
+        route_id TEXT PRIMARY KEY NOT NULL,
+        instance_id TEXT NOT NULL
+      ) STRICT
+    `
+    const [marked] = yield* sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM pragma_table_info('relay_web_routes')
+      WHERE name = 'is_primary'
+    `
+    if (Number(marked?.count ?? 0) === 0) return
+    yield* sql`
+      INSERT OR IGNORE INTO relay_carried_primary_routes (route_id, instance_id)
+      SELECT id, instance_id FROM relay_web_routes WHERE is_primary = 1
+    `
+    yield* sql`ALTER TABLE relay_web_routes DROP COLUMN is_primary`
+  }),
 })
 
 // Rewrites the actions of every client and invitation given actions of its
@@ -2492,7 +2523,6 @@ const makeRelayStateStore = Effect.gen(function* () {
             target_port AS targetPort,
             www,
             https_redirect AS httpsRedirect,
-            is_primary AS isPrimary,
             redirect_to AS redirectTo,
             redirect_permanent AS redirectPermanent,
             redirect_preserve_path AS redirectPreservePath
@@ -2512,7 +2542,6 @@ const makeRelayStateStore = Effect.gen(function* () {
             target_port AS targetPort,
             www,
             https_redirect AS httpsRedirect,
-            is_primary AS isPrimary,
             redirect_to AS redirectTo,
             redirect_permanent AS redirectPermanent,
             redirect_preserve_path AS redirectPreservePath
@@ -2527,7 +2556,6 @@ const makeRelayStateStore = Effect.gen(function* () {
       instanceId: row.instanceId,
       name: row.name,
       path: row.path || null,
-      primary: row.isPrimary === 1,
       redirect:
         row.redirectTo === null
           ? null
@@ -4307,6 +4335,25 @@ const makeRelayStateStore = Effect.gen(function* () {
         )
       ),
     listWebRoutes: () => run("list_web_routes", webRoutes()),
+    listCarriedPrimaryRoutes: () =>
+      run(
+        "list_carried_primary_routes",
+        sql<{ instanceId: string; routeId: string }>`
+          SELECT route_id AS routeId, instance_id AS instanceId
+          FROM relay_carried_primary_routes
+          ORDER BY route_id
+        `
+      ),
+    forgetCarriedPrimaryRoutes: (routeIds) =>
+      routeIds.length === 0
+        ? Effect.void
+        : run(
+            "forget_carried_primary_routes",
+            sql`
+              DELETE FROM relay_carried_primary_routes
+              WHERE route_id IN ${sql.in(routeIds)}
+            `.pipe(Effect.asVoid)
+          ),
     pairClient: (input) =>
       run(
         "pair_client",
@@ -4748,7 +4795,6 @@ const makeRelayStateStore = Effect.gen(function* () {
                   target_port,
                   www,
                   https_redirect,
-                  is_primary,
                   redirect_to,
                   redirect_permanent,
                   redirect_preserve_path,
@@ -4765,7 +4811,6 @@ const makeRelayStateStore = Effect.gen(function* () {
                   ${route.targetPort},
                   ${route.www},
                   ${route.httpsRedirect ? 1 : 0},
-                  ${route.primary ? 1 : 0},
                   ${route.redirect?.to ?? null},
                   ${route.redirect?.permanent === false ? 0 : 1},
                   ${route.redirect?.preservePath === false ? 0 : 1},

@@ -51,6 +51,8 @@ import {
   instanceTailscaleMemberId,
   relayAppWebRouteStateSchema,
   relayInstanceWebRoutesReadSchema,
+  relayCarriedPrimaryRoutesSchema,
+  relayForgetCarriedPrimaryRoutesSchema,
   relayInstanceWebRoutesWriteSchema,
   relayDeleteAppSchema,
   relayAppDeploymentAbortSchema,
@@ -2669,7 +2671,6 @@ async function executeControlRequest(
                 }
               : { id: route.instanceId, kind: "server", service: null },
             path: route.path,
-            primary: route.primary,
             redirect: route.redirect,
             stripPrefix: route.stripPrefix,
             targetPort: route.targetPort,
@@ -3940,6 +3941,28 @@ async function executeControlRequest(
     }
     case "instance.network.routes.read":
       return webRouteState(relayInstanceWebRoutesReadSchema.parse(payload))
+    case "instance.network.primaries.carried": {
+      const carried = await runRelayEffect(
+        "relay.routes.primaries.carried",
+        startup.state.listCarriedPrimaryRoutes()
+      )
+      return relayCarriedPrimaryRoutesSchema.parse({
+        routes: carried.map(({ instanceId, routeId }) => {
+          const appId = appIdFromRouteOwner(instanceId)
+          return appId
+            ? { id: routeId, resourceId: appId, resourceType: "app" }
+            : { id: routeId, resourceId: instanceId, resourceType: "instance" }
+        }),
+      })
+    }
+    case "instance.network.primaries.forget":
+      await runRelayEffect(
+        "relay.routes.primaries.forget",
+        startup.state.forgetCarriedPrimaryRoutes(
+          relayForgetCarriedPrimaryRoutesSchema.parse(payload).routeIds
+        )
+      )
+      return { forgotten: true }
     case "instance.network.databases.remove": {
       const input = relayRemoveDatabaseConnectionSchema.parse(payload)
       const instance = await requiredInstance(payload)

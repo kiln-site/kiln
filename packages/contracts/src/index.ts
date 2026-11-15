@@ -1727,8 +1727,6 @@ const relayInstanceWebRouteConfigurationSchema = z
         "Use an encoded URL path without spaces or routing metacharacters"
       )
       .nullable(),
-    // The domain shown for the server or app, such as in its header.
-    primary: z.boolean().default(false),
     redirect: relayWebRouteRedirectSchema.nullable().default(null),
     stripPrefix: z.boolean().default(true),
     // The port it serves; none for a redirect.
@@ -1773,7 +1771,6 @@ function relayInstanceWebRouteArraySchema<
     .max(16)
     .superRefine((routes, context) => {
       const seen = new Set<string>()
-      let primary = false
       routes.forEach((item, index) => {
         const issue = (message: string, field: string) =>
           context.addIssue({ code: "custom", message, path: [index, field] })
@@ -1800,13 +1797,8 @@ function relayInstanceWebRouteArraySchema<
               "redirect"
             )
           }
-          if (item.primary) issue("A redirect can't be primary", "primary")
         } else if (item.targetPort === null) {
           issue("Enter the port the route serves", "targetPort")
-        }
-        if (item.primary) {
-          if (primary) issue("Only one route can be primary", "primary")
-          primary = true
         }
       })
     })
@@ -1818,6 +1810,28 @@ export const relayInstanceWebRouteInputsSchema =
 export const relayInstanceWebRoutesSchema = relayInstanceWebRouteArraySchema(
   relayInstanceWebRouteSchema
 )
+
+/**
+ * The web routes a Relay had marked primary before Hearth kept each
+ * instance's primary address, until Hearth has taken them.
+ */
+export const relayCarriedPrimaryRoutesSchema = z
+  .object({
+    routes: z.array(
+      z
+        .object({
+          id: relayInstanceWebRouteIdSchema,
+          resourceId: instanceIdSchema,
+          resourceType: z.enum(["app", "instance"]),
+        })
+        .strict()
+    ),
+  })
+  .strict()
+
+export const relayForgetCarriedPrimaryRoutesSchema = z
+  .object({ routeIds: z.array(relayInstanceWebRouteIdSchema).max(4_096) })
+  .strict()
 
 export const relayInstanceWebRouteStateSchema = z
   .object({
@@ -1912,7 +1926,6 @@ export const relayProxyConfigurationSchema = z.object({
       }),
       path: z.string().nullable(),
       // Absent from older Relays.
-      primary: z.boolean().default(false),
       redirect: relayWebRouteRedirectSchema.nullable().default(null),
       stripPrefix: z.boolean(),
       targetPort: z.number().int().nullable(),
@@ -3462,6 +3475,9 @@ export type RelayProxyBrowserMetadata = z.infer<
 export type RelayProxySettings = z.infer<typeof relayProxySettingsSchema>
 export type RelayProxyDiagnostics = z.infer<typeof relayProxyDiagnosticsSchema>
 export type RelayInstanceWebRoute = z.infer<typeof relayInstanceWebRouteSchema>
+export type RelayCarriedPrimaryRoutes = z.infer<
+  typeof relayCarriedPrimaryRoutesSchema
+>
 export type RelayInstanceWebRouteInput = z.infer<
   typeof relayInstanceWebRouteInputSchema
 >
