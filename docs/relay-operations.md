@@ -114,8 +114,9 @@ Hearth alone writes a tailnet's DNS records (`tunnel.dns`), each time from
 what its tunnels hold then (`tunnel.state`, which says each tunnel's
 tailnet). It asks only the Relays they're on: the ones a save is applying
 it to, or, for a deletion, the ones Hearth recorded when it last saved it.
-Records are the enabled members of tunnels not being removed, leaving out
-members whose resource is frozen for its deletion. Each tunnel keeps the
+Records are each name Hearth keeps for the enabled members of tunnels not
+being removed, whole, at the address the member has on its own Relay's
+tunnel, leaving out members whose resource is frozen for its deletion. Each tunnel keeps the
 records Hearth last sent and serves them again whenever it recreates its
 DNS container; it never makes up records of its own. In Hearth, saving a
 tailnet, connecting it to Tailscale, syncing it and rewriting its DNS all

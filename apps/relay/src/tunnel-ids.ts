@@ -9,6 +9,7 @@ import { writeFileAtomic } from "./effect/atomic-file.js"
 import type { RelayStateStore } from "./effect/state.js"
 import { recoverPromise } from "./effect/promise.js"
 import { useInstanceLegacyIds } from "./instance-keys.js"
+import { tunnelCoreDnsRecords } from "./private-network.js"
 
 export interface TunnelIdMigrationInput {
   readonly config: RelayConfig
@@ -91,6 +92,108 @@ export async function migrateTunnelIds(
     console.info(`Gave ${moved} Tailscale network stacks tunnel IDs`)
   }
   return moved
+}
+
+/**
+ * Moves each tunnel's saved files to whole names: its stack names its
+ * tailnet's TLDs (`domains`) rather than one domain, its members no longer
+ * carry a hostname (Hearth keeps every name), and its records are whole
+ * names. A tunnel whose records were still inline in its Corefile has them
+ * saved as a records file. Runs at startup, after the IDs move and before
+ * anything reads a stack. Safe to repeat and to interrupt: each file moves
+ * on its own, its records last, as they need the stack's domain.
+ */
+export async function migrateTunnelNames(config: RelayConfig): Promise<number> {
+  const entries = await recoverPromise(
+    () =>
+      readdir(config.rootDirectory, { encoding: "utf8", withFileTypes: true }),
+    (cause) => {
+      if (hasErrorCode(cause, "ENOENT")) return []
+      throw cause
+    }
+  )
+  let moved = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const directory = join(config.rootDirectory, entry.name)
+    const stack = await readJson(join(directory, "stack.json"))
+    if (!stack) continue
+    const domain =
+      typeof stack.domain === "string"
+        ? stack.domain
+        : Array.isArray(stack.domains) && typeof stack.domains[0] === "string"
+          ? stack.domains[0]
+          : null
+    if (!domain) continue
+    await rewriteRecords(directory, domain)
+    const snapshotMoved = await rewriteNames(
+      join(directory, ".removing-stack.json")
+    )
+    const stackMoved = await rewriteNames(join(directory, "stack.json"))
+    if (snapshotMoved || stackMoved) moved += 1
+  }
+  return moved
+}
+
+// A stack, or a removal's snapshot of one, with its TLDs and members as
+// they are now kept. Says whether it changed.
+async function rewriteNames(path: string): Promise<boolean> {
+  const saved = await readJson(path)
+  if (!saved) return false
+  const { domain, ...rest } = saved
+  const next: Record<string, unknown> = {
+    ...rest,
+    ...(typeof domain === "string" && !("domains" in rest)
+      ? { domains: [domain] }
+      : {}),
+    bindings: Array.isArray(rest.bindings)
+      ? rest.bindings.map((binding: unknown) => {
+          if (typeof binding !== "object" || binding === null) return binding
+          const { hostname: _hostname, ...kept } = binding as Record<
+            string,
+            unknown
+          >
+          return kept
+        })
+      : rest.bindings,
+  }
+  if (JSON.stringify(next) === JSON.stringify(saved)) return false
+  await Effect.runPromise(
+    writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`, 0o600)
+  )
+  return true
+}
+
+// Its records as whole names, from its records file or, without one, from
+// the records its Corefile held inline.
+async function rewriteRecords(directory: string, domain: string) {
+  const path = join(directory, "dns-records.json")
+  const saved = await readJson(path)
+  const records = saved
+    ? Array.isArray(saved.records)
+      ? saved.records
+      : []
+    : tunnelCoreDnsRecords(
+        domain,
+        (await recoverPromise(
+          () => readFile(join(directory, "Corefile"), "utf8"),
+          () => null
+        )) ?? ""
+      )
+  const named = records.map((record: unknown) => {
+    if (typeof record !== "object" || record === null) return record
+    const { hostname, ...rest } = record as Record<string, unknown>
+    return typeof hostname === "string" && !("name" in rest)
+      ? { ...rest, name: `${hostname.replace(/\.$/u, "")}.${domain}` }
+      : rest
+  })
+  const id = saved?.id ?? (await readJson(join(directory, "stack.json")))?.id
+  const next = { id, records: named }
+  if (saved && JSON.stringify(next) === JSON.stringify(saved)) return
+  if (!saved && named.length === 0) return
+  await Effect.runPromise(
+    writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`, 0o600)
+  )
 }
 
 // A saved file as the tunnel's: its ID and, for its stack and a pending

@@ -127,12 +127,23 @@ export const seedNetwork = (
       name: "Test network",
       updated_at: at,
     })
-    yield* insertRows("tailnet", {
-      created_at: at,
-      domain: "test",
-      id,
-      updated_at: at,
-    })
+    yield* insertRows("tailnet", { created_at: at, id, updated_at: at })
+    yield* insertRows("tailnet_domain", { domain: "test", position: 0, tailnet_id: id })
+    // Each member's generated name, as it connected.
+    if (members.length > 0) {
+      yield* insertRows(
+        "tunnel_name",
+        members.map((memberId) => ({
+          created_at: at,
+          domain: "test",
+          generated_for: memberId,
+          id: randomUUID(),
+          label: memberId.replaceAll(":", "-"),
+          member_id: memberId,
+          tailnet_id: id,
+        }))
+      )
+    }
     yield* insertRows(
       "tunnel",
       [relayId, ...alsoOn].map((relay) => ({
@@ -297,8 +308,8 @@ export const deletionRelayConnection = {
       state.stackDns.set(
         [...state.stacks.keys()].find((id) => tunnelOf(id) === tunnelId) ??
           tunnelId,
-        (payload.records as Array<{ hostname: string }>).map(
-          ({ hostname }) => hostname
+        (payload.records as Array<{ name: string }>).map(({ name }) =>
+          name.replace(/\.test$/u, "")
         )
       )
       return {}
@@ -364,7 +375,6 @@ function stackStates() {
       address: `10.1.1.${index + 10}`,
       enabled: true,
       frozen: deletionRelay.frozen.has(memberId.split(":")[1] ?? ""),
-      hostname: memberId.replaceAll(":", "-"),
       memberId,
     })),
     id: tunnelOf(id),

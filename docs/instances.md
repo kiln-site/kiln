@@ -236,6 +236,13 @@ stack.
   never removed. It can have aliases besides, at any depth, under any of the
   tailnet's TLDs (`paper26.3.kiln`, `paper.26.3.test`). A name is unique in
   its tailnet.
+- Hearth keeps every name (`tunnel_name`) and a tailnet's TLDs in order
+  (`tailnet_domain`); a tunnel knows only its TLDs and its members'
+  addresses, and serves the whole names Hearth sends it. A save of the
+  tailnet applies its tunnels first, then its members' names, then rewrites
+  its DNS, so a save that fails leaves both as they were. Built, with
+  aliases added and removed through Hearth; the pages to do so come with
+  the pages.
 - An instance's Network tab has a Tunnels section shaped like its Domains
   table: each tailnet it is in, with its names.
 

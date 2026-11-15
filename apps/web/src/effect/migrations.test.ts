@@ -2047,7 +2047,10 @@ describeMysql("database migrations", () => {
             updated_at: 0,
           })
 
-          yield* applyMigrations(migrations)
+          // Up to names moving to Hearth, which take the network's domain.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 80)
+          )
 
           const tunnelId = yield* Effect.promise(() =>
             migratedTunnelId(networkId, relayId)
@@ -2120,6 +2123,93 @@ describeMysql("database migrations", () => {
                                   ${databaseTableName("tailscale_network_deployment")})
           `
           expect(old).toEqual([])
+        }),
+      schemaBuildTimeout
+    )
+
+    // Hearth keeps every name: a tailnet's domain is its first TLD, and the
+    // hostname each member had on its tunnel is its generated name.
+    it.effect(
+      "moves a tailnet's domain and its members' hostnames to Hearth's names",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 80)
+          )
+          const tailnetId = "a".repeat(12)
+          const tunnelId = "b".repeat(12)
+          const memberId = `instance:${"c".repeat(12)}`
+          yield* insertRows("instance_group", {
+            created_at: 1,
+            created_by: "owner",
+            id: tailnetId,
+            name: "Home",
+            updated_at: 1,
+          })
+          yield* insertRows("tailnet", {
+            created_at: 1,
+            domain: "kiln",
+            id: tailnetId,
+            updated_at: 1,
+          })
+          yield* insertRows("tunnel", {
+            cleanup_next_attempt_at: 0,
+            id: tunnelId,
+            observed_at: 0,
+            relay_id: "1".repeat(12),
+            state: JSON.stringify({
+              bindings: [
+                {
+                  address: "10.165.55.10",
+                  enabled: true,
+                  hostname: "survival",
+                  memberId,
+                },
+              ],
+              domain: "kiln",
+              id: tunnelId,
+              tailnetId,
+            }),
+            tailnet_id: tailnetId,
+            updated_at: 0,
+          })
+
+          yield* applyMigrations(migrations)
+
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT tailnet_id, domain, position
+                FROM ${sql(databaseTableName("tailnet_domain"))}
+            `
+          ).toEqual([{ domain: "kiln", position: 0, tailnet_id: tailnetId }])
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT member_id, label, domain, generated_for
+                FROM ${sql(databaseTableName("tunnel_name"))}
+            `
+          ).toEqual([
+            {
+              domain: "kiln",
+              generated_for: memberId,
+              label: "survival",
+              member_id: memberId,
+            },
+          ])
+          const [tunnel] = yield* sql<{ state: unknown }>`
+            SELECT state FROM ${sql(databaseTableName("tunnel"))}
+          `
+          const state =
+            typeof tunnel?.state === "string"
+              ? JSON.parse(tunnel.state)
+              : tunnel?.state
+          expect(state).toMatchObject({
+            bindings: [{ address: "10.165.55.10", enabled: true, memberId }],
+            domains: ["kiln"],
+          })
+          expect(state).not.toHaveProperty("domain")
+          expect(state.bindings[0]).not.toHaveProperty("hostname")
         }),
       schemaBuildTimeout
     )

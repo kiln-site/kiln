@@ -201,7 +201,7 @@ const TailnetPicker = React.memo(function TailnetPicker({
     const normalized = query.trim().toLowerCase()
     if (!normalized) return stacks
     return stacks.filter((stack) =>
-      `${stack.name} ${stack.domain} ${stack.id}`
+      `${stack.name} ${stack.domains.join(" ")} ${stack.id}`
         .toLowerCase()
         .includes(normalized)
     )
@@ -264,7 +264,7 @@ const TailnetPicker = React.memo(function TailnetPicker({
           titleAccessory={
             selectedStack ? (
               <Badge variant="outline" className="type-meta font-mono">
-                .{selectedStack.domain}
+                .{selectedStack.domains[0]}
               </Badge>
             ) : null
           }
@@ -321,7 +321,7 @@ const TailnetPicker = React.memo(function TailnetPicker({
                     {stack.name}
                   </span>
                   <span className="type-support mt-0.5 block truncate font-mono text-muted-foreground">
-                    .{stack.domain} · {connectedBindingCount(stack)} connected
+                    .{stack.domains[0]} · {connectedBindingCount(stack)} connected
                   </span>
                 </span>
                 {stack.id === selectedStack?.id ? (
@@ -509,7 +509,7 @@ const NetworkForm = React.memo(function NetworkForm({
   const [name, setName] = React.useState(
     stack?.name ?? defaultName ?? "Private Network"
   )
-  const [domain, setDomain] = React.useState(stack?.domain ?? "")
+  const [domain, setDomain] = React.useState(stack?.domains[0] ?? "")
   const [clientId, setClientId] = React.useState(
     stack?.integration?.clientId ?? ""
   )
@@ -522,26 +522,31 @@ const NetworkForm = React.memo(function NetworkForm({
       const input = {
         clientId: clientId.trim(),
         clientSecret: clientSecret.trim(),
-        domain: normalizeTailscaleDomain(domain),
+        domains: [normalizeTailscaleDomain(domain)],
         name: name.trim(),
         tag: tag.trim(),
       }
       if (!stack) return createTailnet({ data: input })
+      // This form changes its first TLD; any others stay.
+      const domains = [input.domains[0]!, ...stack.domains.slice(1)]
 
       const configured = await configureTailscaleIntegration({
         data: {
           clientId: input.clientId,
           clientSecret: input.clientSecret || undefined,
-          domain: stack.domain,
+          domains: stack.domains,
           id: stack.id,
-          previousDomain: stack.domain,
+          previousDomains: stack.domains,
           tag: input.tag,
         },
       })
-      if (input.name !== stack.name || input.domain !== stack.domain) {
+      if (
+        input.name !== stack.name ||
+        domains.join(" ") !== stack.domains.join(" ")
+      ) {
         return saveTailnet({
           data: stackSaveInput(stack, {
-            domain: input.domain,
+            domains,
             name: input.name,
           }),
         })
@@ -781,7 +786,7 @@ function normalizeTailscaleDomain(value: string): string {
 
 function stackSaveInput(
   stack: TailnetOverview,
-  overrides: { domain?: string; name?: string } = {}
+  overrides: { domains?: Array<string>; name?: string } = {}
 ): SaveStackInput {
   return {
     bindings: stack.bindings.map(
@@ -792,7 +797,7 @@ function stackSaveInput(
         relayId,
       })
     ),
-    domain: overrides.domain ?? stack.domain,
+    domains: overrides.domains ?? stack.domains,
     id: stack.id,
     name: overrides.name ?? stack.name,
   }

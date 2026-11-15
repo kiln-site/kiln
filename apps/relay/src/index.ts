@@ -332,7 +332,7 @@ import {
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
-import { migrateTunnelIds } from "./tunnel-ids.js"
+import { migrateTunnelIds, migrateTunnelNames } from "./tunnel-ids.js"
 import { assignRelayWebRouteIds, webRouteCollision } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
 import type {
@@ -390,6 +390,7 @@ await migrateTunnelIds({
   relayId: startupCore.identity.id,
   state: startupCore.state,
 })
+await migrateTunnelNames(config)
 const cliArguments = process.argv.slice(2)
 // Before pairing, so the bootstrap invitation expects the token the
 // installed Hearth is given.

@@ -65,10 +65,12 @@ interface TailscaleControlPlaneDeployment {
 
 interface TailscaleControlPlaneNetwork {
   deployments: ReadonlyArray<TailscaleControlPlaneDeployment>
-  domain: string
+  /** Its TLDs, each answered by its tunnels. */
+  domains: ReadonlyArray<string>
   id: string
   name: string
-  previousDomain?: string
+  /** TLDs it had, which no longer point anywhere. */
+  previousDomains?: ReadonlyArray<string>
 }
 
 interface TailscaleSession {
@@ -194,10 +196,15 @@ export const syncTailscaleControlPlaneEffect = Effect.fn(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        [network.domain]: resolvers.length > 0 ? resolvers : null,
-        ...(network.previousDomain && network.previousDomain !== network.domain
-          ? { [network.previousDomain]: null }
-          : {}),
+        ...Object.fromEntries(
+          removedDomains(network).map((domain) => [domain, null])
+        ),
+        ...Object.fromEntries(
+          network.domains.map((domain) => [
+            domain,
+            resolvers.length > 0 ? resolvers : null,
+          ])
+        ),
       }),
     }
   )
@@ -240,18 +247,16 @@ export const inspectTailscaleControlPlaneEffect = Effect.fn(
       )
     ),
   ].sort()
+  const [primary] = network.domains
+  const [previousDomain] = removedDomains(network)
   return {
     dns: {
-      currentResolvers: [...(splitDns[network.domain] ?? [])].sort(),
+      currentResolvers: [...((primary && splitDns[primary]) || [])].sort(),
       desiredResolvers,
-      previousDomain:
-        network.previousDomain && network.previousDomain !== network.domain
-          ? network.previousDomain
-          : null,
-      previousResolvers:
-        network.previousDomain && network.previousDomain !== network.domain
-          ? [...(splitDns[network.previousDomain] ?? [])].sort()
-          : [],
+      previousDomain: previousDomain ?? null,
+      previousResolvers: previousDomain
+        ? [...(splitDns[previousDomain] ?? [])].sort()
+        : [],
     },
     routes,
   } satisfies TailscaleControlPlaneInspection
@@ -528,4 +533,11 @@ function tailscaleFailure(message: string) {
     message,
     service: "Tailscale",
   })
+}
+
+// The TLDs a tailnet had that it no longer has.
+function removedDomains(network: TailscaleControlPlaneNetwork): Array<string> {
+  return (network.previousDomains ?? []).filter(
+    (domain) => !network.domains.includes(domain)
+  )
 }

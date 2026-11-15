@@ -85,7 +85,6 @@ describeMysql("Who may act on a tunnel", () => {
           })
           yield* insertRows("tailnet", {
             created_at: at,
-            domain: "kiln",
             id: tailnetId,
             owner_id: "owner",
             updated_at: at,
