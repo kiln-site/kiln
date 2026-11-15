@@ -1877,6 +1877,9 @@ function historyTargetHref(identity: InstancePickerItem["identity"]) {
     return `/db/${encodeURIComponent(identity.id)}`
   }
   if (identity.kind === "app") return `/app/${encodeURIComponent(identity.id)}`
+  if (identity.kind === "tunnel") {
+    return `/tunnel/${encodeURIComponent(identity.id)}`
+  }
   if (identity.platform) return "/kiln/info"
   return `/relay/${encodeURIComponent(identity.relayId)}`
 }

@@ -101,7 +101,7 @@ describeMysql("Deleting a game server or database", () => {
     const peer = `instance:${"f".repeat(12)}`
 
     it.effect(
-      "deletes nothing while a Relay its Tailscale network is on is paused",
+      "deletes nothing while a Relay its tailnet is on is paused",
       () =>
         Effect.gen(function* () {
           const paused = "4".repeat(12)

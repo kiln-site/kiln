@@ -1,10 +1,5 @@
 import * as React from "react"
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { Effect } from "effect"
 import { CircleAlert, LoaderCircle, Plus, RotateCw } from "lucide-react"
@@ -62,10 +57,7 @@ import {
   RemovePortDialog,
   type PortNotice,
 } from "@/components/ports-section"
-import {
-  TailscaleMembershipSection,
-  type TailscaleMember,
-} from "@/components/tailscale-network-membership"
+import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
   WebRoutesSection,
@@ -73,7 +65,6 @@ import {
   type WebRouteRow,
 } from "@/components/web-routes-section"
 import {
-  accessCapabilitiesQueryOptions,
   webRoutesQueryOptions,
   queryKeys,
   replaceRelaySnapshotInstance,
@@ -100,26 +91,10 @@ export function InstanceNetworkPage({
 }: {
   editGamePort?: boolean
 }) {
-  const { data: isPlatformAdmin } = useSuspenseQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: (capabilities) => capabilities.isPlatformAdmin,
-  })
-
-  return (
-    <WebRoutesNetworkPage
-      editGamePort={editGamePort}
-      showTailscale={isPlatformAdmin}
-    />
-  )
+  return <WebRoutesNetworkPage editGamePort={editGamePort} />
 }
 
-function WebRoutesNetworkPage({
-  editGamePort,
-  showTailscale,
-}: {
-  editGamePort: boolean
-  showTailscale: boolean
-}) {
+function WebRoutesNetworkPage({ editGamePort }: { editGamePort: boolean }) {
   const instance = useInstanceIdentity()
   const permissions = useInstancePermissions()
   const relayConnected = useInstanceRelayConnected()
@@ -236,7 +211,7 @@ function WebRoutesNetworkPage({
           }
           onSave={saveWebRoutes}
         />
-        {showTailscale ? <GameServerTailscale instance={instance} /> : null}
+        <GameServerTunnels instance={instance} />
       </div>
     </main>
   )
@@ -1858,15 +1833,14 @@ function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "The network change failed."
 }
 
-// The game server's Tailscale networks, as a member of each.
-function GameServerTailscale({
+// The tailnets the game server is connected to, and its names in each.
+function GameServerTunnels({
   instance: { id, name, relayId, relayName },
 }: {
-  instance: Omit<TailscaleMember, "memberId">
+  instance: { id: string; name: string; relayId: string; relayName: string }
 }) {
   const member = React.useMemo(
     () => ({
-      id,
       memberId: instanceTailscaleMemberId(id),
       name,
       relayId,
@@ -1874,5 +1848,5 @@ function GameServerTailscale({
     }),
     [id, name, relayId, relayName]
   )
-  return <TailscaleMembershipSection member={member} />
+  return <InstanceTunnelsSection member={member} />
 }

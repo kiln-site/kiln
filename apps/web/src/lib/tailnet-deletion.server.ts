@@ -29,7 +29,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 
-// Deleting a Tailscale network, as one operation on it: each round removes
+// Deleting a tailnet, as one operation on it: each round removes
 // the network from the Relays it's due on, two-phase around the tailnet
 // device, then, with no Relays left, the network itself. A failure is kept
 // on its row with when to try again, and the operation pauses until the
@@ -37,7 +37,7 @@ import { durableOperation, startDurableOperation } from "@/operations/durable"
 // the operation.
 export const deleteTailnet = durableOperation({
   input: Schema.Struct({ networkId: Schema.String }),
-  kind: "tailscale.network.delete",
+  kind: "tailnet.delete",
   run: ({ networkId }) =>
     Effect.gen(function* () {
       for (let round = 1; ; round++) {
@@ -245,21 +245,21 @@ async function finalizeNetwork(
     )
   }
   await runAppEffect(
-    "tailscale.networks.remove",
+    "tailnet.remove",
     removeTailnetDefinitionEffect(definition.id)
   )
 }
 
 function loadDefinitions() {
   return runAppEffect(
-    "tailscale.networks.load",
+    "tailnet.load",
     loadTailnetDefinitionsEffect()
   )
 }
 
 function loadCredential(id: string) {
   return runAppEffect(
-    "tailscale.networks.integration.load",
+    "tailnet.integration.load",
     loadTailnetCredentialEffect(id)
   )
 }

@@ -17,7 +17,7 @@ export interface TailscaleMemberRecords {
 }
 
 /**
- * Why a binding can't join a Tailscale network, or null when it can: its
+ * Why a binding can't join a tailnet, or null when it can: its
  * member must be a game server, an App, or a database on the Relay the
  * binding names, and not a Tailscale deployment itself.
  */

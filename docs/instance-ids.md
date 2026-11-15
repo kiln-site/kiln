@@ -34,7 +34,7 @@ runs (deterministic hashes), and users.
 
 ## The migration from the old IDs
 
-Before, game servers, Apps, databases, and Tailscale networks had 40-character
+Before, game servers, Apps, databases, and tailnets had 40-character
 hexadecimal IDs, a game server's unique only on its Relay, and a Relay's ID
 was its fingerprint. Each old ID becomes the first 12 hex characters of a
 SHA-256 over its kind and old identity (`migratedInstanceId` in
@@ -47,7 +47,7 @@ compute the same new ID on their own.
   settings, notifications, encrypted App configurations — and shrinks the ID
   columns. Signed pairing records, key material, and the object paths of
   backups already in storage keep what they say.
-- An old ID found both as a game server and as a Tailscale network, App, or
+- An old ID found both as a game server and as a tailnet, App, or
   database is the latter, on Hearth and the Relay alike: a Tailscale
   network's container carries a game server's label with the network's ID.
 - Each Relay migrates its own state when it starts: its identity file, every

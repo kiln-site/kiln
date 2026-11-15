@@ -14,7 +14,7 @@ import { CircleAlert, LoaderCircle, Plus } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 
-import type { PickableBrickKind } from "@/components/brick-kinds"
+import type { AddableKind } from "@/components/brick-kinds"
 import { BrickVariableField } from "@/components/brick-variable-fields"
 import { OfferedBrickBrowser } from "@/components/offered-brick-browser"
 import {
@@ -67,8 +67,8 @@ export const DatabaseBrickBrowser = React.memo(function DatabaseBrickBrowser({
   disabled?: boolean
   /** The source of the Brick to open on. Without one, PostgreSQL's. */
   initialBrick?: string | undefined
-  kinds?: ReadonlyArray<PickableBrickKind>
-  onKindChange?: (kind: PickableBrickKind) => void
+  kinds?: ReadonlyArray<AddableKind>
+  onKindChange?: (kind: AddableKind) => void
 }) {
   const bricksQuery = useQuery(databaseBricksQueryOptions())
   const initial = React.useCallback(

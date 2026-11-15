@@ -53,17 +53,75 @@ export const listTunnelNamesEffect = Effect.fn("tunnelNames.list")(function* (
       ORDER BY tailnet_id, member_id, generated_for IS NULL, label, domain`,
     [...tailnetIds]
   )
-  return rows.map(
-    (row): TunnelName => ({
-      domain: row.domain,
-      generated: row.generated_for !== null,
-      id: row.id,
-      label: row.label,
-      memberId: row.member_id,
-      tailnetId: row.tailnet_id,
-    })
-  )
+  return rows.map((row): TunnelName => ({
+    domain: row.domain,
+    generated: row.generated_for !== null,
+    id: row.id,
+    label: row.label,
+    memberId: row.member_id,
+    tailnetId: row.tailnet_id,
+  }))
 })
+
+// A label is at most 63 characters, DNS's limit for one.
+const MAXIMUM_LABEL_LENGTH = 63
+
+/**
+ * A member to name as it connects: what it's called, and what it is with its
+ * ID's first characters, for a name with nothing left of it.
+ */
+export interface UnnamedTunnelMember {
+  /** `game-server-1a2b3c`, `app-…` or `database-…`. */
+  fallback: string
+  memberId: string
+  name: string
+}
+
+/**
+ * Names each member once, as it connects to a tailnet, from what it's called:
+ * lowercase, spaces become hyphens, anything but letters, digits and hyphens
+ * dropped, repeated hyphens collapsed and trimmed, at most 63 characters, its
+ * fallback when nothing is left, and `-2`, `-3` while another name under
+ * `domain` in the tailnet, or one in `reserved`, has it. Saves nothing: the
+ * save that connects them does (`setGeneratedTunnelNamesEffect`).
+ */
+export const generateTunnelNamesEffect = Effect.fn("tunnelNames.generate")(
+  function* (
+    tailnetId: string,
+    domain: string,
+    members: ReadonlyArray<UnnamedTunnelMember>,
+    reserved: ReadonlyArray<string> = []
+  ) {
+    const generated = new Map<string, string>()
+    if (members.length === 0) return generated
+    const taken = new Set(reserved)
+    for (const name of yield* listTunnelNamesEffect([tailnetId])) {
+      if (name.domain === domain) taken.add(name.label)
+    }
+    for (const member of members) {
+      const base = tunnelLabelOf(member.name) || tunnelLabelOf(member.fallback)
+      let label = base
+      for (let suffix = 2; taken.has(label); suffix += 1) {
+        const ending = `-${suffix}`
+        label = `${base.slice(0, MAXIMUM_LABEL_LENGTH - ending.length).replace(/-+$/u, "")}${ending}`
+      }
+      taken.add(label)
+      generated.set(member.memberId, label)
+    }
+    return generated
+  }
+)
+
+function tunnelLabelOf(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s+/gu, "-")
+    .replace(/[^a-z0-9-]/gu, "")
+    .replace(/-{2,}/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, MAXIMUM_LABEL_LENGTH)
+    .replace(/-+$/u, "")
+}
 
 /**
  * Gives each member its generated name, or renames the one it has. A name
@@ -127,21 +185,26 @@ export const keepTunnelNamesOfEffect = Effect.fn("tunnelNames.keep")(function* (
 })
 
 /** Gives a member another name in its tailnet. */
-export const addTunnelAliasEffect = Effect.fn("tunnelNames.addAlias")(function* (
-  name: { domain: string; label: string; memberId: string; tailnetId: string }
-) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const id = randomUUID()
-  yield* database.execute(
-    "tunnelNames.addAlias",
-    `INSERT INTO ${nameTable}
+export const addTunnelAliasEffect = Effect.fn("tunnelNames.addAlias")(
+  function* (name: {
+    domain: string
+    label: string
+    memberId: string
+    tailnetId: string
+  }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const id = randomUUID()
+    yield* database.execute(
+      "tunnelNames.addAlias",
+      `INSERT INTO ${nameTable}
        (id, tailnet_id, member_id, label, domain, generated_for, created_at)
      VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    [id, name.tailnetId, name.memberId, name.label, name.domain, now]
-  )
-  return id
-})
+      [id, name.tailnetId, name.memberId, name.label, name.domain, now]
+    )
+    return id
+  }
+)
 
 /** Takes away an alias. A generated name stays. Says whether it was one. */
 export const removeTunnelAliasEffect = Effect.fn("tunnelNames.removeAlias")(

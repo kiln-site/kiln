@@ -41,6 +41,7 @@ import {
   GroupKindIcon,
   RelayKindIcon,
   ServerKindIcon,
+  TunnelKindIcon,
   VolumeKindIcon,
 } from "@/components/instance-kind-icon"
 import { instanceFavoriteKey, kilnFavorite } from "@/lib/instance-favorites"
@@ -134,6 +135,7 @@ const kindPresentation: Record<
     label: "Game Server",
     plural: "game servers",
   },
+  tunnel: { Icon: TunnelKindIcon, label: "Tunnel", plural: "tunnels" },
   group: { Icon: GroupKindIcon, label: "Group", plural: "groups" },
   volume: { Icon: VolumeKindIcon, label: "Volume", plural: "volumes" },
 }
@@ -582,8 +584,13 @@ const kilnFavoriteKey = instanceFavoriteKey(kilnFavorite)
 
 function instancePickerFavoriteKey(item: AnyInstancePickerItem): string {
   const { identity } = item
-  // Only an instance can be a favorite.
-  if (identity.kind === "volume" || identity.kind === "group") return ""
+  // Only an instance can be a favorite, and a tunnel can't be one yet.
+  if (
+    identity.kind === "volume" ||
+    identity.kind === "group" ||
+    identity.kind === "tunnel"
+  )
+    return ""
   return isKilnIdentity(identity)
     ? kilnFavoriteKey
     : instanceFavoriteKey(identity)
@@ -1098,6 +1105,7 @@ const groupPresentation: Record<
   database: { Icon: DatabaseKindIcon, label: "All databases" },
   relay: { Icon: RelayKindIcon, label: "All Relays" },
   server: { Icon: ServerKindIcon, label: "All game servers" },
+  tunnel: { Icon: TunnelKindIcon, label: "All tunnels" },
 }
 
 const InstancePickerGroupRow = React.memo(function InstancePickerGroupRow({
@@ -1247,6 +1255,7 @@ const viewAllDestinations = {
   database: { label: "View all databases", to: "/infra/databases" },
   relay: { label: "View all Relays", to: "/infra/relays" },
   server: { label: "View all servers", to: "/infra/servers" },
+  tunnel: { label: "View all tunnels", to: "/infra/tunnels" },
 } as const
 
 const InstancePickerViewAll = React.memo(function InstancePickerViewAll({

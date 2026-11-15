@@ -109,14 +109,19 @@ const InstanceCardView = React.memo(function InstanceCardView({
           }),
     [instance.id, instance.kind, instance.relayId, kiln]
   )
-  // Kiln shows through its host's Relay but is starred on its own.
-  const favorite = kiln ? kilnFavorite : instance
+  // Kiln shows through its host's Relay but is starred on its own. A
+  // tunnel can't be starred yet.
+  const favorite = kiln
+    ? kilnFavorite
+    : instance.kind === "tunnel"
+      ? null
+      : { id: instance.id, kind: instance.kind, relayId: instance.relayId }
   return (
     <IdentityName
       {...props}
       meta={meta}
       iconBadge={
-        iconFavorite ? (
+        iconFavorite && favorite ? (
           <InstanceFavoriteBadge
             className={iconFavoriteClassName}
             id={favorite.id}
@@ -138,7 +143,7 @@ const InstanceCardView = React.memo(function InstanceCardView({
         />
       }
       nameAccessory={
-        showFavorite ? (
+        showFavorite && favorite ? (
           <>
             <InstanceFavoriteStar
               id={favorite.id}
@@ -192,11 +197,11 @@ export function isKilnIdentity(instance: InstanceIdentity): boolean {
   )
 }
 
-/** What an instance's own icon belongs to; Relays have none. */
+/** What an instance's own icon belongs to; Relays and tunnels have none. */
 export function instanceIconSubject(
   instance: Pick<InstanceReference, "id" | "kind" | "relayId">
 ): InstanceIconSubject | null {
-  return instance.kind === "relay"
+  return instance.kind === "relay" || instance.kind === "tunnel"
     ? null
     : { kind: instance.kind, relayId: instance.relayId, id: instance.id }
 }

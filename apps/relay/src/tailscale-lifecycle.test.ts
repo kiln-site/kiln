@@ -236,7 +236,7 @@ describe("Tailscale stack forwarding", () => {
 const deletion = "11111111-1111-4111-8111-111111111111"
 const quiet = async () => {}
 
-describe("Tailscale network members", () => {
+describe("tailnet members", () => {
   const stackId = "f".repeat(12)
   const serverId = "a".repeat(12)
   const otherServerId = "1".repeat(12)

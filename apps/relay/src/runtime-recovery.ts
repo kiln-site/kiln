@@ -98,7 +98,7 @@ export class RuntimeRecoveryManager {
     }).pipe(
       Effect.catch((cause) =>
         Effect.logWarning(
-          "Server could not take its place on its Tailscale networks",
+          "Server could not take its place on its tailnets",
           { cause, instanceId }
         )
       )

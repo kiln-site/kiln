@@ -164,7 +164,7 @@ export const applyTunnelPlanEffect = Effect.fn(
         Effect.flatMap((rollbackFailures) =>
           orchestrationFailure(
             "apply",
-            `Could not update Tailscale network: ${errorMessage(cause)}.${
+            `Could not update the tailnet: ${errorMessage(cause)}.${
               rollbackFailures.length
                 ? ` Rollback also failed: ${rollbackFailures.join("; ")}`
                 : ""
@@ -193,7 +193,7 @@ export const applyTunnelPlanEffect = Effect.fn(
   if (cleanupFailures.length > 0) {
     return yield* orchestrationFailure(
       "cleanup",
-      `Tailscale network was updated, but Relay cleanup failed after 3 attempts: ${cleanupFailures.join("; ")}. Retry the change to finish cleanup.`
+      `The tailnet was updated, but Relay cleanup failed after 3 attempts: ${cleanupFailures.join("; ")}. Retry the change to finish cleanup.`
     )
   }
   return synchronized

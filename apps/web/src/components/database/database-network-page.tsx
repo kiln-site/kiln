@@ -2,7 +2,6 @@ import * as React from "react"
 import { Link } from "@tanstack/react-router"
 import { Cable, LoaderCircle, Network, Unplug } from "lucide-react"
 
-import { useQuery } from "@tanstack/react-query"
 import {
   databaseTailscaleMemberId,
   type RelayDatabaseMember,
@@ -24,8 +23,7 @@ import { useDatabaseWorkspace } from "@/components/database/database-workspace-c
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
-import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
-import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
 
 export function DatabaseNetworkPage() {
   const { database } = useDatabaseWorkspace()
@@ -63,27 +61,21 @@ export function DatabaseNetworkPage() {
           <ConnectedMembers canWrite={canWrite} database={database} />
         </InfoCard>
 
-        <DatabaseTailscale database={database} />
+        <DatabaseTunnels database={database} />
       </div>
     </section>
   )
 }
 
-// The database can join Tailscale networks like a game server, keeping its
-// address when its container is replaced. Managing Tailscale is for
-// platform admins.
-function DatabaseTailscale({
+// The tailnets the database is connected to, keeping its address there when
+// its container is replaced, and its names in each.
+function DatabaseTunnels({
   database: { id, name, relayId, relayName },
 }: {
   database: ManagedDatabase
 }) {
-  const { data: isPlatformAdmin } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: (capabilities) => capabilities.isPlatformAdmin,
-  })
   const member = React.useMemo(
     () => ({
-      id,
       memberId: databaseTailscaleMemberId(id),
       name,
       relayId,
@@ -91,12 +83,7 @@ function DatabaseTailscale({
     }),
     [id, name, relayId, relayName]
   )
-  if (!isPlatformAdmin) return null
-  return (
-    <React.Suspense fallback={null}>
-      <TailscaleMembershipSection member={member} noun="database" />
-    </React.Suspense>
-  )
+  return <InstanceTunnelsSection member={member} />
 }
 
 const kindNames = {

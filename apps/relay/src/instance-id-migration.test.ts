@@ -27,7 +27,7 @@ describe("the move to 12-character instance IDs", () => {
     const owner = { "kiln.relay.owner": TEST_NAMESPACE }
 
     // A Relay from before: its identity, a game server connected to a
-    // database, an App, a Tailscale network, and records naming them.
+    // database, an App, a tailnet, and records naming them.
     const keys = generateKeyPairSync("ed25519", {
       privateKeyEncoding: { format: "pem", type: "pkcs8" },
       publicKeyEncoding: { format: "pem", type: "spki" },

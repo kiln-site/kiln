@@ -20,7 +20,7 @@ export interface RelayInstanceIdState {
   /** Every migrated instance's old ID. */
   readonly list: () => Effect.Effect<Array<InstanceLegacyId>, RelayStateError>
   /**
-   * Gives a Tailscale network's stack on this Relay to its tunnel: the
+   * Gives a tailnet's stack on this Relay to its tunnel: the
    * tunnel takes the key the network's folder and containers are named by,
    * and the network, no longer anything on the Relay, gives up any old ID.
    */

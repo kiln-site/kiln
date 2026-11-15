@@ -18,7 +18,7 @@ import { durableOperation, startDurableOperation } from "@/operations/durable"
 import { exclusive } from "@/operations/lanes"
 
 /**
- * Tailscale networks' DNS (docs/relay-operations.md). Hearth writes every
+ * tailnets' DNS (docs/relay-operations.md). Hearth writes every
  * node's records, each time from what the Relays hold now: the enabled
  * members of the nodes not being removed, leaving out those frozen for
  * their deletion. What writes them holds each network's `#settings`, so a
@@ -160,7 +160,7 @@ export const rewriteTailscaleDns = durableOperation({
     // such as the one a deleted resource's member is on.
     alsoOn: Schema.Array(Schema.String),
   }),
-  kind: "tailscale.network.dns",
+  kind: "tailnet.dns",
   locks: ({ networkIds }) =>
     networkIds.map((id) => exclusive(tailnetSettingsKey(id))),
   run: ({ alsoOn, networkIds }) =>

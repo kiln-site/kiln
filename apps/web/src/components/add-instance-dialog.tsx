@@ -3,29 +3,27 @@ import { useQuery } from "@tanstack/react-query"
 
 import { AddServerPane } from "@/components/add-server-pane"
 import { AddAppPane } from "@/components/app/add-app-pane"
-import {
-  pickableBrickKinds,
-  type PickableBrickKind,
-} from "@/components/brick-kinds"
+import { pickableBrickKinds, type AddableKind } from "@/components/brick-kinds"
 import { BrickBrowserDialog } from "@/components/brick-selector"
 import { AddDatabasePane } from "@/components/database/add-database-pane"
+import { AddTunnelPane } from "@/components/tunnel/add-tunnel-pane"
 import { infraRelayOptionsQueryOptions } from "@/lib/infra-directory"
 import { canCreateGameServers } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
-// One dialog adds an instance of any kind that runs a Brick: pick the kind,
-// pick its Brick, answer what that kind asks. Each page's Add button opens
-// it on its own kind.
+// One dialog adds an instance of any kind: pick the kind, then, for a kind
+// that runs a Brick, its Brick, and answer what that kind asks. Each page's
+// Add button opens it on its own kind.
 
 interface AddInstanceDialogState {
   /** The kind shown, kept while it closes. */
-  kind: PickableBrickKind
+  kind: AddableKind
   open: boolean
 }
 
 export interface AddInstanceDialogStore {
   /** Shows another kind's Bricks while open. */
-  choose: (kind: PickableBrickKind) => void
+  choose: (kind: AddableKind) => void
   close: () => void
   getServerSnapshot: () => AddInstanceDialogState
   getSnapshot: () => AddInstanceDialogState
@@ -35,7 +33,7 @@ export interface AddInstanceDialogStore {
 }
 
 export function createAddInstanceDialogStore(
-  kind: PickableBrickKind
+  kind: AddableKind
 ): AddInstanceDialogStore {
   const closedState: AddInstanceDialogState = { kind, open: false }
   let state = closedState
@@ -88,7 +86,7 @@ function AddInstancePane({
   kind,
   store,
 }: {
-  kind: PickableBrickKind
+  kind: AddableKind
   store: AddInstanceDialogStore
 }) {
   const kinds = useCreatableKinds(kind)
@@ -103,7 +101,13 @@ const panes = {
   app: AddAppPane,
   database: AddDatabasePane,
   "game-server": AddServerPane,
-} satisfies Record<PickableBrickKind, unknown>
+  tunnel: AddTunnelPane,
+} satisfies Record<AddableKind, unknown>
+
+const addableKinds: ReadonlyArray<AddableKind> = [
+  ...pickableBrickKinds,
+  "tunnel",
+]
 
 const someRelayCreates = ({
   relays,
@@ -112,12 +116,16 @@ const someRelayCreates = ({
 }) => relays.some((relay) => relay.canCreate)
 
 // The kinds this person may add somewhere, and the one already shown.
-function useCreatableKinds(
-  shown: PickableBrickKind
-): ReadonlyArray<PickableBrickKind> {
+function useCreatableKinds(shown: AddableKind): ReadonlyArray<AddableKind> {
   const { data: gameServers = false } = useQuery({
     ...accessCapabilitiesQueryOptions(),
     select: canCreateGameServers,
+  })
+  // Tailnets are a platform administrator's, until tunnels have permissions
+  // of their own.
+  const { data: tunnels = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: (capabilities) => capabilities.isPlatformAdmin,
   })
   const { data: databases = false } = useQuery({
     ...infraRelayOptionsQueryOptions("database"),
@@ -132,9 +140,8 @@ function useCreatableKinds(
       app: apps,
       database: databases,
       "game-server": gameServers,
+      tunnel: tunnels,
     }
-    return pickableBrickKinds.filter(
-      (kind) => kind === shown || creatable[kind]
-    )
-  }, [apps, databases, gameServers, shown])
+    return addableKinds.filter((kind) => kind === shown || creatable[kind])
+  }, [apps, databases, gameServers, shown, tunnels])
 }

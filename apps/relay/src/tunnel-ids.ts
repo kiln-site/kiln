@@ -19,7 +19,7 @@ export interface TunnelIdMigrationInput {
 }
 
 /**
- * Gives each Tailscale network's stack on this Relay an ID of its own: a
+ * Gives each tailnet's stack on this Relay an ID of its own: a
  * tunnel's, worked out from the network's ID and this Relay's
  * (`migratedTunnelId`), as Hearth works it out on its side. Nothing physical
  * moves. The tunnel takes the key the network's folder, containers and
@@ -89,7 +89,7 @@ export async function migrateTunnelIds(
   }
   useInstanceLegacyIds(await Effect.runPromise(state.instanceIds.list()))
   if (moved > 0) {
-    console.info(`Gave ${moved} Tailscale network stacks tunnel IDs`)
+    console.info(`Gave ${moved} tailnet stacks tunnel IDs`)
   }
   return moved
 }

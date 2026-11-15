@@ -246,7 +246,7 @@ export const saveTailnetIntegrationEffect = Effect.fn(
   if (result.affectedRows === 0) {
     return yield* ResourceNotFoundError.make({
       resource: "tailnet",
-      message: "Tailscale network not found",
+      message: "Tailnet not found",
     })
   }
 })

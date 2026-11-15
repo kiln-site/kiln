@@ -46,6 +46,23 @@ function gameLabel(brick: Brick): string {
 // Kiln has a viewer and dumps for the SQL engines; the others keep keys.
 const keyValueTypes: ReadonlySet<string> = new Set(["redis", "valkey"])
 
+/**
+ * Every kind the Add dialog adds: those made from a Brick, and a tunnel,
+ * which isn't.
+ */
+export type AddableKind = PickableBrickKind | "tunnel"
+
+/** What each kind is called where someone chooses between kinds. */
+export const addableKindNames: Record<
+  AddableKind,
+  { instanceKind: "app" | "database" | "server" | "tunnel"; name: string }
+> = {
+  app: { instanceKind: "app", name: "App" },
+  database: { instanceKind: "database", name: "Database" },
+  "game-server": { instanceKind: "server", name: "Game Server" },
+  tunnel: { instanceKind: "tunnel", name: "Tunnel" },
+}
+
 /** Every kind someone can pick a Brick for, in the order they're offered. */
 export const pickableBrickKinds: ReadonlyArray<PickableBrickKind> = [
   "game-server",

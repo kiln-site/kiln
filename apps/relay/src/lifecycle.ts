@@ -637,7 +637,7 @@ export class LifecycleDriver {
   }
 
   /**
-   * What each Tailscale network's DNS is made from on this node, as saved,
+   * What each tailnet's DNS is made from on this node, as saved,
    * whatever its containers are doing: its members, each marked frozen
    * while it's being deleted, and whether its removal is pending. Hearth
    * builds every node's records from these.
@@ -724,7 +724,7 @@ export class LifecycleDriver {
   ): void {
     if (planned === undefined || planned === tunnelBasis(config)) return
     throw new Error(
-      "This Tailscale network changed while the change waited its turn. Send it again."
+      "This tailnet changed while the change waited its turn. Send it again."
     )
   }
 
@@ -2546,7 +2546,7 @@ export class LifecycleDriver {
               start,
               variables: resolved.values,
             })
-            // The new container joins its Tailscale networks where the old one
+            // The new container joins its tailnets where the old one
             // was.
             await this.reattachTailscaleMember(
               instanceTailscaleMemberId(existing.id)
@@ -3186,7 +3186,7 @@ export class LifecycleDriver {
   /**
    * Deletes a game server Hearth froze for its deletion and whose DNS
    * records Hearth already removed from every node, then takes it off its
-   * Tailscale networks. A server already gone still leaves its networks, so
+   * tailnets. A server already gone still leaves its networks, so
    * a deletion sent again finishes.
    */
   async deleteInstance(id: string, deleteData: boolean): Promise<void> {
@@ -3604,7 +3604,7 @@ export class LifecycleDriver {
   }
 
   /**
-   * Removes what the Relay ran before Tailscale networks, and its private
+   * Removes what the Relay ran before tailnets, and its private
    * networking: Tailscale on the host's network, its CoreDNS, and Limbo,
    * with their settings and files. Nothing makes them any more. Runs at
    * startup; safe to repeat.
@@ -4614,7 +4614,7 @@ export class LifecycleDriver {
         () => this.reattachTailscaleMember(memberId),
         (cause) => {
           console.warn(
-            `Could not put ${memberId} back on its Tailscale networks:`,
+            `Could not put ${memberId} back on its tailnets:`,
             cause
           )
         }
@@ -4640,7 +4640,7 @@ export class LifecycleDriver {
   }
 
   /**
-   * Takes every matching member off its Tailscale networks, once what it ran
+   * Takes every matching member off its tailnets, once what it ran
    * in is gone: a deleted game server, App, or database. Hearth removed its
    * DNS records from every node before the deletion, and the member stays
    * frozen until it's done, so this only changes the network: each stack in
@@ -4724,7 +4724,7 @@ async function ensureProtectedFile(path: string): Promise<void> {
   await chmod(path, 0o600)
 }
 
-// Puts a container on a Tailscale network at its member address, moving it
+// Puts a container on a tailnet at its member address, moving it
 // there if it holds another.
 async function attachTailscaleMember(
   docker: DockerEngine,
@@ -4948,7 +4948,7 @@ function allocatesPort(
   return allocatedPorts(instance, protocol).includes(port)
 }
 
-// The Tailscale network a folder of the instances directory may hold: one
+// The tailnet a folder of the instances directory may hold: one
 // named after its ID, or after its old one before 12-character IDs
 // (instance-keys.ts). Game servers' folders share the directory, so only
 // one holding a `stack.json` is a network.

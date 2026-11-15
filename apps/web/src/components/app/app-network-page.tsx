@@ -61,7 +61,7 @@ import {
   RemovePortDialog,
   type PortNotice,
 } from "@/components/ports-section"
-import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
+import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
 import { useHeldWebHostnames } from "@/components/web-hostname-dns"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
@@ -71,7 +71,6 @@ import {
   type WebRouteServiceOption,
 } from "@/components/web-routes-section"
 import {
-  accessCapabilitiesQueryOptions,
   appConfigQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   queryKeys,
@@ -136,7 +135,7 @@ export function AppNetworkPage() {
               canManage={canManage}
               databaseIds={app.savedDatabaseIds}
             />
-            <AppTailscale app={app} compose={compose} />
+            <AppTunnels app={app} compose={compose} />
           </>
         ) : (
           <div className="grid h-40 place-items-center">
@@ -332,49 +331,34 @@ function AppDeployButton({ app }: { app: App }) {
   )
 }
 
-// Each service can join Tailscale networks like a server, keeping its
-// address across deploys. Managing Tailscale is for platform admins.
-function AppTailscale({ app, compose }: { app: App; compose: boolean }) {
-  const { data: isPlatformAdmin } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: (capabilities) => capabilities.isPlatformAdmin,
-  })
-  if (!isPlatformAdmin) return null
+// Each service connects to tailnets on its own, keeping its address there
+// across deploys, with names of its own in each.
+function AppTunnels({ app, compose }: { app: App; compose: boolean }) {
   const services = appServices(app)
   const members =
     services.length > 0 ? services : compose ? [] : [APP_SERVICE_NAME]
   if (members.length === 0) {
     return (
       <InfoCard>
-        <InfoCardHeader icon={<Network />} title="Tailscale networks" />
+        <InfoCardHeader icon={<Network />} title="Tunnels" />
         <p className="px-4 py-4 text-xs text-muted-foreground">
-          Deploy this app once so its services can join Tailscale networks.
+          Deploy this app once so its services can connect to tailnets.
         </p>
       </InfoCard>
     )
   }
-  return (
-    <React.Suspense fallback={null}>
-      {members.map((service) => (
-        <TailscaleMembershipSection
-          key={service}
-          member={{
-            id: app.id,
-            memberId: appTailscaleMemberId(app.id, service),
-            name: members.length > 1 ? `${service}-${app.name}` : app.name,
-            relayId: app.relayId,
-            relayName: app.relayName,
-          }}
-          noun={members.length > 1 ? "service" : "app"}
-          title={
-            members.length > 1
-              ? `Tailscale networks · ${service}`
-              : "Tailscale networks"
-          }
-        />
-      ))}
-    </React.Suspense>
-  )
+  return members.map((service) => (
+    <InstanceTunnelsSection
+      key={service}
+      member={{
+        memberId: appTailscaleMemberId(app.id, service),
+        name: members.length > 1 ? `${app.name} ${service}` : app.name,
+        relayId: app.relayId,
+        relayName: app.relayName,
+      }}
+      title={members.length > 1 ? `Tunnels · ${service}` : "Tunnels"}
+    />
+  ))
 }
 
 // Image and Dockerfile apps run one service under this name.

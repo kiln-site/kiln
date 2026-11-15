@@ -282,7 +282,7 @@ export class DatabaseDriver {
     return container?.Id ?? null
   }
 
-  // Puts a database's container at its addresses on its Tailscale networks:
+  // Puts a database's container at its addresses on its tailnets:
   // once a replacement's old container is gone, and before it starts, so an
   // attempt that failed is tried again. What it does is beside the
   // replacement or start, which go ahead either way.
@@ -296,7 +296,7 @@ export class DatabaseDriver {
     const done = await promiseResult(() => this.#tailscaleAddresses(databaseId))
     if (Result.isFailure(done)) {
       console.warn(
-        `Database ${databaseId} couldn't take its place on its Tailscale networks:`,
+        `Database ${databaseId} couldn't take its place on its tailnets:`,
         done.failure
       )
     }

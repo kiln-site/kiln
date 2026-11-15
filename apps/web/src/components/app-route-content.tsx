@@ -21,6 +21,7 @@ import { KilnWorkspaceShell } from "@/components/kiln/kiln-workspace"
 import { RelayWorkspaceShell } from "@/components/relay/relay-workspace"
 import { RelayUnavailableState } from "@/components/relay-unavailable-state"
 import { SettingsShell } from "@/components/settings-layout"
+import { TunnelWorkspaceShell } from "@/components/tunnel/tunnel-workspace"
 import { AutomationsShell } from "@/components/automations-layout"
 import { BackupsShell } from "@/components/backups-layout"
 import { GlobalPageToolbar } from "@/components/global-page-toolbar"
@@ -49,6 +50,7 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
       if (routeId?.startsWith("/_app/db/")) return "database"
       if (routeId?.startsWith("/_app/app/")) return "app"
       if (routeId?.startsWith("/_app/relay/")) return "relay"
+      if (routeId?.startsWith("/_app/tunnel/")) return "tunnel"
       if (routeId?.startsWith("/_app/kiln")) return "kiln"
       return state.matches.some(
         (match) => match.status === "notFound" || match._notFound
@@ -66,6 +68,9 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
   }
   if (routeFrame === "relay") {
     return <RelayWorkspaceShell>{children}</RelayWorkspaceShell>
+  }
+  if (routeFrame === "tunnel") {
+    return <TunnelWorkspaceShell>{children}</TunnelWorkspaceShell>
   }
   if (routeFrame === "kiln") {
     return <KilnWorkspaceShell>{children}</KilnWorkspaceShell>

@@ -29,7 +29,7 @@ const refusals: Record<FrozenKind, string> = {
   instance: "This game server is being deleted",
   volume: "This volume is being deleted",
 }
-// A Tailscale network's change is refused for one of its members, so it
+// A tailnet's change is refused for one of its members, so it
 // says which.
 const memberNouns: Record<FrozenKind, string> = {
   app: "App",

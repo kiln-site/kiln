@@ -16,7 +16,7 @@ export type ResourceWorkspaceQuery<T> =
   | { status: "found"; value: T }
 
 export function useWorkspaceRouteParam(
-  name: "appId" | "databaseId" | "relayId"
+  name: "appId" | "databaseId" | "relayId" | "tunnelId"
 ): string | undefined {
   return useRouterState({
     select: (state) => {
@@ -59,7 +59,7 @@ export function ResourceWorkspaceBoundary<T>({
   // Where the person goes from a missing resource.
   list: {
     label: string
-    to: "/infra/apps" | "/infra/databases" | "/infra/relays"
+    to: "/infra/apps" | "/infra/databases" | "/infra/relays" | "/infra/tunnels"
   }
   // Singular and plural, lowercase: `{ one: "app", other: "apps" }`.
   noun: { one: string; other: string }
