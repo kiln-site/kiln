@@ -569,6 +569,36 @@ describeMysql("web route hostnames", () => {
         })
     )
 
+    // On a tunnel's tailnet its domain answers for every name beneath it,
+    // so a public name there would never reach the Relay.
+    it.effect("refuses a public name under a tunnel's domain", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone, platformZone])
+        yield* insertRows("tunnel", {
+          created_at: 0,
+          id: "t".repeat(12),
+          name: "Home",
+          updated_at: 0,
+        })
+        yield* insertRows("domain", {
+          created_at: 0,
+          domain: "lan.owner.example",
+          enabled: 1,
+          is_default: 1,
+          position: 0,
+          provider: "tunnel",
+          tunnel_id: "t".repeat(12),
+          updated_at: 0,
+        })
+
+        const refused = yield* refusal(owner, ["wiki.lan.owner.example"], app)
+
+        assert.include(refused.message, ".lan.owner.example")
+        assert.deepEqual(cloudflare.dns(), {})
+      })
+    )
+
     it.effect("uses an owner's Cloudflare connection only for its owner", () =>
       Effect.gen(function* () {
         yield* seed

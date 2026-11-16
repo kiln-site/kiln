@@ -878,3 +878,23 @@ export const publicDomainConflictEffect = Effect.fn("domains.publicConflict")(
       : null
   }
 )
+
+/**
+ * The tunnel domain a public name would sit under, or null. On that
+ * tunnel's tailnet, its domain answers for every name beneath it, so such a
+ * name would never reach the Relay there.
+ */
+export const tunnelDomainOverEffect = Effect.fn("domains.tunnelOver")(
+  function* (hostname: string) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<RowDataPacket & { domain: string }>(
+      "domains.tunnelOver",
+      `SELECT domain FROM ${databaseTable("domain")} WHERE provider = 'tunnel'`
+    )
+    return (
+      rows.find(
+        ({ domain }) => hostname === domain || hostname.endsWith(`.${domain}`)
+      )?.domain ?? null
+    )
+  }
+)
