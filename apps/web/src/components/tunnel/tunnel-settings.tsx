@@ -1,32 +1,57 @@
 import * as React from "react"
 import { useMutation } from "@tanstack/react-query"
 import {
-  ArrowDown,
-  ArrowUp,
-  Check,
+  ArrowUpToLine,
+  EllipsisVertical,
   ExternalLink,
+  Globe,
   KeyRound,
   LoaderCircle,
   Plus,
-  X,
+  Trash2,
 } from "lucide-react"
-import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import { DataTableActionGroup } from "@/components/data-table"
+import { DataTable } from "@/components/data-table-view"
+import { InfoHint, InfoSection } from "@/components/info-page"
+import { SectionIconButton } from "@/components/instance-container-section"
+import { StatusIndicator } from "@/components/status-indicator"
 import {
   normalizeTld,
   useSetTunnels,
   useTunnelSave,
   type TunnelOverview,
 } from "@/components/tunnel/tunnel-data"
+import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import type { DataTableSource } from "@/lib/data-table-source"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { configureTailscaleIntegration } from "@/server/tunnels"
 
-// What a tunnel shares: its name and TLDs, and its Tailscale login.
+// A tunnel's TLDs, on its Info page, with its Tailscale login behind
+// Configure; and the login's fields, which adding a tunnel uses too.
 
 const MAXIMUM_TLDS = 16
 
@@ -182,10 +207,429 @@ export function TailscaleLoginHelp({ tag }: { tag: string }) {
   )
 }
 
-/** A tunnel's Tailscale login, checked with Tailscale as it's saved. */
-export const TunnelLoginCard = React.memo(function TunnelLoginCard({
+/**
+ * A tunnel's TLDs, in a table: generated names go under the first, and
+ * Tailscale's split DNS sends every one to its gateways. Its Tailscale login
+ * opens from the header, since it's set once and rarely changed.
+ */
+export const TunnelTldsSection = React.memo(function TunnelTldsSection({
+  canManage,
   tunnel,
 }: {
+  canManage: boolean
+  tunnel: TunnelOverview
+}) {
+  const save = useTunnelSave()
+  const [dialog, setDialog] = React.useState<
+    | { kind: "add" }
+    | { kind: "login" }
+    | { domain: string; kind: "remove" }
+    | null
+  >(null)
+  const close = React.useCallback((open: boolean) => {
+    if (!open) setDialog(null)
+  }, [])
+  // While a change saves, the table shows it.
+  const domains =
+    save.isPending && save.variables?.tunnel.id === tunnel.id
+      ? (save.variables.change.domains ?? tunnel.domains)
+      : tunnel.domains
+  const saveDomains = React.useCallback(
+    (next: ReadonlyArray<string>, doing: string, done: string) =>
+      save.mutateAsync({ change: { domains: next }, doing, done, tunnel }),
+    [save, tunnel]
+  )
+  // Its toast says how it went.
+  const makeFirst = React.useCallback(
+    (domain: string) =>
+      save.mutate({
+        change: {
+          domains: [
+            domain,
+            ...tunnel.domains.filter((other) => other !== domain),
+          ],
+        },
+        doing: `Moving generated names under .${domain} on every gateway`,
+        done: `Generated names are under .${domain}`,
+        tunnel,
+      }),
+    [save, tunnel]
+  )
+  const rows = React.useMemo(
+    () =>
+      domains.map((domain, index) => ({
+        domain,
+        first: index === 0,
+        names: tunnel.names.filter((name) => name.domain === domain).length,
+      })),
+    [domains, tunnel.names]
+  )
+  const busy = save.isPending
+  const definition = React.useMemo(
+    () =>
+      defineDataTable({
+        ariaLabel: "TLDs",
+        columns: tldColumnHelper.columns([
+          tldColumnHelper.accessor((row) => row.domain, {
+            id: "tld",
+            header: "TLD",
+            enableSorting: false,
+            cell: ({ row }) => (
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate font-mono text-[0.8125rem]">
+                  .{row.original.domain}
+                </span>
+                {row.original.first ? (
+                  <Badge variant="outline" className="type-meta shrink-0">
+                    Generated names
+                  </Badge>
+                ) : null}
+              </span>
+            ),
+            meta: dataTableColumnMeta({ width: "minmax(0,1fr)" }),
+          }),
+          tldColumnHelper.accessor((row) => row.names, {
+            id: "names",
+            header: "Names",
+            enableSorting: false,
+            cell: ({ row }) => (
+              <span className="type-meta text-muted-foreground">
+                {row.original.names}{" "}
+                {row.original.names === 1 ? "name" : "names"}
+              </span>
+            ),
+            meta: dataTableColumnMeta({ hideBelow: "sm", width: "6.5rem" }),
+          }),
+          tldColumnHelper.display({
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            enableSorting: false,
+            cell: ({ row }) =>
+              canManage ? (
+                <TldActions
+                  busy={busy}
+                  domain={row.original.domain}
+                  first={row.original.first}
+                  only={rows.length === 1}
+                  onMakeFirst={makeFirst}
+                  onRemove={(domain) => setDialog({ domain, kind: "remove" })}
+                />
+              ) : null,
+            meta: dataTableColumnMeta(
+              { width: "2.75rem" },
+              { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
+            ),
+          }),
+        ]),
+        getRowId: (row) => row.domain,
+      }),
+    [busy, canManage, makeFirst, rows.length]
+  )
+  const source = React.useMemo(
+    (): DataTableSource<TldRow> => ({
+      body: { kind: "ready" },
+      refreshing: false,
+      rows,
+    }),
+    [rows]
+  )
+  const loginError = tunnel.integration?.lastError ?? null
+  return (
+    <InfoSection
+      icon={<Globe />}
+      title="TLDs"
+      status={
+        <>
+          <InfoHint label="About TLDs" title="TLDs">
+            <p>
+              Everything this tunnel connects gets a name under the first TLD,
+              like{" "}
+              <span className="font-mono text-foreground">
+                app.{domains[0]}
+              </span>
+              . Devices on your tailnet reach it by that name.
+            </p>
+            <p>
+              Tailscale sends every TLD here to this tunnel's gateways, so
+              aliases can use any of them.
+            </p>
+          </InfoHint>
+          {loginError ? (
+            <StatusIndicator
+              status={{
+                detail: loginError,
+                label: "Tailscale login failing",
+                tone: "danger",
+              }}
+            />
+          ) : null}
+        </>
+      }
+      action={
+        canManage ? (
+          <>
+            {domains.length < MAXIMUM_TLDS ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setDialog({ kind: "add" })}
+              >
+                <Plus />
+                Add TLD
+              </Button>
+            ) : null}
+            <SectionIconButton
+              label="Tailscale login"
+              onClick={() => setDialog({ kind: "login" })}
+            >
+              <KeyRound />
+            </SectionIconButton>
+          </>
+        ) : null
+      }
+      content="flush"
+    >
+      <div className="[&_tbody]:overflow-visible [&_tbody]:overscroll-auto">
+        <DataTable definition={definition} emptyState={null} source={source} />
+      </div>
+      {dialog?.kind === "add" ? (
+        <AddTldDialog
+          domains={tunnel.domains}
+          onAdd={(domain) =>
+            saveDomains(
+              [...tunnel.domains, domain],
+              `Adding .${domain} on every gateway`,
+              `.${domain} is added`
+            )
+          }
+          onOpenChange={close}
+        />
+      ) : null}
+      {dialog?.kind === "remove" ? (
+        <RemoveTldDialog
+          domain={dialog.domain}
+          first={tunnel.domains[0] === dialog.domain}
+          next={tunnel.domains.find((other) => other !== dialog.domain) ?? ""}
+          onRemove={() =>
+            saveDomains(
+              tunnel.domains.filter((other) => other !== dialog.domain),
+              `Removing .${dialog.domain} from every gateway`,
+              `.${dialog.domain} is removed`
+            )
+          }
+          onOpenChange={close}
+        />
+      ) : null}
+      {dialog?.kind === "login" ? (
+        <TailscaleLoginDialog tunnel={tunnel} onOpenChange={close} />
+      ) : null}
+    </InfoSection>
+  )
+})
+
+interface TldRow {
+  domain: string
+  first: boolean
+  names: number
+}
+
+const tldColumnHelper = createDataTableColumnHelper<TldRow>()
+
+function TldActions({
+  busy,
+  domain,
+  first,
+  only,
+  onMakeFirst,
+  onRemove,
+}: {
+  busy: boolean
+  domain: string
+  first: boolean
+  only: boolean
+  onMakeFirst: (domain: string) => void
+  onRemove: (domain: string) => void
+}) {
+  if (first && only) return null
+  return (
+    <DataTableActionGroup>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            aria-label={`Actions for .${domain}`}
+            disabled={busy}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-52">
+          {first ? null : (
+            <DropdownMenuItem onSelect={() => onMakeFirst(domain)}>
+              <ArrowUpToLine /> Use for generated names
+            </DropdownMenuItem>
+          )}
+          {only ? null : (
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={() => onRemove(domain)}
+            >
+              <Trash2 /> Remove
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
+  )
+}
+
+function AddTldDialog({
+  domains,
+  onAdd,
+  onOpenChange,
+}: {
+  domains: ReadonlyArray<string>
+  onAdd: (domain: string) => Promise<unknown>
+  onOpenChange: (open: boolean) => void
+}) {
+  const [value, setValue] = React.useState("")
+  const add = useMutation({
+    mutationFn: onAdd,
+    onSuccess: () => onOpenChange(false),
+  })
+  const domain = normalizeTld(value)
+  const taken = domains.includes(domain)
+  return (
+    <Dialog open onOpenChange={(open) => !add.isPending && onOpenChange(open)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add a TLD</DialogTitle>
+          <DialogDescription>
+            Tailscale sends names under it to this tunnel. Aliases can use it;
+            generated names stay under the first TLD.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id="add-tld"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!domain || taken) return
+            add.mutate(domain)
+          }}
+        >
+          <Input
+            {...notALoginField}
+            autoFocus
+            aria-label="TLD"
+            className="font-mono"
+            disabled={add.isPending}
+            placeholder="test"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          {taken ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              .{domain} is already one of this tunnel's TLDs.
+            </p>
+          ) : null}
+        </form>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={add.isPending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form="add-tld"
+            disabled={!domain || taken || add.isPending}
+          >
+            {add.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Plus />
+            )}
+            Add
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function RemoveTldDialog({
+  domain,
+  first,
+  next,
+  onOpenChange,
+  onRemove,
+}: {
+  domain: string
+  first: boolean
+  /** The TLD generated names move under, when it's the first. */
+  next: string
+  onOpenChange: (open: boolean) => void
+  onRemove: () => Promise<unknown>
+}) {
+  const remove = useMutation({
+    mutationFn: onRemove,
+    onSuccess: () => onOpenChange(false),
+  })
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => !remove.isPending && onOpenChange(open)}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Remove .{domain}?</DialogTitle>
+          <DialogDescription>
+            Names under .{domain} stop resolving, and aliases under it are
+            forgotten.
+            {first ? ` Generated names move under .${next}.` : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={remove.isPending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Trash2 />
+            )}
+            Remove
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** A tunnel's Tailscale login, checked with Tailscale as it's saved. */
+function TailscaleLoginDialog({
+  onOpenChange,
+  tunnel,
+}: {
+  onOpenChange: (open: boolean) => void
   tunnel: TunnelOverview
 }) {
   const [values, setValues] = React.useState(() => initialLogin(tunnel))
@@ -204,11 +648,11 @@ export const TunnelLoginCard = React.memo(function TunnelLoginCard({
       }),
     onSuccess: (configured) => {
       setTunnels(configured.result)
-      setValues((current) => ({ ...current, clientSecret: "" }))
       showToast({
         message: `${tunnel.name}'s Tailscale login is checked and saved`,
         type: "success",
       })
+      onOpenChange(false)
     },
   })
   const hasSecret = tunnel.integration !== null
@@ -217,37 +661,61 @@ export const TunnelLoginCard = React.memo(function TunnelLoginCard({
     values.tag.trim() !== (tunnel.integration?.tags[0] ?? "") ||
     values.clientSecret.trim().length > 0
   return (
-    <form
-      className="grid gap-5 p-4 md:grid-cols-[minmax(0,1fr)_16rem]"
-      onSubmit={(event) => {
-        event.preventDefault()
-        save.mutate()
-      }}
-    >
-      <div className="min-w-0">
-        {tunnel.integration?.lastError ? (
-          <p
-            className="mb-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive light:bg-destructive/10"
-            role="alert"
+    <Dialog open onOpenChange={(open) => !save.isPending && onOpenChange(open)}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Tailscale login</DialogTitle>
+          <DialogDescription>
+            The OAuth client {tunnel.name}'s gateways log in with and set split
+            DNS through. It's checked with Tailscale as it saves.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id="tailscale-login"
+          className="grid gap-5 md:grid-cols-[minmax(0,1fr)_16rem]"
+          onSubmit={(event) => {
+            event.preventDefault()
+            save.mutate()
+          }}
+        >
+          <div className="min-w-0">
+            {tunnel.integration?.lastError ? (
+              <p
+                className="mb-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive light:bg-destructive/10"
+                role="alert"
+              >
+                {tunnel.integration.lastError}
+              </p>
+            ) : null}
+            <TailscaleLoginFields
+              compact
+              disabled={save.isPending}
+              hasSecret={hasSecret}
+              values={values}
+              onChange={setValues}
+            />
+            {save.error ? (
+              <p className="mt-3 text-xs text-destructive" role="alert">
+                {save.error.message}
+              </p>
+            ) : null}
+          </div>
+          <aside className="border-t pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-5">
+            <TailscaleLoginHelp tag={values.tag} />
+          </aside>
+        </form>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={save.isPending}
+            onClick={() => onOpenChange(false)}
           >
-            {tunnel.integration.lastError}
-          </p>
-        ) : null}
-        <TailscaleLoginFields
-          disabled={save.isPending}
-          hasSecret={hasSecret}
-          values={values}
-          onChange={setValues}
-        />
-        {save.error ? (
-          <p className="mt-3 text-xs text-destructive" role="alert">
-            {save.error.message}
-          </p>
-        ) : null}
-        <div className="mt-4 flex justify-end">
+            Cancel
+          </Button>
           <Button
             type="submit"
-            size="sm"
+            form="tailscale-login"
             disabled={
               !changed || !loginComplete(values, !hasSecret) || save.isPending
             }
@@ -259,187 +727,8 @@ export const TunnelLoginCard = React.memo(function TunnelLoginCard({
             )}
             {save.isPending ? "Checking…" : "Check and save"}
           </Button>
-        </div>
-      </div>
-      <aside className="border-t pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-5">
-        <TailscaleLoginHelp tag={values.tag} />
-      </aside>
-    </form>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
-})
-
-/**
- * A tunnel's name and its TLDs, in order. Generated names are under the
- * first; Tailscale's split DNS sends every one to its gateways.
- */
-export const TunnelSettingsCard = React.memo(function TunnelSettingsCard({
-  canWrite,
-  tunnel,
-}: {
-  canWrite: boolean
-  tunnel: TunnelOverview
-}) {
-  const [name, setName] = React.useState(tunnel.name)
-  const [domains, setDomains] = React.useState(tunnel.domains)
-  const [adding, setAdding] = React.useState("")
-  const save = useTunnelSave()
-  const nextTld = normalizeTld(adding)
-  const changed =
-    name.trim() !== tunnel.name ||
-    domains.join(" ") !== tunnel.domains.join(" ")
-  const disabled = !canWrite || save.isPending
-  const move = (index: number, by: number) =>
-    setDomains((current) => {
-      const next = [...current]
-      const [moved] = next.splice(index, 1)
-      next.splice(index + by, 0, moved!)
-      return next
-    })
-  const addTld = () => {
-    if (!nextTld || domains.includes(nextTld)) return
-    setDomains((current) => [...current, nextTld])
-    setAdding("")
-  }
-  return (
-    <form
-      className="grid gap-4 p-4"
-      onSubmit={(event) => {
-        event.preventDefault()
-        if (!changed || name.trim().length === 0) return
-        save.mutate({
-          change: { domains, name: name.trim() },
-          doing: "Saving its name and TLDs on every gateway",
-          done: "Its name and TLDs are saved",
-          tunnel,
-        })
-      }}
-    >
-      <label className="block max-w-sm">
-        <span className="mb-2 block text-xs font-medium">Name</span>
-        <Input
-          {...notALoginField}
-          disabled={disabled}
-          maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </label>
-      <div>
-        <p className="mb-2 text-xs font-medium">TLDs</p>
-        <ol className="divide-y divide-border/65 rounded-lg border border-border/70">
-          {domains.map((domain, index) => (
-            <li key={domain} className="flex items-center gap-2 px-3 py-1.5">
-              <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                .{domain}
-              </span>
-              {index === 0 ? (
-                <Badge variant="outline" className="type-meta">
-                  Generated names
-                </Badge>
-              ) : null}
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`Move .${domain} up`}
-                disabled={disabled || index === 0}
-                onClick={() => move(index, -1)}
-              >
-                <ArrowUp />
-              </Button>
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`Move .${domain} down`}
-                disabled={disabled || index === domains.length - 1}
-                onClick={() => move(index, 1)}
-              >
-                <ArrowDown />
-              </Button>
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`Remove .${domain}`}
-                disabled={disabled || domains.length === 1}
-                onClick={() =>
-                  setDomains((current) =>
-                    current.filter((candidate) => candidate !== domain)
-                  )
-                }
-              >
-                <X />
-              </Button>
-            </li>
-          ))}
-        </ol>
-        {canWrite && domains.length < MAXIMUM_TLDS ? (
-          <div className="mt-2 flex max-w-sm gap-2">
-            <Input
-              {...notALoginField}
-              aria-label="Another TLD"
-              disabled={disabled}
-              placeholder="test"
-              value={adding}
-              className="font-mono"
-              onChange={(event) => setAdding(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return
-                event.preventDefault()
-                addTld()
-              }}
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled || !nextTld || domains.includes(nextTld)}
-              onClick={addTld}
-            >
-              <Plus />
-              Add
-            </Button>
-          </div>
-        ) : null}
-        <p className="type-meta mt-2 text-muted-foreground">
-          Moving another TLD first moves every generated name under it. An alias
-          under a TLD that's removed is forgotten.
-        </p>
-      </div>
-      {save.error ? (
-        <p className="text-xs text-destructive" role="alert">
-          {save.error.message}
-        </p>
-      ) : null}
-      {canWrite ? (
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={!changed || save.isPending}
-            onClick={() => {
-              setName(tunnel.name)
-              setDomains(tunnel.domains)
-            }}
-          >
-            Undo
-          </Button>
-          <Button
-            type="submit"
-            size="sm"
-            disabled={!changed || !name.trim() || save.isPending}
-          >
-            {save.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Check />
-            )}
-            Save
-          </Button>
-        </div>
-      ) : null}
-    </form>
-  )
-})
+}

@@ -1,17 +1,9 @@
 import * as React from "react"
 import { useMutation } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import {
-  Boxes,
-  CircleAlert,
-  KeyRound,
-  LoaderCircle,
-  Network,
-  Settings2,
-  Trash2,
-} from "lucide-react"
+import { CircleAlert, LoaderCircle, Network, Trash2 } from "lucide-react"
+import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -23,108 +15,127 @@ import {
 } from "@workspace/ui/components/dialog"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import { TailscaleLogo } from "@/components/brand-logos"
 import {
-  CopyMetaRow,
-  DangerZone,
-  InfoCard,
-  InfoCardHeader,
-  MetaRow,
-} from "@/components/info-card"
+  InfoDangerAction,
+  InfoDangerZone,
+  InfoPage,
+  InfoRailGroup,
+  InfoRailLink,
+  InfoRailRow,
+  InfoSection,
+} from "@/components/info-page"
 import { TunnelKindIcon } from "@/components/instance-kind-icon"
-import { StatusIndicator } from "@/components/status-indicator"
 import {
-  tunnelStatus,
+  InstanceProfile,
+  InstanceProfileBrick,
+} from "@/components/instance-profile"
+import { RenameButton } from "@/components/rename-dialog"
+import { TunnelGatewaysSection } from "@/components/tunnel/tunnel-gateways-section"
+import {
+  tunnelSaveInput,
   useSetTunnels,
   type TunnelOverview,
 } from "@/components/tunnel/tunnel-data"
-import {
-  TunnelLoginCard,
-  TunnelSettingsCard,
-} from "@/components/tunnel/tunnel-settings"
+import { TunnelTldsSection } from "@/components/tunnel/tunnel-settings"
 import { useTunnelWorkspace } from "@/components/tunnel/tunnel-workspace-context"
-import { removeTunnel } from "@/server/tunnels"
+import { removeTunnel, saveTunnel } from "@/server/tunnels"
 
-// What a tunnel is and what it shares: its state, its gateways and what it
-// connects at a glance, its name and TLDs, its Tailscale login, and deleting
-// it. Whoever manages it changes them here.
+// What a tunnel is, on the Info page every instance has: its profile, its
+// gateways, its TLDs with its Tailscale login behind Configure, and deleting
+// it, with a rail summing up what it connects.
 export function TunnelInfoPage() {
   const { tunnel } = useTunnelWorkspace()
   const canManage = tunnel.access.manage && !tunnel.cleanup
   return (
-    <main className="min-h-0 flex-1 overflow-y-auto bg-background/55 p-4 sm:p-6">
-      <div className="mx-auto max-w-4xl space-y-4">
-        {tunnel.cleanup ? <TunnelCleanupState tunnel={tunnel} /> : null}
-        <InfoCard>
-          <InfoCardHeader
-            icon={<TunnelKindIcon />}
-            title="Tunnel · Tailscale"
-            action={<StatusIndicator status={tunnelStatus(tunnel)} />}
-          />
-          <CopyMetaRow label="Tunnel ID" value={tunnel.id} />
-          <MetaRow
-            icon={Boxes}
-            label="Brick"
-            value={tunnel.brickSource ?? "Kiln's Tailscale"}
-            mono={tunnel.brickSource !== null}
-          />
-          <MetaRow
-            icon={Network}
-            label="Gateways"
-            value={
-              tunnel.gateways.length === 0
-                ? "None yet. Connecting something adds one on its Relay."
-                : tunnel.gateways.map(({ relayName }) => relayName).join(", ")
-            }
-          />
-          <MetaRow
-            icon={Network}
-            label="Connected"
-            value={`${tunnel.bindings.length} ${
-              tunnel.bindings.length === 1 ? "instance" : "instances"
-            }`}
-          />
-          <MetaRow
-            icon={Settings2}
-            label="TLDs"
-            value={
-              <span className="flex flex-wrap gap-1">
-                {tunnel.domains.map((domain, index) => (
-                  <Badge key={domain} variant="outline" className="font-mono">
-                    .{domain}
-                    {index === 0 ? " · generated names" : ""}
-                  </Badge>
-                ))}
-              </span>
-            }
-          />
-        </InfoCard>
-        {canManage ? (
-          <>
-            <InfoCard>
-              <InfoCardHeader icon={<Settings2 />} title="Name and TLDs" />
-              <TunnelSettingsCard
-                key={`${tunnel.name}:${tunnel.domains.join(" ")}`}
-                canWrite
-                tunnel={tunnel}
-              />
-            </InfoCard>
-            <InfoCard>
-              <InfoCardHeader icon={<KeyRound />} title="Tailscale login" />
-              <TunnelLoginCard
-                key={`${tunnel.integration?.clientId}:${tunnel.integration?.tags.join(" ")}`}
-                tunnel={tunnel}
-              />
-            </InfoCard>
-            <DeleteTunnel tunnel={tunnel} />
-          </>
-        ) : null}
-      </div>
-    </main>
+    <InfoPage rail={<TunnelInfoRail tunnel={tunnel} />}>
+      {tunnel.cleanup ? <TunnelCleanupState tunnel={tunnel} /> : null}
+      <InstanceProfile
+        brick={
+          <InstanceProfileBrick icon={<TailscaleLogo />}>
+            {tunnel.brickSource ?? "Tailscale"}
+          </InstanceProfileBrick>
+        }
+        favorite={null}
+        icon={
+          <span className="relative grid size-16 shrink-0 place-items-center rounded-xl border border-border/70 bg-background/60 text-muted-foreground [&_svg]:size-7">
+            <TunnelKindIcon />
+          </span>
+        }
+        id={tunnel.id}
+        idLabel="tunnel ID"
+        name={tunnel.name}
+        rename={canManage ? <TunnelRenameButton tunnel={tunnel} /> : null}
+      />
+      <TunnelGatewaysSection tunnel={tunnel} />
+      <TunnelTldsSection canManage={canManage} tunnel={tunnel} />
+      {canManage ? (
+        <InfoDangerZone>
+          <InfoDangerAction
+            dialog={(onOpenChange) => (
+              <DeleteTunnelDialog tunnel={tunnel} onOpenChange={onOpenChange} />
+            )}
+          >
+            Delete tunnel
+          </InfoDangerAction>
+        </InfoDangerZone>
+      ) : null}
+    </InfoPage>
   )
 }
 
-function DeleteTunnel({ tunnel }: { tunnel: TunnelOverview }) {
-  const [open, setOpen] = React.useState(false)
+// What it connects and where, at a glance.
+const TunnelInfoRail = React.memo(function TunnelInfoRail({
+  tunnel,
+}: {
+  tunnel: TunnelOverview
+}) {
+  const connected = tunnel.bindings.length
+  const gateways = tunnel.gateways.length
+  return (
+    <InfoRailGroup card>
+      <InfoRailLink
+        to="/tunnel/$tunnelId/connected"
+        params={{ tunnelId: tunnel.id }}
+        leading={<Network />}
+        detail={connected}
+      >
+        Connected
+      </InfoRailLink>
+      <InfoRailRow leading={<TunnelKindIcon />} detail={gateways}>
+        {gateways === 1 ? "Gateway" : "Gateways"}
+      </InfoRailRow>
+    </InfoRailGroup>
+  )
+})
+
+// Hearth keeps the name, so renaming doesn't wait on its gateways.
+function TunnelRenameButton({ tunnel }: { tunnel: TunnelOverview }) {
+  const setTunnels = useSetTunnels()
+  const rename = React.useCallback(
+    async (name: string) =>
+      setTunnels(await saveTunnel({ data: tunnelSaveInput(tunnel, { name }) })),
+    [setTunnels, tunnel]
+  )
+  return (
+    <RenameButton
+      compact
+      id={tunnel.id}
+      maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
+      name={tunnel.name}
+      noun="tunnel"
+      rename={rename}
+    />
+  )
+}
+
+function DeleteTunnelDialog({
+  onOpenChange,
+  tunnel,
+}: {
+  onOpenChange: (open: boolean) => void
+  tunnel: TunnelOverview
+}) {
   const setTunnels = useSetTunnels()
   const navigate = useNavigate()
   const remove = useMutation({
@@ -135,67 +146,55 @@ function DeleteTunnel({ tunnel }: { tunnel: TunnelOverview }) {
         message: `Deleting ${tunnel.name} in the background`,
         type: "success",
       })
-      setOpen(false)
+      onOpenChange(false)
       void navigate({ replace: true, to: "/infra/tunnels" })
     },
   })
   const count = tunnel.gateways.length
   return (
-    <>
-      <DangerZone
-        title="Delete this tunnel"
-        action={
+    <Dialog
+      open
+      onOpenChange={(open) => !remove.isPending && onOpenChange(open)}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete {tunnel.name}?</DialogTitle>
+          <DialogDescription>
+            {count === 0
+              ? "Its Tailscale login and split DNS are forgotten."
+              : `Its ${count === 1 ? "gateway is" : `${count} gateways are`} removed, everything it connects is disconnected, and its Tailscale login and split DNS are forgotten. A Relay that's away finishes when it's back.`}
+          </DialogDescription>
+        </DialogHeader>
+        {remove.error ? (
+          <p className="text-xs text-destructive" role="alert">
+            {remove.error.message}
+          </p>
+        ) : null}
+        <DialogFooter>
           <Button
             type="button"
-            size="sm"
-            variant="destructive"
-            onClick={() => setOpen(true)}
+            variant="ghost"
+            disabled={remove.isPending}
+            onClick={() => onOpenChange(false)}
           >
-            <Trash2 />
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Trash2 />
+            )}
             Delete tunnel
           </Button>
-        }
-      />
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete {tunnel.name}?</DialogTitle>
-            <DialogDescription>
-              {count === 0
-                ? "Its Tailscale login and split DNS are forgotten."
-                : `Its ${count === 1 ? "gateway is" : `${count} gateways are`} removed, everything it connects is disconnected, and its Tailscale login and split DNS are forgotten. A Relay that's away finishes when it's back.`}
-            </DialogDescription>
-          </DialogHeader>
-          {remove.error ? (
-            <p className="text-xs text-destructive" role="alert">
-              {remove.error.message}
-            </p>
-          ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={remove.isPending}
-              onClick={() => remove.mutate()}
-            >
-              {remove.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Trash2 />
-              )}
-              Delete tunnel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -216,37 +215,37 @@ function TunnelCleanupState({
     ? retryFormatter.format(new Date(cleanup.nextAttemptAt))
     : null
   return (
-    <InfoCard>
-      <div className="flex flex-col items-center px-6 py-12 text-center">
-        <LoaderCircle className="size-6 animate-spin text-primary-ink" />
-        <p className="mt-3 text-sm font-semibold">Deleting {tunnel.name}</p>
-        <p className="type-support mt-1 text-muted-foreground">
-          {cleanup.pendingRelays}{" "}
-          {cleanup.pendingRelays === 1 ? "Relay" : "Relays"} to go. It carries
-          on by itself.
-        </p>
-        {cleanup.lastError ? (
-          <div
-            className="mt-4 flex max-w-lg items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-left light:bg-destructive/10"
-            role="status"
-          >
-            <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-            <div className="min-w-0">
-              <p className="text-xs break-words text-destructive">
-                {cleanup.lastError}
-              </p>
-              <p className="type-meta mt-1 text-muted-foreground">
-                {nextAttemptAt
-                  ? `Tries again ${nextAttemptAt}`
-                  : "Tries again shortly"}
-                {cleanup.attempts > 0
-                  ? ` · ${cleanup.attempts} ${cleanup.attempts === 1 ? "attempt" : "attempts"}`
-                  : ""}
-              </p>
-            </div>
+    <InfoSection
+      icon={<LoaderCircle className="animate-spin text-primary-ink" />}
+      title={`Deleting ${tunnel.name}`}
+      content
+    >
+      <p className="type-support text-muted-foreground">
+        {cleanup.pendingRelays}{" "}
+        {cleanup.pendingRelays === 1 ? "Relay" : "Relays"} to go. It carries on
+        by itself.
+      </p>
+      {cleanup.lastError ? (
+        <div
+          className="mt-3 flex items-start gap-2.5 border border-destructive/30 bg-destructive/5 px-3 py-2.5 light:bg-destructive/10"
+          role="status"
+        >
+          <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div className="min-w-0">
+            <p className="text-xs break-words text-destructive">
+              {cleanup.lastError}
+            </p>
+            <p className="type-meta mt-1 text-muted-foreground">
+              {nextAttemptAt
+                ? `Tries again ${nextAttemptAt}`
+                : "Tries again shortly"}
+              {cleanup.attempts > 0
+                ? ` · ${cleanup.attempts} ${cleanup.attempts === 1 ? "attempt" : "attempts"}`
+                : ""}
+            </p>
           </div>
-        ) : null}
-      </div>
-    </InfoCard>
+        </div>
+      ) : null}
+    </InfoSection>
   )
 }

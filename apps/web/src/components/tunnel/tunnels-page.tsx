@@ -464,15 +464,6 @@ const TunnelActions = React.memo(function TunnelActions({
             </DropdownMenuItem>
           ) : null}
           {canToggle || power.restart ? <DropdownMenuSeparator /> : null}
-          <DropdownMenuItem asChild>
-            <Link
-              to="/tunnel/$tunnelId/gateways"
-              params={{ tunnelId: tunnel.id }}
-            >
-              <TunnelKindIcon /> Gateways
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Tunnel ID" value={tunnel.id} />
         </DropdownMenuContent>
       </DropdownMenu>

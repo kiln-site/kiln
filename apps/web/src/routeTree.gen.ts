@@ -130,7 +130,6 @@ import { Route as AppServerServerIdTerminalRouteImport } from './routes/_app/ser
 import { Route as AppTunnelTunnelIdIndexRouteImport } from './routes/_app/tunnel/$tunnelId.index'
 import { Route as AppTunnelTunnelIdSplatRouteImport } from './routes/_app/tunnel/$tunnelId.$'
 import { Route as AppTunnelTunnelIdConnectedRouteImport } from './routes/_app/tunnel/$tunnelId.connected'
-import { Route as AppTunnelTunnelIdGatewaysRouteImport } from './routes/_app/tunnel/$tunnelId.gateways'
 import { Route as AppTunnelTunnelIdInfoRouteImport } from './routes/_app/tunnel/$tunnelId.info'
 import { Route as AppTunnelTunnelIdLogsRouteImport } from './routes/_app/tunnel/$tunnelId.logs'
 import { Route as AppTunnelTunnelIdTerminalRouteImport } from './routes/_app/tunnel/$tunnelId.terminal'
@@ -756,12 +755,6 @@ const AppTunnelTunnelIdConnectedRoute =
     path: '/connected',
     getParentRoute: () => AppTunnelTunnelIdRoute,
   } as any)
-const AppTunnelTunnelIdGatewaysRoute =
-  AppTunnelTunnelIdGatewaysRouteImport.update({
-    id: '/gateways',
-    path: '/gateways',
-    getParentRoute: () => AppTunnelTunnelIdRoute,
-  } as any)
 const AppTunnelTunnelIdInfoRoute = AppTunnelTunnelIdInfoRouteImport.update({
   id: '/info',
   path: '/info',
@@ -943,7 +936,6 @@ export interface FileRoutesByFullPath {
   '/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/tunnel/$tunnelId/$': typeof AppTunnelTunnelIdSplatRoute
   '/tunnel/$tunnelId/connected': typeof AppTunnelTunnelIdConnectedRoute
-  '/tunnel/$tunnelId/gateways': typeof AppTunnelTunnelIdGatewaysRoute
   '/tunnel/$tunnelId/info': typeof AppTunnelTunnelIdInfoRoute
   '/tunnel/$tunnelId/logs': typeof AppTunnelTunnelIdLogsRoute
   '/tunnel/$tunnelId/terminal': typeof AppTunnelTunnelIdTerminalRoute
@@ -1068,7 +1060,6 @@ export interface FileRoutesByTo {
   '/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/tunnel/$tunnelId/$': typeof AppTunnelTunnelIdSplatRoute
   '/tunnel/$tunnelId/connected': typeof AppTunnelTunnelIdConnectedRoute
-  '/tunnel/$tunnelId/gateways': typeof AppTunnelTunnelIdGatewaysRoute
   '/tunnel/$tunnelId/info': typeof AppTunnelTunnelIdInfoRoute
   '/tunnel/$tunnelId/logs': typeof AppTunnelTunnelIdLogsRoute
   '/tunnel/$tunnelId/terminal': typeof AppTunnelTunnelIdTerminalRoute
@@ -1205,7 +1196,6 @@ export interface FileRoutesById {
   '/_app/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/_app/tunnel/$tunnelId/$': typeof AppTunnelTunnelIdSplatRoute
   '/_app/tunnel/$tunnelId/connected': typeof AppTunnelTunnelIdConnectedRoute
-  '/_app/tunnel/$tunnelId/gateways': typeof AppTunnelTunnelIdGatewaysRoute
   '/_app/tunnel/$tunnelId/info': typeof AppTunnelTunnelIdInfoRoute
   '/_app/tunnel/$tunnelId/logs': typeof AppTunnelTunnelIdLogsRoute
   '/_app/tunnel/$tunnelId/terminal': typeof AppTunnelTunnelIdTerminalRoute
@@ -1342,7 +1332,6 @@ export interface FileRouteTypes {
     | '/server/$serverId/terminal'
     | '/tunnel/$tunnelId/$'
     | '/tunnel/$tunnelId/connected'
-    | '/tunnel/$tunnelId/gateways'
     | '/tunnel/$tunnelId/info'
     | '/tunnel/$tunnelId/logs'
     | '/tunnel/$tunnelId/terminal'
@@ -1467,7 +1456,6 @@ export interface FileRouteTypes {
     | '/server/$serverId/terminal'
     | '/tunnel/$tunnelId/$'
     | '/tunnel/$tunnelId/connected'
-    | '/tunnel/$tunnelId/gateways'
     | '/tunnel/$tunnelId/info'
     | '/tunnel/$tunnelId/logs'
     | '/tunnel/$tunnelId/terminal'
@@ -1603,7 +1591,6 @@ export interface FileRouteTypes {
     | '/_app/server/$serverId/terminal'
     | '/_app/tunnel/$tunnelId/$'
     | '/_app/tunnel/$tunnelId/connected'
-    | '/_app/tunnel/$tunnelId/gateways'
     | '/_app/tunnel/$tunnelId/info'
     | '/_app/tunnel/$tunnelId/logs'
     | '/_app/tunnel/$tunnelId/terminal'
@@ -2513,13 +2500,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTunnelTunnelIdConnectedRouteImport
       parentRoute: typeof AppTunnelTunnelIdRoute
     }
-    '/_app/tunnel/$tunnelId/gateways': {
-      id: '/_app/tunnel/$tunnelId/gateways'
-      path: '/gateways'
-      fullPath: '/tunnel/$tunnelId/gateways'
-      preLoaderRoute: typeof AppTunnelTunnelIdGatewaysRouteImport
-      parentRoute: typeof AppTunnelTunnelIdRoute
-    }
     '/_app/tunnel/$tunnelId/info': {
       id: '/_app/tunnel/$tunnelId/info'
       path: '/info'
@@ -2874,7 +2854,6 @@ const AppServerServerIdRouteWithChildren =
 interface AppTunnelTunnelIdRouteChildren {
   AppTunnelTunnelIdSplatRoute: typeof AppTunnelTunnelIdSplatRoute
   AppTunnelTunnelIdConnectedRoute: typeof AppTunnelTunnelIdConnectedRoute
-  AppTunnelTunnelIdGatewaysRoute: typeof AppTunnelTunnelIdGatewaysRoute
   AppTunnelTunnelIdInfoRoute: typeof AppTunnelTunnelIdInfoRoute
   AppTunnelTunnelIdLogsRoute: typeof AppTunnelTunnelIdLogsRoute
   AppTunnelTunnelIdTerminalRoute: typeof AppTunnelTunnelIdTerminalRoute
@@ -2884,7 +2863,6 @@ interface AppTunnelTunnelIdRouteChildren {
 const AppTunnelTunnelIdRouteChildren: AppTunnelTunnelIdRouteChildren = {
   AppTunnelTunnelIdSplatRoute: AppTunnelTunnelIdSplatRoute,
   AppTunnelTunnelIdConnectedRoute: AppTunnelTunnelIdConnectedRoute,
-  AppTunnelTunnelIdGatewaysRoute: AppTunnelTunnelIdGatewaysRoute,
   AppTunnelTunnelIdInfoRoute: AppTunnelTunnelIdInfoRoute,
   AppTunnelTunnelIdLogsRoute: AppTunnelTunnelIdLogsRoute,
   AppTunnelTunnelIdTerminalRoute: AppTunnelTunnelIdTerminalRoute,

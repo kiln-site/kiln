@@ -43,7 +43,7 @@ import {
   type GatewayOutcome,
 } from "@/server/tunnel-instances"
 
-// A tunnel's pages: Info, Gateways, Connected, Logs and Terminal, in the
+// A tunnel's pages: Info, Connected, Logs and Terminal, in the
 // frame every instance's pages share. Its power and deploying it again act
 // on every gateway it has.
 

@@ -1224,15 +1224,13 @@ const InstanceSelector = React.memo(function InstanceSelector({
         void navigate(
           tab === "connected"
             ? { to: "/tunnel/$tunnelId/connected", params: { tunnelId } }
-            : tab === "gateways"
-              ? { to: "/tunnel/$tunnelId/gateways", params: { tunnelId } }
-              : tab === "logs"
-                ? { to: "/tunnel/$tunnelId/logs", params: { tunnelId } }
-                : tab === "terminal"
-                  ? { to: "/tunnel/$tunnelId/terminal", params: { tunnelId } }
-                  : tab === "info"
-                    ? { to: "/tunnel/$tunnelId/info", params: { tunnelId } }
-                    : { to: "/tunnel/$tunnelId", params: { tunnelId } }
+            : tab === "logs"
+              ? { to: "/tunnel/$tunnelId/logs", params: { tunnelId } }
+              : tab === "terminal"
+                ? { to: "/tunnel/$tunnelId/terminal", params: { tunnelId } }
+                : tab === "info"
+                  ? { to: "/tunnel/$tunnelId/info", params: { tunnelId } }
+                  : { to: "/tunnel/$tunnelId", params: { tunnelId } }
         )
         return
       }
@@ -2151,7 +2149,7 @@ function appTabFromPathname(pathname: string): AppDestinationId | null {
 
 function tunnelTabFromPathname(pathname: string) {
   return (
-    /^\/tunnel\/[^/]+\/(connected|gateways|info|logs|terminal)\/?$/.exec(
+    /^\/tunnel\/[^/]+\/(connected|info|logs|terminal)\/?$/.exec(
       pathname
     )?.[1] ?? null
   )

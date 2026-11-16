@@ -311,11 +311,14 @@ On the components every instance's pages share. Built.
   its TLDs, how many gateways (and on which Relays) and how many things it
   connects. The sidebar counts tunnels, and its instance picker lists them.
 - **A tunnel's page** (`/tunnel/$id`):
-  - **Info:** its ID, Brick, gateways and TLDs, then its name and TLDs, its
-    Tailscale login and deleting it, until Info pages are one.
-  - **Gateways:** one row per Relay, with its state, Tailscale IP, what
-    connects through it, and power, deploying again and its logs. None is
-    added here: gateways follow what's connected.
+  - **Info:** the Info page every instance has. Its profile (name with
+    rename, Kiln ID, Brick); a Gateways table, one row per Relay with its
+    state, Tailscale IP, what connects through it, and power, deploying
+    again and its logs; a TLDs table, where one is added, made the one
+    generated names go under, or removed, with the Tailscale login behind
+    the table's key button; deleting it; and a rail counting what it
+    connects and its gateways. No gateway is added here: gateways follow
+    what's connected.
   - **Connected:** everything it connects, with its names. Connecting picks
     from every Relay; one with no gateway yet says it adds one, and the
     toast follows Tailscale logging it in.

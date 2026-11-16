@@ -23,7 +23,6 @@ import {
   SquareChevronRight,
   Table2,
   TerminalSquare,
-  Waypoints,
   Workflow,
 } from "lucide-react"
 import {
@@ -350,12 +349,7 @@ export function canAccessInstancePermission(
   )
 }
 
-export type TunnelDestinationId =
-  | "connected"
-  | "gateways"
-  | "info"
-  | "logs"
-  | "terminal"
+export type TunnelDestinationId = "connected" | "info" | "logs" | "terminal"
 
 export interface TunnelDestination extends NavigationDestination {
   id: TunnelDestinationId
@@ -366,18 +360,10 @@ export const tunnelDestinations = [
   {
     icon: SlidersHorizontal,
     id: "info",
-    keywords: ["details", "settings", "tlds", "login", "tailscale"],
+    keywords: ["details", "settings", "tlds", "login", "tailscale", "gateways"],
     label: "Info",
     permission: "instance.read",
     to: "/tunnel/$tunnelId/info",
-  },
-  {
-    icon: Waypoints,
-    id: "gateways",
-    keywords: ["relays", "tailscale", "coredns", "power"],
-    label: "Gateways",
-    permission: "instance.read",
-    to: "/tunnel/$tunnelId/gateways",
   },
   {
     icon: Network,
