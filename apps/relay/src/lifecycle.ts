@@ -123,7 +123,6 @@ import {
   tunnelCorefile,
   tunnelHostsFile,
   TUNNEL_DNS_MOUNT,
-  tunnelCoreDnsRecords,
   tunnelFirewallIsCurrent,
   tunnelFirewallRules,
   tunnelServiceAddress,
@@ -729,23 +728,6 @@ export class LifecycleDriver {
     )
   }
 
-  #assertUniqueTailscaleHostnames(
-    domain: string,
-    bindings: ReadonlyArray<{ hostname: string }>
-  ): void {
-    const duplicateHostname = bindings.find(
-      (binding, index, bindings) =>
-        bindings.findIndex(
-          (candidate) => candidate.hostname === binding.hostname
-        ) !== index
-    )
-    if (duplicateHostname) {
-      throw new Error(
-        `Hostname ${duplicateHostname.hostname}.${domain} is selected more than once`
-      )
-    }
-  }
-
   async applyTunnel(
     rawInput: TunnelApply,
     planned?: string
@@ -785,8 +767,6 @@ export class LifecycleDriver {
       }
     }
 
-    this.#assertUniqueTailscaleHostnames(input.domain, input.bindings)
-
     const reservedSubnets = new Set(
       (await this.#tunnelConfigs())
         .filter((config) => config.id !== input.id)
@@ -806,7 +786,7 @@ export class LifecycleDriver {
     )
     const config = tunnelConfigSchema.parse({
       bindings,
-      domain: input.domain,
+      domains: input.domains,
       hostname: input.hostname,
       id: input.id,
       name: input.name,
@@ -892,17 +872,12 @@ export class LifecycleDriver {
     )
     const config = await this.#readTunnelConfig(input.id)
     if (!config) throw new Error("Tailscale stack not found")
-    const duplicateHostname = input.records.find(
+    const duplicate = input.records.find(
       (record, index, records) =>
-        records.findIndex(
-          (candidate) => candidate.hostname === record.hostname
-        ) !== index
+        records.findIndex((candidate) => candidate.name === record.name) !==
+        index
     )
-    if (duplicateHostname) {
-      throw new Error(
-        `Duplicate private hostname ${duplicateHostname.hostname}`
-      )
-    }
+    if (duplicate) throw new Error(`Duplicate name ${duplicate.name}`)
     await this.#ensureTunnelDns(config, input.records)
     return this.#tunnel(config)
   }
@@ -4162,7 +4137,7 @@ export class LifecycleDriver {
    */
   async #ensureTunnelDns(
     config: TunnelConfig,
-    records: ReadonlyArray<{ address: string; hostname: string }>,
+    records: ReadonlyArray<{ address: string; name: string }>,
     recreate = false
   ): Promise<void> {
     await runLifecycle(
@@ -4179,13 +4154,10 @@ export class LifecycleDriver {
     )
     await mkdir(directory, { mode: 0o755, recursive: true })
     await chmod(directory, 0o755)
-    await writeIfChanged(
-      join(directory, "hosts"),
-      tunnelHostsFile(config.domain, records)
-    )
+    await writeIfChanged(join(directory, "hosts"), tunnelHostsFile(records))
     await writeIfChanged(
       join(directory, "Corefile"),
-      tunnelCorefile(config.domain)
+      tunnelCorefile(config.domains)
     )
     const name = this.#resources.tunnelDnsContainer(config.id)
     const labels = await this.#containerLabels(name)
@@ -4275,47 +4247,26 @@ export class LifecycleDriver {
       : null
   }
 
+  // The records Hearth last sent; none before it sent any.
   async #readTunnelDnsRecords(
     config: TunnelConfig
-  ): Promise<Array<{ address: string; hostname: string }>> {
+  ): Promise<Array<{ address: string; name: string }>> {
     return runLifecycle(
       lifecycleOperation(
         async () =>
           tunnelDnsSchema.parse(
             JSON.parse(
-              await readFile(
-                this.#tunnelDnsRecordsPath(config.id),
-                "utf8"
-              )
+              await readFile(this.#tunnelDnsRecordsPath(config.id), "utf8")
             )
           ).records
       ).pipe(
-        Effect.catch((cause) => {
-          if (!hasErrorCode(cause, "ENOENT")) return Effect.fail(cause)
-          return lifecycleOperation(async () =>
-            tunnelCoreDnsRecords(
-              config.domain,
-              await readFile(
-                join(
-                  this.#config.rootDirectory,
-                  physicalKey(config.id),
-                  "Corefile"
-                ),
-                "utf8"
-              )
-            )
-          ).pipe(
-            // Hearth hasn't sent any yet.
-            Effect.catch((fallbackCause) =>
-              hasErrorCode(fallbackCause, "ENOENT")
-                ? Effect.succeed([])
-                : Effect.fail(fallbackCause)
-            )
-          )
-        })
+        Effect.catch((cause) =>
+          hasErrorCode(cause, "ENOENT") ? Effect.succeed([]) : Effect.fail(cause)
+        )
       )
     )
   }
+
 
   async #waitForTunnelConnection(
     id: string,

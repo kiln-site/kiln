@@ -27,7 +27,7 @@ describe("Tailscale deployment orchestration", () => {
         authKey: "test-auth-key",
         current: [],
         desired: [target("relay-a")],
-        domain: "test",
+        domains: ["test"],
         id: "a".repeat(12),
         name: "Test network",
         operations: {
@@ -56,13 +56,14 @@ describe("Tailscale deployment orchestration", () => {
       applyTailscaleDeploymentPlan({
         current,
         desired: [target("relay-a"), target("relay-b")],
-        domain: "test",
+        domains: ["test"],
         id: "a".repeat(12),
         name: "Test network",
         operations: {
           apply: async (desired, input) => {
-            held.set(desired.relayId, input.bindings[0]?.hostname ?? "")
-            if (input.bindings[0]?.hostname === "old") {
+            // The member it holds stands for what it was given.
+            held.set(desired.relayId, input.bindings[0]?.memberId ?? "")
+            if (input.bindings[0]?.memberId === "old") {
               restored.push(desired.relayId)
               return deployment(desired.relayId, "old")
             }
@@ -88,7 +89,7 @@ describe("Tailscale deployment orchestration", () => {
 function target(relayId: string): DesiredTunnel {
   return {
     bindings: [
-      { enabled: true, hostname: `new-${relayId}`, memberId: relayId },
+      { enabled: true, memberId: `new-${relayId}` },
     ],
     hostname: `network-${relayId}`,
     id: tunnelId(relayId),
@@ -112,11 +113,10 @@ function deployment(
       {
         address,
         enabled: true,
-        hostname: revision === "old" ? "old" : `new-${relayId}`,
-        memberId: relayId,
+        memberId: revision === "old" ? "old" : `new-${relayId}`,
       },
     ],
-    domain: "test",
+    domains: ["test"],
     hostname: `network-${relayId}`,
     id: tunnelId(relayId),
     name: "Test network",

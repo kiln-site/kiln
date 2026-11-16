@@ -30,7 +30,7 @@ function stackConfig(
 ): TunnelConfig {
   return tunnelConfigSchema.parse({
     bindings: [],
-    domain: "test",
+    domains: ["test"],
     hostname: "private-network",
     id,
     name: "Private Network",
@@ -70,7 +70,7 @@ function stackContainer(harness: RelayHarness, id: string, running: boolean) {
 async function savedStack(
   harness: RelayHarness,
   config: TunnelConfig,
-  records: ReadonlyArray<{ address: string; hostname: string }>
+  records: ReadonlyArray<{ address: string; name: string }>
 ) {
   const directory = join(harness.config.rootDirectory, config.id)
   await mkdir(directory, { recursive: true })
@@ -90,7 +90,7 @@ async function savedState(harness: RelayHarness, id: string) {
   )
   const records = JSON.parse(
     await readFile(join(directory, "dns-records.json"), "utf8")
-  ).records as Array<{ address: string; hostname: string }>
+  ).records as Array<{ address: string; name: string }>
   // What CoreDNS answers from: the hosts file in its folder.
   const hosts = await readFile(join(directory, "dns", "hosts"), "utf8").catch(
     () => null
@@ -166,13 +166,11 @@ describe("Tailscale stack forwarding", () => {
             {
               address: bound,
               enabled: true,
-              hostname: "paper",
               memberId: `instance:${"d".repeat(12)}`,
             },
             {
               address: "10.165.57.11",
               enabled: false,
-              hostname: "paused",
               memberId: `instance:${"e".repeat(12)}`,
             },
           ],
@@ -244,16 +242,16 @@ describe("Tailscale network members", () => {
   const otherServerId = "1".repeat(12)
   const appId = "e".repeat(12)
   const databaseId = "d".repeat(12)
-  const binding = (memberId: string, hostname: string, host: number) => ({
+  // Named for the reader: Hearth keeps members' names, not the Relay.
+  const binding = (memberId: string, _name: string, host: number) => ({
     address: `10.165.60.${host}`,
     enabled: true,
-    hostname,
     memberId,
   })
   // Hearth's records: a peer node's member, and this node's game server.
   const hearthRecords = [
-    { address: "10.165.61.10", hostname: "peer" },
-    { address: "10.165.60.10", hostname: "paper" },
+    { address: "10.165.61.10", name: "peer.test" },
+    { address: "10.165.60.10", name: "paper.test" },
   ]
   const members = stackConfig(stackId, {
     bindings: [
@@ -330,16 +328,14 @@ describe("Tailscale network members", () => {
       bindings: [
         {
           enabled: true,
-          hostname: "paper",
           memberId: instanceTailscaleMemberId(serverId),
         },
         {
           enabled: true,
-          hostname: "other",
           memberId: instanceTailscaleMemberId(otherServerId),
         },
       ],
-      domain: servers.domain,
+      domains: servers.domains,
       hostname: servers.hostname,
       id: stackId,
       tailnetId,
@@ -359,10 +355,10 @@ describe("Tailscale forwarding repair", () => {
   const otherServerId = "1".repeat(12)
   const binding = (
     memberId: string,
-    hostname: string,
+    _name: string,
     host: number,
     enabled: boolean
-  ) => ({ address: `10.165.63.${host}`, enabled, hostname, memberId })
+  ) => ({ address: `10.165.63.${host}`, enabled, memberId })
   const before = stackConfig(stackId, {
     bindings: [
       binding(instanceTailscaleMemberId(serverId), "paper", 10, true),
@@ -404,12 +400,11 @@ describe("Tailscale forwarding repair", () => {
       applying.run(
         Effect.promise(() =>
           harness.lifecycle.applyTunnel({
-            bindings: before.bindings.map(({ hostname, memberId }) => ({
+            bindings: before.bindings.map(({ memberId }) => ({
               enabled: true,
-              hostname,
               memberId,
             })),
-            domain: before.domain,
+            domains: before.domains,
             hostname: before.hostname,
             id: stackId,
             tailnetId,
@@ -447,7 +442,7 @@ describe("Tailscale forwarding repair", () => {
 describe("A tunnel as an instance", () => {
   async function runningTunnel(harness: RelayHarness, id: string) {
     await savedStack(harness, stackConfig(id), [
-      { address: "10.165.55.10", hostname: "paper" },
+      { address: "10.165.55.10", name: "paper.test" },
     ])
     fakeDocker.addNetwork({
       labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
@@ -509,7 +504,7 @@ describe("A tunnel as an instance", () => {
     expect(replaced?.state.running).toBe(true)
     expect(redeployed).toMatchObject({ id, observedState: "running" })
     expect((await savedState(harness, id)).records).toEqual([
-      { address: "10.165.55.10", hostname: "paper" },
+      { address: "10.165.55.10", name: "paper.test" },
     ])
   })
 })
@@ -521,7 +516,7 @@ describe("A tunnel's DNS", () => {
     const harness = await relayHarness()
     const id = "f".repeat(12)
     await savedStack(harness, stackConfig(id), [
-      { address: "10.165.55.10", hostname: "paper" },
+      { address: "10.165.55.10", name: "paper.test" },
     ])
     fakeDocker.addNetwork({
       labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
@@ -530,7 +525,7 @@ describe("A tunnel's DNS", () => {
     stackContainer(harness, id, true)
     await harness.lifecycle.syncTunnelDns({
       id,
-      records: [{ address: "10.165.55.10", hostname: "paper" }],
+      records: [{ address: "10.165.55.10", name: "paper.test" }],
     })
     const dns = harness.resources.tunnelDnsContainer(id)
     const before = fakeDocker.container(dns)?.id
@@ -538,8 +533,8 @@ describe("A tunnel's DNS", () => {
     await harness.lifecycle.syncTunnelDns({
       id,
       records: [
-        { address: "10.165.55.10", hostname: "paper" },
-        { address: "10.165.55.11", hostname: "survival" },
+        { address: "10.165.55.10", name: "paper.test" },
+        { address: "10.165.55.11", name: "survival.test" },
       ],
     })
 

@@ -183,7 +183,7 @@ const ConnectedMembersTableContent = React.memo(
           cached.member === member &&
           cached.binding === binding &&
           cached.deployment === deployment &&
-          cached.domain === stack.domain &&
+          cached.domain === stack.domains[0] &&
           cached.stackId === stack.id
         ) {
           next.push(cached)
@@ -192,7 +192,7 @@ const ConnectedMembersTableContent = React.memo(
         const row = {
           binding,
           deployment,
-          domain: stack.domain,
+          domain: stack.domains[0] ?? "",
           member,
           stackId: stack.id,
         }
@@ -1100,11 +1100,11 @@ const MembershipRow = React.memo(function MembershipRow({
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold">{stack.name}</p>
           <p className="type-meta mt-0.5 truncate font-mono text-muted-foreground">
-            {binding ? binding.address : `*.${stack.domain}`}
+            {binding ? binding.address : `*.${stack.domains[0]}`}
           </p>
         </div>
         <p className="type-code min-w-0 truncate text-muted-foreground">
-          {binding ? `${binding.hostname}.${stack.domain}` : "Not connected"}
+          {binding ? `${binding.hostname}.${stack.domains[0]}` : "Not connected"}
         </p>
         <div className="flex items-center justify-end gap-1">
           {binding ? (
@@ -1116,7 +1116,7 @@ const MembershipRow = React.memo(function MembershipRow({
                     size="icon-sm"
                     variant="ghost"
                     disabled={disabled}
-                    aria-label={`Edit ${binding.hostname}.${stack.domain}`}
+                    aria-label={`Edit ${binding.hostname}.${stack.domains[0]}`}
                     onClick={() => onJoin(stack.id)}
                   >
                     <Pencil />
@@ -1246,7 +1246,7 @@ const JoinNetworkDialog = React.memo(function JoinNetworkDialog({
                 className="min-w-0 rounded-r-none font-mono"
               />
               <span className="flex h-8 shrink-0 items-center border border-l-0 border-input bg-muted/30 px-3 font-mono text-xs text-muted-foreground">
-                .{network.domain}
+                .{network.domains[0]}
               </span>
             </div>
           </label>
@@ -1448,7 +1448,7 @@ function stackSaveInput(
   stack: TailnetOverview,
   bindings: Array<StackBinding>,
   authKey?: string,
-  domain = stack.domain
+  domains = stack.domains
 ): SaveStackInput {
   return {
     ...(authKey ? { authKey } : {}),
@@ -1458,7 +1458,7 @@ function stackSaveInput(
       memberId,
       relayId,
     })),
-    domain,
+    domains,
     id: stack.id,
     name: stack.name,
   }

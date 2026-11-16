@@ -38,7 +38,8 @@ export interface TailscaleOAuthCredential {
 
 export interface TailnetDefinition {
   cleanup: TailnetCleanup | null
-  domain: string
+  /** Its TLDs, in order: the first is the one generated names are under. */
+  domains: Array<string>
   id: string
   integration: TailscaleIntegration | null
   name: string
@@ -58,7 +59,6 @@ interface TailnetRow extends RowDataPacket {
   cleanup_next_attempt_at: number | null
   cleanup_pending_relays: number | string
   deletion_requested_at: number | null
-  domain: string
   id: string
   name: string
   oauth_client_id: string | null
@@ -103,7 +103,7 @@ export const loadTailnetDefinitionsEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<TailnetRow>(
     "tailnets.load",
-    `SELECT tailnet.id, tailnet_group.name, tailnet.domain,
+    `SELECT tailnet.id, tailnet_group.name,
             tailnet.oauth_client_id, oauth_client_secret_ciphertext,
             oauth_scopes, oauth_tags, oauth_last_synced_at, oauth_last_error,
             deletion_requested_at, cleanup_attempts,
@@ -116,9 +116,20 @@ export const loadTailnetDefinitionsEffect = Effect.fn(
          ON tailnet_group.id = tailnet.id
       ORDER BY tailnet_group.name, tailnet.id`
   )
+  const domains = yield* database.queryRows<
+    RowDataPacket & { domain: string; tailnet_id: string }
+  >(
+    "tailnets.domains",
+    `SELECT tailnet_id, domain FROM ${databaseTable("tailnet_domain")}
+      ORDER BY tailnet_id, position, domain`
+  )
+  const domainsOf = (id: string) =>
+    domains
+      .filter((row) => row.tailnet_id === id)
+      .map((row) => relayTailscaleDomainSchema.parse(row.domain))
   return rows.map((row) => ({
     cleanup: cleanupState(row),
-    domain: relayTailscaleDomainSchema.parse(row.domain),
+    domains: domainsOf(row.id),
     id: tunnelIdSchema.parse(row.id),
     integration: publicIntegration(row),
     name: relayInstanceNameSchema.parse(row.name),
@@ -141,13 +152,12 @@ export const createTailnetDefinitionEffect = Effect.fn(
       yield* insertTailnetGroup(transaction, definition, ownerId, now)
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("tailnet")}
-           (id, domain, owner_id, oauth_client_id,
+           (id, owner_id, oauth_client_id,
             oauth_client_secret_ciphertext, oauth_scopes, oauth_tags,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           definition.id,
-          definition.domain,
           ownerId,
           credential.clientId,
           ciphertext,
@@ -157,6 +167,7 @@ export const createTailnetDefinitionEffect = Effect.fn(
           now,
         ]
       )
+      yield* replaceTailnetDomains(transaction, definition)
     })
   )
 })
@@ -178,11 +189,10 @@ export const saveTailnetDefinitionEffect = Effect.fn(
       )
       if (existing.length > 0) {
         yield* transaction.execute(
-          `UPDATE ${databaseTable("tailnet")}
-            SET domain = ?, updated_at = ?
-          WHERE id = ?`,
-          [definition.domain, now, definition.id]
+          `UPDATE ${databaseTable("tailnet")} SET updated_at = ? WHERE id = ?`,
+          [now, definition.id]
         )
+        yield* replaceTailnetDomains(transaction, definition)
         yield* transaction.execute(
           `UPDATE ${databaseTable("instance_group")}
             SET name = ?, updated_at = ?
@@ -194,10 +204,11 @@ export const saveTailnetDefinitionEffect = Effect.fn(
       yield* insertTailnetGroup(transaction, definition, ownerId, now)
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("tailnet")}
-         (id, domain, owner_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
-        [definition.id, definition.domain, ownerId, now, now]
+         (id, owner_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?)`,
+        [definition.id, ownerId, now, now]
       )
+      yield* replaceTailnetDomains(transaction, definition)
     })
   )
 })
@@ -246,7 +257,7 @@ export const loadTailnetCredentialEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<TailnetRow>(
     "tailnets.integration.load",
-    `SELECT id, domain, oauth_client_id,
+    `SELECT id, oauth_client_id,
             oauth_client_secret_ciphertext, oauth_scopes, oauth_tags,
             oauth_last_synced_at, oauth_last_error
        FROM ${databaseTable("tailnet")}
@@ -355,6 +366,28 @@ export const removeTailnetDefinitionEffect = Effect.fn(
     })
   )
 })
+
+// A tailnet's TLDs, in its order. A TLD another tailnet has fails the
+// transaction, as each is unique.
+function replaceTailnetDomains(
+  transaction: DatabaseTransaction,
+  definition: Pick<TailnetDefinition, "domains" | "id">
+) {
+  return Effect.gen(function* () {
+    yield* transaction.execute(
+      `DELETE FROM ${databaseTable("tailnet_domain")} WHERE tailnet_id = ?`,
+      [definition.id]
+    )
+    for (const [position, domain] of definition.domains.entries()) {
+      yield* transaction.execute(
+        `INSERT INTO ${databaseTable("tailnet_domain")}
+           (tailnet_id, domain, position)
+         VALUES (?, ?, ?)`,
+        [definition.id, domain, position]
+      )
+    }
+  })
+}
 
 // A tailnet is an instance group of its tunnels, which Kiln makes for it.
 function insertTailnetGroup(

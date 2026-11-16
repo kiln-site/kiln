@@ -73,7 +73,7 @@ vi.mock("@/effect/tailscale-api", async (importOriginal) => {
       credential: { clientSecret: string },
       network: {
         deployments: ReadonlyArray<{ status: { ipv4Address: string | null } }>
-        domain: string
+        domains: ReadonlyArray<string>
       }
     ) =>
       tailnet(credential).pipe(
@@ -81,9 +81,10 @@ vi.mock("@/effect/tailscale-api", async (importOriginal) => {
           const resolvers = network.deployments.flatMap(({ status }) =>
             status.ipv4Address ? [status.ipv4Address] : []
           )
-          if (resolvers.length > 0)
-            fake.tailnetDns.set(network.domain, resolvers)
-          else fake.tailnetDns.delete(network.domain)
+          for (const domain of network.domains) {
+            if (resolvers.length > 0) fake.tailnetDns.set(domain, resolvers)
+            else fake.tailnetDns.delete(domain)
+          }
           return { resolvers }
         })
       ),
@@ -113,7 +114,7 @@ const seedNetworkBeingDeleted = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertRelay(relayId, { name: "Relay One" })
   yield* createTailnetDefinitionEffect(
-    { domain, id: networkId, name: "Private Network" },
+    { domains: [domain], id: networkId, name: "Private Network" },
     { clientId: "tailscale-client", scopes: [], tags: ["tag:kiln"] },
     fake.tailnetSecret,
     "user-one"
@@ -186,7 +187,7 @@ function deployment(): PersistedTunnel {
   const parsed = tunnelSchema.parse({
     bindings: [],
     components: { coreDnsRunning: true, tailscaleRunning: true },
-    domain,
+    domains: [domain],
     hostname,
     id: tunnelId,
     name: "Private Network",

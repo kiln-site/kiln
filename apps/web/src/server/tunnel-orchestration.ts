@@ -7,13 +7,12 @@ import { TailscaleOrchestrationError } from "@/effect/errors"
 interface TailscaleBindingState {
   address: string
   enabled: boolean
-  hostname: string
   memberId: string
 }
 
 export interface TunnelPlanState {
   bindings: Array<TailscaleBindingState>
-  domain: string
+  domains: Array<string>
   hostname: string
   id: string
   name: string
@@ -26,7 +25,6 @@ export interface TunnelPlanState {
 export interface DesiredTunnel {
   bindings: Array<{
     enabled: boolean
-    hostname: string
     memberId: string
   }>
   hostname: string
@@ -60,7 +58,7 @@ export const applyTunnelPlanEffect = Effect.fn(
   authKeyForTarget,
   current,
   desired,
-  domain,
+  domains,
   id,
   name,
   operations,
@@ -73,7 +71,7 @@ export const applyTunnelPlanEffect = Effect.fn(
   ) => Promise<string | undefined>
   current: ReadonlyArray<TDeployment>
   desired: ReadonlyArray<DesiredTunnel>
-  domain: string
+  domains: Array<string>
   id: string
   name: string
   operations: TunnelOperations<TDeployment>
@@ -114,7 +112,7 @@ export const applyTunnelPlanEffect = Effect.fn(
             operations.apply(target, {
               ...(targetAuthKey ? { authKey: targetAuthKey } : {}),
               bindings: target.bindings,
-              domain,
+              domains,
               hostname: target.hostname,
               id: target.id,
               name,
@@ -234,13 +232,12 @@ const rollbackTunnelPlanEffect = Effect.fn(
         ? promiseOperation("rollback", () =>
             operations.apply(deploymentTarget(previous), {
               bindings: previous.bindings.map(
-                ({ enabled, hostname, memberId }) => ({
+                ({ enabled, memberId }) => ({
                   enabled,
-                  hostname,
                   memberId,
                 })
               ),
-              domain: previous.domain,
+              domains: previous.domains,
               hostname: previous.hostname,
               id: previous.id,
               name: previous.name,
@@ -305,9 +302,8 @@ function deploymentTarget(
   deployment: TunnelPlanState
 ): DesiredTunnel {
   return {
-    bindings: deployment.bindings.map(({ enabled, hostname, memberId }) => ({
+    bindings: deployment.bindings.map(({ enabled, memberId }) => ({
       enabled,
-      hostname,
       memberId,
     })),
     hostname: deployment.hostname,

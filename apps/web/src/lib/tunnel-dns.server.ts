@@ -9,6 +9,8 @@ import { Effect, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
 import { tailnetRelaysEffect } from "@/effect/tailnets"
+import { runAppEffect } from "@/effect/runtime"
+import { listTunnelNamesEffect, tunnelNameOf } from "@/effect/tunnel-names"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { tailnetSettingsKey } from "@/lib/tunnel-lanes"
@@ -61,9 +63,22 @@ export async function writeTailnetDns(
       )
     )
   ).flat()
+  // Each name a member has in the tailnet, at the address it has on its
+  // own Relay's tunnel.
+  const names = await runAppEffect(
+    "tunnelNames.list",
+    listTunnelNamesEffect([network.id])
+  )
+  const namesOf = (memberId: string) =>
+    names.filter((name) => name.memberId === memberId)
   const records = nodes.flatMap(({ stack }) =>
-    stack.bindings.flatMap(({ address, enabled, frozen, hostname }) =>
-      enabled && !frozen ? [{ address, hostname }] : []
+    stack.bindings.flatMap(({ address, enabled, frozen, memberId }) =>
+      enabled && !frozen
+        ? namesOf(memberId).map((name) => ({
+            address,
+            name: tunnelNameOf(name),
+          }))
+        : []
     )
   )
   const written = await Promise.allSettled(

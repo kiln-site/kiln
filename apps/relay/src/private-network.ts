@@ -1,14 +1,11 @@
 import { createHash } from "node:crypto"
 
 import type { TunnelConfig } from "@workspace/contracts"
-import {
-  tunnelConfigSchema,
-  tunnelDnsSchema,
-} from "@workspace/contracts"
+import { tunnelConfigSchema } from "@workspace/contracts"
 
 /**
- * Tailscale stacks' private networking: subnet and address allocation, the
- * stack forwarding allowlist, and its DNS records.
+ * Tunnels' private networking: subnet and address allocation, the
+ * forwarding allowlist, and their DNS files.
  */
 
 export const TUNNEL_FORWARD_CHAIN = "KILN-TAILSCALE"
@@ -101,18 +98,15 @@ export function assignTailscaleBindingAddresses(
   existing: ReadonlyArray<{
     address: string
     enabled?: boolean
-    hostname: string
     memberId: string
   }>,
   desired: ReadonlyArray<{
     enabled?: boolean
-    hostname: string
     memberId: string
   }>
 ): Array<{
   address: string
   enabled: boolean
-  hostname: string
   memberId: string
 }> {
   const desiredMemberIds = new Set(desired.map(({ memberId }) => memberId))
@@ -155,26 +149,23 @@ export function tunnelWithoutMembers(
 }
 
 /**
- * A tunnel's Corefile: its zone, answered from its hosts file, which CoreDNS
- * reads again by itself as it changes. CoreDNS also watches the Corefile and
- * reloads it gracefully, keeping the old one if the new one fails, so a
- * change to either never restarts it.
+ * A tunnel's Corefile: its tailnet's TLDs, answered from its hosts file,
+ * which CoreDNS reads again by itself as it changes. CoreDNS also watches
+ * the Corefile and reloads it gracefully, keeping the old one if the new one
+ * fails, so a change to either never restarts it.
  */
-export function tunnelCorefile(domain: string): string {
-  return `${domain}:53 {\n    errors\n    cache 30\n    hosts ${TUNNEL_DNS_MOUNT}/hosts {\n        ttl 60\n    }\n    reload 4s 1s\n}\n`
+export function tunnelCorefile(domains: ReadonlyArray<string>): string {
+  const zones = domains.map((domain) => `${domain}:53`).join(" ")
+  return `${zones} {\n    errors\n    cache 30\n    hosts ${TUNNEL_DNS_MOUNT}/hosts {\n        ttl 60\n    }\n    reload 4s 1s\n}\n`
 }
 
 /** A tunnel's records, as the hosts file its CoreDNS answers from. */
 export function tunnelHostsFile(
-  domain: string,
-  records: ReadonlyArray<{ address: string; hostname: string }>
+  records: ReadonlyArray<{ address: string; name: string }>
 ): string {
   return [...records]
-    .sort((left, right) => left.hostname.localeCompare(right.hostname))
-    .map(
-      ({ address, hostname }) =>
-        `${address} ${hostname.replace(/\.$/u, "")}.${domain}\n`
-    )
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(({ address, name }) => `${address} ${name}\n`)
     .join("")
 }
 
@@ -182,26 +173,18 @@ export function tunnelHostsFile(
 export const TUNNEL_DNS_MOUNT = "/etc/coredns"
 
 // A tunnel's Corefile from before it answered from a hosts file, with its
-// records inline: read once, for a tunnel that has no records file.
+// records inline under one domain: read once, as its tunnel moves on.
 export function tunnelCoreDnsRecords(
   domain: string,
   configuration: string
 ): Array<{ address: string; hostname: string }> {
   const suffix = `.${domain}`
-  const records = configuration
+  return configuration
     .split("\n")
     .map((line) => line.trim().split(/\s+/u))
-    .flatMap(([address, name]) => {
-      if (!address || !name || !name.endsWith(suffix)) return []
-      return [
-        {
-          address,
-          hostname: name.slice(0, -suffix.length),
-        },
-      ]
-    })
-  return tunnelDnsSchema.parse({
-    id: "0".repeat(12),
-    records,
-  }).records
+    .flatMap(([address, name]) =>
+      address && name?.endsWith(suffix) && /^\d+\.\d+\.\d+\.\d+$/u.test(address)
+        ? [{ address, hostname: name.slice(0, -suffix.length) }]
+        : []
+    )
 }

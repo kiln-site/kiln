@@ -18,6 +18,8 @@ const normalizedDnsNameSchema = (maximumLength: number) =>
 
 export const relayTailscaleDomainSchema = normalizedDnsNameSchema(120)
 export const relayTailscaleSubdomainSchema = normalizedDnsNameSchema(120)
+/** A name in a tailnet, whole: its label or labels, then one of its TLDs. */
+export const tunnelNameSchema = normalizedDnsNameSchema(253)
 export const relayTailscaleHostnameSchema = z
   .string()
   .trim()

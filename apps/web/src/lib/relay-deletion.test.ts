@@ -29,7 +29,6 @@ const invitation = (
 
 const network = (id: string) => ({
   id: id.padEnd(12, "0"),
-  domain: `${id}.ts.net`,
   deletion_requested_at: 1,
   cleanup_attempts: 5,
   cleanup_next_attempt_at: 99_999,

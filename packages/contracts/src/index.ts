@@ -47,7 +47,7 @@ import {
 import {
   relayTailscaleDomainSchema,
   relayTailscaleHostnameSchema,
-  relayTailscaleSubdomainSchema,
+  tunnelNameSchema,
 } from "./tailscale.js"
 
 export * from "./access-permissions.js"
@@ -1480,7 +1480,6 @@ export const MAXIMUM_TUNNEL_BINDINGS = 245
 export const tunnelBindingInputSchema = z
   .object({
     enabled: z.boolean().default(true),
-    hostname: relayTailscaleSubdomainSchema,
     // A game server, an App's service, or a database (see
     // `tailscaleMemberIdSchema`).
     memberId: tailscaleMemberIdSchema,
@@ -1493,7 +1492,8 @@ export const tunnelApplySchema = z
     bindings: z
       .array(tunnelBindingInputSchema)
       .max(MAXIMUM_TUNNEL_BINDINGS),
-    domain: relayTailscaleDomainSchema,
+    // Its tailnet's TLDs, which its CoreDNS answers for.
+    domains: z.array(relayTailscaleDomainSchema).min(1).max(16),
     hostname: relayTailscaleHostnameSchema,
     id: tunnelIdSchema,
     name: relayInstanceNameSchema,
@@ -1502,10 +1502,12 @@ export const tunnelApplySchema = z
   })
   .strict()
 
+// One of a member's names in its tailnet, whole, and the address it has
+// on the tunnel that answers for it.
 export const tunnelDnsRecordSchema = z
   .object({
     address: z.ipv4(),
-    hostname: relayTailscaleSubdomainSchema,
+    name: tunnelNameSchema,
   })
   .strict()
 
@@ -2241,7 +2243,8 @@ export const tunnelConfigSchema = z
     bindings: z
       .array(tunnelBindingSchema)
       .max(MAXIMUM_TUNNEL_BINDINGS),
-    domain: relayTailscaleDomainSchema,
+    // Its tailnet's TLDs, which its CoreDNS answers for.
+    domains: z.array(relayTailscaleDomainSchema).min(1).max(16),
     hostname: relayTailscaleHostnameSchema,
     id: tunnelIdSchema,
     name: relayInstanceNameSchema,
@@ -2259,7 +2262,8 @@ export const tunnelSchema = z
         tailscaleRunning: z.boolean(),
       })
       .strict(),
-    domain: relayTailscaleDomainSchema,
+    // Its tailnet's TLDs, which its CoreDNS answers for.
+    domains: z.array(relayTailscaleDomainSchema).min(1).max(16),
     hostname: relayTailscaleHostnameSchema,
     id: tunnelIdSchema,
     name: relayInstanceNameSchema,

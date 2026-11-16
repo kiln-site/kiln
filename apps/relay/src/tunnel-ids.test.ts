@@ -11,7 +11,7 @@ import { physicalKey, useInstanceLegacyIds } from "./instance-keys.js"
 import { TUNNEL_ID_LABEL } from "./lifecycle.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
-import { migrateTunnelIds } from "./tunnel-ids.js"
+import { migrateTunnelIds, migrateTunnelNames } from "./tunnel-ids.js"
 
 const relayId = "7".repeat(12)
 const networkId = "b".repeat(12)
@@ -131,7 +131,7 @@ describe("Tailscale network stacks becoming tunnels", () => {
     await mkdir(directory, { recursive: true })
     const stack = {
       bindings: [],
-      domain: "kiln",
+      domains: ["kiln"],
       hostname: "home",
       id: tunnelId,
       name: "Home",
@@ -152,6 +152,39 @@ describe("Tailscale network stacks becoming tunnels", () => {
     useInstanceLegacyIds([])
   })
 
+  // Hearth keeps every name now: a stack names its tailnet's TLDs, its
+  // members have no hostname, and its records are whole names.
+  it("moves a stack's names to Hearth's", async () => {
+    const harness = await relayHarness()
+    const directory = await networkStack(harness.config.rootDirectory)
+    await migrateTunnelIds({
+      config: harness.config,
+      relayId,
+      state: harness.state,
+    })
+
+    expect(await migrateTunnelNames(harness.config)).toBe(1)
+
+    const stack = await read(directory, "stack.json")
+    expect(stack).toMatchObject({ domains: ["test"] })
+    expect(stack).not.toHaveProperty("domain")
+    expect(stack.bindings).toEqual([
+      {
+        address: "10.165.55.10",
+        enabled: true,
+        memberId: `instance:${"c".repeat(12)}`,
+      },
+    ])
+    expect((await read(directory, "dns-records.json")).records).toEqual([
+      { address: "10.165.55.10", name: "survival.test" },
+    ])
+    expect(await read(directory, ".removing-stack.json")).toMatchObject({
+      domains: ["test"],
+    })
+    expect(await migrateTunnelNames(harness.config)).toBe(0)
+    useInstanceLegacyIds([])
+  })
+
   it("makes a stack's containers again as a tunnel's, and leaves a stopped one stopped", async () => {
     const harness = await relayHarness()
     await networkStack(harness.config.rootDirectory)
@@ -161,6 +194,7 @@ describe("Tailscale network stacks becoming tunnels", () => {
       relayId,
       state: harness.state,
     })
+    await migrateTunnelNames(harness.config)
     const name = harness.resources.tunnelContainer(tunnelId)
     fakeDocker.tailscale.machines.set(name, {
       ipv4: "100.64.0.9",
