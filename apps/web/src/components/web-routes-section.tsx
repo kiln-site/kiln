@@ -57,6 +57,8 @@ import {
 } from "@/lib/data-table"
 import type { DataTableSource } from "@/lib/data-table-source"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
+import { TailscaleLogo } from "@/components/brand-logos"
+import type { InstanceTunnelName } from "@/components/tunnel/tunnel-data"
 import type { ResourceWebHostname } from "@/server/domains"
 
 const AdoptRecordDialog = React.lazy(async () => ({
@@ -73,10 +75,27 @@ export type WebRouteRow = RelayInstanceWebRouteInput & {
 
 type DisplayedRoute = WebRouteRow & { readonly rowId: string }
 
-// A row of the table: a route, or a name held that no route serves yet.
+// A row of the table: a route, a name held that no route serves yet, or a
+// name in a tunnel the instance is connected to.
 type DomainRow =
-  | { held?: undefined; route: DisplayedRoute; rowId: string }
-  | { held: ResourceWebHostname; route?: undefined; rowId: string }
+  | {
+      held?: undefined
+      route: DisplayedRoute
+      rowId: string
+      tunnel?: undefined
+    }
+  | {
+      held: ResourceWebHostname
+      route?: undefined
+      rowId: string
+      tunnel?: undefined
+    }
+  | {
+      held?: undefined
+      route?: undefined
+      rowId: string
+      tunnel: InstanceTunnelName
+    }
 
 /** Whether a route's hostnames go through Cloudflare's proxy, as changed. */
 export interface WebRouteProxyChange {
@@ -108,8 +127,10 @@ export function WebRoutesSection({
   status,
   statusAction,
   targets = noTargets,
+  tunnelNames = noTunnelNames,
   onSave,
   onMakePrimary,
+  onMakeTunnelPrimary,
 }: {
   canWrite: boolean
   // Whose DNS records the domains' badges read.
@@ -131,6 +152,10 @@ export function WebRoutesSection({
   // The ports an App's running services listen on that could be a
   // website's: one click points a name nothing serves at one.
   targets?: ReadonlyArray<WebRouteTarget>
+  // Its names in the tunnels it's connected to, listed with its domains.
+  tunnelNames?: ReadonlyArray<InstanceTunnelName>
+  // Makes one of them its primary address; an App's only.
+  onMakeTunnelPrimary?: (name: InstanceTunnelName) => void
   // `proxy` when a route's dialog changed whether its hostnames go through
   // Cloudflare's proxy.
   onSave: (
@@ -204,7 +229,8 @@ export function WebRoutesSection({
     displayed && (choosing !== null || !primaryElsewhere)
       ? primaryWebRoute(displayed, choosing ?? primaryRouteId)
       : undefined
-  // The routes, then each name held that none of them serves.
+  // The routes, then each name held that none of them serves, then its
+  // names in tunnels.
   const rows = React.useMemo((): Array<DomainRow> | undefined => {
     if (!displayed || !held) return undefined
     const served = new Set(displayed.flatMap(webRouteHostnames))
@@ -213,8 +239,12 @@ export function WebRoutesSection({
       ...held
         .filter((name) => !served.has(name.hostname))
         .map((name) => ({ held: name, rowId: `held-${name.id}` })),
+      ...tunnelNames.map((tunnel) => ({
+        rowId: `tunnel-${tunnel.name.id}`,
+        tunnel,
+      })),
     ]
-  }, [displayed, held])
+  }, [displayed, held, tunnelNames])
   // A game server is reached at its own address; only an app's header and
   // list show a domain.
   const showPrimary = kind === "app" && onMakePrimary !== undefined
@@ -404,6 +434,7 @@ export function WebRoutesSection({
         showPrimary={showPrimary}
         targets={targets}
         onAdd={canWrite ? () => setEditing({ mode: "add" }) : undefined}
+        onMakeTunnelPrimary={onMakeTunnelPrimary}
         onAdopt={setAdopting}
         onEdit={edit}
         onMakePrimary={makePrimary}
@@ -494,6 +525,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   onRelease,
   onRemove,
   onServe,
+  onMakeTunnelPrimary,
 }: {
   adoptable: ReadonlyArray<ResourceWebHostname>
   canWrite: boolean
@@ -514,6 +546,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   onRelease: (hostname: ResourceWebHostname) => void
   onRemove: (route: DisplayedRoute) => void
   onServe: (hostname: string, target: WebRouteTarget) => void
+  onMakeTunnelPrimary?: (name: InstanceTunnelName) => void
 }) {
   const source = React.useMemo(
     (): DataTableSource<DomainRow> => ({
@@ -537,7 +570,13 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             header: () => <span className="sr-only">Primary</span>,
             enableSorting: false,
             cell: ({ row }) =>
-              row.original.route ? (
+              row.original.tunnel ? (
+                <TunnelKindCell
+                  disabled={disabled}
+                  name={row.original.tunnel}
+                  onMakePrimary={onMakeTunnelPrimary}
+                />
+              ) : row.original.route ? (
                 <RouteKindCell
                   disabled={disabled || !canWrite}
                   primary={row.original.rowId === primaryRowId}
@@ -561,7 +600,9 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             header: "Domain",
             enableSorting: false,
             cell: ({ row }) =>
-              row.original.route ? (
+              row.original.tunnel ? (
+                <TunnelDomainCell name={row.original.tunnel} />
+              ) : row.original.route ? (
                 <RouteDomainCell
                   dnsResource={dnsResource}
                   route={row.original.route}
@@ -583,7 +624,11 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             header: "Destination",
             enableSorting: false,
             cell: ({ row }) =>
-              row.original.route ? (
+              row.original.tunnel ? (
+                <span className="type-meta text-muted-foreground">
+                  Every port, on the tailnet
+                </span>
+              ) : row.original.route ? (
                 <RouteDestinationCell
                   route={row.original.route}
                   services={services}
@@ -606,7 +651,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             header: () => <span className="sr-only">Actions</span>,
             enableSorting: false,
             cell: ({ row }) =>
-              row.original.route ? (
+              row.original.tunnel ? null : row.original.route ? (
                 <RouteActions
                   adoptable={adoptable.find(
                     (hostname) =>
@@ -654,6 +699,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
       onRelease,
       onRemove,
       onServe,
+      onMakeTunnelPrimary,
       pending,
       primaryRowId,
       services,
@@ -698,6 +744,64 @@ function PlainKindIcon() {
     </span>
   )
 }
+
+const noTunnelNames: ReadonlyArray<InstanceTunnelName> = []
+
+// A name in a tunnel: Tailscale's mark, or the primary star where the
+// instance's primary address can be one.
+const TunnelKindCell = React.memo(function TunnelKindCell({
+  disabled,
+  name,
+  onMakePrimary,
+}: {
+  disabled: boolean
+  name: InstanceTunnelName
+  onMakePrimary?: (name: InstanceTunnelName) => void
+}) {
+  if (onMakePrimary) {
+    return (
+      <PrimaryStar
+        disabled={disabled}
+        name={name.hostname}
+        noun="address"
+        primary={name.name.primary}
+        onMakePrimary={() => onMakePrimary(name)}
+      />
+    )
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="grid size-7 place-items-center text-muted-foreground">
+          <TailscaleLogo className="size-4" aria-label="On a tunnel" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Reached on {name.tunnelName}'s tailnet</TooltipContent>
+    </Tooltip>
+  )
+})
+
+const TunnelDomainCell = React.memo(function TunnelDomainCell({
+  name,
+}: {
+  name: InstanceTunnelName
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-sm font-medium">{name.hostname}</span>
+        <TailscaleLogo
+          className="size-3.5 shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />
+      </span>
+      <span className="type-meta block truncate text-muted-foreground">
+        {name.tunnelName}
+        {name.name.generated ? "" : " · alias"}
+      </span>
+    </div>
+  )
+})
 
 const RouteKindCell = React.memo(function RouteKindCell({
   disabled,

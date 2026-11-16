@@ -457,3 +457,35 @@ export function normalizeTld(value: string): string {
     .replace(/^[.]+|[.]+$/gu, "")
     .toLowerCase()
 }
+
+/** One of an instance's names in a tunnel, as its Domains table lists it. */
+export interface InstanceTunnelName {
+  hostname: string
+  name: TunnelMemberName
+  tunnelId: string
+  tunnelName: string
+}
+
+/**
+ * An instance's names in every tunnel it's connected to, its generated ones
+ * first, for the members `isMember` says are its own.
+ */
+export function useInstanceTunnelNames(
+  isMember: (memberId: string) => boolean
+): ReadonlyArray<InstanceTunnelName> {
+  const { data } = useTunnels()
+  return React.useMemo(
+    () =>
+      data.tunnels.flatMap((tunnel) =>
+        tunnel.names
+          .filter((name) => isMember(name.memberId))
+          .map((name) => ({
+            hostname: wholeName(name),
+            name,
+            tunnelId: tunnel.id,
+            tunnelName: tunnel.name,
+          }))
+      ),
+    [data.tunnels, isMember]
+  )
+}

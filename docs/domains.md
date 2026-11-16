@@ -16,7 +16,8 @@ a game server's address always is, since players connect to it directly.
 ## On an instance's Network page
 
 Every instance's Network page has one **Domains** table: each name the
-instance holds and where it goes, a port or a redirect to another URL. Each
+instance holds and where it goes, a port or a redirect to another URL, and
+its names in the tunnels it's connected to, marked with Tailscale's. Each
 row is a web route, served through the Relay's proxy, and one of them is an
 App's primary domain (★), the one its header and lists show. A
 name nothing serves yet, such as a new App's own address, is a row too,
@@ -386,7 +387,9 @@ change.
    DNS worker brings one that missed a change up to date, and the undo
    stopgap goes. Done.
 6. One Domains list: an instance's Network page lists its public and tunnel
-   names together, marked by where they live.
+   names together, marked by where they live. Done: a tunnel name is a row
+   with Tailscale's mark, reached on every port, and an App's can be its
+   primary there; the Tunnels section still connects and names them.
 
 Upgrading: migration 0087 moves each tunnel's TLDs into `domain` and stops
 if one is already a domain there, a vanity domain by the same name, rather
