@@ -207,7 +207,8 @@ export async function getDomainSettingsHandler() {
         hostname: row.hostname,
         id: row.id,
         lastError: row.lastError,
-        proxied: webHostnameProxied(row),
+        // A name managed elsewhere has no record of Kiln's to proxy.
+        proxied: row.connectionId === null ? null : webHostnameProxied(row),
         relayId: row.relayId,
         routed: row.routed,
         relayName: resources.relayName(row.relayId),

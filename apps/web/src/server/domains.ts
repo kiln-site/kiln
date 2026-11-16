@@ -319,7 +319,8 @@ export interface ResourceWebHostname {
   pointsAtRelay: boolean
   /** Through Cloudflare's proxy; null when Kiln doesn't know. */
   proxied: boolean | null
-  status: Exclude<WebHostnameOverview["status"], "manual">
+  /** `manual`: under a domain managed elsewhere, so Kiln keeps no record. */
+  status: WebHostnameOverview["status"]
 }
 
 /** A domain its owner manages elsewhere, as the Domains page lists it. */

@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react"
+import { CircleAlert, CircleCheck, Globe2, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -191,6 +191,12 @@ function dnsPresentation(row: ResourceWebHostname) {
         className: "text-amber-700 dark:text-amber-300",
         icon: CircleAlert,
         label: "Existing DNS record",
+      }
+    case "manual":
+      return {
+        className: "text-muted-foreground",
+        icon: Globe2,
+        label: "Managed elsewhere",
       }
     case "removing":
       return {

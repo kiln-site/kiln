@@ -116,8 +116,12 @@ export async function getResourceWebHostnamesHandler(
       id: row.id,
       lastError: row.lastError,
       pointsAtRelay: adoptable.get(row.id) ?? false,
-      proxied: webHostnameProxied(row),
-      status: row.status,
+      // A name managed elsewhere has no record of Kiln's, proxied or not.
+      proxied: row.connectionId === null ? null : webHostnameProxied(row),
+      status:
+        row.connectionId === null && row.status !== "removing"
+          ? "manual"
+          : row.status,
     })),
   }
 }
