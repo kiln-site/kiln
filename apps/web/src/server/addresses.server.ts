@@ -34,6 +34,7 @@ import {
   finishInstanceDomainRenameEffect,
   insertGameAddressEffect,
   insertWebHostnameEffect,
+  settleManualAddressEffect,
   listAddressesEffect,
   listDueAddressResourcesEffect,
   listResourceAddressesEffect,
@@ -71,10 +72,12 @@ import {
 import {
   anyDomainConnectionEffect,
   listDomainConnectionsEffect,
+  listManualDomainsEffect,
   listUsableVanityDomainsEffect,
   loadDomainConnectionCredentialEffect,
   loadDomainConnectionEffect,
   loadManagedDomainEffect,
+  type ManualDomain,
   updateDomainConnectionZonesEffect,
   type DomainConnection,
   type ManagedDomain,
@@ -632,6 +635,13 @@ const reconcileAddressEffect = Effect.fn("addresses.reconcile")(function* (
     yield* removeAddressEffect(listed)
     return true
   }
+  // A name under a domain managed elsewhere has no records of Kiln's: its
+  // owner points it at the Relay, and holding it is all there is to do.
+  if (listed.connectionId === null) {
+    if (listed.status === "active" && !listed.lastError) return false
+    yield* settleManualAddressEffect(listed.id)
+    return true
+  }
   let row = listed
   if (row.next) {
     yield* applyRenameEffect(row)
@@ -665,6 +675,16 @@ const reconcileAddressEffect = Effect.fn("addresses.reconcile")(function* (
   )
   return true
 })
+
+/** The connection that writes an address's records; none for a name managed elsewhere. */
+const connectionOf = (row: Address) =>
+  row.connectionId === null
+    ? Effect.fail(
+        domainFailure(
+          `${row.hostname} is managed elsewhere: Kiln keeps no records for it`
+        )
+      )
+    : Effect.succeed(row.connectionId)
 
 const desiredEffect = Effect.fnUntraced(function* (
   row: Address,
@@ -710,7 +730,7 @@ const syncRecordsEffect = Effect.fnUntraced(function* (
 ) {
   const zoneId = yield* zoneOfEffect(row)
   const { apiToken } = yield* loadDomainConnectionCredentialEffect(
-    row.connectionId
+    yield* connectionOf(row)
   )
   const comment = recordComment(row)
   const marker = recordMarker(row)
@@ -866,7 +886,7 @@ const applyRenameEffect = Effect.fnUntraced(function* (row: Address) {
   const apply = Effect.gen(function* () {
     const domain = yield* configuredDomainEffect(next.vanityDomain, true)
     const { apiToken } = yield* loadDomainConnectionCredentialEffect(
-      row.connectionId
+      yield* connectionOf(row)
     )
     if (
       row.status === "active" &&
@@ -979,7 +999,7 @@ const removeAddressEffect = Effect.fn("addresses.remove")(function* (
     if (row.zoneId) {
       const zoneId = row.zoneId
       const { apiToken } = yield* loadDomainConnectionCredentialEffect(
-        row.connectionId
+        yield* connectionOf(row)
       )
       for (const recordId of recordIds) {
         yield* deleteCloudflareRecordEffect(apiToken, zoneId, recordId)
@@ -1535,13 +1555,23 @@ const requireUsableDomainEffect = Effect.fnUntraced(function* (
   }
 })
 
-/** Where Kiln may create a hostname's record. */
-interface HostnameZone {
-  connectionId: string
-  /** The vanity domain it's a name under, when it is one. */
-  vanityDomain: string | null
-  zoneId: string
-}
+/**
+ * Where Kiln may create a hostname's record, or, under a domain managed
+ * elsewhere, where it holds the name without one.
+ */
+type HostnameZone =
+  | {
+      connectionId: string
+      /** The vanity domain it's a name under, when it is one. */
+      vanityDomain: string | null
+      zoneId: string
+    }
+  | {
+      connectionId: null
+      /** The domain managed elsewhere it's a name under. */
+      vanityDomain: string
+      zoneId: null
+    }
 
 /**
  * The connection and zone Kiln may make `hostname`'s record in for an
@@ -1588,9 +1618,23 @@ const resolveHostnameZoneEffect = Effect.fn("addresses.resolve")(function* (
     owners.add(ownerId)
   }
   if (actor.admin) owners.add(null)
+  // The most specific domain holding it wins, a zone or one managed
+  // elsewhere.
+  const manual = manualDomainFor(
+    hostname,
+    yield* listManualDomainsEffect([...owners])
+  )
+  const pick = (found: { name: string; zone: HostnameZone } | null) =>
+    manual && (!found || manual.length > found.name.length)
+      ? ({
+          connectionId: null,
+          vanityDomain: manual,
+          zoneId: null,
+        } satisfies HostnameZone)
+      : (found?.zone ?? null)
   const connections = yield* listDomainConnectionsEffect([...owners])
   const found = zoneFor(hostname, connections)
-  if (found) return found
+  if (found) return pick(found)
   // The zone may have been added to a token since it was saved.
   const now = yield* Clock.currentTimeMillis
   const stale = connections.filter(
@@ -1598,7 +1642,7 @@ const resolveHostnameZoneEffect = Effect.fn("addresses.resolve")(function* (
       !connection.lastVerifiedAt ||
       now - Date.parse(connection.lastVerifiedAt) > zoneRefreshIntervalMs
   )
-  if (stale.length === 0) return null
+  if (stale.length === 0) return pick(null)
   const refreshed = yield* Effect.forEach(
     stale,
     (connection) =>
@@ -1615,14 +1659,27 @@ const resolveHostnameZoneEffect = Effect.fn("addresses.resolve")(function* (
       ),
     { concurrency: 4 }
   )
-  return zoneFor(hostname, refreshed)
+  return pick(zoneFor(hostname, refreshed))
 })
+
+/** The most specific of these domains managed elsewhere holding `hostname`. */
+function manualDomainFor(
+  hostname: string,
+  domains: ReadonlyArray<ManualDomain>
+): string | null {
+  let best: string | null = null
+  for (const { domain } of domains) {
+    if (!domainInZone(hostname, domain)) continue
+    if (best === null || domain.length > best.length) best = domain
+  }
+  return best
+}
 
 /** The connection with the most specific zone holding `hostname`. */
 function zoneFor(
   hostname: string,
   connections: ReadonlyArray<DomainConnection>
-): HostnameZone | null {
+): { name: string; zone: HostnameZone } | null {
   let best: { name: string; zone: HostnameZone } | null = null
   for (const connection of connections) {
     for (const zone of connection.zones) {
@@ -1638,7 +1695,7 @@ function zoneFor(
       }
     }
   }
-  return best?.zone ?? null
+  return best
 }
 
 interface ClaimInput {
@@ -1884,7 +1941,7 @@ const counterpartZoneEffect = Effect.fnUntraced(function* (
   const baseName = hostname.slice(4)
   const base = held.get(baseName)
   if (base) {
-    return base.vanityDomain && base.zoneId
+    return base.vanityDomain && base.zoneId && base.connectionId
       ? ({
           connectionId: base.connectionId,
           vanityDomain: null,
@@ -1948,6 +2005,94 @@ const claimHostnameEffect = Effect.fnUntraced(function* (
   })
   return yield* loadAddressEffect(id)
 })
+
+/** A hostname a Relay routes for an instance, as its proxy reports it. */
+export interface RoutedHostname {
+  hostname: string
+  resource: WebHostnameResource
+}
+
+/**
+ * Holds the hostnames Relays already route under a domain managed
+ * elsewhere that was just added, each for the instance whose routes serve
+ * it, so nobody else takes one. A name several instances route, or one
+ * another instance already holds, is left as it is and returned as a
+ * conflict for someone to settle.
+ */
+export const attachManualHostnamesEffect = Effect.fn("addresses.attachManual")(
+  function* (
+    domain: string,
+    routed: ReadonlyArray<RoutedHostname>,
+    // The hostnames an instance's routes answer on now, read again once its
+    // DNS is held, so a route removed since the first read isn't taken in.
+    routedNow: (
+      resource: WebHostnameResource
+    ) => Effect.Effect<ReadonlySet<string>, unknown>
+  ) {
+    const conflicts = new Set<string>()
+    const holders = new Map<string, string>()
+    const resourceId = ({ resource }: RoutedHostname) =>
+      `${resource.relayId}:${resource.resourceType}:${resource.resourceId}`
+    for (const route of routed) {
+      const held = holders.get(route.hostname)
+      if (held !== undefined && held !== resourceId(route)) {
+        conflicts.add(route.hostname)
+      }
+      holders.set(route.hostname, resourceId(route))
+    }
+    const byResource = new Map<string, RoutedHostname[]>()
+    for (const route of routed) {
+      if (conflicts.has(route.hostname)) continue
+      const key = resourceId(route)
+      const names = byResource.get(key) ?? []
+      if (!names.some((name) => name.hostname === route.hostname)) {
+        names.push(route)
+      }
+      byResource.set(key, names)
+    }
+    let attached = 0
+    for (const names of byResource.values()) {
+      const resource = names[0]!.resource
+      yield* withDnsChange(
+        "dns.webRoutes.attach",
+        resource,
+        Effect.gen(function* () {
+          const current = yield* routedNow(resource)
+          yield* Effect.forEach(
+            names.filter(({ hostname }) => current.has(hostname)),
+            ({ hostname }) =>
+              Effect.gen(function* () {
+                const holder = yield* loadHostnameHolderEffect(hostname)
+                // One it holds already is taken in; another's is a conflict.
+                if (holder) {
+                  if (!sameOwner(holder, resource)) conflicts.add(hostname)
+                  return
+                }
+                yield* insertWebHostnameEffect({
+                  ...resource,
+                  connectionId: null,
+                  generated: false,
+                  hostname,
+                  id: randomUUID(),
+                  routed: true,
+                  vanityDomain: domain,
+                  zoneId: null,
+                }).pipe(
+                  Effect.tap(() => Effect.sync(() => attached++)),
+                  Effect.catchTag("HostnameInUseError", () =>
+                    Effect.sync(() => conflicts.add(hostname))
+                  )
+                )
+              }),
+            { discard: true }
+          )
+        })
+      )
+      yield* reconcileResourceAddressesEffect(resource)
+    }
+    return { attached, conflicts: [...conflicts].sort() }
+  }
+)
 
 /**
  * Gives a new App an address under a vanity domain it may use, as game
@@ -2059,7 +2204,9 @@ export const adoptableWebHostnamesEffect = Effect.fn("addresses.adoptable")(
     const adoptable = new Map<string, boolean>()
     const targets = new Map<string, string | null>()
     for (const connectionId of new Set(
-      candidates.map((row) => row.connectionId)
+      candidates.flatMap((row) =>
+        row.connectionId === null ? [] : [row.connectionId]
+      )
     )) {
       const connection = yield* loadDomainConnectionEffect(connectionId)
       if (
@@ -2109,8 +2256,9 @@ export const adoptExistingWebRecordEffect = Effect.fn(
 ) {
   yield* withCurrentRow("dns.webRoutes.adopt", row, (current) =>
     Effect.gen(function* () {
-      const owner = (yield* loadDomainConnectionEffect(current.connectionId))
-        ?.connection.ownerId
+      const owner = (yield* loadDomainConnectionEffect(
+        yield* connectionOf(current)
+      ))?.connection.ownerId
       if (owner === undefined || !mayAdoptRecords(owner, input.actor)) {
         return yield* DomainConfigurationError.make({
           message:
@@ -2124,7 +2272,7 @@ export const adoptExistingWebRecordEffect = Effect.fn(
       }
       const zoneId = yield* zoneOfEffect(current)
       const { apiToken } = yield* loadDomainConnectionCredentialEffect(
-        current.connectionId
+        yield* connectionOf(current)
       )
       const records = yield* listCloudflareRecordsEffect(
         apiToken,

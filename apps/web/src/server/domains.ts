@@ -24,10 +24,14 @@ import {
   updateInstanceDomainHandler,
 } from "@/server/addresses.server"
 import {
+  addManualDomainHandler,
   deleteDomainConnectionHandler,
   discoverCloudflareDomainsHandler,
   getDomainSettingsHandler,
   getManualWebHostnamesHandler,
+  manualDomainInputSchema,
+  removeManualDomainHandler,
+  removeManualDomainInputSchema,
   resyncDomainAssignmentsHandler,
   saveDomainConnectionHandler,
 } from "@/server/domain-settings.server"
@@ -315,7 +319,17 @@ export interface ResourceWebHostname {
   pointsAtRelay: boolean
   /** Through Cloudflare's proxy; null when Kiln doesn't know. */
   proxied: boolean | null
-  status: Exclude<WebHostnameOverview["status"], "manual">
+  /** `manual`: under a domain managed elsewhere, so Kiln keeps no record. */
+  status: WebHostnameOverview["status"]
+}
+
+/** A domain its owner manages elsewhere, as the Domains page lists it. */
+export interface ManualDomainOverview {
+  domain: string
+  /** How many names Kiln holds under it. */
+  names: number
+  /** Kiln's, which administrators manage. */
+  platform: boolean
 }
 
 export interface DiscoveredCloudflareZone {
@@ -343,6 +357,19 @@ export const saveDomainConnection = createServerFn({ method: "POST" })
 export const deleteDomainConnection = createServerFn({ method: "POST" })
   .validator(deleteDomainConnectionInputSchema)
   .handler(({ data }) => deleteDomainConnectionHandler(data))
+
+/**
+ * Adds a domain managed elsewhere, and holds the names Relays already route
+ * under it for the instances that route them.
+ */
+export const addManualDomain = createServerFn({ method: "POST" })
+  .validator(manualDomainInputSchema)
+  .handler(({ data }) => addManualDomainHandler(data))
+
+/** Removes a domain managed elsewhere that no name is under. */
+export const removeManualDomain = createServerFn({ method: "POST" })
+  .validator(removeManualDomainInputSchema)
+  .handler(({ data }) => removeManualDomainHandler(data))
 
 export const resyncDomainAssignments = createServerFn({
   method: "POST",

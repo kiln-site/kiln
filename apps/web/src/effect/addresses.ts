@@ -45,8 +45,11 @@ export interface ExistingWebRecord {
 
 /** A hostname an instance holds, and the records Kiln keeps for it. */
 export interface Address {
-  /** The connection whose token manages its zone. */
-  connectionId: string
+  /**
+   * The connection whose token manages its zone; null for a name under a
+   * domain managed elsewhere, whose records Kiln doesn't write.
+   */
+  connectionId: string | null
   createdAt: number
   /**
    * While `external`, the address record Cloudflare had under the name, as
@@ -127,7 +130,7 @@ interface AddressRow extends RowDataPacket {
   game: boolean | number
   hostname: string
   id: string
-  integration_id: string
+  integration_id: string | null
   is_generated: boolean | number
   is_primary: boolean | number
   last_error: string | null
@@ -342,30 +345,40 @@ export const listGameAddressesEffect = Effect.fn("domains.assignments.all")(
  */
 export const insertWebHostnameEffect = Effect.fn("addresses.insert")(function* (
   input: HostnameOwner & {
-    connectionId: string
+    /** Null for a name under a domain managed elsewhere. */
+    connectionId: string | null
     generated: boolean
     hostname: string
     id: string
+    /** Already served by its instance's web routes, as one a Relay routes. */
+    routed?: boolean
     vanityDomain: string | null
-    zoneId: string
+    zoneId: string | null
   }
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.transaction("addresses.insert", () =>
     Effect.gen(function* () {
-      // A connection removed since its zone was resolved takes no new
-      // hostnames; removing one waits for this insert, then deletes it.
-      const connections = yield* database.queryRows<RowDataPacket>(
+      // A connection or domain removed since the name was placed takes no
+      // new hostnames; removing one waits for this insert, then sees it.
+      const holders = yield* database.queryRows<RowDataPacket>(
         "addresses.insert",
-        `SELECT 1 FROM ${databaseTable("domain_integration")}
-            WHERE id = ?
-            LOCK IN SHARE MODE`,
-        [input.connectionId]
+        input.connectionId === null
+          ? `SELECT 1 FROM ${databaseTable("domain")}
+              WHERE domain = ? AND provider = 'manual'
+              LOCK IN SHARE MODE`
+          : `SELECT 1 FROM ${databaseTable("domain_integration")}
+              WHERE id = ?
+              LOCK IN SHARE MODE`,
+        [input.connectionId ?? input.vanityDomain ?? ""]
       )
-      if (connections.length === 0) {
+      if (holders.length === 0) {
         return yield* DomainConfigurationError.make({
-          message: "The Cloudflare connection for this hostname was removed",
+          message:
+            input.connectionId === null
+              ? `${input.vanityDomain} is no longer a domain in Kiln`
+              : "The Cloudflare connection for this hostname was removed",
         })
       }
       yield* claimHostnamesEffect(input, [input.hostname])
@@ -373,9 +386,9 @@ export const insertWebHostnameEffect = Effect.fn("addresses.insert")(function* (
         "addresses.insert",
         `INSERT INTO ${addressTable}
              (id, hostname, relay_id, resource_type, resource_id,
-              integration_id, zone_id, vanity_domain, is_generated, status,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+              integration_id, zone_id, vanity_domain, is_generated, routed,
+              status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         [
           input.id,
           input.hostname.toLowerCase(),
@@ -384,6 +397,7 @@ export const insertWebHostnameEffect = Effect.fn("addresses.insert")(function* (
           input.zoneId,
           input.vanityDomain,
           input.generated,
+          input.routed ?? false,
           now,
           now,
         ]
@@ -732,6 +746,25 @@ export const saveAddressRecordEffect = Effect.fn("addresses.saveRecord")(
 )
 
 /**
+ * Settles a name under a domain managed elsewhere: held, with no record of
+ * Kiln's, nothing left to do.
+ */
+export const settleManualAddressEffect = Effect.fn("addresses.settleManual")(
+  function* (id: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "addresses.settleManual",
+      `UPDATE ${addressTable}
+          SET status = 'active', last_error = NULL, attempts = 0,
+              next_attempt_at = NULL, updated_at = ?
+        WHERE id = ? AND status <> 'removing' AND integration_id IS NULL`,
+      [now, id]
+    )
+  }
+)
+
+/**
  * Marks a hostname in step: where its records now point, with the SRV
  * record it has, if it has one.
  */
@@ -907,6 +940,8 @@ export const setWebHostnamesProxiedEffect = Effect.fn("addresses.proxied")(
               attempts = 0, next_attempt_at = NULL, updated_at = ?
         WHERE ${ofResource}
           AND game = 0 AND proxied <> ?
+          -- A name managed elsewhere has no record of Kiln's to proxy.
+          AND integration_id IS NOT NULL
           AND hostname IN (${names.map(() => "?").join(", ")})`,
       [proxied, now, ...resourceValues(resource), proxied, ...names]
     )
