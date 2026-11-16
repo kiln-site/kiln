@@ -120,7 +120,9 @@ import {
   activeTunnelBindings,
   allocateTunnelSubnet,
   assignTailscaleBindingAddresses,
-  tunnelCoreDnsConfiguration,
+  tunnelCorefile,
+  tunnelHostsFile,
+  TUNNEL_DNS_MOUNT,
   tunnelCoreDnsRecords,
   tunnelFirewallIsCurrent,
   tunnelFirewallRules,
@@ -149,6 +151,8 @@ const COREDNS_IMAGE = "coredns/coredns:1.14.7"
 // A tunnel's two containers say whose they are and which they are. The
 // physical key names it, as its containers and folders are named.
 export const TUNNEL_ID_LABEL = "kiln.tunnel.id"
+// A CoreDNS container that reads its tunnel's DNS folder, which reloads.
+const TUNNEL_DNS_LAYOUT_LABEL = "kiln.tunnel.dns"
 const TUNNEL_COMPONENT_LABEL = "kiln.tunnel.component"
 
 function tunnelLabels(
@@ -824,14 +828,14 @@ export class LifecycleDriver {
       lifecycleOperation(async () => {
         await this.#ensureTunnelNetwork(config)
         await this.#writeTunnelConfig(config)
+        // Only its Tailscale node's name restarts it: its domain is its
+        // CoreDNS's, which reloads in place.
+        const remade =
+          !containerExists ||
+          (existing !== null && existing.hostname !== config.hostname)
         if (!containerExists) {
           await this.#installTunnel(config, input.authKey!)
-        } else if (
-          existing &&
-          (existing.domain !== config.domain ||
-            existing.hostname !== config.hostname ||
-            existing.name !== config.name)
-        ) {
+        } else if (remade) {
           await this.#restartTunnel(config)
         }
         // Docker can attach and detach a running game container from this
@@ -843,7 +847,7 @@ export class LifecycleDriver {
         )
         await this.#configureTunnelRouting(config)
         // Hearth rewrites the records for the new members once this is done.
-        await this.#renderTunnelDns(config)
+        await this.#renderTunnelDns(config, { recreate: remade })
         return this.#tunnel(config)
       }).pipe(
         Effect.catch((cause) =>
@@ -4147,60 +4151,84 @@ export class LifecycleDriver {
   // Saves the records Hearth sent and serves them. Hearth is their only
   // writer: it builds every node's records from what each node reports
   // (`tunnelStates`), in the network's lane.
+  /**
+   * Saves the records Hearth sent and serves them. CoreDNS reads its folder,
+   * mounted whole: the records as a hosts file it reads again by itself, and
+   * a Corefile it reloads as it changes, so new records or a new domain
+   * never restart it. Each file is replaced whole, by a rename the mount
+   * sees. The container is made only when it's missing, predates the folder,
+   * or `recreate` asks, as when its Tailscale container, whose network it
+   * lives in, was made again.
+   */
   async #ensureTunnelDns(
     config: TunnelConfig,
-    records: ReadonlyArray<{ address: string; hostname: string }>
+    records: ReadonlyArray<{ address: string; hostname: string }>,
+    recreate = false
   ): Promise<void> {
-    const recordsPath = this.#tunnelDnsRecordsPath(config.id)
-    await writeFile(
-      recordsPath,
-      `${JSON.stringify({ id: config.id, records }, null, 2)}\n`,
-      { mode: 0o600 }
+    await runLifecycle(
+      writeFileAtomic(
+        this.#tunnelDnsRecordsPath(config.id),
+        `${JSON.stringify({ id: config.id, records }, null, 2)}\n`,
+        0o600
+      )
     )
-    const path = join(
+    const directory = join(
       this.#config.rootDirectory,
       physicalKey(config.id),
-      "Corefile"
+      "dns"
     )
-    await writeFile(
-      path,
-      tunnelCoreDnsConfiguration(config.domain, records),
-      { mode: 0o644 }
+    await mkdir(directory, { mode: 0o755, recursive: true })
+    await chmod(directory, 0o755)
+    await writeIfChanged(
+      join(directory, "hosts"),
+      tunnelHostsFile(config.domain, records)
     )
-    await chmod(path, 0o644)
-    const hostPath = join(
+    await writeIfChanged(
+      join(directory, "Corefile"),
+      tunnelCorefile(config.domain)
+    )
+    const name = this.#resources.tunnelDnsContainer(config.id)
+    const labels = await this.#containerLabels(name)
+    if (!recreate && labels?.[TUNNEL_DNS_LAYOUT_LABEL] === "folder") return
+    const hostDirectory = join(
       await this.#hostDataDirectory(),
       "instances",
       physicalKey(config.id),
-      "Corefile"
+      "dns"
     )
-    await this.#replaceContainer(
-      this.#resources.tunnelDnsContainer(config.id),
-      {
-        binds: [`${hostPath}:/etc/coredns/Corefile:ro`],
-        capAdd: ["CAP_NET_BIND_SERVICE"],
-        capDrop: ["ALL"],
-        command: ["-conf", "/etc/coredns/Corefile"],
-        image: COREDNS_IMAGE,
-        labels: tunnelLabels(config.id, "dns"),
-        memory: "32m",
-        network: `container:${this.#resources.tunnelContainer(config.id)}`,
-        pidsLimit: 64,
-        readOnly: true,
-        restart: "unless-stopped",
-        securityOpt: ["no-new-privileges:true"],
-      }
-    )
+    await this.#replaceContainer(name, {
+      binds: [`${hostDirectory}:${TUNNEL_DNS_MOUNT}:ro`],
+      capAdd: ["CAP_NET_BIND_SERVICE"],
+      capDrop: ["ALL"],
+      command: ["-conf", `${TUNNEL_DNS_MOUNT}/Corefile`],
+      image: COREDNS_IMAGE,
+      labels: {
+        ...tunnelLabels(config.id, "dns"),
+        [TUNNEL_DNS_LAYOUT_LABEL]: "folder",
+      },
+      memory: "32m",
+      network: `container:${this.#resources.tunnelContainer(config.id)}`,
+      pidsLimit: 64,
+      readOnly: true,
+      restart: "unless-stopped",
+      securityOpt: ["no-new-privileges:true"],
+    })
+    // Its Corefile from before it read a folder.
+    await rm(join(this.#config.rootDirectory, physicalKey(config.id), "Corefile"), {
+      force: true,
+    })
   }
 
-  // Serves the records Hearth last sent again, as the stack's CoreDNS is
-  // (re)created.
+  // Serves the records Hearth last sent again, making CoreDNS again unless
+  // told it still has the Tailscale container it lives in.
   async #renderTunnelDns(
-    config: TunnelConfig
+    config: TunnelConfig,
+    { recreate = true }: { recreate?: boolean } = {}
   ): Promise<void> {
     await this.#ensureTunnelDns(
       config,
-      await this.#readTunnelDnsRecords(config)
+      await this.#readTunnelDnsRecords(config),
+      recreate
     )
   }
 
@@ -4977,4 +5005,15 @@ function tunnelDirectoryId(name: string): string | null {
   return /^(?:[a-f0-9]{40}|[a-f0-9]{12})$/u.test(name)
     ? instanceIdFrom(name)
     : null
+}
+
+// Replaces a file whole, by a rename a folder's mount sees, unless it
+// already says that.
+async function writeIfChanged(path: string, content: string): Promise<void> {
+  const current = await recoverPromise(
+    () => readFile(path, "utf8"),
+    () => null
+  )
+  if (current === content) return
+  await runLifecycle(writeFileAtomic(path, content, 0o644))
 }

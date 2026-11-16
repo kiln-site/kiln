@@ -193,10 +193,12 @@ stack.
   special-cased for it. A Relay lists its tunnels as it lists its Apps and
   databases.
 - Its DNS reloads in place. Its records are a hosts file that CoreDNS reads
-  again by itself, and a change of TLDs rewrites the Corefile and signals
-  CoreDNS to reload; neither recreates the container or drops a query. Both
-  files sit in a folder mounted whole, so a file replaced by a rename is
-  seen. Only redeploying recreates the containers.
+  again by itself, and its Corefile is one CoreDNS watches and reloads
+  gracefully, keeping the old one if the new one fails; a change to either
+  never recreates the container or drops a query. Both files sit in a folder
+  mounted whole (`dns/`), so a file replaced by a rename is seen. Only
+  making its Tailscale container again, as redeploying or renaming its node
+  does, recreates CoreDNS, which lives in its network. Built.
 
 ### The tailnet
 
