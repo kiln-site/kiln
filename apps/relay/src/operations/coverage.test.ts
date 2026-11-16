@@ -42,8 +42,8 @@ const directAdmissions: Record<string, string> = {
     "Nested; a volume its Compose file declares, made as the file is read",
   "lifecycle.ts:instance.allocations":
     "Nested; declared up front with game server changes",
-  "lifecycle.ts:instance.dns":
-    "Nested; the CoreDNS step of a game server's create, startup change, or deletion",
+  "lifecycle.ts:instance.routes":
+    "Nested; the step of a game server's create or startup change that makes its container",
   "lifecycle.ts:tailscale.member.remove":
     "Nested; declared up front with deletion",
   "backups.ts:outcome":
@@ -74,8 +74,6 @@ const semaphores: Record<string, string> = {
   "image-checks.ts:registryLookups": "Bounds registry lookups",
   "docker.ts:#diskUsageSemaphore": "Bounds disk scans",
   "installation.ts:adoption": "Orders adopting an installation's metadata",
-  "lifecycle.ts:#tailscaleDnsSemaphore":
-    "Orders writing Tailscale's CoreDNS file, which starts refresh holding the routes only shared",
   "platform.ts:identifying": "Orders identifying Kiln's services",
   "runtime-recovery.ts:created": "Orders crash recovery's saved state",
   "schedules.ts:#semaphore": "Orders saving schedules",

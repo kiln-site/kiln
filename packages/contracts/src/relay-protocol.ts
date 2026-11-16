@@ -115,11 +115,6 @@ export const relayControlOperations = [
   "relay.resources.read",
   "relay.rename",
   "relay.audit.list",
-  "relay.networking.read",
-  "relay.networking.write",
-  "relay.tailscale.install",
-  "relay.tailscale.read",
-  "relay.tailscale.write",
   "relay.tailscale.stack.apply",
   "relay.tailscale.stack.dns",
   "relay.tailscale.stack.list",
@@ -270,18 +265,15 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.pairing.revoke",
   "relay.clients.update",
   "relay.clients.revoke",
-  "relay.networking.write",
   "relay.docker.cleanup",
   "relay.volumes.create",
   "relay.volumes.rename",
   "relay.volumes.delete",
   "relay.volumes.references.import",
   "relay.volumes.references.hold",
-  "relay.tailscale.install",
   "relay.tailscale.stack.apply",
   "relay.tailscale.stack.dns",
   "relay.tailscale.stack.remove",
-  "relay.tailscale.write",
   "relay.proxy.write",
   "relay.proxy.trial",
   "relay.platform.action",
@@ -359,8 +351,6 @@ export function relayControlOperationChanges(
     case "relay.update.status":
     case "relay.resources.read":
     case "relay.audit.list":
-    case "relay.networking.read":
-    case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
     case "relay.tailscale.stack.state":
     case "relay.host.read":
@@ -426,9 +416,6 @@ export function relayControlOperationChanges(
     case "relay.update.apply":
     case "relay.restart":
     case "relay.rename":
-    case "relay.networking.write":
-    case "relay.tailscale.install":
-    case "relay.tailscale.write":
     case "relay.tailscale.stack.apply":
     case "relay.tailscale.stack.dns":
     case "relay.tailscale.stack.remove":
@@ -559,15 +546,12 @@ export function relayControlDeadlineMs(
   if (operation === "relay.update.apply") return 15 * 60_000
   // The host's shell helper may have to be pulled first.
   if (operation === "relay.host.restart") return 120_000
-  if (operation === "relay.tailscale.install") return 240_000
   if (operation === "relay.tailscale.stack.apply") return 240_000
   if (operation === "relay.tailscale.stack.remove") return 120_000
   if (operation === "relay.tailscale.stack.dns") return 60_000
-  // Proxy and networking writes can pull and start edge containers.
+  // Proxy writes can pull and start edge containers.
   if (operation === "relay.proxy.write") return 240_000
   if (operation === "relay.proxy.trial") return 240_000
-  if (operation === "relay.networking.write") return 240_000
-  if (operation === "relay.tailscale.write") return 90_000
   if (operation === "relay.host.files.mount") return 60_000
   // Docker counts every image's layers to answer.
   if (operation === "relay.docker.storage") return 90_000

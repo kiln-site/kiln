@@ -340,21 +340,6 @@ export const getInstanceStartup = createServerFn({ method: "GET" })
     getInstanceStartupHandler(await requireEligibleResourceUser(), data)
   )
 
-export function startupNetworkChanged(
-  existing: z.infer<typeof relayInstanceSchema>["tailscale"],
-  input: {
-    tailscale?: z.infer<typeof relayInstanceSchema>["tailscale"]
-  }
-): boolean {
-  // Compare fields, not JSON order, so a repeated settings object remains a
-  // no-op.
-  return (
-    input.tailscale !== undefined &&
-    (input.tailscale.enabled !== existing.enabled ||
-      input.tailscale.subdomain !== existing.subdomain)
-  )
-}
-
 // Startup weighs several permissions against what changes, so only reading
 // its configuration is checked before the lanes; the run checks the rest.
 const changeInstanceStartup = resourceOperation({
@@ -407,7 +392,6 @@ async function updateInstanceStartupHandler(
   const recipeDefinition = recipeChanged
     ? await requiredVisibleRecipeDefinition(user, submittedRecipe)
     : null
-  const networkChanged = startupNetworkChanged(existing.tailscale, data)
   const { brick: previousRecipe } = await loadInstanceRecipe(relay, existing)
   const nextRecipe = recipeDefinition ?? previousRecipe
   const configurationChanged =
@@ -424,7 +408,6 @@ async function updateInstanceStartupHandler(
     existing.variables ?? {},
     data.variables ?? {}
   )
-  if (networkChanged) authorization.require("instance.network.write")
   if (configurationChanged)
     authorization.require("instance.configuration.write")
   if (limitsChanged) authorization.require("instance.limits.write")
@@ -433,11 +416,9 @@ async function updateInstanceStartupHandler(
   if (
     !configurationChanged &&
     !limitsChanged &&
-    !networkChanged &&
-    !authorization.allows("instance.configuration.write") &&
     !authorization.allows("instance.limits.write")
   ) {
-    authorization.require("instance.network.write")
+    authorization.require("instance.configuration.write")
   }
   const powerPermission = startupPowerPermission(existing, data)
   if (powerPermission) authorization.require(powerPermission)

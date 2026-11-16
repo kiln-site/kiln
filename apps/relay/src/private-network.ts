@@ -1,18 +1,14 @@
 import { createHash } from "node:crypto"
 
-import type {
-  RelayNetworking,
-  RelayTailscaleSettings,
-  RelayTailscaleStackConfig,
-} from "@workspace/contracts"
+import type { RelayTailscaleStackConfig } from "@workspace/contracts"
 import {
   relayTailscaleStackConfigSchema,
   relayTailscaleStackDnsSchema,
 } from "@workspace/contracts"
 
 /**
- * Private networking for Relay servers: CoreDNS zones, Tailscale stack subnet
- * and address allocation, the stack forwarding allowlist, and its DNS records.
+ * Tailscale stacks' private networking: subnet and address allocation, the
+ * stack forwarding allowlist, and its DNS records.
  */
 
 export const TAILSCALE_STACK_FORWARD_CHAIN = "KILN-TAILSCALE"
@@ -57,40 +53,6 @@ export function tailscaleStackFirewallIsCurrent(
     current.length === expected.length &&
     current.every((line, index) => line === expected[index])
   )
-}
-
-function coreDnsHostnamePattern(
-  domain: string,
-  hostnames: ReadonlyArray<string>
-): string {
-  const suffix = `.${domain}`
-  const names = Array.from(
-    new Set(
-      hostnames
-        .map((hostname) => hostname.toLowerCase().replace(/\.$/u, ""))
-        .filter((hostname) => hostname.endsWith(suffix))
-    )
-  ).sort()
-  return names.length === 0
-    ? "^$"
-    : `(?i)^(?:${names.map(escapeRegex).join("|")})[.]$`
-}
-
-export function coreDnsConfiguration(
-  networking: RelayNetworking,
-  hostnames: ReadonlyArray<string>
-): string {
-  const pattern = coreDnsHostnamePattern(networking.domain, hostnames)
-  return `${networking.domain}:${networking.dnsPort} {\n    errors\n    template IN A {\n        match "${pattern}"\n        answer "{{ .Name }} 60 IN A {$KILN_NODE_ADDRESS}"\n    }\n    template IN AAAA {\n        match "${pattern}"\n        rcode NOERROR\n    }\n}\n`
-}
-
-export function tailscaleCoreDnsConfiguration(
-  settings: RelayTailscaleSettings,
-  address: string,
-  hostnames: ReadonlyArray<string>
-): string {
-  const pattern = coreDnsHostnamePattern(settings.domain, hostnames)
-  return `${settings.domain}:${settings.dnsPort} {\n    bind ${address}\n    errors\n    template IN A {\n        match "${pattern}"\n        answer "{{ .Name }} 60 IN A ${address}"\n    }\n    template IN AAAA {\n        match "${pattern}"\n        rcode NOERROR\n    }\n}\n`
 }
 
 export function allocateTailscaleStackSubnet(
@@ -227,8 +189,4 @@ export function tailscaleStackCoreDnsRecords(
     id: "0".repeat(12),
     records,
   }).records
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 }

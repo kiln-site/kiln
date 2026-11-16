@@ -69,11 +69,9 @@ describe("Relay archive restores", () => {
         yield* Effect.promise(() =>
           writeFile(resolve(root, "server.txt"), "old")
         )
-        const subdomain = `${"a".repeat(60)}.${"b".repeat(59)}`
         const instance = testInstance({
           brickSource: "https://kiln.test/bricks/paper.yml",
           brickSnapshotSha256: yield* Effect.promise(() => record(config)),
-          tailscale: { enabled: true, subdomain },
         })
         const manager = yield* backupManager(config, async () => instance)
         const input = backupInput(6)

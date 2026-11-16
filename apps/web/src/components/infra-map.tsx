@@ -117,7 +117,7 @@ const OverviewMap = React.memo(function OverviewMap({
     () => overviewInstances(directory),
     [directory]
   )
-  const services = useServices(includeDomains, instances)
+  const services = useServices(includeDomains)
   const focus =
     scope.kind === "relay"
       ? relays.find((relay) => relay.id === scope.relayId)
@@ -417,7 +417,6 @@ function overviewInstances(directory: Directory): Array<OverviewInstance> {
       relayId: server.relayId,
       name: server.name,
       meta: server.connectAddress || server.game,
-      tailscale: server.tailscale,
     })),
     ...directory.apps.map((app): OverviewInstance => ({
       key: instanceKey("app", app.relayId, app.id),
@@ -470,15 +469,10 @@ interface ServiceIndex {
 const noServices: ServiceIndex = { relays: new Map(), instances: new Map() }
 
 /**
- * Which Relays and instances use Cloudflare (a managed domain) or Tailscale
- * (a game server on a tailnet). People without the Domains page see only
- * Tailscale. The map never waits for them: the logos appear once the domains
- * arrive.
+ * Which Relays and instances use Cloudflare (a managed domain). The map never
+ * waits for them: the logos appear once the domains arrive.
  */
-function useServices(
-  includeDomains: boolean,
-  instances: ReadonlyArray<OverviewInstance>
-): ServiceIndex {
+function useServices(includeDomains: boolean): ServiceIndex {
   const { data: domains } = useQuery({
     ...domainSettingsQueryOptions(),
     enabled: includeDomains,
@@ -505,13 +499,11 @@ function useServices(
         instanceKey("server", domain.relayId, domain.instanceId),
         "cloudflare"
       )
-    for (const instance of instances)
-      if (instance.tailscale) mark(instance.relayId, instance.key, "tailscale")
     return relays.size === 0 ? noServices : { relays, instances: marked }
-  }, [domains, instances])
+  }, [domains])
 }
 
-const noService: OverviewServices = { cloudflare: false, tailscale: false }
+const noService: OverviewServices = { cloudflare: false }
 
 function selectDomainAssignments(settings: {
   managedDomains: ReadonlyArray<{ relayId: string; instanceId: string }>

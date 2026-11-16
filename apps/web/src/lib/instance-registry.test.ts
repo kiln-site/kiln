@@ -23,7 +23,6 @@ const server = (
   implementation: "Paper",
   version: "1.21",
   connectAddress: "play.example.test:25565",
-  tailscale: { enabled: false },
 })
 
 interface InstanceRow {

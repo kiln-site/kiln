@@ -26,12 +26,6 @@ export const relayCachePolicy = {
     name: "Relay Brick catalog",
     ttlMs: 5 * 60_000,
   }),
-  networking: (relayId: string): CachePolicy => ({
-    fallbackTtlMs: 7 * 24 * 60 * 60_000,
-    key: `relay:${relayId}:networking`,
-    name: "Relay networking",
-    ttlMs: 1_000,
-  }),
   snapshot: (relayId: string): CachePolicy => ({
     fallbackTtlMs: 7 * 24 * 60 * 60_000,
     key: `relay:${relayId}:snapshot`,
@@ -196,25 +190,6 @@ function relayControlRequest(path: string, init?: RequestInit) {
         source: url.searchParams.get("source"),
       },
     }
-  }
-  if (url.pathname === "/v1/networking") {
-    if (method === "GET") {
-      return { operation: "relay.networking.read" as const, payload: {} }
-    }
-    if (method === "PUT") {
-      return { operation: "relay.networking.write" as const, payload: body }
-    }
-  }
-  if (url.pathname === "/v1/tailscale") {
-    if (method === "GET") {
-      return { operation: "relay.tailscale.read" as const, payload: {} }
-    }
-    if (method === "PUT") {
-      return { operation: "relay.tailscale.write" as const, payload: body }
-    }
-  }
-  if (url.pathname === "/v1/tailscale/install" && method === "POST") {
-    return { operation: "relay.tailscale.install" as const, payload: body }
   }
   if (url.pathname === "/v1/tailscale/stacks" && method === "GET") {
     return {

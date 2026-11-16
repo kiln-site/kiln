@@ -96,18 +96,13 @@ export function instanceStatus(
   return instance.name === "creative" ? stopped : running
 }
 
-const cloudflare: OverviewServices = { cloudflare: true, tailscale: false }
-const tailscale: OverviewServices = { cloudflare: false, tailscale: true }
+const cloudflare: OverviewServices = { cloudflare: true }
 
-// fsn1's proxy has a Cloudflare domain; the home lab's game servers are on
-// a tailnet.
+// fsn1's proxy has a Cloudflare domain.
 export const relayServices: Record<string, OverviewServices> = {
   "fsn1-dedicated": cloudflare,
-  "home-lab": tailscale,
 }
 
 export const instanceServices: Record<string, OverviewServices> = {
   "server:fsn1-dedicated:velocity-proxy": cloudflare,
-  "server:home-lab:survival-smp": tailscale,
-  "server:home-lab:creative": tailscale,
 }

@@ -1,7 +1,6 @@
 const COLLECTION_ROUTES = new Set([
   "/v1/snapshot",
   "/v1/bricks",
-  "/v1/networking",
   "/v1/instances",
 ])
 

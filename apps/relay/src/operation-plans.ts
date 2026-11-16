@@ -481,8 +481,6 @@ export function controlRequestLocks(
     case "relay.docker.storage":
     case "relay.rename":
     case "relay.audit.list":
-    case "relay.networking.read":
-    case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
     case "relay.tailscale.stack.state":
     case "relay.host.read":
@@ -632,7 +630,6 @@ export function controlRequestLocks(
     case "sftp.authorization.resolve":
       return null
 
-    case "relay.networking.write":
     case "relay.proxy.write":
     case "relay.proxy.trial":
     // May write the bundled Traefik's routes again.
@@ -659,16 +656,9 @@ export function controlRequestLocks(
         )
       )
     }
-    // Both rewrite the Relay's CoreDNS, as networking changes do.
-    case "relay.tailscale.install":
-    case "relay.tailscale.write":
-      return [exclusive(laneKeys.tailscale), exclusive(laneKeys.routes)]
     // DNS records change nothing of a stack's members.
     case "relay.tailscale.stack.dns":
-      return instance(
-        (id) => [...instanceReplaceLocks(id), shared(laneKeys.tailscale)],
-        "id"
-      )
+      return instance((id) => instanceReplaceLocks(id), "id")
     // Applying a stack joins and leaves members, and removing one leaves
     // them all, so each waits for those members' power changes, as theirs
     // wait for it. A stack runs as a game server of its own.
@@ -679,7 +669,6 @@ export function controlRequestLocks(
       const resolved = resolveInstance(reference)
       return Promise.resolve(resolved).then(async (stackId) => [
         ...instanceReplaceLocks(stackId),
-        shared(laneKeys.tailscale),
         ...tailscaleMemberLocks(
           (await readTailscaleStack?.(stackId)) ?? [],
           operation === "relay.tailscale.stack.apply"

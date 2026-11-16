@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
-import { exclusive, laneKeys, shared } from "./operation-lanes.js"
+import { exclusive, laneKeys } from "./operation-lanes.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -394,10 +394,7 @@ describe("Tailscale forwarding repair", () => {
     await looking.reached
     const applying = harness.lanes.admit({
       label: "relay.tailscale.stack.apply",
-      locks: [
-        exclusive(laneKeys.instance(stackId)),
-        shared(laneKeys.tailscale),
-      ],
+      locks: [exclusive(laneKeys.instance(stackId))],
     })
     const applied = Effect.runPromise(
       applying.run(

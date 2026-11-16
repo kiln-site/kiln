@@ -57,7 +57,6 @@ import {
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   isInstanceId,
   relayInstanceLifecycleEventTime as lifecycleEventTime,
-  relayInstanceTailscaleSchema,
 } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -371,11 +370,7 @@ function instanceConnectAddress(input: {
   gameHost?: string
   publicPort?: number
   relayHost?: string
-  tailscaleHost?: string
 }): string {
-  const tailscaleHost = input.tailscaleHost?.trim()
-  if (tailscaleHost) return tailscaleHost
-
   const publicHost =
     input.gameHost?.trim() ||
     input.discoveredPublicIp?.trim() ||
@@ -2648,10 +2643,6 @@ export class DockerDriver {
       instanceHost: labels["kiln.instance.public-host"],
       relayHost: this.#config.advertisedHost,
     })
-    const tailscale = relayInstanceTailscaleSchema.parse({
-      enabled: labels["kiln.instance.tailscale-enabled"] === "true",
-      subdomain: labels["kiln.instance.tailscale-subdomain"],
-    })
     const implementation = titleCase(validBrickId ?? parsed?.[1] ?? name)
     const version =
       labels["kiln.instance.version"] ??
@@ -2722,9 +2713,6 @@ export class DockerDriver {
         gameHost: publicHost,
         publicPort,
         relayHost: this.#config.advertisedHost,
-        tailscaleHost: tailscale.enabled
-          ? labels["kiln.instance.hostname"]
-          : undefined,
       }),
       directory: relativeDirectory,
       hostDirectory: serverMount.Source,
@@ -2739,7 +2727,6 @@ export class DockerDriver {
       publicHost,
       publicPort,
       service,
-      tailscale,
       variables: parseBrickVariablesLabel(labels["kiln.brick.variables"]),
       limits: containerResourceLimits(container, diskLimitBytes),
       version,
