@@ -2020,7 +2020,15 @@ export interface RoutedHostname {
  * conflict for someone to settle.
  */
 export const attachManualHostnamesEffect = Effect.fn("addresses.attachManual")(
-  function* (domain: string, routed: ReadonlyArray<RoutedHostname>) {
+  function* (
+    domain: string,
+    routed: ReadonlyArray<RoutedHostname>,
+    // The hostnames an instance's routes answer on now, read again once its
+    // DNS is held, so a route removed since the first read isn't taken in.
+    routedNow: (
+      resource: WebHostnameResource
+    ) => Effect.Effect<ReadonlySet<string>, unknown>
+  ) {
     const conflicts = new Set<string>()
     const holders = new Map<string, string>()
     const resourceId = ({ resource }: RoutedHostname) =>
@@ -2048,34 +2056,37 @@ export const attachManualHostnamesEffect = Effect.fn("addresses.attachManual")(
       yield* withDnsChange(
         "dns.webRoutes.attach",
         resource,
-        Effect.forEach(
-          names,
-          ({ hostname }) =>
-            Effect.gen(function* () {
-              const holder = yield* loadHostnameHolderEffect(hostname)
-              // One it holds already is taken in; another's is a conflict.
-              if (holder) {
-                if (!sameOwner(holder, resource)) conflicts.add(hostname)
-                return
-              }
-              yield* insertWebHostnameEffect({
-                ...resource,
-                connectionId: null,
-                generated: false,
-                hostname,
-                id: randomUUID(),
-                routed: true,
-                vanityDomain: domain,
-                zoneId: null,
-              }).pipe(
-                Effect.tap(() => Effect.sync(() => attached++)),
-                Effect.catchTag("HostnameInUseError", () =>
-                  Effect.sync(() => conflicts.add(hostname))
+        Effect.gen(function* () {
+          const current = yield* routedNow(resource)
+          yield* Effect.forEach(
+            names.filter(({ hostname }) => current.has(hostname)),
+            ({ hostname }) =>
+              Effect.gen(function* () {
+                const holder = yield* loadHostnameHolderEffect(hostname)
+                // One it holds already is taken in; another's is a conflict.
+                if (holder) {
+                  if (!sameOwner(holder, resource)) conflicts.add(hostname)
+                  return
+                }
+                yield* insertWebHostnameEffect({
+                  ...resource,
+                  connectionId: null,
+                  generated: false,
+                  hostname,
+                  id: randomUUID(),
+                  routed: true,
+                  vanityDomain: domain,
+                  zoneId: null,
+                }).pipe(
+                  Effect.tap(() => Effect.sync(() => attached++)),
+                  Effect.catchTag("HostnameInUseError", () =>
+                    Effect.sync(() => conflicts.add(hostname))
+                  )
                 )
-              )
-            }),
-          { discard: true }
-        )
+              }),
+            { discard: true }
+          )
+        })
       )
       yield* reconcileResourceAddressesEffect(resource)
     }

@@ -4,7 +4,9 @@ import {
   relayProxyConfigurationSchema,
   relayProxyConfigurationV1Feature,
   relaySnapshotSchema,
+  webRouteHostnames,
 } from "@workspace/contracts"
+import type { WebHostnameResource } from "@/effect/addresses"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -41,6 +43,7 @@ import {
   domainHasActiveSrvRecord,
   managedDomainConnectAddress,
 } from "@/lib/domain-address"
+import { domainCatalogKey } from "@/lib/dns-operations"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import {
   domainInZone,
@@ -604,6 +607,7 @@ const saveConnection = operation<SaveDomainConnectionInput>()({
     ),
   locks: ({ context }) => [
     exclusive(partKey(connectionKey(context.id), "settings")),
+    exclusive(domainCatalogKey),
   ],
   run: ({ context, input }) =>
     saveDomainConnectionEffect({
@@ -777,6 +781,40 @@ function serverKey(relayId: string, id: string): string {
   return `${relayId}:${id}`
 }
 
+/**
+ * The hostnames an instance's web routes answer on now, as its Relay keeps
+ * them. Read once its DNS is held, so taking names in sees the latest save.
+ */
+const routedNow = (resource: WebHostnameResource) =>
+  promiseEffect(async () => {
+    const state = z
+      .object({
+        routes: z.array(
+          z
+            .object({
+              hostname: z.string(),
+              path: z.string().nullable(),
+              www: z.enum(["none", "redirect", "serve"]).optional(),
+            })
+            .passthrough()
+        ),
+      })
+      .passthrough()
+      .parse(
+        await relayRpc(
+          await activeRelay(resource.relayId),
+          "instance.network.routes.read",
+          { id: resource.resourceId, kind: resource.resourceType },
+          15_000
+        )
+      )
+    return new Set(
+      state.routes.flatMap((route) =>
+        webRouteHostnames(route).map((hostname) => hostname.toLowerCase())
+      )
+    ) as ReadonlySet<string>
+  })
+
 // Domains managed elsewhere: Kiln holds the names under one and writes no
 // records. Each is its own lane, so adding and removing one never
 // interleave.
@@ -804,7 +842,10 @@ const addManualDomain = operation<ManualDomainInput>()({
           : Effect.succeed(input.platform ? null : person.id)
       )
     ),
-  locks: ({ input }) => [exclusive(manualDomainKey(input.domain))],
+  locks: ({ input }) => [
+    exclusive(manualDomainKey(input.domain)),
+    exclusive(domainCatalogKey),
+  ],
   run: ({ context: ownerId, input }) =>
     addManualDomainEffect(input.domain, ownerId).pipe(
       // What its Relays already route under it is now held for the
@@ -829,7 +870,7 @@ const addManualDomain = operation<ManualDomainInput>()({
               }))
             const attached = await runAppEffect(
               "addresses.attachManual",
-              attachManualHostnamesEffect(input.domain, routes)
+              attachManualHostnamesEffect(input.domain, routes, routedNow)
             )
             // A Relay away now has its names taken in as it reconnects.
             return { ...attached, unreadRelays: read.unread }
@@ -928,7 +969,7 @@ export async function attachManualRoutesOfRelay(relayId: string) {
   for (const [domain, names] of byDomain) {
     await runAppEffect(
       "addresses.attachManual",
-      attachManualHostnamesEffect(domain, names)
+      attachManualHostnamesEffect(domain, names, routedNow)
     )
   }
   if (byDomain.size > 0) publishDomainChange()

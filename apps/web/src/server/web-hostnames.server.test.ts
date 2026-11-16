@@ -539,18 +539,25 @@ describeMysql("web route hostnames", () => {
     )
 
     it.effect(
-      "takes in what Relays already route under a domain added later, but not a name two instances route",
+      "takes in what Relays still route under a domain added later, but not a name two instances route",
       () =>
         Effect.gen(function* () {
           yield* seed
           fakeCloudflare([ownerZone, platformZone])
           yield* addManualDomainEffect("mybiz.example", owner.id)
 
-          const result = yield* attachManualHostnamesEffect("mybiz.example", [
-            { hostname: "shop.mybiz.example", resource: app },
-            { hostname: "both.mybiz.example", resource: app },
-            { hostname: "both.mybiz.example", resource: server },
-          ])
+          // The app's routes as its Relay has them once its DNS is held: a
+          // save since the first read took `gone` off.
+          const result = yield* attachManualHostnamesEffect(
+            "mybiz.example",
+            [
+              { hostname: "shop.mybiz.example", resource: app },
+              { hostname: "gone.mybiz.example", resource: app },
+              { hostname: "both.mybiz.example", resource: app },
+              { hostname: "both.mybiz.example", resource: server },
+            ],
+            () => Effect.succeed(new Set(["shop.mybiz.example"]))
+          )
 
           assert.deepEqual(result, {
             attached: 1,

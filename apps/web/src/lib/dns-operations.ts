@@ -10,6 +10,12 @@ import { inLanes } from "@/operations/operation"
 // never interleave, and deleting it waits for them or turns them away. A
 // change that spans two resources takes both at once.
 
+/**
+ * Every domain Kiln has, as one: whatever adds a domain holds it, so two
+ * saves can't each find no overlap with the other and both go in.
+ */
+export const domainCatalogKey = "domain-catalog"
+
 /** The lane key of a game server's or App's DNS. */
 export const dnsKey = (owner: HostnameOwner) =>
   partKey(
