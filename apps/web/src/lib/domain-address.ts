@@ -1,10 +1,10 @@
-interface ManagedDomainAddress {
-  domain: string
-  publicPort: number
+/** What a game server's address needs to say how players join it. */
+interface GameAddress {
+  hostname: string
+  publicPort: number | null
   srvRecordId: string | null
-  status: "active" | "error" | "pending" | "removing"
+  status: string
   supportsSrv: boolean
-  vanityLabel: string
 }
 
 export interface ManagedDomainEndpoint {
@@ -12,9 +12,7 @@ export interface ManagedDomainEndpoint {
   publicPort: number
 }
 
-export function domainHasActiveSrvRecord(
-  assignment: ManagedDomainAddress
-): boolean {
+export function domainHasActiveSrvRecord(assignment: GameAddress): boolean {
   return (
     assignment.supportsSrv &&
     assignment.status === "active" &&
@@ -22,13 +20,10 @@ export function domainHasActiveSrvRecord(
   )
 }
 
-export function managedDomainConnectAddress(
-  assignment: ManagedDomainAddress
-): string {
-  const hostname = `${assignment.vanityLabel}.${assignment.domain}`
+export function managedDomainConnectAddress(assignment: GameAddress): string {
   return domainHasActiveSrvRecord(assignment)
-    ? hostname
-    : hostPortAddress(hostname, assignment.publicPort)
+    ? assignment.hostname
+    : hostPortAddress(assignment.hostname, assignment.publicPort ?? 0)
 }
 
 export function managedDomainEndpointMatches(

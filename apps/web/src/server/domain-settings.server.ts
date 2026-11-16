@@ -25,7 +25,8 @@ import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   listWebHostnamesEffect,
-  loadInstanceDomainAssignmentsEffect,
+  listGameAddressesEffect,
+  vanityLabelOf,
   retryAddressesNowEffect,
   webHostnameProxied,
 } from "@/effect/addresses"
@@ -103,10 +104,7 @@ export async function getDomainSettingsHandler() {
       "domains.domains.usable",
       listUsableVanityDomainsEffect(user.id)
     ),
-    runAppEffect(
-      "domains.assignments.all",
-      loadInstanceDomainAssignmentsEffect()
-    ),
+    runAppEffect("domains.assignments.all", listGameAddressesEffect()),
     runAppEffect("webHostnames.list", listWebHostnamesEffect()),
     listPersistedRelays(),
     runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
@@ -124,30 +122,30 @@ export async function getDomainSettingsHandler() {
     }
   }
   const visibleAssignments = assignments.filter((assignment) =>
-    access.instance(assignment.relayId, assignment.instanceId, false)
+    access.instance(assignment.relayId, assignment.resourceId, false)
   )
   const domainCounts = new Map<string, number>()
   for (const assignment of visibleAssignments) {
-    const key = serverKey(assignment.relayId, assignment.instanceId)
+    const key = serverKey(assignment.relayId, assignment.resourceId)
     domainCounts.set(key, (domainCounts.get(key) ?? 0) + 1)
   }
   const managedDomains = visibleAssignments.map(
     (assignment): ManagedDomainOverview => {
-      const key = serverKey(assignment.relayId, assignment.instanceId)
-      const server = resources.server(assignment.relayId, assignment.instanceId)
+      const key = serverKey(assignment.relayId, assignment.resourceId)
+      const server = resources.server(assignment.relayId, assignment.resourceId)
       return {
         address: managedDomainConnectAddress(assignment),
         canManage: access.instance(
           assignment.relayId,
-          assignment.instanceId,
+          assignment.resourceId,
           true
         ),
-        domain: assignment.domain,
+        domain: assignment.vanityDomain ?? "",
         domainCount: domainCounts.get(key) ?? 1,
         id: assignment.id,
-        instanceId: assignment.instanceId,
+        instanceId: assignment.resourceId,
         lastError: assignment.lastError,
-        port: assignment.publicPort,
+        port: assignment.publicPort ?? 0,
         primary: assignment.primary,
         relayId: assignment.relayId,
         relayName: resources.relayName(assignment.relayId),
@@ -155,13 +153,16 @@ export async function getDomainSettingsHandler() {
           brickId: server?.brickId,
           game: server?.game,
           implementation: server?.implementation,
-          name: server?.name ?? assignment.instanceId,
+          name: server?.name ?? assignment.resourceId,
         },
         srvActive: domainHasActiveSrvRecord(assignment),
-        status: assignment.status,
+        status: assignment.status === "external" ? "error" : assignment.status,
         supportsSrv: assignment.supportsSrv,
-        vanityLabel: assignment.vanityLabel,
-        zoneName: zoneNames.get(assignment.domain) ?? null,
+        vanityLabel: vanityLabelOf(
+          assignment.hostname,
+          assignment.vanityDomain
+        ),
+        zoneName: zoneNames.get(assignment.vanityDomain ?? "") ?? null,
       }
     }
   )

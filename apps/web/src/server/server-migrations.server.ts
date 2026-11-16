@@ -12,9 +12,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import type { z } from "zod"
 
 import { countLinkableInstanceBackupsEffect } from "@/effect/backups"
-import {
-  loadInstanceDomainAssignmentsForInstanceEffect,
-} from "@/effect/addresses"
+import { listInstanceGameAddressesEffect } from "@/effect/addresses"
 import { anyDomainConnectionEffect } from "@/effect/domains"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
@@ -184,7 +182,7 @@ export async function previewServerMigrationHandler(
       Effect.all(
         [
           anyDomainConnectionEffect(),
-          loadInstanceDomainAssignmentsForInstanceEffect(relay.id, instance.id),
+          listInstanceGameAddressesEffect(relay.id, instance.id),
         ],
         { concurrency: 2 }
       )
@@ -226,7 +224,7 @@ export async function previewServerMigrationHandler(
       managed: connected,
       names: assignments
         .filter((assignment) => assignment.status !== "removing")
-        .map((assignment) => `${assignment.vanityLabel}.${assignment.domain}`),
+        .map((assignment) => assignment.hostname),
     },
     source: {
       instanceId: instance.id,

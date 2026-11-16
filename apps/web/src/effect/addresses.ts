@@ -98,40 +98,11 @@ export interface Address {
   zoneId: string | null
 }
 
-/**
- * A hostname as an instance's web routes see it. A game server's own
- * address reads as in step with no record of its own: its record is the
- * game port's, and how that is doing shows with the address.
- */
-export type WebHostname = Address
-
-/** A game server's address: the name players join it at, and its records. */
-export interface InstanceDomainAssignment {
-  addressRecordId: string | null
-  addressRecordType: "A" | "AAAA" | "CNAME" | null
-  domain: string
-  id: string
-  instanceId: string
-  integrationId: string
-  lastError: string | null
-  /**
-   * The name a rename is moving it to, held alongside its current one until
-   * Cloudflare has it; null when no rename is under way.
-   */
-  next: { domain: string; vanityLabel: string } | null
-  /** The domain Hearth advertises as the game server's connect address. */
-  primary: boolean
-  publicHost: string
-  publicPort: number
-  relayId: string
-  srvProtocol: "tcp" | "udp" | null
-  srvRecordId: string | null
-  srvService: string | null
-  status: "active" | "error" | "pending" | "removing"
-  supportsSrv: boolean
-  vanityLabel: string
-  /** Null only if its row is older than rows keeping their zone. */
-  zoneId: string | null
+/** The label before a name's vanity domain: `deep-moon` in `deep-moon.example.com`. */
+export function vanityLabelOf(hostname: string, vanityDomain: string | null) {
+  return vanityDomain && hostname.endsWith(`.${vanityDomain}`)
+    ? hostname.slice(0, hostname.length - vanityDomain.length - 1)
+    : hostname
 }
 
 /**
@@ -261,8 +232,12 @@ export const listAddressesEffect = Effect.fn("addresses.list")(
 
 const usedByWeb = (row: Address) => !row.game || row.routed
 
-/** A game server's address as its web routes see it: the game port's. */
-function webHostname(row: Address): WebHostname {
+/**
+ * An address as its instance's web routes see it. A game server's own
+ * address reads as in step with no record of its own: its record is the game
+ * port's, and how that is doing shows with the address.
+ */
+function forWebRoutes(row: Address): Address {
   return row.game
     ? {
         ...row,
@@ -282,7 +257,7 @@ export const loadWebHostnameEffect = Effect.fn("webHostnames.load")(function* (
   id: string
 ) {
   const row = yield* loadAddressEffect(id)
-  return row && usedByWeb(row) ? webHostname(row) : null
+  return row && usedByWeb(row) ? forWebRoutes(row) : null
 })
 
 export const loadWebHostnameByNameEffect = Effect.fn("webHostnames.byName")(
@@ -294,7 +269,7 @@ export const loadWebHostnameByNameEffect = Effect.fn("webHostnames.byName")(
       [hostname]
     )
     const row = found ? address(found) : null
-    return row && usedByWeb(row) ? webHostname(row) : null
+    return row && usedByWeb(row) ? forWebRoutes(row) : null
   }
 )
 
@@ -305,7 +280,7 @@ export const listResourceWebHostnamesEffect = Effect.fn(
   const rows = yield* listResourceAddressesEffect(resource)
   return rows
     .filter(usedByWeb)
-    .map(webHostname)
+    .map(forWebRoutes)
     .sort(
       (left, right) =>
         Number(right.generated) - Number(left.generated) ||
@@ -317,12 +292,12 @@ export const listResourceWebHostnamesEffect = Effect.fn(
 export const listWebHostnamesEffect = Effect.fn("webHostnames.list")(
   function* (filter?: { connectionId?: string; relayId?: string }) {
     const rows = yield* listAddressesEffect(filter)
-    return rows.filter(usedByWeb).map(webHostname)
+    return rows.filter(usedByWeb).map(forWebRoutes)
   }
 )
 
 /** A game server's addresses, primary first. */
-export const loadInstanceDomainAssignmentsForInstanceEffect = Effect.fn(
+export const listInstanceGameAddressesEffect = Effect.fn(
   "domains.assignments.instance"
 )(function* (relayId: string, instanceId: string) {
   const rows = yield* listResourceAddressesEffect({
@@ -330,11 +305,11 @@ export const loadInstanceDomainAssignmentsForInstanceEffect = Effect.fn(
     resourceId: instanceId,
     resourceType: "instance",
   })
-  return rows.filter((row) => row.game).map(assignmentOf)
+  return rows.filter((row) => row.game)
 })
 
 /** Active game addresses, each game server's primary before its others. */
-export const loadActiveInstanceDomainAssignmentsEffect = Effect.fn(
+export const listActiveGameAddressesEffect = Effect.fn(
   "domains.assignments.active"
 )(function* () {
   const database = yield* Database
@@ -344,21 +319,21 @@ export const loadActiveInstanceDomainAssignmentsEffect = Effect.fn(
       WHERE game = 1 AND status = 'active'
       ORDER BY is_primary DESC, created_at, id`
   )
-  return rows.map((row) => assignmentOf(address(row)))
+  return rows.map(address)
 })
 
-export const loadInstanceDomainAssignmentsEffect = Effect.fn(
-  "domains.assignments.all"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<AddressRow>(
-    "domains.assignments.all",
-    `${addressSelect}
+export const listGameAddressesEffect = Effect.fn("domains.assignments.all")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<AddressRow>(
+      "domains.assignments.all",
+      `${addressSelect}
       WHERE game = 1
       ORDER BY vanity_domain, hostname`
-  )
-  return rows.map((row) => assignmentOf(address(row)))
-})
+    )
+    return rows.map(address)
+  }
+)
 
 /**
  * Holds a hostname for an instance before its record exists, claiming it in
@@ -430,37 +405,36 @@ export interface GameEndpoint {
  * claiming it in the same transaction, so a name another instance holds
  * fails rather than being taken over.
  */
-export const insertInstanceDomainAssignmentEffect = Effect.fn(
-  "addresses.insertGame"
-)(function* (input: {
-  /** The connection whose token manages the domain's zone. */
-  connectionId: string
-  domain: string
-  endpoint: GameEndpoint
-  hostname: string
-  id: string
-  instanceId: string
-  primary: boolean
-  relayId: string
-  /** The zone its records go in, as the domain was loaded. */
-  zoneId: string
-}) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  yield* database.transaction("addresses.insertGame", () =>
-    Effect.gen(function* () {
-      const owner = {
-        relayId: input.relayId,
-        resourceId: input.instanceId,
-        resourceType: "instance" as const,
-      }
-      yield* claimHostnamesEffect(owner, [input.hostname])
-      // Only into an enabled domain still in the zone its records will go
-      // in: a save that removes or moves it either waits for this row or
-      // this insert finds nothing.
-      const result = yield* database.execute(
-        "addresses.insertGame",
-        `INSERT INTO ${addressTable}
+export const insertGameAddressEffect = Effect.fn("addresses.insertGame")(
+  function* (input: {
+    /** The connection whose token manages the domain's zone. */
+    connectionId: string
+    domain: string
+    endpoint: GameEndpoint
+    hostname: string
+    id: string
+    instanceId: string
+    primary: boolean
+    relayId: string
+    /** The zone its records go in, as the domain was loaded. */
+    zoneId: string
+  }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.transaction("addresses.insertGame", () =>
+      Effect.gen(function* () {
+        const owner = {
+          relayId: input.relayId,
+          resourceId: input.instanceId,
+          resourceType: "instance" as const,
+        }
+        yield* claimHostnamesEffect(owner, [input.hostname])
+        // Only into an enabled domain still in the zone its records will go
+        // in: a save that removes or moves it either waits for this row or
+        // this insert finds nothing.
+        const result = yield* database.execute(
+          "addresses.insertGame",
+          `INSERT INTO ${addressTable}
            (id, hostname, relay_id, resource_type, resource_id,
             integration_id, zone_id, vanity_domain, game, target,
             public_port, supports_srv, srv_service, srv_protocol, status,
@@ -470,39 +444,40 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
            FROM ${databaseTable("domain_zone")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
             AND enabled = 1`,
-        [
-          input.id,
-          input.hostname.toLowerCase(),
-          ...resourceValues(owner),
-          input.connectionId,
-          input.zoneId,
-          input.domain,
-          input.endpoint.publicHost,
-          input.endpoint.publicPort,
-          input.endpoint.srv !== null,
-          input.endpoint.srv?.service ?? null,
-          input.endpoint.srv?.protocol ?? null,
-          now,
-          now,
-          input.domain,
-          input.zoneId,
-          input.connectionId,
-        ]
-      )
-      if (result.affectedRows === 0) {
-        return yield* DomainConfigurationError.make({
-          message: `${input.domain} isn't taking new game server domains`,
-        })
-      }
-      if (input.primary) {
-        yield* setPrimaryAddressEffect(
-          { id: input.instanceId, type: "instance" },
-          { kind: "join", ref: input.id }
+          [
+            input.id,
+            input.hostname.toLowerCase(),
+            ...resourceValues(owner),
+            input.connectionId,
+            input.zoneId,
+            input.domain,
+            input.endpoint.publicHost,
+            input.endpoint.publicPort,
+            input.endpoint.srv !== null,
+            input.endpoint.srv?.service ?? null,
+            input.endpoint.srv?.protocol ?? null,
+            now,
+            now,
+            input.domain,
+            input.zoneId,
+            input.connectionId,
+          ]
         )
-      }
-    })
-  )
-})
+        if (result.affectedRows === 0) {
+          return yield* DomainConfigurationError.make({
+            message: `${input.domain} isn't taking new game server domains`,
+          })
+        }
+        if (input.primary) {
+          yield* setPrimaryAddressEffect(
+            { id: input.instanceId, type: "instance" },
+            { kind: "join", ref: input.id }
+          )
+        }
+      })
+    )
+  }
+)
 
 /**
  * Gives an address whose records were released a new name, claiming it and
@@ -512,68 +487,68 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
  * zone, and on the connection, its records will go in. The connection moves
  * with it, so later syncs and the delete use the token that made them.
  */
-export const reserveInstanceDomainAssignmentEffect = Effect.fn(
-  "addresses.reserve"
-)(function* (input: {
-  connectionId: string
-  domain: string
-  hostname: string
-  id: string
-  zoneId: string
-}) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  yield* database.transaction("addresses.reserve", (transaction) =>
-    Effect.gen(function* () {
-      const zones = yield* transaction.queryRows<RowDataPacket>(
-        `SELECT 1 FROM ${databaseTable("domain_zone")}
+export const reserveGameAddressEffect = Effect.fn("addresses.reserve")(
+  function* (input: {
+    connectionId: string
+    domain: string
+    hostname: string
+    id: string
+    zoneId: string
+  }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.transaction("addresses.reserve", (transaction) =>
+      Effect.gen(function* () {
+        const zones = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("domain_zone")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
           LOCK IN SHARE MODE`,
-        [input.domain, input.zoneId, input.connectionId]
-      )
-      if (zones.length === 0) {
-        return yield* DomainConfigurationError.make({
-          message: `${input.domain} is no longer a configured vanity domain`,
-        })
-      }
-      const current = yield* lockAddressEffect(input.id)
-      if (current.status === "removing") {
-        return yield* DomainConfigurationError.make({
-          message: "The domain is being deleted",
-        })
-      }
-      const hostname = input.hostname.toLowerCase()
-      yield* claimHostnamesEffect(current, [hostname])
-      const moved = hostname !== current.hostname
-      const routedThere = moved
-        ? yield* takeRouteNameEffect(current, hostname)
-        : current.routed
-      yield* transaction.execute(
-        `UPDATE ${addressTable}
+          [input.domain, input.zoneId, input.connectionId]
+        )
+        if (zones.length === 0) {
+          return yield* DomainConfigurationError.make({
+            message: `${input.domain} is no longer a configured vanity domain`,
+          })
+        }
+        const current = yield* lockAddressEffect(input.id)
+        if (current.status === "removing") {
+          return yield* DomainConfigurationError.make({
+            message: "The domain is being deleted",
+          })
+        }
+        const hostname = input.hostname.toLowerCase()
+        yield* claimHostnamesEffect(current, [hostname])
+        const moved = hostname !== current.hostname
+        const routedThere = moved
+          ? yield* takeRouteNameEffect(current, hostname)
+          : current.routed
+        yield* transaction.execute(
+          `UPDATE ${addressTable}
             SET hostname = ?, vanity_domain = ?, next_hostname = NULL,
                 next_vanity_domain = NULL, integration_id = ?, zone_id = ?,
                 record_id = NULL, record_type = NULL, srv_record_id = NULL,
                 routed = ?, status = 'pending', last_error = NULL,
                 updated_at = ?
           WHERE id = ?`,
-        [
-          hostname,
-          input.domain,
-          input.connectionId,
-          input.zoneId,
-          routedThere,
-          now,
-          input.id,
-        ]
-      )
-      if (moved) yield* leaveToRoutesEffect(current, now)
-      yield* releaseUnusedHostnamesEffect(
-        current,
-        addressHostnames(current).filter((name) => name !== hostname)
-      )
-    })
-  )
-})
+          [
+            hostname,
+            input.domain,
+            input.connectionId,
+            input.zoneId,
+            routedThere,
+            now,
+            input.id,
+          ]
+        )
+        if (moved) yield* leaveToRoutesEffect(current, now)
+        yield* releaseUnusedHostnamesEffect(
+          current,
+          addressHostnames(current).filter((name) => name !== hostname)
+        )
+      })
+    )
+  }
+)
 
 /**
  * Starts renaming an address: claims the new name and records it beside the
@@ -1438,45 +1413,12 @@ function address(row: AddressRow): Address {
     srvProtocol: row.srv_protocol,
     srvRecordId: row.srv_record_id,
     srvService: row.srv_service,
-    status: row.status,
+    // A game server's address is never left to someone else's record: one
+    // it finds there is a failure, the same for every kind of name.
+    status: row.game && row.status === "external" ? "error" : row.status,
     supportsSrv: Boolean(row.supports_srv),
     target: row.target,
     vanityDomain: row.vanity_domain,
     zoneId: row.zone_id,
-  }
-}
-
-/** A game server's address, as its Network page and the Domains page read it. */
-export function assignmentOf(row: Address): InstanceDomainAssignment {
-  const domain = row.vanityDomain ?? ""
-  // A name under its vanity domain: the label is what comes before it.
-  const label = (hostname: string, under: string) =>
-    hostname.slice(0, hostname.length - under.length - 1)
-  return {
-    addressRecordId: row.recordId,
-    addressRecordType: row.recordType,
-    domain,
-    id: row.id,
-    instanceId: row.resourceId,
-    integrationId: row.connectionId,
-    lastError: row.lastError,
-    next: row.next
-      ? {
-          domain: row.next.vanityDomain,
-          vanityLabel: label(row.next.hostname, row.next.vanityDomain),
-        }
-      : null,
-    primary: row.primary,
-    publicHost: row.target ?? "",
-    publicPort: row.publicPort ?? 0,
-    relayId: row.relayId,
-    srvProtocol: row.srvProtocol,
-    srvRecordId: row.srvRecordId,
-    srvService: row.srvService,
-    // A game server's address is never left to someone else's record.
-    status: row.status === "external" ? "error" : row.status,
-    supportsSrv: row.supportsSrv,
-    vanityLabel: label(row.hostname, domain),
-    zoneId: row.zoneId,
   }
 }
