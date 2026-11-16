@@ -10,6 +10,7 @@ import {
 } from "@/lib/server-migrations.server"
 import { deleteTunnel } from "@/lib/tunnel-deletion.server"
 import { rewriteTailscaleDns } from "@/lib/tunnel-dns.server"
+import { pruneTunnelGateways } from "@/lib/tunnel-gateway-pruning.server"
 
 /**
  * Every workflow Hearth runs, registered with the engine when it starts. An
@@ -25,5 +26,6 @@ export const HearthWorkflows = Layer.mergeAll(
   serverMigration.layer,
   rollBackLegacyServerMigration.layer,
   deleteTunnel.layer,
-  rewriteTailscaleDns.layer
+  rewriteTailscaleDns.layer,
+  pruneTunnelGateways.layer
 )
