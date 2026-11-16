@@ -5,7 +5,11 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import type { AccessPermission } from "@/lib/permissions"
-import { queryKeys, tailnetsQueryOptions } from "@/lib/query-options"
+import {
+  queryKeys,
+  tailnetsQueryOptions,
+  tunnelBricksQueryOptions,
+} from "@/lib/query-options"
 import {
   addTunnelAlias,
   removeTunnelAlias,
@@ -128,6 +132,8 @@ export function wholeName(name: Pick<TailnetName, "domain" | "label">) {
 /** A change to a tailnet, sent with everything it keeps. */
 export interface TailnetChange {
   authKey?: string
+  /** The Brick a tunnel it adds is made from. */
+  brick?: string
   /** What it connects; each keeps its name. */
   bindings?: ReadonlyArray<
     Pick<TailnetBinding, "enabled" | "memberId" | "relayId">
@@ -145,6 +151,7 @@ export function tailnetSaveInput(
 ): SaveTailnetInput {
   return {
     ...(change.authKey ? { authKey: change.authKey } : {}),
+    ...(change.brick ? { brick: change.brick } : {}),
     bindings: (change.bindings ?? tailnet.bindings).map(
       ({ enabled, memberId, relayId }) => ({
         enabled,
@@ -162,6 +169,23 @@ export function tailnetSaveInput(
       ...(change.relayIds ?? tailnet.deployments.map(({ relayId }) => relayId)),
     ],
   }
+}
+
+/**
+ * Where Kiln's Tailscale tunnel Brick comes from, which a tunnel added here
+ * is made from, or undefined until the catalog is read.
+ */
+export function useTailscaleTunnelBrick(): string | undefined {
+  return useQuery({
+    ...tunnelBricksQueryOptions(),
+    select: selectTailscaleBrick,
+  }).data
+}
+
+function selectTailscaleBrick(
+  bricks: ReadonlyArray<{ source: string; type?: string | undefined }>
+): string | undefined {
+  return bricks.find((brick) => brick.type === "tailscale")?.source
 }
 
 export function useSetTailnets() {

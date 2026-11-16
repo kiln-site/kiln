@@ -7,9 +7,10 @@ import { brickRecipeSchema } from "@workspace/contracts"
 
 import {
   BrickCatalog,
+  resolveBrick,
   resolveDatabaseBrick,
   resolveRecipeIconSource,
-  resolveBrick,
+  tunnelBrick,
 } from "./bricks.js"
 import type { BrickRecipe } from "@workspace/contracts"
 
@@ -232,16 +233,31 @@ describe("the official Bricks", () => {
       "redis",
       "valkey",
     ])
+    expect(ids("tunnel")).toEqual(["tailscale"])
     for (const brick of bricks) {
-      const { source: _source, ...definition } = brick
+      const { source, ...definition } = brick
       if (definition.kind === "database") {
-        expect(() =>
-          resolveDatabaseBrick(definition, {}, login)
-        ).not.toThrow()
+        expect(() => resolveDatabaseBrick(definition, {}, login)).not.toThrow()
+      } else if (definition.kind === "tunnel") {
+        expect(() => tunnelBrick(definition, source)).not.toThrow()
       } else {
         expect(() => resolveBrick(definition, {})).not.toThrow()
       }
     }
+  })
+
+  // A tunnel made before Bricks reads as this one, at the images it runs,
+  // so one made from it runs as they do.
+  it("run a tunnel as Kiln ran one before it had a Brick", async () => {
+    const { bricks } = await catalogAt("bricks.yml").catalog()
+    const { source, ...definition } = bricks.find(
+      (brick) => brick.metadata.id === "tailscale"
+    )!
+
+    expect(tunnelBrick(definition, source).images).toEqual({
+      dns: "coredns/coredns:1.14.7",
+      tailscale: "tailscale/tailscale:stable",
+    })
   })
 
   // The engine table these replaced: a database made from a Brick has to
@@ -295,7 +311,11 @@ describe("the official Bricks", () => {
     })
 
     expect(() =>
-      resolveDatabaseBrick(withImage("example.com/other/postgres:17"), {}, login)
+      resolveDatabaseBrick(
+        withImage("example.com/other/postgres:17"),
+        {},
+        login
+      )
     ).toThrow(/runs from the postgres image/u)
     // An answer that would turn the tag into another registry's image.
     const freeVersion = withImage("postgres:{{ version }}", [

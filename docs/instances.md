@@ -177,8 +177,10 @@ primary addresses. Its permissions of its own follow.
 ### What runs
 
 - **A tunnel** is an instance of kind `tunnel` on one Relay, of type
-  `tailscale`, shown as "Tunnel · Tailscale". It runs two containers from
-  official images: Tailscale (`kiln-ts-<key>`, a subnet router) and CoreDNS
+  `tailscale`, shown as "Tunnel · Tailscale", made from a tunnel Brick as a
+  database is from a database Brick (see [Bricks](#bricks)). It runs two
+  containers from the images its Brick pins: Tailscale (`kiln-ts-<key>`, a
+  subnet router) and CoreDNS
   (`kiln-ts-<key>-dns`, in the Tailscale container's network namespace, so
   only its tailnet reaches it). Its connected instances join its Docker
   network (`kiln-ts-<key>-network`), each at an address of its own; nobody
@@ -311,7 +313,7 @@ primary addresses. Its permissions of its own follow.
   from the components every instance's pages share.
 - The one Add dialog has Tunnel, whose only type is Tailscale: pick a Relay,
   then a new tailnet (its name, first TLD and Tailscale login) or one that
-  has no tunnel there yet. Tunnels aren't Bricks.
+  has no tunnel there yet. A tunnel comes from Kiln's `tailscale` Brick.
 - A tailnet keeps the Relays it has tunnels on, so a tunnel can be added
   before anything connects through it, and deleted from its page, which
   disconnects what it connected. Built: the pages, the Add dialog, the
@@ -386,8 +388,8 @@ Every kind except a Relay comes from a Brick. Three things stay separate:
 
 `kiln.brick/v2` (`apps/bricks/docs/brick-v2.md`) is the format:
 
-- **`kind`**: game server, database, App or group. Each has a section of its
-  own.
+- **`kind`**: game server, database, App, tunnel or group. Each has a
+  section of its own.
 - **`type`**, optional, within a kind. A Brick with no type runs with the
   foundation and nothing more. A type such as `minecraft` or `postgres`
   unlocks extras Kiln implements, and the Brick says which it uses.
@@ -413,6 +415,18 @@ the database Bricks of Kiln's own catalog are offered and accepted, and the
 Relay refuses one that doesn't run as its type does. A database made before
 databases ran Bricks is read as its engine's official Brick, and nothing
 about its container or data changes.
+
+A tunnel is made from a tunnel Brick whose `type` is one Kiln runs
+(`tailscale`). The Brick pins its two images: `deploy` runs the Tailscale
+container, and its `tunnel` section names the CoreDNS image that answers the
+tailnet's names. It says nothing else: the login, routes, firewall and DNS
+are Kiln's, made for those images, so only the tunnel Bricks of Kiln's own
+catalog are offered and accepted, and the Relay refuses one of another type
+or images. A tunnel records the Brick it was made from, with the images it
+resolved to, and keeps it: redeploying pulls those images again. A tunnel
+made before tunnels ran Bricks reads as Kiln's `tailscale` Brick, with the
+images it already ran and no source, and nothing about its containers
+changes. Built.
 
 A database that an App needs should be a member of a group, not a container
 in its Compose project: only then is it a database to Kiln, with the viewer,

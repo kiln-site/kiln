@@ -23,6 +23,7 @@ import {
   tailnetSaveInput,
   useSetTailnets,
   useTailnets,
+  useTailscaleTunnelBrick,
   type TailnetsResult,
 } from "@/components/tunnel/tailnet-data"
 import {
@@ -86,6 +87,8 @@ export const AddTunnelPane = React.memo(function AddTunnelPane({
   const creating = tailnetId === NEW_TAILNET
   const relayName = relays.find(({ id }) => id === relayId)?.name ?? ""
 
+  // The Brick a tunnel is made from: Kiln's Tailscale one.
+  const brick = useTailscaleTunnelBrick()
   const add = useMutation({
     mutationFn: async () => {
       let result: TailnetsResult = tailnets
@@ -111,6 +114,7 @@ export const AddTunnelPane = React.memo(function AddTunnelPane({
       if (!tailnet) throw new Error("The tailnet is gone")
       const next = await saveTailnet({
         data: tailnetSaveInput(tailnet, {
+          brick,
           relayIds: [
             ...tailnet.deployments.map((deployment) => deployment.relayId),
             relayId,
@@ -135,6 +139,7 @@ export const AddTunnelPane = React.memo(function AddTunnelPane({
   })
   const canSubmit =
     Boolean(relayId) &&
+    brick !== undefined &&
     !add.isPending &&
     (!creating ||
       (name.trim().length > 0 &&

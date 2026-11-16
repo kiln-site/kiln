@@ -18,6 +18,7 @@ import {
   brickProvisioningAnswers,
   resolveBrick,
   resolveBrickForProvisioning,
+  tunnelBrick,
 } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
@@ -145,8 +146,6 @@ import type { TraefikCertificateGate } from "./web-certificates.js"
 
 // Containers Relay runs for its own infrastructure, named when created.
 type InfrastructureContainer = Omit<ContainerSpec, "name">
-const TAILSCALE_IMAGE = "tailscale/tailscale:stable"
-const COREDNS_IMAGE = "coredns/coredns:1.14.7"
 // A tunnel's two containers say whose they are and which they are. The
 // physical key names it, as its containers and folders are named.
 export const TUNNEL_ID_LABEL = "kiln.tunnel.id"
@@ -253,10 +252,13 @@ function nextManagedGamePort(input: {
   throw new Error(`No game ports are available in ${input.start}-${input.end}`)
 }
 
-function tunnelPendingRemoval(
-  config: TunnelConfig,
-  snapshot: Tunnel
-): Tunnel {
+// The images a tunnel runs, as its Brick pinned them: its Tailscale
+// container's, then its CoreDNS container's.
+function tunnelImages(config: TunnelConfig): ReadonlyArray<string> {
+  return [config.brick.images.tailscale, config.brick.images.dns]
+}
+
+function tunnelPendingRemoval(config: TunnelConfig, snapshot: Tunnel): Tunnel {
   return tunnelSchema.parse({
     ...snapshot,
     ...config,
@@ -571,7 +573,7 @@ export class LifecycleDriver {
     if (!config) throw new Error(`Tunnel ${id} was not found`)
     await this.#assertTunnelRemovalNotPending(id, "redeploy")
     await onPhase("pulling_image")
-    for (const image of [TAILSCALE_IMAGE, COREDNS_IMAGE]) {
+    for (const image of tunnelImages(config)) {
       await note(`Pulling ${image}`)
       await runLifecycle(this.#engine.pullImage(image, { timeout: 300_000 }))
     }
@@ -624,9 +626,7 @@ export class LifecycleDriver {
     )
     const stacks = await Promise.all(
       entries.map(async (entry) => {
-        const id = entry.isDirectory()
-          ? tunnelDirectoryId(entry.name)
-          : null
+        const id = entry.isDirectory() ? tunnelDirectoryId(entry.name) : null
         const config = id ? await this.#readTunnelConfig(id) : null
         return config ? this.#tunnel(config) : null
       })
@@ -728,20 +728,22 @@ export class LifecycleDriver {
     )
   }
 
-  async applyTunnel(
-    rawInput: TunnelApply,
-    planned?: string
-  ): Promise<Tunnel> {
+  async applyTunnel(rawInput: TunnelApply, planned?: string): Promise<Tunnel> {
     const input = rawInput
-    await this.#assertTunnelRemovalNotPending(
-      input.id,
-      "apply changes to"
-    )
+    await this.#assertTunnelRemovalNotPending(input.id, "apply changes to")
     const existing = await this.#readTunnelConfig(input.id)
     this.#assertTunnelPlanned(existing, planned)
     if (existing && existing.tailnetId !== input.tailnetId) {
       throw new Error("This tunnel belongs to another tailnet")
     }
+    // A tunnel keeps the Brick it was made from; a new one names its own,
+    // and runs only a type and images Kiln runs.
+    const brick =
+      existing?.brick ??
+      (input.brick
+        ? tunnelBrick(input.brick.definition, input.brick.source)
+        : null)
+    if (!brick) throw new Error("A new tunnel names the Brick it runs")
     const instances = await this.#docker.inspectInstances()
     for (const binding of input.bindings) {
       const app = appTailscaleMember(binding.memberId)
@@ -774,11 +776,7 @@ export class LifecycleDriver {
     )
     const subnet =
       existing?.subnet ??
-      allocateTunnelSubnet(
-        input.id,
-        this.#config.nodeId,
-        reservedSubnets
-      )
+      allocateTunnelSubnet(input.id, this.#config.nodeId, reservedSubnets)
     const bindings = assignTailscaleBindingAddresses(
       subnet,
       existing?.bindings ?? [],
@@ -786,6 +784,7 @@ export class LifecycleDriver {
     )
     const config = tunnelConfigSchema.parse({
       bindings,
+      brick,
       domains: input.domains,
       hostname: input.hostname,
       id: input.id,
@@ -801,8 +800,7 @@ export class LifecycleDriver {
         "An auth key is required to install Tailscale on this node"
       )
     }
-    const rollbackStackApply = () =>
-      this.#rollbackTunnelApply(config, existing)
+    const rollbackStackApply = () => this.#rollbackTunnelApply(config, existing)
 
     return runLifecycle(
       lifecycleOperation(async () => {
@@ -863,13 +861,8 @@ export class LifecycleDriver {
     )
   }
 
-  async syncTunnelDns(
-    input: TunnelDns
-  ): Promise<Tunnel> {
-    await this.#assertTunnelRemovalNotPending(
-      input.id,
-      "synchronize DNS for"
-    )
+  async syncTunnelDns(input: TunnelDns): Promise<Tunnel> {
+    await this.#assertTunnelRemovalNotPending(input.id, "synchronize DNS for")
     const config = await this.#readTunnelConfig(input.id)
     if (!config) throw new Error("Tailscale stack not found")
     const duplicate = input.records.find(
@@ -888,10 +881,7 @@ export class LifecycleDriver {
     controlPlaneDeviceRemoved = false,
     planned?: string
   ): Promise<void> {
-    this.#assertTunnelPlanned(
-      await this.#readTunnelConfig(id),
-      planned
-    )
+    this.#assertTunnelPlanned(await this.#readTunnelConfig(id), planned)
     if (mode === "prepare") {
       await this.#prepareTunnelRemoval(id)
       return
@@ -934,9 +924,7 @@ export class LifecycleDriver {
             )
           }
         }
-        await this.#removeOwnedContainer(
-          this.#resources.tunnelDnsContainer(id)
-        )
+        await this.#removeOwnedContainer(this.#resources.tunnelDnsContainer(id))
         const container = this.#resources.tunnelContainer(id)
         if (await this.#containerRunning(container)) {
           await runLifecycle(
@@ -950,9 +938,9 @@ export class LifecycleDriver {
         Effect.catch((cause) =>
           (alreadyPending
             ? Effect.void
-            : lifecycleOperation(() =>
-                this.#rollbackTunnelRemoval(id)
-              ).pipe(Effect.ignore)
+            : lifecycleOperation(() => this.#rollbackTunnelRemoval(id)).pipe(
+                Effect.ignore
+              )
           ).pipe(Effect.flatMap(() => Effect.fail(cause)))
         )
       )
@@ -1020,9 +1008,7 @@ export class LifecycleDriver {
         )
       )
     }
-    await this.#removeOwnedContainer(
-      this.#resources.tunnelDnsContainer(id)
-    )
+    await this.#removeOwnedContainer(this.#resources.tunnelDnsContainer(id))
     await this.#removeOwnedContainer(container)
     await this.#removeOwnedNetwork(network)
     await rm(
@@ -1069,9 +1055,7 @@ export class LifecycleDriver {
 
   async #tunnelRemovalPending(id: string): Promise<boolean> {
     return runLifecycle(
-      lifecycleOperation(() =>
-        readFile(this.#tunnelRemovalMarker(id))
-      ).pipe(
+      lifecycleOperation(() => readFile(this.#tunnelRemovalMarker(id))).pipe(
         Effect.as(true),
         Effect.catch((cause) =>
           hasErrorCode(cause, "ENOENT")
@@ -1092,15 +1076,11 @@ export class LifecycleDriver {
     )
   }
 
-  async #readTunnelRemovalSnapshot(
-    id: string
-  ): Promise<Tunnel | null> {
+  async #readTunnelRemovalSnapshot(id: string): Promise<Tunnel | null> {
     return runLifecycle(
       lifecycleOperation(async () =>
         tunnelSchema.parse(
-          JSON.parse(
-            await readFile(this.#tunnelRemovalSnapshot(id), "utf8")
-          )
+          JSON.parse(await readFile(this.#tunnelRemovalSnapshot(id), "utf8"))
         )
       ).pipe(optionalWhenMissing())
     )
@@ -3658,17 +3638,13 @@ export class LifecycleDriver {
     )
     let migrated = 0
     for (const entry of entries) {
-      if (!entry.isDirectory() || !tunnelDirectoryId(entry.name))
-        continue
+      if (!entry.isDirectory() || !tunnelDirectoryId(entry.name)) continue
       for (const [path, schema] of [
         [
           join(this.#config.rootDirectory, entry.name, "stack.json"),
           tunnelConfigSchema,
         ],
-        [
-          this.#tunnelRemovalSnapshot(entry.name),
-          tunnelSchema,
-        ],
+        [this.#tunnelRemovalSnapshot(entry.name), tunnelSchema],
       ] as const) {
         const saved = await recoverPromise(
           () => readFile(path, "utf8"),
@@ -3708,9 +3684,7 @@ export class LifecycleDriver {
     return migrated
   }
 
-  async #readTunnelConfig(
-    id: string
-  ): Promise<TunnelConfig | null> {
+  async #readTunnelConfig(id: string): Promise<TunnelConfig | null> {
     return runLifecycle(
       lifecycleOperation(async () =>
         tunnelConfigSchema.parse(
@@ -3739,9 +3713,7 @@ export class LifecycleDriver {
     )
     const configs = await Promise.all(
       entries.map((entry) => {
-        const id = entry.isDirectory()
-          ? tunnelDirectoryId(entry.name)
-          : null
+        const id = entry.isDirectory() ? tunnelDirectoryId(entry.name) : null
         return id ? this.#readTunnelConfig(id) : Promise.resolve(null)
       })
     )
@@ -3753,18 +3725,14 @@ export class LifecycleDriver {
     return found
   }
 
-  async #knownTunnelConfigs(): Promise<
-    Array<TunnelConfig>
-  > {
+  async #knownTunnelConfigs(): Promise<Array<TunnelConfig>> {
     if (!this.#tailscaleConfigsDiscovered) {
       await this.#tunnelConfigs()
     }
     return [...this.#tailscaleConfigs.values()]
   }
 
-  async #writeTunnelConfig(
-    config: TunnelConfig
-  ): Promise<void> {
+  async #writeTunnelConfig(config: TunnelConfig): Promise<void> {
     const directory = join(this.#config.rootDirectory, physicalKey(config.id))
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await writeFile(
@@ -3776,9 +3744,7 @@ export class LifecycleDriver {
     this.#tailscaleConfigsDiscovered = true
   }
 
-  async #ensureTunnelNetwork(
-    config: TunnelConfig
-  ): Promise<void> {
+  async #ensureTunnelNetwork(config: TunnelConfig): Promise<void> {
     const name = this.#resources.tunnelNetwork(config.id)
     const labels = await this.#networkLabels(name)
     if (labels) {
@@ -3858,10 +3824,7 @@ export class LifecycleDriver {
     }
   }
 
-  async #installTunnel(
-    config: TunnelConfig,
-    authKey: string
-  ): Promise<void> {
+  async #installTunnel(config: TunnelConfig, authKey: string): Promise<void> {
     const stateDirectory = join(
       this.#config.dataDirectory,
       "infrastructure",
@@ -3870,7 +3833,7 @@ export class LifecycleDriver {
       "state"
     )
     await mkdir(stateDirectory, { recursive: true, mode: 0o700 })
-    for (const image of [TAILSCALE_IMAGE, COREDNS_IMAGE]) {
+    for (const image of tunnelImages(config)) {
       await runLifecycle(
         this.#engine.inspectImage(image).pipe(
           Effect.catch(() =>
@@ -3892,10 +3855,7 @@ export class LifecycleDriver {
         }
         // Remove the one-time key from Docker metadata after the persisted
         // machine identity has authenticated.
-        await this.#replaceContainer(
-          name,
-          await this.#tunnelContainer(config)
-        )
+        await this.#replaceContainer(name, await this.#tunnelContainer(config))
         if (!(await this.#waitForTunnelConnection(config.id, 45_000))) {
           throw new Error(
             "Tailscale did not reconnect with its persisted identity"
@@ -3935,7 +3895,7 @@ export class LifecycleDriver {
         ...(authKey !== undefined && { TS_AUTHKEY: authKey }),
       },
       hostname: config.hostname,
-      image: TAILSCALE_IMAGE,
+      image: config.brick.images.tailscale,
       labels: tunnelLabels(config.id, "tailscale"),
       memory: "64m",
       memoryReservation: "16m",
@@ -3953,9 +3913,7 @@ export class LifecycleDriver {
     }
   }
 
-  async #restartTunnel(
-    config: TunnelConfig
-  ): Promise<void> {
+  async #restartTunnel(config: TunnelConfig): Promise<void> {
     await this.#removeOwnedContainer(
       this.#resources.tunnelDnsContainer(config.id)
     )
@@ -3968,9 +3926,7 @@ export class LifecycleDriver {
     }
   }
 
-  async #configureTunnelRouting(
-    config: TunnelConfig
-  ): Promise<void> {
+  async #configureTunnelRouting(config: TunnelConfig): Promise<void> {
     await this.#ensureTunnelFirewall(config)
     const container = this.#resources.tunnelContainer(config.id)
     await runLifecycle(
@@ -4017,9 +3973,7 @@ export class LifecycleDriver {
     this.#tailscaleFirewallGenerations.set(id, generation)
   }
 
-  async #ensureTunnelFirewall(
-    config: TunnelConfig
-  ): Promise<void> {
+  async #ensureTunnelFirewall(config: TunnelConfig): Promise<void> {
     const container = this.#resources.tunnelContainer(config.id)
     const chain = TUNNEL_FORWARD_CHAIN
     const iptables = (...arguments_: Array<string>) =>
@@ -4077,9 +4031,7 @@ export class LifecycleDriver {
     }
 
     if (
-      await this.#containerExists(
-        this.#resources.tunnelContainer(attempted.id)
-      )
+      await this.#containerExists(this.#resources.tunnelContainer(attempted.id))
     ) {
       await this.#prepareTunnelRemoval(attempted.id)
       await this.#commitTunnelRemoval(attempted.id)
@@ -4096,17 +4048,11 @@ export class LifecycleDriver {
       return
     }
 
-    await this.#reconcileTunnelBindings(
-      attempted.id,
-      attempted.bindings,
-      []
-    )
+    await this.#reconcileTunnelBindings(attempted.id, attempted.bindings, [])
     await this.#removeOwnedContainer(
       this.#resources.tunnelDnsContainer(attempted.id)
     )
-    await this.#removeOwnedNetwork(
-      this.#resources.tunnelNetwork(attempted.id)
-    )
+    await this.#removeOwnedNetwork(this.#resources.tunnelNetwork(attempted.id))
     await rm(join(this.#config.rootDirectory, physicalKey(attempted.id)), {
       force: true,
       recursive: true,
@@ -4173,7 +4119,7 @@ export class LifecycleDriver {
       capAdd: ["CAP_NET_BIND_SERVICE"],
       capDrop: ["ALL"],
       command: ["-conf", `${TUNNEL_DNS_MOUNT}/Corefile`],
-      image: COREDNS_IMAGE,
+      image: config.brick.images.dns,
       labels: {
         ...tunnelLabels(config.id, "dns"),
         [TUNNEL_DNS_LAYOUT_LABEL]: "folder",
@@ -4186,9 +4132,12 @@ export class LifecycleDriver {
       securityOpt: ["no-new-privileges:true"],
     })
     // Its Corefile from before it read a folder.
-    await rm(join(this.#config.rootDirectory, physicalKey(config.id), "Corefile"), {
-      force: true,
-    })
+    await rm(
+      join(this.#config.rootDirectory, physicalKey(config.id), "Corefile"),
+      {
+        force: true,
+      }
+    )
   }
 
   // Serves the records Hearth last sent again, making CoreDNS again unless
@@ -4236,9 +4185,7 @@ export class LifecycleDriver {
     const inspected = await recoverPromise(
       () =>
         runLifecycle(
-          this.#engine.inspectContainer(
-            this.#resources.tunnelContainer(id)
-          )
+          this.#engine.inspectContainer(this.#resources.tunnelContainer(id))
         ),
       () => null
     )
@@ -4261,12 +4208,13 @@ export class LifecycleDriver {
           ).records
       ).pipe(
         Effect.catch((cause) =>
-          hasErrorCode(cause, "ENOENT") ? Effect.succeed([]) : Effect.fail(cause)
+          hasErrorCode(cause, "ENOENT")
+            ? Effect.succeed([])
+            : Effect.fail(cause)
         )
       )
     )
   }
-
 
   async #waitForTunnelConnection(
     id: string,
@@ -4305,9 +4253,7 @@ export class LifecycleDriver {
     }
   }
 
-  async #tunnel(
-    config: TunnelConfig
-  ): Promise<Tunnel> {
+  async #tunnel(config: TunnelConfig): Promise<Tunnel> {
     if (await this.#tunnelRemovalPending(config.id)) {
       const snapshot = await this.#readTunnelRemovalSnapshot(config.id)
       if (!snapshot) {
@@ -4320,7 +4266,9 @@ export class LifecycleDriver {
     const container = await recoverPromise(
       () =>
         runLifecycle(
-          this.#engine.inspectContainer(this.#resources.tunnelContainer(config.id))
+          this.#engine.inspectContainer(
+            this.#resources.tunnelContainer(config.id)
+          )
         ),
       () => null
     )
@@ -4613,10 +4561,7 @@ export class LifecycleDriver {
       await recoverPromise(
         () => this.reattachTailscaleMember(memberId),
         (cause) => {
-          console.warn(
-            `Could not put ${memberId} back on its tailnets:`,
-            cause
-          )
+          console.warn(`Could not put ${memberId} back on its tailnets:`, cause)
         }
       )
     }

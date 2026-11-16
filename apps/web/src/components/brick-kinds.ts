@@ -47,8 +47,8 @@ function gameLabel(brick: Brick): string {
 const keyValueTypes: ReadonlySet<string> = new Set(["redis", "valkey"])
 
 /**
- * Every kind the Add dialog adds: those made from a Brick, and a tunnel,
- * which isn't.
+ * Every kind the Add dialog adds. A tunnel comes from a Brick too, but its
+ * pane picks Kiln's Tailscale one for now rather than browsing them.
  */
 export type AddableKind = PickableBrickKind | "tunnel"
 

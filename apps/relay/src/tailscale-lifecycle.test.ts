@@ -23,6 +23,30 @@ import {
 
 const owner = { "kiln.relay.owner": TEST_NAMESPACE }
 const tailnetId = "f".repeat(12)
+// Kiln's `tailscale` Brick, as a tunnel made from it keeps it.
+const tailscaleBrick = {
+  id: "tailscale",
+  images: {
+    dns: "coredns/coredns:1.14.7",
+    tailscale: "tailscale/tailscale:stable",
+  },
+  revision: 1,
+  source: "https://bricks.example/bricks/tailscale.yml",
+}
+// Its recipe, as Hearth sends it to make a tunnel.
+const tailscaleRecipe = {
+  format: "kiln.brick/v2" as const,
+  kind: "tunnel" as const,
+  type: "tailscale",
+  metadata: {
+    author: "Kiln",
+    id: "tailscale",
+    name: "Tailscale",
+    summary: "Reach what runs on a Relay by name.",
+  },
+  deploy: { type: "image" as const, image: "tailscale/tailscale:stable" },
+  tunnel: { dns: { image: "coredns/coredns:1.14.7" } },
+}
 
 function stackConfig(
   id: string,
@@ -30,6 +54,7 @@ function stackConfig(
 ): TunnelConfig {
   return tunnelConfigSchema.parse({
     bindings: [],
+    brick: tailscaleBrick,
     domains: ["test"],
     hostname: "private-network",
     id,
@@ -41,10 +66,7 @@ function stackConfig(
 }
 
 /** Writes a stack that Relay already prepared for removal. */
-async function preparedRemoval(
-  harness: RelayHarness,
-  config: TunnelConfig
-) {
+async function preparedRemoval(harness: RelayHarness, config: TunnelConfig) {
   const directory = join(harness.config.rootDirectory, config.id)
   await mkdir(directory, { recursive: true })
   await writeFile(join(directory, "stack.json"), JSON.stringify(config))
@@ -492,7 +514,11 @@ describe("A tunnel as an instance", () => {
       async () => undefined
     )
 
-    expect(phases).toEqual(["pulling_image", "creating_container", "finalizing"])
+    expect(phases).toEqual([
+      "pulling_image",
+      "creating_container",
+      "finalizing",
+    ])
     expect([...fakeDocker.pulls.keys()]).toEqual(
       expect.arrayContaining([
         expect.stringContaining("tailscale/tailscale"),
@@ -542,5 +568,69 @@ describe("A tunnel's DNS", () => {
     expect((await savedState(harness, id)).hosts).toBe(
       "10.165.55.10 paper.test\n10.165.55.11 survival.test\n"
     )
+  })
+})
+
+describe("A tunnel's Brick", () => {
+  // Kiln's login, routes, firewall and DNS are made for the type's own
+  // images; a Brick that runs anything else makes nothing.
+  it("refuses one that runs another image, before anything is made", async () => {
+    const harness = await relayHarness()
+    const id = "8".repeat(12)
+
+    await expect(
+      harness.lifecycle.applyTunnel({
+        authKey: "tskey-auth-k0000000000000CNTRL-0000000000000000000000000000",
+        bindings: [],
+        brick: {
+          definition: {
+            ...tailscaleRecipe,
+            deploy: { type: "image", image: "example/tailscale:stable" },
+          },
+          source: tailscaleBrick.source,
+        },
+        domains: ["test"],
+        hostname: "home",
+        id,
+        name: "Home",
+        tailnetId,
+      })
+    ).rejects.toThrow(/tailscale\/tailscale image/u)
+    expect(
+      fakeDocker.container(harness.resources.tunnelContainer(id))
+    ).toBeUndefined()
+    await expect(
+      access(join(harness.config.rootDirectory, id, "stack.json"))
+    ).rejects.toThrow()
+  })
+
+  it("is the one it was made from, whatever a later apply names", async () => {
+    const harness = await relayHarness()
+    const id = "7".repeat(12)
+    const config = stackConfig(id)
+    await savedStack(harness, config, [])
+    stackContainer(harness, id, true)
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
+      name: harness.resources.tunnelNetwork(id),
+    })
+
+    const applied = await harness.lifecycle.applyTunnel({
+      bindings: [],
+      brick: {
+        definition: {
+          ...tailscaleRecipe,
+          deploy: { type: "image", image: "tailscale/tailscale:v1.90.0" },
+        },
+        source: "https://bricks.example/bricks/newer.yml",
+      },
+      domains: config.domains,
+      hostname: config.hostname,
+      id,
+      name: config.name,
+      tailnetId,
+    })
+
+    expect(applied.brick).toEqual(tailscaleBrick)
   })
 })

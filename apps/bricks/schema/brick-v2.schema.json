@@ -12,6 +12,7 @@
         "game-server",
         "database",
         "app",
+        "tunnel",
         "group"
       ]
     },
@@ -864,6 +865,29 @@
       ],
       "additionalProperties": false
     },
+    "tunnel": {
+      "type": "object",
+      "properties": {
+        "dns": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "required": [
+            "image"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "dns"
+      ],
+      "additionalProperties": false
+    },
     "minecraft": {
       "type": "object",
       "properties": {
@@ -1583,6 +1607,29 @@
                     },
                     "required": [
                       "connection"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "tunnel": {
+                    "type": "object",
+                    "properties": {
+                      "dns": {
+                        "type": "object",
+                        "properties": {
+                          "image": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          }
+                        },
+                        "required": [
+                          "image"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "dns"
                     ],
                     "additionalProperties": false
                   },

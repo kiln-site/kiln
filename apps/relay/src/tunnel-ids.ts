@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import { migratedTunnelId } from "@workspace/contracts"
+import type { TunnelBrickRecord } from "@workspace/contracts"
 import { Effect } from "effect"
 
 import type { RelayConfig } from "./config.js"
@@ -51,7 +52,10 @@ export async function migrateTunnelIds(
   )
   let moved = 0
   for (const entry of entries) {
-    if (!entry.isDirectory() || !/^(?:[a-f0-9]{40}|[a-f0-9]{12})$/u.test(entry.name))
+    if (
+      !entry.isDirectory() ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{12})$/u.test(entry.name)
+    )
       continue
     const directory = join(config.rootDirectory, entry.name)
     const stack = await readJson(join(directory, "stack.json"))
@@ -133,6 +137,66 @@ export async function migrateTunnelNames(config: RelayConfig): Promise<number> {
     if (snapshotMoved || stackMoved) moved += 1
   }
   return moved
+}
+
+/**
+ * What a tunnel made before tunnels ran Bricks runs: Kiln's `tailscale`
+ * Brick, at the images every stack ran then. Frozen: it describes
+ * containers that already exist, so it never follows what the official
+ * Brick comes to pin. It has no source, as a database from then has none.
+ */
+const PRE_BRICK_TUNNEL: TunnelBrickRecord = {
+  id: "tailscale",
+  images: {
+    dns: "coredns/coredns:1.14.7",
+    tailscale: "tailscale/tailscale:stable",
+  },
+  revision: 1,
+  source: null,
+}
+
+/**
+ * Gives each stack saved before tunnels ran Bricks the Brick it runs, and
+ * its removal snapshot with it, so nothing about its containers changes.
+ * Says how many it gave one.
+ */
+export async function migrateTunnelBricks(
+  config: RelayConfig
+): Promise<number> {
+  const entries = await recoverPromise(
+    () =>
+      readdir(config.rootDirectory, { encoding: "utf8", withFileTypes: true }),
+    (cause) => {
+      if (hasErrorCode(cause, "ENOENT")) return []
+      throw cause
+    }
+  )
+  let moved = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const directory = join(config.rootDirectory, entry.name)
+    const snapshotMoved = await recordBrick(
+      join(directory, ".removing-stack.json")
+    )
+    const stackMoved = await recordBrick(join(directory, "stack.json"))
+    if (snapshotMoved || stackMoved) moved += 1
+  }
+  return moved
+}
+
+// A stack or a removal's snapshot with the Brick it runs. Says whether it
+// changed.
+async function recordBrick(path: string): Promise<boolean> {
+  const saved = await readJson(path)
+  if (!saved || "brick" in saved) return false
+  await Effect.runPromise(
+    writeFileAtomic(
+      path,
+      `${JSON.stringify({ ...saved, brick: PRE_BRICK_TUNNEL }, null, 2)}\n`,
+      0o600
+    )
+  )
+  return true
 }
 
 // A stack, or a removal's snapshot of one, with its TLDs and members as

@@ -11,11 +11,27 @@ interface TestDeployment extends TunnelPlanState {
   revision: string
 }
 
-const applyTailscaleDeploymentPlan = <
-  TDeployment extends TunnelPlanState,
->(
+const applyTailscaleDeploymentPlan = <TDeployment extends TunnelPlanState>(
   input: Parameters<typeof applyTunnelPlanEffect<TDeployment>>[0]
 ) => Effect.runPromise(applyTunnelPlanEffect(input))
+
+// Kiln's Tailscale Brick, which a new tunnel is made from.
+const tailscaleBrick = {
+  definition: {
+    deploy: { image: "tailscale/tailscale:stable", type: "image" as const },
+    format: "kiln.brick/v2" as const,
+    kind: "tunnel" as const,
+    metadata: {
+      author: "Kiln",
+      id: "tailscale",
+      name: "Tailscale",
+      summary: "Reach what runs on a Relay by name.",
+    },
+    tunnel: { dns: { image: "coredns/coredns:1.14.7" } },
+    type: "tailscale",
+  },
+  source: "https://bricks.example/bricks/tailscale.yml",
+}
 
 describe("Tailscale deployment orchestration", () => {
   it("rolls back a new node whose allocated subnet is already reserved", async () => {
@@ -25,6 +41,7 @@ describe("Tailscale deployment orchestration", () => {
     await expect(
       applyTailscaleDeploymentPlan({
         authKey: "test-auth-key",
+        brick: tailscaleBrick,
         current: [],
         desired: [target("relay-a")],
         domains: ["test"],
@@ -88,9 +105,7 @@ describe("Tailscale deployment orchestration", () => {
 
 function target(relayId: string): DesiredTunnel {
   return {
-    bindings: [
-      { enabled: true, memberId: `new-${relayId}` },
-    ],
+    bindings: [{ enabled: true, memberId: `new-${relayId}` }],
     hostname: `network-${relayId}`,
     id: tunnelId(relayId),
     relayId,

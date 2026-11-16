@@ -21,21 +21,22 @@ by [`bricks.yml`](../bricks.yml).
 
 The format describes every kind. Kiln reads them in stages.
 
-| Part                             | Status                                |
-| -------------------------------- | ------------------------------------- |
-| Game server Bricks from an image | Run                                   |
-| `type: minecraft`                | Run                                   |
-| Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image |
-| A database's `connection`        | Defined here; Kiln builds a type's URL itself |
-| A database Brick with no type    | Defined here; not installable yet     |
-| App Bricks                       | Run from any catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
+| Part                             | Status                                                                                                                |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Game server Bricks from an image | Run                                                                                                                   |
+| `type: minecraft`                | Run                                                                                                                   |
+| Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image                                                                     |
+| A database's `connection`        | Defined here; Kiln builds a type's URL itself                                                                         |
+| A database Brick with no type    | Defined here; not installable yet                                                                                     |
+| Tunnel Bricks of a known type    | Run from Kiln's own catalog, on that type's images                                                                    |
+| App Bricks                       | Run from any catalog: what they deploy, how they start, their variables, one web port and the ports they publish      |
 | Group Bricks                     | Run from any catalog: Kiln's own databases, and Apps connected to them that run an image or a file the recipe carries |
-| `dockerfile` and `compose`       | Run for Apps: written in the Brick, kept beside its recipe (`file`), or from `path` in a source |
-| `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
-| `ready` by HTTP                  | Defined here; nothing runs it yet     |
-| Ports that aren't `public`       | Defined here; not for game servers    |
-| A raster icon                    | Defined here; SVG marks are shown     |
-| `settings`                       | Reserved; refused until it is defined |
+| `dockerfile` and `compose`       | Run for Apps: written in the Brick, kept beside its recipe (`file`), or from `path` in a source                       |
+| `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs                                  |
+| `ready` by HTTP                  | Defined here; nothing runs it yet                                                                                     |
+| Ports that aren't `public`       | Defined here; not for game servers                                                                                    |
+| A raster icon                    | Defined here; SVG marks are shown                                                                                     |
+| `settings`                       | Reserved; refused until it is defined                                                                                 |
 
 A Relay refuses a Brick that uses a part it doesn't run yet, and says which.
 Those parts are provisional (see the rules below).
@@ -97,13 +98,14 @@ game-server:
 | Field         |               |                                                        |
 | ------------- | ------------- | ------------------------------------------------------ |
 | `format`      | required      | `kiln.brick/v2`                                        |
-| `kind`        | required      | `game-server`, `database`, `app` or `group`            |
+| `kind`        | required      | `game-server`, `database`, `app`, `tunnel` or `group`  |
 | `type`        |               | Within a kind; see [Kinds and types](#kinds-and-types) |
 | `metadata`    | required      | Who it is                                              |
 | `inputs`      |               | The install form, in order                             |
 | `deploy`      | all but group | How it runs                                            |
 | `game-server` | game servers  | What only a game server has                            |
 | `database`    | databases     | What only a database has                               |
+| `tunnel`      | tunnels       | What only a tunnel has                                 |
 | `minecraft`   | by type       | Which of the type's extras it uses                     |
 | `group`       | groups        | Its members                                            |
 
@@ -231,9 +233,9 @@ are passed on as they are.
 
 `deploy.type` is one of:
 
-| Type         | Runs                                                                      | Needs a source   |
-| ------------ | ------------------------------------------------------------------------- | ---------------- |
-| `image`      | `image`, a Docker image                                                   | No               |
+| Type         | Runs                                                                                                    | Needs a source   |
+| ------------ | ------------------------------------------------------------------------------------------------------- | ---------------- |
+| `image`      | `image`, a Docker image                                                                                 | No               |
 | `dockerfile` | A build of `dockerfile` (written in the Brick), of `file` beside the recipe, or of `path` in the source | Only with `path` |
 | `compose`    | `compose` (written in the Brick), `file` beside the recipe, or the file at `path` in the source         | Only with `path` |
 
@@ -314,12 +316,13 @@ A kind decides which foundation an instance gets and which section a Brick
 has. A type, within a kind, unlocks extras Kiln implements in code. A Brick
 with no type runs with the foundation and nothing more.
 
-| Kind          | Its section                                  | Types               |
-| ------------- | -------------------------------------------- | ------------------- |
-| `game-server` | `game-server`: `game`, `stop`, `srv`         | `minecraft`         |
-| `database`    | `database`: `connection`, `export`, `import` | See below           |
-| `app`         | None                                         | None                |
-| `group`       | `group`: `members`                           | None                |
+| Kind          | Its section                                  | Types       |
+| ------------- | -------------------------------------------- | ----------- |
+| `game-server` | `game-server`: `game`, `stop`, `srv`         | `minecraft` |
+| `database`    | `database`: `connection`, `export`, `import` | See below   |
+| `app`         | None                                         | None        |
+| `tunnel`      | `tunnel`: `dns`                              | `tailscale` |
+| `group`       | `group`: `members`                           | None        |
 
 ### Game servers
 
@@ -376,11 +379,11 @@ Its environment sets the variables that image takes its first login from,
 each to what Kiln supplies, because Kiln's dumps, restores and wipes read
 them back inside the container:
 
-| Type       | Variables                                                                                     |
-| ---------- | --------------------------------------------------------------------------------------------- |
-| `postgres` | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`                                           |
-| `mysql`    | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD` as a made secret  |
-| `mariadb`  | `MARIADB_DATABASE`, `MARIADB_USER`, `MARIADB_PASSWORD`, and `MARIADB_ROOT_PASSWORD` likewise  |
+| Type       | Variables                                                                                    |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `postgres` | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`                                          |
+| `mysql`    | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD` as a made secret |
+| `mariadb`  | `MARIADB_DATABASE`, `MARIADB_USER`, `MARIADB_PASSWORD`, and `MARIADB_ROOT_PASSWORD` likewise |
 
 The name, user and password are `{{ database.name }}`,
 `{{ database.username }}` and `{{ database.password }}`; a root password is
@@ -397,16 +400,50 @@ A type brings its own export and import. `export` and `import` are for a
 database with no type, which has neither a viewer nor files; without
 `export`, its backups copy the volume.
 
+### Tunnels
+
+A tunnel joins a Relay to a private network, so what runs there answers to
+names on it. Its Brick pins the images of its two containers and says
+nothing else: Kiln makes the rest of both, its login, routes, firewall and
+DNS, for those images.
+
+| Field       |          |                                                             |
+| ----------- | -------- | ----------------------------------------------------------- |
+| `dns.image` | required | The image of the container that answers its names, at a tag |
+
+`deploy` is an `image` and nothing more: the tunnel's own container.
+`type: tailscale` runs `tailscale/tailscale` as a subnet router and
+`coredns/coredns` in its network, each at whatever tag the Brick pins, and
+nothing else. A tunnel Brick asks nothing at install. Only Kiln's own
+catalog's tunnel Bricks are offered and accepted, as its databases are.
+
+```yaml
+format: kiln.brick/v2
+kind: tunnel
+type: tailscale
+metadata:
+  id: tailscale
+  name: Tailscale
+  summary: Reach what runs on a Relay by name from anywhere on your tailnet.
+  author: Kiln
+deploy:
+  type: image
+  image: tailscale/tailscale:stable
+tunnel:
+  dns:
+    image: coredns/coredns:1.14.7
+```
+
 ### Apps
 
 An App is installed from an App Brick, and Hearth keeps what it turns into:
 the App's configuration. So far Kiln runs this much of an App Brick:
 
-| `deploy.type` | What Kiln takes from it                                      |
-| ------------- | ------------------------------------------------------------ |
-| `image`       | `image`, with its templates filled from the answers          |
+| `deploy.type` | What Kiln takes from it                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `image`       | `image`, with its templates filled from the answers                                        |
 | `dockerfile`  | `dockerfile`, written in the Brick, or `path`, the Dockerfile to build in the App's source |
-| `compose`     | `compose`, written in the Brick, or `path`, the Compose file to run from the App's source |
+| `compose`     | `compose`, written in the Brick, or `path`, the Compose file to run from the App's source  |
 
 Every type takes `env`, with its templates filled from the answers: the
 variables the Brick sets in the App's environment.

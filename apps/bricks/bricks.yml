@@ -15,6 +15,7 @@ recipes:
   - bricks/mariadb.yml
   - bricks/redis.yml
   - bricks/valkey.yml
+  - bricks/tailscale.yml
   - bricks/docker-image.yml
   - bricks/dockerfile.yml
   - bricks/compose.yml
