@@ -609,8 +609,9 @@ async function saveTunnelHandler(
     label ?? kept.get(memberId) ?? generated.get(memberId)!
   // A name is unique in its tunnel, so each member's generated name under
   // the first TLD is checked before anything changes: no two members take
-  // the same one, and none takes an alias of another member that stays. One
-  // of its own aliases becomes its generated name.
+  // the same one, and none takes a name another member that stays has now,
+  // even one that member is renamed from in the same save, as names change
+  // one at a time. One of its own aliases becomes its generated name.
   const bound = new Set(data.bindings.map(({ memberId }) => memberId))
   const chosen = new Set<string>()
   for (const binding of data.bindings) {
@@ -621,7 +622,6 @@ async function saveTunnelHandler(
     chosen.add(label)
     const taken = names.find(
       (name) =>
-        !name.generated &&
         name.memberId !== binding.memberId &&
         bound.has(name.memberId) &&
         name.label === label &&

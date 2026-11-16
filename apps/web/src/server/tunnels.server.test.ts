@@ -545,6 +545,52 @@ describeMysql("a tunnel's gateways", () => {
         })
     )
 
+    // Names change one at a time, so a save can't hand one member's name to
+    // another as it renames the first.
+    it.effect(
+      "refuses a rename onto a name another member is renamed from, changing nothing",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          assert.isNull(yield* connect(survival))
+          assert.isNull(yield* connect(creative))
+          const applies = fake.applies.length
+
+          const refused = yield* outcome(() =>
+            runOperationPromise(
+              saveTunnelOperation,
+              {
+                bindings: [
+                  {
+                    enabled: true,
+                    label: "survival-dd",
+                    memberId: `instance:${survival}`,
+                    relayId: relayOne,
+                  },
+                  {
+                    enabled: true,
+                    label: "creative",
+                    memberId: `instance:${creative}`,
+                    relayId: relayOne,
+                  },
+                ],
+                domains: ["kiln"],
+                id: tunnelId,
+                name: "Home",
+              },
+              { user: admin }
+            )
+          )
+
+          assert.include(refused ?? "", "survival-dd.kiln")
+          assert.strictEqual(fake.applies.length, applies)
+          assert.sameMembers(
+            (yield* nameRows).map(({ label }) => label),
+            ["survival-cc", "survival-dd"]
+          )
+        })
+    )
+
     // An alias its gateways couldn't all serve isn't kept, so asking again
     // adds it rather than finding it there already.
     it.effect("takes back an alias its gateways couldn't serve", () =>
