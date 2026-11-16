@@ -245,8 +245,9 @@ refuses is finished later.
 Requests change Cloudflare themselves, and record what they're doing in
 MySQL first. Hearth's DNS worker (`Domains.dns`) finishes whatever they
 left: records Cloudflare refused, renames and deletes cut short by an outage
-or a restart. A row still waiting is retried after 30 seconds, then twice as
-long each time, up to an hour; saving it again or Sync tries it at once,
+or a restart, and a tunnel gateway's hosts file that missed a change. A row
+still waiting is retried after 30 seconds, then twice as long each time, up to
+an hour; saving it again or Sync tries it at once,
 including deletes left behind by a removed Relay. Sync also asks Cloudflare
 about every record Kiln keeps, a game server's address and its SRV record
 like a web route's, and makes one deleted there again.
@@ -383,7 +384,7 @@ change.
    provider is their tunnel, in order, the first its default. Done.
 5. Tunnel DNS with retries: each gateway records the hosts file it has, the
    DNS worker brings one that missed a change up to date, and the undo
-   stopgap goes.
+   stopgap goes. Done.
 6. One Domains list: an instance's Network page lists its public and tunnel
    names together, marked by where they live.
 

@@ -8,13 +8,23 @@ import {
 import { Effect, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
+import { recoverPromise } from "@/effect/promise"
+import {
+  markTunnelDnsPendingEffect,
+  recordTunnelDnsEffect,
+} from "@/effect/tunnel-gateways"
 import { tunnelRelaysEffect } from "@/effect/tunnels"
 import { runAppEffect } from "@/effect/runtime"
 import { listTunnelNamesEffect, tunnelNameOf } from "@/effect/tunnel-names"
+import { wakePollingWorker } from "@/lib/polling-worker"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { tunnelSettingsKey } from "@/lib/tunnel-lanes"
-import { durableOperation, startDurableOperation } from "@/operations/durable"
+import {
+  durableOperation,
+  startDurableOperation,
+  whileMySqlIsAway,
+} from "@/operations/durable"
 import { exclusive } from "@/operations/lanes"
 
 /**
@@ -25,6 +35,12 @@ import { exclusive } from "@/operations/lanes"
  * save and a rewrite go one after the other, and the last one read the
  * latest state.
  */
+
+/**
+ * A write that failed after recording which gateways it missed, so they
+ * already wait to be tried again.
+ */
+class RecordedTunnelDnsError extends Error {}
 
 export class TailscaleDnsError extends Schema.TaggedError<TailscaleDnsError>()(
   "TailscaleDnsError",
@@ -43,24 +59,50 @@ export async function writeTunnelDns(
   network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   subject?: string
 ): Promise<void> {
-  const relayIds = new Set(network.relayIds)
-  const relays = (await listPersistedRelays()).filter((relay) =>
-    relayIds.has(relay.id)
+  // Due until it's written, so the DNS worker finishes a write a failure or
+  // a restart cut short.
+  await runAppEffect(
+    "tunnelDns.markPending",
+    markTunnelDnsPendingEffect(network.id)
   )
-  const paused = relays.find((relay) => !relay.enabled)
-  if (paused) throw new Error(`${paused.name} is paused`)
-  const nodes = (
-    await Promise.all(
-      relays.map(async (relay) =>
-        gatewayStatesSchema
-          .parse(await relayRpc(relay, "tunnel.state", {}, 15_000))
-          .filter(
-            (stack) => stack.tailnetId === network.id && !stack.removalPending
-          )
-          .map((stack) => ({ relay, stack }))
+  const relayIds = new Set(network.relayIds)
+  const read = await recoverPromise(
+    async () => {
+      const relays = (await listPersistedRelays()).filter((relay) =>
+        relayIds.has(relay.id)
       )
+      const paused = relays.find((relay) => !relay.enabled)
+      if (paused) throw new Error(`${paused.name} is paused`)
+      return (
+        await Promise.all(
+          relays.map(async (relay) =>
+            gatewayStatesSchema
+              .parse(await relayRpc(relay, "tunnel.state", {}, 15_000))
+              .filter(
+                (stack) =>
+                  stack.tailnetId === network.id && !stack.removalPending
+              )
+              .map((stack) => ({ relay, stack }))
+          )
+        )
+      ).flat()
+    },
+    (cause) => ({ cause })
+  )
+  // Without every gateway's members, no file would be whole: none is sent.
+  if ("cause" in read) {
+    await runAppEffect(
+      "tunnelDns.record",
+      recordTunnelDnsEffect(network.id, {
+        everyFailed: errorMessageOf(read.cause),
+      })
     )
-  ).flat()
+    wakePollingWorker("Domains.dns")
+    throw new RecordedTunnelDnsError(errorMessageOf(read.cause), {
+      cause: read.cause,
+    })
+  }
+  const nodes = read
   // Each name a member has in the tunnel, at the address it has on its
   // own Relay's tunnel.
   const names = await runAppEffect(
@@ -84,18 +126,31 @@ export async function writeTunnelDns(
       relayRpc(relay, "tunnel.dns", { id: stack.id, records }, 60_000, subject)
     )
   )
-  const failures = written.flatMap((result, index) =>
+  const failed = written.flatMap((result, index) =>
     result.status === "rejected"
       ? [
-          `${nodes[index]?.relay.name}: ${
-            result.reason instanceof Error
-              ? result.reason.message
-              : String(result.reason)
-          }`,
+          {
+            error: errorMessageOf(result.reason),
+            id: nodes[index]!.stack.id,
+            relayName: nodes[index]!.relay.name,
+          },
         ]
       : []
   )
-  if (failures.length > 0) throw new Error(failures.join("; "))
+  await runAppEffect(
+    "tunnelDns.record",
+    recordTunnelDnsEffect(network.id, { failed })
+  )
+  if (failed.length > 0) {
+    wakePollingWorker("Domains.dns")
+    throw new RecordedTunnelDnsError(
+      failed.map(({ error, relayName }) => `${relayName}: ${error}`).join("; ")
+    )
+  }
+}
+
+function errorMessageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 /** The networks a resource is a member of, as its Relay holds them. */
@@ -162,15 +217,50 @@ export const rewriteTailscaleDns = durableOperation({
       execute: Effect.gen(function* () {
         // The Relays each network is on, as Hearth recorded them when it
         // last saved it, read once its turn has come.
-        const deployed = yield* tunnelRelaysEffect(networkIds)
+        // A failure is recorded, so its gateways wait for a new attempt
+        // rather than this one; that write is tried until MySQL answers,
+        // as an operation's own writes are, or they'd wait for nothing.
+        const recordFailure = (id: string, message: string) =>
+          recordTunnelDnsEffect(id, { everyFailed: message }).pipe(
+            Effect.retry({ schedule: whileMySqlIsAway })
+          )
+        const deployed = yield* tunnelRelaysEffect(networkIds).pipe(
+          Effect.tapError((cause) =>
+            Effect.forEach(
+              networkIds,
+              (id) => recordFailure(id, cause.message),
+              { discard: true }
+            )
+          )
+        )
         yield* Effect.tryPromise({
           try: async () => {
+            // Each network is tried, and one that failed before recording
+            // it is recorded here, so its gateways wait for a new attempt
+            // rather than the one that just ended.
+            const failures: Array<string> = []
             for (const id of networkIds) {
-              await writeTunnelDns({
-                id,
-                relayIds: [...(deployed.get(id) ?? []), ...alsoOn],
-              })
+              const failed = await recoverPromise(
+                async () => {
+                  await writeTunnelDns({
+                    id,
+                    relayIds: [...(deployed.get(id) ?? []), ...alsoOn],
+                  })
+                  return null
+                },
+                (cause) => cause
+              )
+              if (failed === null) continue
+              failures.push(errorMessageOf(failed))
+              if (!(failed instanceof RecordedTunnelDnsError)) {
+                await runAppEffect(
+                  "tunnelDns.record",
+                  recordFailure(id, errorMessageOf(failed))
+                )
+                wakePollingWorker("Domains.dns")
+              }
             }
+            if (failures.length > 0) throw new Error(failures.join("; "))
           },
           catch: (cause) =>
             new TailscaleDnsError({

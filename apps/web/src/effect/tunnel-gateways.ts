@@ -370,3 +370,145 @@ function parseDeployment(
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "unknown error"
 }
+
+// A tunnel's DNS, one hosts file per gateway: whether each has the latest,
+// and when to try again one that missed it (`tunnel-dns.server.ts`).
+
+const MAXIMUM_DNS_RETRY_MS = 60 * 60 * 1000
+
+/** How long a gateway waits after missing its DNS this many times. */
+function dnsRetryDelayMs(attempts: number): number {
+  return Math.min(MAXIMUM_DNS_RETRY_MS, 30_000 * 2 ** Math.min(attempts, 10))
+}
+
+// Long enough for the write marking a tunnel due to finish before the DNS
+// worker would take it up.
+const DNS_WRITE_GRACE_MS = 30_000
+
+/**
+ * Every gateway of the tunnel is due a DNS write: the one about to be made,
+ * or, if that's cut short, the DNS worker's.
+ */
+export const markTunnelDnsPendingEffect = Effect.fn("tunnelDns.markPending")(
+  function* (tunnelId: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "tunnelDns.markPending",
+      `UPDATE ${databaseTable("tunnel_gateway")}
+          SET dns_pending = 1,
+              dns_next_attempt_at = LEAST(
+                COALESCE(dns_next_attempt_at, ?), ?)
+        WHERE tunnel_id = ?`,
+      [now + DNS_WRITE_GRACE_MS, now + DNS_WRITE_GRACE_MS, tunnelId]
+    )
+  }
+)
+
+/**
+ * Records how a DNS write went: the gateways that failed wait to be tried
+ * again, and every other gateway of the tunnel is up to date, having taken
+ * it or had nothing to take.
+ */
+export const recordTunnelDnsEffect = Effect.fn("tunnelDns.record")(function* (
+  tunnelId: string,
+  outcome:
+    | { failed: ReadonlyArray<{ error: string; id: string }> }
+    /** None could be written, as when a Relay's state couldn't be read. */
+    | { everyFailed: string }
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.transaction("tunnelDns.record", (transaction) =>
+    Effect.gen(function* () {
+      const rows = yield* transaction.queryRows<
+        RowDataPacket & { dns_attempts: number; id: string }
+      >(
+        `SELECT id, dns_attempts FROM ${databaseTable("tunnel_gateway")}
+          WHERE tunnel_id = ?
+          FOR UPDATE`,
+        [tunnelId]
+      )
+      const failed = new Map(
+        "failed" in outcome
+          ? outcome.failed.map(({ error, id }) => [id, error])
+          : rows.map(({ id }) => [id, outcome.everyFailed])
+      )
+      for (const row of rows) {
+        const error = failed.get(row.id)
+        if (error === undefined) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("tunnel_gateway")}
+                SET dns_pending = 0, dns_attempts = 0,
+                    dns_next_attempt_at = NULL, dns_last_error = NULL
+              WHERE id = ?`,
+            [row.id]
+          )
+          continue
+        }
+        const attempts = Number(row.dns_attempts) + 1
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("tunnel_gateway")}
+              SET dns_pending = 1, dns_attempts = ?,
+                  dns_next_attempt_at = ?, dns_last_error = ?
+            WHERE id = ?`,
+          [
+            attempts,
+            now + dnsRetryDelayMs(attempts - 1),
+            error.slice(0, 512),
+            row.id,
+          ]
+        )
+      }
+    })
+  )
+})
+
+/** When the next gateway is due a DNS write, or null when none is. */
+export const nextTunnelDnsAttemptEffect = Effect.fn("tunnelDns.next")(
+  function* () {
+    const database = yield* Database
+    const [row] = yield* database.queryRows<
+      RowDataPacket & { next: number | string | null }
+    >(
+      "tunnelDns.next",
+      `SELECT MIN(dns_next_attempt_at) AS next
+         FROM ${databaseTable("tunnel_gateway")}
+        WHERE dns_pending = 1`
+    )
+    return row?.next == null ? null : Number(row.next)
+  }
+)
+
+/** The tunnels with a gateway due a DNS write by `now`, and when each was due. */
+export const dueTunnelDnsEffect = Effect.fn("tunnelDns.due")(function* (
+  now: number
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { due: number | string; tunnel_id: string }
+  >(
+    "tunnelDns.due",
+    `SELECT tunnel_id, MIN(dns_next_attempt_at) AS due
+       FROM ${databaseTable("tunnel_gateway")}
+      WHERE dns_pending = 1 AND dns_next_attempt_at <= ?
+      GROUP BY tunnel_id`,
+    [now]
+  )
+  return rows.map((row) => ({ due: Number(row.due), tunnelId: row.tunnel_id }))
+})
+
+/** Each gateway's DNS that hasn't taken the latest yet, by gateway ID. */
+export const pendingGatewayDnsEffect = Effect.fn("tunnelDns.pending")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<
+      RowDataPacket & { dns_last_error: string | null; id: string }
+    >(
+      "tunnelDns.pending",
+      `SELECT id, dns_last_error FROM ${databaseTable("tunnel_gateway")}
+        WHERE dns_pending = 1`
+    )
+    return new Map(rows.map((row) => [row.id, row.dns_last_error]))
+  }
+)

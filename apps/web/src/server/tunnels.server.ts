@@ -22,6 +22,7 @@ import { z } from "zod"
 
 import {
   observeGatewaysEffect,
+  pendingGatewayDnsEffect,
   reconcileGatewaysEffect,
   requestTunnelCleanupEffect,
 } from "@/effect/tunnel-gateways"
@@ -208,6 +209,11 @@ export interface TunnelOverview {
   id: string
   integration: TailscaleIntegration | null
   name: string
+  /**
+   * Its gateways still due the latest DNS, by ID, with why the last try
+   * failed; the DNS worker tries again.
+   */
+  dnsPending: Record<string, string | null>
   /** Every name of everything it connects, generated ones first. */
   names: Array<TunnelMemberName>
   ownerId: string | null
@@ -865,7 +871,12 @@ async function saveTunnelHandler(
       yield* keepTunnelNamesOfEffect(id, members, data.domains)
     })
   )
-  await writeTunnelDns({ id, relayIds: [...desiredRelayIds] }, subject)
+  // Its gateways are made and saved; one that can't take its names now gets
+  // them from the DNS worker.
+  await recoverPromise(
+    () => writeTunnelDns({ id, relayIds: [...desiredRelayIds] }, subject),
+    () => undefined
+  )
   publishTailscaleChange()
   return {
     tunnels: groupGateways(
@@ -881,7 +892,8 @@ async function saveTunnelHandler(
             (definition) => definition.id
           )
         )
-      )
+      ),
+      await runAppEffect("tunnelDns.pending", pendingGatewayDnsEffect())
     ),
     unavailableRelays: currentResult.unavailableRelays,
   }
@@ -983,42 +995,18 @@ async function addTunnelAliasHandler(
     await rewriteTunnelNames(input.tunnelId, user.id)
     return loadTunnels()
   }
-  const id = await runAppEffect(
-    "tunnelNames.addAlias",
-    addTunnelAliasEffect(input)
-  )
-  await serveNamesOrUndo(input.tunnelId, user.id, () =>
-    runAppEffect("tunnelNames.removeAlias", removeTunnelAliasEffect(id))
-  )
+  await runAppEffect("tunnelNames.addAlias", addTunnelAliasEffect(input))
+  await serveNames(input.tunnelId, user.id)
   return loadTunnels()
 }
 
 /**
- * Serves a tunnel's names after one changed. If its gateways can't all take
- * them, the change is undone and what they serve put back, so the name
- * stays as it was and asking again tries again.
+ * Serves a tunnel's names after one changed. A gateway that can't take them
+ * now, as one whose Relay is away, gets them from the DNS worker once it
+ * can, so the change stands.
  */
-async function serveNamesOrUndo(
-  tunnelId: string,
-  subject: string,
-  undo: () => Promise<unknown>
-) {
-  const failure = await recoverPromise(
-    async () => {
-      await rewriteTunnelNames(tunnelId, subject)
-      return null
-    },
-    (cause) => ({ cause })
-  )
-  if (!failure) return
-  await undo()
-  // Gateways that took the change before another failed take it back; one
-  // that still can't is told again by the next change.
-  await recoverPromise(
-    () => rewriteTunnelNames(tunnelId, subject),
-    () => undefined
-  )
-  throw failure.cause
+async function serveNames(tunnelId: string, subject: string) {
+  await rewriteTunnelNames(tunnelId, subject)
 }
 
 export const removeTunnelAliasSchema = z.strictObject({ id: z.uuid() })
@@ -1045,9 +1033,7 @@ export const removeTunnelAliasOperation = operation<
       )
       if (!removed)
         throw new Error("A generated name can be renamed, not removed")
-      await serveNamesOrUndo(input.tunnelId, user.id, () =>
-        runAppEffect("tunnelNames.addAlias", addTunnelAliasEffect(name))
-      )
+      await serveNames(input.tunnelId, user.id)
       return loadTunnels()
     }),
   audit: ({ input }) => ({ id: input.tunnelId, kind: "tunnel" }),
@@ -1099,9 +1085,14 @@ async function rewriteTunnelNames(tunnelId: string, subject: string) {
     "tunnels.relays",
     tunnelRelaysEffect([tunnelId])
   )
-  await writeTunnelDns(
-    { id: tunnelId, relayIds: relays.get(tunnelId) ?? [] },
-    subject
+  // A gateway that can't take them now gets them from the DNS worker.
+  await recoverPromise(
+    () =>
+      writeTunnelDns(
+        { id: tunnelId, relayIds: relays.get(tunnelId) ?? [] },
+        subject
+      ),
+    () => undefined
   )
   // A game server whose primary was one of them shows another now.
   await runAppEffect(
@@ -1209,7 +1200,8 @@ export async function loadTunnels(): Promise<TunnelsResult> {
       await runAppEffect(
         "tunnelNames.list",
         listTunnelNamesEffect(definitions.map(({ id }) => id))
-      )
+      ),
+      await runAppEffect("tunnelDns.pending", pendingGatewayDnsEffect())
     ),
     unavailableRelays: result.unavailableRelays,
   }
@@ -1218,7 +1210,8 @@ export async function loadTunnels(): Promise<TunnelsResult> {
 function groupGateways(
   gateways: ReadonlyArray<GatewayOverview>,
   definitions: ReadonlyArray<TunnelDefinition>,
-  names: ReadonlyArray<TunnelName>
+  names: ReadonlyArray<TunnelName>,
+  dnsPending: ReadonlyMap<string, string | null>
 ): Array<TunnelOverview> {
   // Each member's generated name in each tunnel, by both.
   const generated = new Map(
@@ -1236,6 +1229,7 @@ function groupGateways(
       ...definition,
       access: { manage: true, gateways: {} },
       bindings: [],
+      dnsPending: {},
       gateways: [],
       names: namesOf(definition.id),
     })
@@ -1246,6 +1240,7 @@ function groupGateways(
       bindings: [],
       brickSource: null,
       cleanup: null,
+      dnsPending: {},
       gateways: [],
       domains: gateway.domains,
       id: gateway.tailnetId,
@@ -1256,6 +1251,9 @@ function groupGateways(
     }
     stack.gateways.push(gateway)
     stack.access.gateways[gateway.id] = gatewayPermissions
+    if (dnsPending.has(gateway.id)) {
+      stack.dnsPending[gateway.id] = dnsPending.get(gateway.id) ?? null
+    }
     stack.bindings.push(
       ...gateway.bindings.map((binding) => ({
         ...binding,
@@ -1549,6 +1547,7 @@ function tailscaleOverviewForGateways(
   return {
     ...definition,
     access: { manage: true, gateways: {} },
+    dnsPending: {},
     names: [],
     bindings: gateways.flatMap(({ bindings, relayId, relayName }) =>
       bindings.map((binding) => ({
