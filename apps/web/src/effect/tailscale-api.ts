@@ -122,7 +122,7 @@ export const createTailscaleNodeAuthKeyEffect = Effect.fn(
     credential.tags
   )
   const result = yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tunnel/-/keys`,
+    `${tailscaleApiBaseUrl}/tailnet/-/keys`,
     session.accessToken,
     TailscaleKeySchema,
     {
@@ -189,7 +189,7 @@ export const syncTailscaleControlPlaneEffect = Effect.fn(
     ),
   ].sort()
   yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tunnel/-/dns/split-dns`,
+    `${tailscaleApiBaseUrl}/tailnet/-/dns/split-dns`,
     session.accessToken,
     TailscaleSplitDnsSchema,
     {
@@ -224,12 +224,12 @@ export const inspectTailscaleControlPlaneEffect = Effect.fn(
   )
   const [splitDns, devicesResult] = yield* Effect.all([
     requestTailscaleJson(
-      `${tailscaleApiBaseUrl}/tunnel/-/dns/split-dns`,
+      `${tailscaleApiBaseUrl}/tailnet/-/dns/split-dns`,
       session.accessToken,
       TailscaleSplitDnsSchema
     ),
     requestTailscaleJson(
-      `${tailscaleApiBaseUrl}/tunnel/-/devices?fields=all`,
+      `${tailscaleApiBaseUrl}/tailnet/-/devices?fields=all`,
       session.accessToken,
       TailscaleDevicesSchema
     ),
@@ -274,7 +274,7 @@ export const removeTailscaleControlPlaneDeviceEffect = Effect.fn(
     credential.tags
   )
   const result = yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tunnel/-/devices?fields=all`,
+    `${tailscaleApiBaseUrl}/tailnet/-/devices?fields=all`,
     session.accessToken,
     TailscaleDevicesSchema
   )
@@ -395,14 +395,14 @@ const approveGatewayRouteEffect = Effect.fn(
   "tailscale.controlPlane.approveRoute"
 )(function* (session: TailscaleSession, gateway: TailscaleControlPlaneGateway) {
   const result = yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tunnel/-/devices?fields=all`,
+    `${tailscaleApiBaseUrl}/tailnet/-/devices?fields=all`,
     session.accessToken,
     TailscaleDevicesSchema
   )
   const device = findTailscaleDevice(result.devices, gateway)
   if (!device) {
     return yield* TailscaleRoutePendingError.make({
-      message: `Waiting for ${gateway.hostname} to appear in the Tunnel`,
+      message: `Waiting for ${gateway.hostname} to appear in its tailnet`,
     })
   }
   const routes = yield* requestTailscaleJson(
