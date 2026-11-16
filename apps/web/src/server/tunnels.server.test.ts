@@ -6,6 +6,7 @@ import { disposeAppRuntime } from "@/effect/runtime"
 import { addManualDomainEffect } from "@/effect/domains"
 import { createTunnelDefinitionEffect } from "@/effect/tunnels"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { writeTunnelDns } from "@/lib/tunnel-dns.server"
 import { runOperationPromise } from "@/operations/operation"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertInstance, insertRelay, selectRows } from "@/test/seed"
@@ -350,6 +351,10 @@ const nameRows = selectRows<{
   label: string
   member_id: string
 }>("tunnel_name")
+const dnsRows = selectRows<{
+  dns_last_error: string | null
+  dns_pending: number
+}>("tunnel_gateway")
 const primaryRows = selectRows<{ address_ref: string; instance_id: string }>(
   "instance_primary_address"
 )
@@ -607,28 +612,41 @@ describeMysql("a tunnel's gateways", () => {
       })
     )
 
-    // An alias its gateways couldn't all serve isn't kept, so asking again
-    // adds it rather than finding it there already.
-    it.effect("takes back an alias its gateways couldn't serve", () =>
-      Effect.gen(function* () {
-        yield* seed
-        assert.isNull(yield* connect(survival))
-        fake.failDns = true
+    // An alias stands when a gateway can't take it yet: the gateway records
+    // that it's behind, and the DNS worker's rewrite brings it up to date.
+    it.effect(
+      "keeps an alias a gateway couldn't take yet, and serves it later",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          assert.isNull(yield* connect(survival))
+          fake.failDns = true
 
-        const refused = yield* addAlias(survival, "spawn", "kiln")
+          assert.isNull(yield* addAlias(survival, "spawn", "kiln"))
 
-        assert.include(refused ?? "", "CoreDNS could not be reached")
-        assert.deepEqual(
-          (yield* nameRows).map(({ label }) => label),
-          ["survival-cc"]
-        )
-        fake.failDns = false
-        assert.isNull(yield* addAlias(survival, "spawn", "kiln"))
-        assert.sameMembers(
-          (yield* nameRows).map(({ label }) => label),
-          ["survival-cc", "spawn"]
-        )
-      })
+          assert.sameMembers(
+            (yield* nameRows).map(({ label }) => label),
+            ["survival-cc", "spawn"]
+          )
+          assert.deepEqual(
+            (yield* dnsRows).map(({ dns_last_error, dns_pending }) => [
+              dns_pending,
+              dns_last_error,
+            ]),
+            [[1, "CoreDNS could not be reached"]]
+          )
+
+          fake.failDns = false
+          yield* Effect.promise(() =>
+            writeTunnelDns({ id: tunnelId, relayIds: [relayOne] })
+          )
+          assert.deepEqual(
+            (yield* dnsRows).map(({ dns_pending }) => dns_pending),
+            [0]
+          )
+          const [gateway] = [...gatewaysOn(relayOne).values()]
+          assert.ok(gateway, "Relay One has its gateway")
+        })
     )
 
     // Deleting the last thing a gateway connects takes it off its gateway on

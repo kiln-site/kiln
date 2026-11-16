@@ -247,8 +247,12 @@ permissions of its own follow.
 - Hearth keeps every name (`tunnel_name`); a gateway knows only its
   tunnel's TLDs and its members' addresses, and serves the whole names
   Hearth sends it. A save of the tunnel applies its gateways first, then its
-  members' names, then rewrites its DNS, so a save that fails leaves both as
-  they were. Built, with aliases added and removed through Hearth.
+  members' names, then rewrites its DNS. Each gateway records whether it has
+  the latest hosts file; one that couldn't take it, as when its Relay is
+  away, shows **DNS pending**, and Hearth's DNS worker writes it again, after
+  30 seconds then twice as long each time up to an hour. A write goes out
+  only when Hearth has read every gateway's members, so no file leaves an
+  away gateway's out. Built, with aliases added and removed through Hearth.
 - An instance's Network tab has a Tunnels section shaped like its Domains
   table: each tunnel it is in, with its names, and connecting to another.
 

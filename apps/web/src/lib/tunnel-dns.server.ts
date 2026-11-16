@@ -8,9 +8,15 @@ import {
 import { Effect, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
+import { recoverPromise } from "@/effect/promise"
+import {
+  markTunnelDnsPendingEffect,
+  recordTunnelDnsEffect,
+} from "@/effect/tunnel-gateways"
 import { tunnelRelaysEffect } from "@/effect/tunnels"
 import { runAppEffect } from "@/effect/runtime"
 import { listTunnelNamesEffect, tunnelNameOf } from "@/effect/tunnel-names"
+import { wakePollingWorker } from "@/lib/polling-worker"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { tunnelSettingsKey } from "@/lib/tunnel-lanes"
@@ -43,24 +49,48 @@ export async function writeTunnelDns(
   network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   subject?: string
 ): Promise<void> {
-  const relayIds = new Set(network.relayIds)
-  const relays = (await listPersistedRelays()).filter((relay) =>
-    relayIds.has(relay.id)
+  // Due until it's written, so the DNS worker finishes a write a failure or
+  // a restart cut short.
+  await runAppEffect(
+    "tunnelDns.markPending",
+    markTunnelDnsPendingEffect(network.id)
   )
-  const paused = relays.find((relay) => !relay.enabled)
-  if (paused) throw new Error(`${paused.name} is paused`)
-  const nodes = (
-    await Promise.all(
-      relays.map(async (relay) =>
-        gatewayStatesSchema
-          .parse(await relayRpc(relay, "tunnel.state", {}, 15_000))
-          .filter(
-            (stack) => stack.tailnetId === network.id && !stack.removalPending
-          )
-          .map((stack) => ({ relay, stack }))
+  const relayIds = new Set(network.relayIds)
+  const read = await recoverPromise(
+    async () => {
+      const relays = (await listPersistedRelays()).filter((relay) =>
+        relayIds.has(relay.id)
       )
+      const paused = relays.find((relay) => !relay.enabled)
+      if (paused) throw new Error(`${paused.name} is paused`)
+      return (
+        await Promise.all(
+          relays.map(async (relay) =>
+            gatewayStatesSchema
+              .parse(await relayRpc(relay, "tunnel.state", {}, 15_000))
+              .filter(
+                (stack) =>
+                  stack.tailnetId === network.id && !stack.removalPending
+              )
+              .map((stack) => ({ relay, stack }))
+          )
+        )
+      ).flat()
+    },
+    (cause) => ({ cause })
+  )
+  // Without every gateway's members, no file would be whole: none is sent.
+  if ("cause" in read) {
+    await runAppEffect(
+      "tunnelDns.record",
+      recordTunnelDnsEffect(network.id, {
+        everyFailed: errorMessageOf(read.cause),
+      })
     )
-  ).flat()
+    wakePollingWorker("Domains.dns")
+    throw read.cause
+  }
+  const nodes = read
   // Each name a member has in the tunnel, at the address it has on its
   // own Relay's tunnel.
   const names = await runAppEffect(
@@ -84,18 +114,31 @@ export async function writeTunnelDns(
       relayRpc(relay, "tunnel.dns", { id: stack.id, records }, 60_000, subject)
     )
   )
-  const failures = written.flatMap((result, index) =>
+  const failed = written.flatMap((result, index) =>
     result.status === "rejected"
       ? [
-          `${nodes[index]?.relay.name}: ${
-            result.reason instanceof Error
-              ? result.reason.message
-              : String(result.reason)
-          }`,
+          {
+            error: errorMessageOf(result.reason),
+            id: nodes[index]!.stack.id,
+            relayName: nodes[index]!.relay.name,
+          },
         ]
       : []
   )
-  if (failures.length > 0) throw new Error(failures.join("; "))
+  await runAppEffect(
+    "tunnelDns.record",
+    recordTunnelDnsEffect(network.id, { failed })
+  )
+  if (failed.length > 0) {
+    wakePollingWorker("Domains.dns")
+    throw new Error(
+      failed.map(({ error, relayName }) => `${relayName}: ${error}`).join("; ")
+    )
+  }
+}
+
+function errorMessageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 /** The networks a resource is a member of, as its Relay holds them. */

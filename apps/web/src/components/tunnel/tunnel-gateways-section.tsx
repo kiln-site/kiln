@@ -111,9 +111,27 @@ export const TunnelGatewaysSection = React.memo(function TunnelGatewaysSection({
             id: "status",
             header: "Status",
             enableSorting: false,
-            cell: ({ row }) => (
-              <StatusIndicator status={gatewayStatus(row.original.gateway)} />
-            ),
+            cell: ({ row }) => {
+              const status = gatewayStatus(row.original.gateway)
+              const dnsError = tunnel.dnsPending[row.original.gateway.id]
+              // Up, but missing the latest names until the DNS worker
+              // brings its hosts file up to date.
+              return (
+                <StatusIndicator
+                  status={
+                    dnsError !== undefined && status.tone === "success"
+                      ? {
+                          detail:
+                            dnsError ??
+                            "Its names are being brought up to date",
+                          label: "DNS pending",
+                          tone: "warning",
+                        }
+                      : status
+                  }
+                />
+              )
+            },
             meta: dataTableColumnMeta({ width: "7.5rem" }),
           }),
           columnHelper.accessor((row) => row.gateway.status.ipv4Address, {
