@@ -2,22 +2,18 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { RelayVolume } from "@workspace/contracts"
 import {
-  ChevronsUpDown,
   CornerDownLeft,
   FileText,
   FolderTree,
-  Plus,
   TriangleAlert,
 } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  DrawerPopover,
-  DrawerPopoverContent,
-  DrawerPopoverTrigger,
-} from "@/components/drawer-popover"
+  InstancePickerField,
+  pickerCreateItem,
+} from "@/components/instance-picker-field"
 import {
   InstancePickerContent,
   InstancePickerFooterAction,
@@ -134,21 +130,11 @@ function definitionItem(
 }
 
 function createItem(name: string, relayId: string): VolumePickerItem {
-  return {
-    card: (
-      <VolumePickerCard
-        icon={<Plus className="size-4 text-primary-ink" aria-hidden="true" />}
-        meta="New volume on this Relay"
-        metaClassName={undefined}
-        name={`Create ${name}`}
-      />
-    ),
+  return pickerCreateItem({
     identity: { id: CREATE_KEY, kind: "volume", relayId },
-    key: CREATE_KEY,
-    meta: "",
+    meta: "New volume on this Relay",
     name,
-    searchText: name,
-  }
+  })
 }
 
 /** The volume a name refers to, by the name it shows or Docker's. */
@@ -322,44 +308,15 @@ export function VolumeField({
   // Takes focus once a choice closes the picker.
   focusAfterChoice?: React.RefObject<HTMLElement | null>
 }) {
-  const [open, setOpen] = React.useState(false)
-  const chose = React.useRef(false)
-  const close = React.useCallback(() => {
-    chose.current = true
-    setOpen(false)
-  }, [])
   return (
-    <div className="min-w-0">
-      <span className="mb-2 block text-xs font-medium">Volume</span>
-      <DrawerPopover open={open} onOpenChange={setOpen}>
-        <DrawerPopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            aria-label="Volume"
-            className="h-12 w-full justify-between gap-3 px-2 font-normal"
-          >
-            {children}
-            <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-          </Button>
-        </DrawerPopoverTrigger>
-        <DrawerPopoverContent
-          title="Volumes"
-          align="start"
-          className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
-          onCloseAutoFocus={(event) => {
-            if (!chose.current) return
-            chose.current = false
-            event.preventDefault()
-            focusAfterChoice?.current?.focus()
-          }}
-        >
-          <VolumePickerList {...picker} onDone={close} />
-        </DrawerPopoverContent>
-      </DrawerPopover>
-    </div>
+    <InstancePickerField
+      focusAfterChoice={focusAfterChoice}
+      label="Volume"
+      title="Volumes"
+      value={children}
+    >
+      {(close) => <VolumePickerList {...picker} onDone={close} />}
+    </InstancePickerField>
   )
 }
 

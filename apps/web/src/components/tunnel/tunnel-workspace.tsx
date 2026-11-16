@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import { RefreshCw } from "lucide-react"
 
 import { showToast } from "@workspace/ui/components/sonner"
@@ -83,7 +83,7 @@ const TunnelWorkspaceHeader = React.memo(function TunnelWorkspaceHeader({
 }) {
   const [error, setError] = React.useState<string | null>(null)
   if (workspace.status !== "found") return <WorkspaceHeader identity={null} />
-  const { tunnel } = workspace.value
+  const { tailnet, tunnel } = workspace.value
   return (
     <WorkspaceHeader
       identity={
@@ -101,6 +101,18 @@ const TunnelWorkspaceHeader = React.memo(function TunnelWorkspaceHeader({
         >
           <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">
             <span>Tunnel · Tailscale</span>
+            <WorkspaceMetaSeparator />
+          </span>
+          {/* Its TLDs, login and names are its tailnet's, set there. */}
+          <span className="inline-flex min-w-0 shrink items-center gap-1.5">
+            <Link
+              className="truncate transition-colors hover:text-foreground"
+              params={{ tailnetId: tailnet.id }}
+              title={`${tailnet.name}'s TLDs, login and names`}
+              to="/tailnet/$tailnetId"
+            >
+              {tailnet.name}
+            </Link>
             <WorkspaceMetaSeparator />
           </span>
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">

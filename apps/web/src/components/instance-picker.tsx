@@ -144,6 +144,7 @@ const kindOrder: ReadonlyArray<InstancePickerKind> = [
   "server",
   "database",
   "app",
+  "tunnel",
   "relay",
 ]
 const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
@@ -1024,9 +1025,7 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
       )}
       onClick={() => onSelect(item)}
     >
-      {multiple ? (
-        <InstancePickerCheckbox state={checked} />
-      ) : null}
+      {multiple ? <InstancePickerCheckbox state={checked} /> : null}
       {item.card ??
         (identity.kind === "volume" || identity.kind === "group" ? null : (
           <InstanceCard
@@ -1067,11 +1066,7 @@ function rowChecked(
 ): "all" | "none" | "some" {
   if (!item.stands) return selectedKeys.has(item.key) ? "all" : "none"
   const chosen = item.stands.filter((key) => selectedKeys.has(key)).length
-  return chosen === 0
-    ? "none"
-    : chosen === item.stands.length
-      ? "all"
-      : "some"
+  return chosen === 0 ? "none" : chosen === item.stands.length ? "all" : "some"
 }
 
 function InstancePickerCheckbox({ state }: { state: "all" | "none" | "some" }) {

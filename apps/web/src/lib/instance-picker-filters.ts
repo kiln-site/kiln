@@ -91,6 +91,12 @@ export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
   },
   {
     group: "type",
+    id: "tunnel",
+    label: "Tunnels",
+    matches: (item) => item.identity.kind === "tunnel",
+  },
+  {
+    group: "type",
     id: "group",
     label: "Groups",
     matches: (item) => item.identity.kind === "group",

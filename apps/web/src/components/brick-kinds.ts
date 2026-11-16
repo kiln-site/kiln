@@ -7,14 +7,14 @@ import { brickGame, type Brick, type BrickKind } from "@workspace/contracts"
 /** The kinds of instance someone picks a Brick for. */
 export type PickableBrickKind = Extract<
   BrickKind,
-  "app" | "database" | "game-server"
+  "app" | "database" | "game-server" | "tunnel"
 >
 
 export interface BrickKindPresentation {
   /** What the kind is called where someone chooses between kinds. */
   name: string
   /** The kind as the rest of Hearth knows it, for its icon and colour. */
-  instanceKind: "app" | "database" | "server"
+  instanceKind: "app" | "database" | "server" | "tunnel"
   /** Offered after "All", in this order. */
   categories: ReadonlyArray<{ id: string; label: string }>
   /** Which of them a Brick is in. */
@@ -46,11 +46,8 @@ function gameLabel(brick: Brick): string {
 // Kiln has a viewer and dumps for the SQL engines; the others keep keys.
 const keyValueTypes: ReadonlySet<string> = new Set(["redis", "valkey"])
 
-/**
- * Every kind the Add dialog adds. A tunnel comes from a Brick too, but its
- * pane picks Kiln's Tailscale one for now rather than browsing them.
- */
-export type AddableKind = PickableBrickKind | "tunnel"
+/** Every kind the Add dialog adds, each from a Brick. */
+export type AddableKind = PickableBrickKind
 
 /** What each kind is called where someone chooses between kinds. */
 export const addableKindNames: Record<
@@ -68,6 +65,7 @@ export const pickableBrickKinds: ReadonlyArray<PickableBrickKind> = [
   "game-server",
   "database",
   "app",
+  "tunnel",
 ]
 
 // What an App Brick deploys, which is all that tells Kiln's own apart.
@@ -103,6 +101,14 @@ export const brickKindPresentations: Record<
       keyValueTypes.has(brick.type ?? "") ? "key-value" : "sql",
     label: (brick) =>
       keyValueTypes.has(brick.type ?? "") ? "Key-value store" : "SQL database",
+  },
+  // A tunnel Brick's type is what it joins through, Tailscale for now.
+  tunnel: {
+    name: "Tunnel",
+    instanceKind: "tunnel",
+    categories: [],
+    category: () => "",
+    label: (brick) => (brick.type === "tailscale" ? "Tailscale" : "Tunnel"),
   },
   "game-server": {
     name: "Game Server",

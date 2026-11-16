@@ -23,7 +23,6 @@ import {
   SquareChevronRight,
   Table2,
   TerminalSquare,
-  Waypoints,
   Workflow,
 } from "lucide-react"
 import {
@@ -36,6 +35,7 @@ import {
   DatabaseKindIcon,
   RelayKindIcon,
   ServerKindIcon,
+  TunnelKindIcon,
 } from "@/components/instance-kind-icon"
 import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
@@ -124,7 +124,7 @@ export const infrastructureDestinations = [
   {
     access: "tunnels",
     group: "network",
-    icon: Waypoints,
+    icon: TunnelKindIcon,
     keywords: ["infrastructure", "tailscale", "tailnet", "vpn", "private"],
     label: "Tunnels",
     to: "/infra/tunnels",

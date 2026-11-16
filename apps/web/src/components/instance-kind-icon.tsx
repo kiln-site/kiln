@@ -1,12 +1,12 @@
 import type { ComponentType } from "react"
 import {
   Boxes,
+  BoxesLinked,
   Database,
   Group,
   HardDrive,
   RadioTower,
   Server,
-  Waypoints,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 
@@ -74,7 +74,10 @@ export function DatabaseKindIcon({ className, ...props }: LucideProps) {
 
 export function TunnelKindIcon({ className, ...props }: LucideProps) {
   return (
-    <Waypoints className={cn(className, instanceKindTones.tunnel)} {...props} />
+    <BoxesLinked
+      className={cn(className, instanceKindTones.tunnel)}
+      {...props}
+    />
   )
 }
 

@@ -1,3 +1,4 @@
+import type { TailnetsResult } from "@/server/tunnels"
 import * as React from "react"
 import {
   useQuery,
@@ -71,6 +72,7 @@ import {
   DatabaseKindIcon,
   RelayKindIcon,
   ServerKindIcon,
+  TunnelKindIcon,
 } from "@/components/instance-kind-icon"
 import {
   DrawerPopover,
@@ -88,6 +90,7 @@ import {
   appDirectoryQueryOptions,
   kilnPlatformQueryOptions,
   managedDatabaseDirectoryQueryOptions,
+  tailnetsQueryOptions,
   relaysQueryOptions,
   serverDirectoryQueryOptions,
 } from "@/lib/query-options"
@@ -263,7 +266,17 @@ function InfrastructureNavigation({
   const showApps = destinations.some(
     (destination) => destination.to === "/infra/apps"
   )
-  if (!showRelays && !showServers && !showDatabases && !showApps) return null
+  const showTunnels = destinations.some(
+    (destination) => destination.to === "/infra/tunnels"
+  )
+  if (
+    !showRelays &&
+    !showServers &&
+    !showDatabases &&
+    !showApps &&
+    !showTunnels
+  )
+    return null
 
   return (
     <SidebarGroup className="pt-2">
@@ -286,6 +299,9 @@ function InfrastructureNavigation({
           ) : null}
           {showApps ? (
             <AppsNavigationItem relayConfigured={relayConfigured} />
+          ) : null}
+          {showTunnels ? (
+            <TunnelsNavigationItem relayConfigured={relayConfigured} />
           ) : null}
         </SidebarMenu>
       </SidebarGroupContent>
@@ -370,6 +386,52 @@ const DatabaseCount = React.memo(function DatabaseCount({
 
   return count
 })
+
+function TunnelsNavigationItem({
+  relayConfigured,
+}: {
+  relayConfigured: boolean
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip="Tunnels">
+        <Link
+          to="/infra/tunnels"
+          activeOptions={{ exact: true, includeSearch: false }}
+          activeProps={{ "data-active": true }}
+          preload="intent"
+        >
+          <TunnelKindIcon />
+          <span>Tunnels</span>
+        </Link>
+      </SidebarMenuButton>
+      <SidebarMenuBadge className="text-sidebar-muted-foreground">
+        <TunnelCount relayConfigured={relayConfigured} />
+      </SidebarMenuBadge>
+    </SidebarMenuItem>
+  )
+}
+
+const TunnelCount = React.memo(function TunnelCount({
+  relayConfigured,
+}: {
+  relayConfigured: boolean
+}) {
+  const { data: count = 0 } = useQuery({
+    ...tailnetsQueryOptions(),
+    enabled: relayConfigured,
+    select: selectTunnelCount,
+  })
+
+  return count
+})
+
+function selectTunnelCount(result: TailnetsResult) {
+  return result.stacks.reduce(
+    (count, tailnet) => count + tailnet.deployments.length,
+    0
+  )
+}
 
 function AppsNavigationItem({ relayConfigured }: { relayConfigured: boolean }) {
   return (
@@ -1153,6 +1215,22 @@ const InstanceSelector = React.memo(function InstanceSelector({
         )
         return
       }
+      if (item.identity.kind === "tunnel") {
+        const tunnelId = item.identity.id
+        const tab = tunnelTabFromPathname(window.location.pathname)
+        void navigate(
+          tab === "connected"
+            ? { to: "/tunnel/$tunnelId/connected", params: { tunnelId } }
+            : tab === "logs"
+              ? { to: "/tunnel/$tunnelId/logs", params: { tunnelId } }
+              : tab === "terminal"
+                ? { to: "/tunnel/$tunnelId/terminal", params: { tunnelId } }
+                : tab === "info"
+                  ? { to: "/tunnel/$tunnelId/info", params: { tunnelId } }
+                  : { to: "/tunnel/$tunnelId", params: { tunnelId } }
+        )
+        return
+      }
       if (item.identity.kind === "relay") {
         const relayId = item.identity.relayId
         const tab = relayTabFromPathname(window.location.pathname)
@@ -1428,6 +1506,9 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
   const showApps = destinations.some(
     (destination) => destination.to === "/infra/apps"
   )
+  const showTunnels = destinations.some(
+    (destination) => destination.to === "/infra/tunnels"
+  )
   const { data: serverItems = emptyPickerItems } = useQuery({
     ...serverDirectoryQueryOptions(),
     select: selectSidebarServerPickerItems,
@@ -1447,6 +1528,11 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     enabled: showApps,
     select: selectSidebarAppPickerItems,
   })
+  const { data: tunnelItems = emptyPickerItems } = useQuery({
+    ...tailnetsQueryOptions(),
+    enabled: showTunnels,
+    select: selectSidebarTunnelPickerItems,
+  })
   // Kiln's own pages follow its services; the picker only names it, so it
   // doesn't poll them.
   const showKiln = capabilities.isPlatformAdmin
@@ -1462,7 +1548,8 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
       !showKiln &&
       databaseItems.length === 0 &&
       relayItems.length === 0 &&
-      appItems.length === 0
+      appItems.length === 0 &&
+      tunnelItems.length === 0
         ? serverItems
         : [
             // Kiln leads, so a fresh installation's picker isn't empty.
@@ -1472,10 +1559,13 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
             ...serverItems,
             ...(showDatabases ? databaseItems : emptyPickerItems),
             ...(showApps ? appItems : emptyPickerItems),
+            ...(showTunnels ? tunnelItems : emptyPickerItems),
             ...(showRelays ? relayItems : emptyPickerItems),
           ],
     [
       appItems,
+      showTunnels,
+      tunnelItems,
       databaseItems,
       kilnHost,
       relayItems,
@@ -1586,6 +1676,24 @@ function selectSidebarAppPickerItems(
     name: app.name,
     searchText: `${app.id} ${app.relayName}`,
   }))
+}
+
+function selectSidebarTunnelPickerItems(
+  result: TailnetsResult
+): Array<InstancePickerItem> {
+  return result.stacks.flatMap((tailnet) =>
+    tailnet.deployments.map((tunnel) => ({
+      identity: { id: tunnel.id, kind: "tunnel", relayId: tunnel.relayId },
+      key: sidebarPickerKey("tunnel", tunnel.relayId, tunnel.id),
+      meta: `Tailscale · ${tunnel.id}`,
+      name: tunnel.name,
+      searchText: `${tunnel.id} ${tailnet.name} ${tunnel.relayName}`,
+      // The Relay's inventory doesn't list tunnels; their tailnet says.
+      status: tailnet.cleanup
+        ? { label: "Deleting", pulse: true, tone: "warning" as const }
+        : tunnelStatus(tunnel),
+    }))
+  )
 }
 
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
@@ -2040,6 +2148,14 @@ function appTabFromPathname(pathname: string): AppDestinationId | null {
   const match =
     /^\/app\/[^/]+\/(files|info|logs|network|terminal)(?:\/|$)/.exec(pathname)
   return match ? (match[1] as AppDestinationId) : null
+}
+
+function tunnelTabFromPathname(pathname: string) {
+  return (
+    /^\/tunnel\/[^/]+\/(connected|info|logs|terminal)\/?$/.exec(
+      pathname
+    )?.[1] ?? null
+  )
 }
 
 function relayTabFromPathname(pathname: string): RelayDestinationId | null {

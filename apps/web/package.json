@@ -52,7 +52,7 @@
     "codemirror": "^6.0.2",
     "cronstrue": "^3.29.0",
     "effect": "4.1.0",
-    "lucide-react": "^1.52.0",
+    "lucide-react": "^1.64.0",
     "mysql2": "^3.24.5",
     "obscenity": "0.4.6",
     "react": "^19.3.0",
