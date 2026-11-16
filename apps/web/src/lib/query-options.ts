@@ -1570,9 +1570,13 @@ export function webRoutesQueryOptions<Type extends "app" | "instance">(
   resource: WebRoutesOf<Type>
 ) {
   return webRoutesOptions<
-    (Type extends "app" ? RelayAppWebRouteState : RelayInstanceWebRouteState) & {
+    (Type extends "app"
+      ? RelayAppWebRouteState
+      : RelayInstanceWebRouteState) & {
       /** The route its primary address names, if one does. */
       readonly primaryRouteId: string | null
+      /** Its name in a tailnet, whole, if its primary address is one. */
+      readonly primaryTunnelName: string | null
     }
   >(resource)
 }

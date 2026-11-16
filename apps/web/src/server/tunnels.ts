@@ -58,6 +58,7 @@ import {
 } from "@/effect/tunnel-names"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
+import { setPrimaryAddressEffect } from "@/effect/primary-addresses"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import { accessPermissions, type AccessPermission } from "@/lib/permissions"
@@ -74,6 +75,7 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { tailnetKey, tailnetSettingsKey } from "@/lib/tunnel-lanes"
 import { exclusive } from "@/operations/lanes"
+import { invalidateManagedDomainAddressesEffect } from "@/server/addresses.server"
 import {
   operation,
   runOperationPromise,
@@ -923,7 +925,14 @@ async function saveTailnetHandler(
         ...synchronized,
       ],
       replaceTailnetDefinition(definitions, nextDefinition),
-      await runAppEffect("tunnelNames.list", listTunnelNamesEffect([id]))
+      await runAppEffect(
+        "tunnelNames.list",
+        listTunnelNamesEffect(
+          replaceTailnetDefinition(definitions, nextDefinition).map(
+            (definition) => definition.id
+          )
+        )
+      )
     ),
     unavailableRelays: currentResult.unavailableRelays,
   }
@@ -1027,6 +1036,66 @@ export const removeTunnelAlias = createServerFn({ method: "POST" })
     )
   })
 
+const primaryTunnelNameSchema = z.strictObject({ id: z.uuid() })
+
+const setPrimaryTunnelNameOperation = operation<
+  z.infer<typeof primaryTunnelNameSchema> & { tailnetId: string }
+>()({
+  name: "tailnet.name.primary",
+  doing: "Making this name its primary address",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailnetSettingsKey(input.tailnetId))],
+  run: ({ input }) =>
+    promiseEffect(() => setPrimaryTunnelNameHandler(input.id)),
+  audit: ({ input }) => ({ id: input.tailnetId, kind: "tailnet" }),
+})
+
+/**
+ * Makes one of a game server's or an App's names in a tailnet its primary
+ * address, in place of its join address or domain. A database has none.
+ */
+export const setPrimaryTunnelName = createServerFn({ method: "POST" })
+  .validator(primaryTunnelNameSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const name = await runAppEffect(
+      "tunnelNames.load",
+      loadTunnelNameEffect(data.id)
+    )
+    if (!name) throw new Error("That name is gone")
+    return runOperationPromise(
+      setPrimaryTunnelNameOperation,
+      { ...data, tailnetId: name.tailnetId },
+      { user }
+    )
+  })
+
+async function setPrimaryTunnelNameHandler(id: string) {
+  const name = await runAppEffect("tunnelNames.load", loadTunnelNameEffect(id))
+  if (!name) throw new Error("That name is gone")
+  const app = appTailscaleMember(name.memberId)
+  const instanceId = instanceTailscaleMember(name.memberId)
+  const instance = app
+    ? ({ id: app.appId, type: "app" } as const)
+    : instanceId
+      ? ({ id: instanceId, type: "instance" } as const)
+      : null
+  if (!instance) throw new Error("A database has no primary address")
+  await runAppEffect(
+    "primaryAddresses.set",
+    setPrimaryAddressEffect(instance, { kind: "tunnel", ref: name.id })
+  )
+  // A game server shows and advertises it.
+  if (instance.type === "instance") {
+    await runAppEffect(
+      "domains.addresses.invalidate",
+      invalidateManagedDomainAddressesEffect
+    )
+  }
+  publishTailscaleChange()
+  return loadTailnets()
+}
+
 // Serves a tailnet's names as they are now, on every tunnel it has.
 async function rewriteTailnetNames(tailnetId: string, subject: string) {
   const relays = await runAppEffect(
@@ -1036,6 +1105,11 @@ async function rewriteTailnetNames(tailnetId: string, subject: string) {
   await writeTailnetDns(
     { id: tailnetId, relayIds: relays.get(tailnetId) ?? [] },
     subject
+  )
+  // A game server whose primary was one of them shows another now.
+  await runAppEffect(
+    "domains.addresses.invalidate",
+    invalidateManagedDomainAddressesEffect
   )
   publishTailscaleChange()
 }

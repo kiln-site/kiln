@@ -10,6 +10,7 @@ import {
   addTunnelAlias,
   removeTunnelAlias,
   saveTailnet,
+  setPrimaryTunnelName,
   type TailnetName,
   type TailnetOverview,
   type TailnetsResult,
@@ -260,6 +261,37 @@ export function useTailnetAliases() {
     onError,
   })
   return { add, remove }
+}
+
+/**
+ * Makes a name its game server's or App's primary address, in place of its
+ * join address or domain. What shows that address reads it again.
+ */
+export function useMakeTunnelNamePrimary() {
+  const setTailnets = useSetTailnets()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: TailnetName) =>
+      setPrimaryTunnelName({ data: { id: name.id } }),
+    onSuccess: (next, name) => {
+      setTailnets(next)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.directory })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.servers.directory,
+      })
+      void queryClient.invalidateQueries({ queryKey: ["web-routes"] })
+      showToast({
+        message: `${wholeName(name)} is its primary address`,
+        type: "success",
+      })
+    },
+    onError: (cause: Error) =>
+      showToast({
+        description: cause.message,
+        message: "The primary address wasn't changed",
+        type: "error",
+      }),
+  })
 }
 
 const toastId = (tailnetId: string) => `kiln-tailnet-${tailnetId}`

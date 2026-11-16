@@ -67,6 +67,10 @@ import {
 } from "@/effect/addresses"
 import { Database } from "@/effect/database"
 import {
+  loadPrimaryTunnelNamesEffect,
+  primaryIsTunnelNameEffect,
+} from "@/effect/primary-addresses"
+import {
   anyDomainConnectionEffect,
   listDomainConnectionsEffect,
   listUsableVanityDomainsEffect,
@@ -166,12 +170,14 @@ const managedDomainAddressCachePolicy: CachePolicy = {
   name: "Managed domain addresses",
   ttlMs: 30_000,
 }
+// By `<relay>:<instance>`, each game server's active domain address, and by
+// `tunnel:<instance>`, the tunnel name that is its primary.
 const managedDomainAddressMapSchema = z.record(
   z.string(),
   z.object({
     address: z.string(),
-    publicHost: z.string(),
-    publicPort: z.number().int().min(1).max(65_535),
+    publicHost: z.string().optional(),
+    publicPort: z.number().int().min(1).max(65_535).optional(),
   })
 )
 export const invalidateManagedDomainAddressesEffect = invalidateCached(
@@ -440,9 +446,18 @@ export const loadManagedDomainAddressesEffect = Effect.fn(
 )(function* () {
   return yield* readThroughCache({
     decode: managedDomainAddressMapSchema.parse,
-    load: loadActiveInstanceDomainAssignmentsEffect().pipe(
-      Effect.map((assignments) => {
+    load: Effect.all(
+      [
+        loadActiveInstanceDomainAssignmentsEffect(),
+        loadPrimaryTunnelNamesEffect("instance"),
+      ],
+      { concurrency: 2 }
+    ).pipe(
+      Effect.map(([assignments, tunnelNames]) => {
         const addresses: z.infer<typeof managedDomainAddressMapSchema> = {}
+        for (const { instanceId, name } of tunnelNames) {
+          addresses[tunnelAddressKey(instanceId)] = { address: name }
+        }
         // Primaries come first, so a game server advertises its primary,
         // or another active address while the primary is failing.
         for (const assignment of assignments) {
@@ -1158,13 +1173,16 @@ const provisionEffect = Effect.fnUntraced(function* (
       generateVanityCandidates(blacklistPatterns)
     )
     yield* addGameAddressEffect(resource, endpoint, domain, {
-      primary: true,
+      primary: !(yield* primaryIsTunnelNameEffect(primaryOf(resource))),
       vanityLabel,
     })
     return true
   }
   let changed = false
-  if (!rows.some((row) => row.primary)) {
+  if (
+    !rows.some((row) => row.primary) &&
+    !(yield* primaryIsTunnelNameEffect(primaryOf(resource)))
+  ) {
     const first = rows.find((row) => row.status !== "removing")
     if (first) {
       yield* setInstanceDomainPrimaryEffect({ ...resource, id: first.id })
@@ -1268,7 +1286,9 @@ const createGameAddressEffect = Effect.fn("domains.instance.create")(function* (
   // Promoted only once its records exist, so a failed create leaves the
   // current connect address alone.
   const created = yield* addGameAddressEffect(resource, endpoint, domain, {
-    primary: existing.length === 0,
+    primary:
+      existing.length === 0 &&
+      !(yield* primaryIsTunnelNameEffect(primaryOf(resource))),
     vanityLabel,
   })
   if (input.primary && existing.length > 0) {
@@ -2465,15 +2485,42 @@ function assignmentKey(relayId: string, instanceId: string): string {
   return `${relayId}:${instanceId}`
 }
 
+// A game server, as its primary address is kept.
+const primaryOf = (resource: WebHostnameResource) =>
+  ({ id: resource.resourceId, type: "instance" }) as const
+
+const tunnelAddressKey = (instanceId: string) => `tunnel:${instanceId}`
+
+/**
+ * The address a game server shows and advertises: a tunnel name that is its
+ * primary, at the port it listens on in its container, since its tailnet
+ * reaches the container itself; else its active domain address while that
+ * still points at its public endpoint; else its own.
+ */
 export function managedAddressForInstance(
   addresses: z.infer<typeof managedDomainAddressMapSchema>,
   instance: Pick<
     FleetRelayInstance,
-    "connectAddress" | "id" | "publicHost" | "publicPort" | "relayId"
+    | "brickPrimaryPort"
+    | "connectAddress"
+    | "id"
+    | "publicHost"
+    | "publicPort"
+    | "relayId"
   >
 ): string {
+  const tunnel = addresses[tunnelAddressKey(instance.id)]
+  if (tunnel) {
+    return instance.brickPrimaryPort === undefined
+      ? tunnel.address
+      : `${tunnel.address}:${instance.brickPrimaryPort}`
+  }
   const assignment = addresses[assignmentKey(instance.relayId, instance.id)]
-  return assignment && managedDomainEndpointMatches(assignment, instance)
+  const { publicHost, publicPort } = assignment ?? {}
+  return assignment &&
+    publicHost !== undefined &&
+    publicPort !== undefined &&
+    managedDomainEndpointMatches({ publicHost, publicPort }, instance)
     ? assignment.address
     : instance.connectAddress
 }

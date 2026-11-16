@@ -32,6 +32,7 @@ import {
   type AppWorkspaceApp,
 } from "@/components/app/app-workspace-context"
 import { ProvisioningGate } from "@/components/provisioning-progress"
+import { TailscaleLogo } from "@/components/brand-logos"
 import {
   WorkspaceCopyLinkButton,
   WorkspaceCopyValueButton,
@@ -299,8 +300,20 @@ function AppHeaderAddress({ app }: { app: App }) {
       resourceId: app.id,
       resourceType: "app",
     }),
-    select: selectPrimaryUrl,
+    select: selectPrimaryAddress,
   }).data
+  if (url?.startsWith(TUNNEL_PREFIX)) {
+    // Only its tailnet reaches it.
+    return (
+      <span className="flex min-w-0 items-center gap-1">
+        <TailscaleLogo className="size-3 shrink-0 text-muted-foreground" />
+        <WorkspaceCopyValueButton
+          label="tailnet name"
+          value={url.slice(TUNNEL_PREFIX.length)}
+        />
+      </span>
+    )
+  }
   return url ? (
     <WorkspaceCopyLinkButton href={url} label="domain" />
   ) : (
@@ -308,10 +321,17 @@ function AppHeaderAddress({ app }: { app: App }) {
   )
 }
 
-function selectPrimaryUrl(state: {
+const TUNNEL_PREFIX = "tunnel:"
+
+// Its primary domain's URL, or its tunnel name after `tunnel:`.
+function selectPrimaryAddress(state: {
   primaryRouteId: string | null
+  primaryTunnelName: string | null
   routes: ReadonlyArray<RelayInstanceWebRoute>
 }): string | null {
+  if (state.primaryTunnelName) {
+    return `${TUNNEL_PREFIX}${state.primaryTunnelName}`
+  }
   const route = primaryWebRoute(state.routes, state.primaryRouteId)
   return route ? webRouteUrl(route) : null
 }

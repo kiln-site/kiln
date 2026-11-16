@@ -13,6 +13,8 @@ const Metadata = Schema.Struct({
   connectAddress: Schema.String,
   publicHost: Schema.optionalKey(Schema.String),
   publicPort: Schema.optionalKey(Schema.Number),
+  // Where it listens in its container, as a tunnel name reaches it.
+  brickPrimaryPort: Schema.optionalKey(Schema.Number),
 })
 const MetadataJson = Schema.fromJsonString(Metadata)
 
@@ -27,6 +29,7 @@ export type DirectoryInstance = Pick<
   | "connectAddress"
   | "publicHost"
   | "publicPort"
+  | "brickPrimaryPort"
 >
 
 export function instanceDirectoryMetadata(instance: DirectoryInstance) {
@@ -42,6 +45,9 @@ export function instanceDirectoryMetadata(instance: DirectoryInstance) {
     ...(instance.publicPort === undefined
       ? {}
       : { publicPort: instance.publicPort }),
+    ...(instance.brickPrimaryPort === undefined
+      ? {}
+      : { brickPrimaryPort: instance.brickPrimaryPort }),
   })
 }
 

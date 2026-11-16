@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Check, LoaderCircle, Pencil, Plus, X } from "lucide-react"
+import { Check, LoaderCircle, Pencil, Plus, Star, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -26,6 +26,7 @@ import {
 
 import {
   namesOf,
+  useMakeTunnelNamePrimary,
   useTailnetAliases,
   useTailnetSave,
   wholeName,
@@ -51,6 +52,10 @@ export const TunnelMemberNames = React.memo(function TunnelMemberNames({
   memberName: string
   tailnet: TailnetOverview
 }) {
+  // A database has no primary address; a game server's or an App's can be
+  // any of its names.
+  const canStar = !memberId.startsWith("database:")
+  const makePrimary = useMakeTunnelNamePrimary()
   const names = React.useMemo(
     () => namesOf(tailnet, memberId),
     [memberId, tailnet]
@@ -70,6 +75,32 @@ export const TunnelMemberNames = React.memo(function TunnelMemberNames({
       {names.map((name) => (
         <NameChip
           key={name.id}
+          star={
+            canStar && (name.primary || canWrite) ? (
+              <ChipButton
+                disabled={name.primary || makePrimary.isPending}
+                label={
+                  name.primary
+                    ? `${wholeName(name)} is the primary address`
+                    : `Make ${wholeName(name)} the primary address`
+                }
+                pressed={name.primary}
+                tooltip={name.primary ? "Primary address" : "Make primary"}
+                onClick={() => makePrimary.mutate(name)}
+              >
+                {makePrimary.isPending &&
+                makePrimary.variables?.id === name.id ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Star
+                    className={
+                      name.primary ? "fill-current text-primary-ink" : ""
+                    }
+                  />
+                )}
+              </ChipButton>
+            ) : null
+          }
           action={
             !canWrite ? null : name.generated ? (
               <ChipButton
@@ -132,9 +163,11 @@ export const TunnelMemberNames = React.memo(function TunnelMemberNames({
 const NameChip = React.memo(function NameChip({
   action,
   name,
+  star,
 }: {
   action: React.ReactNode
   name: TailnetName
+  star: React.ReactNode
 }) {
   const whole = wholeName(name)
   const { copied, copy } = useCopyFeedback(whole)
@@ -165,6 +198,7 @@ const NameChip = React.memo(function NameChip({
               : "Click to copy"}
         </TooltipContent>
       </Tooltip>
+      {star}
       {action}
     </span>
   )
@@ -174,12 +208,14 @@ function ChipButton({
   children,
   disabled,
   label,
+  pressed,
   tooltip,
   onClick,
 }: {
   children: React.ReactNode
   disabled?: boolean
   label: string
+  pressed?: boolean
   tooltip: string
   onClick: () => void
 }) {
@@ -189,6 +225,7 @@ function ChipButton({
         <button
           type="button"
           aria-label={label}
+          aria-pressed={pressed}
           disabled={disabled}
           className="grid size-6 shrink-0 place-items-center border-l border-inherit text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 [&_svg]:size-3"
           onClick={onClick}

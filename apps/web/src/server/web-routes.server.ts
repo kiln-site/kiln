@@ -10,6 +10,7 @@ import {
 import { Effect } from "effect"
 
 import { promiseEffect, recoverPromise } from "@/effect/promise"
+import { loadTunnelNameEffect, tunnelNameOf } from "@/effect/tunnel-names"
 import { runAppEffect } from "@/effect/runtime"
 import type { WebHostnameResource } from "@/effect/addresses"
 import {
@@ -63,11 +64,12 @@ const stateOf = (resource: WebHostnameResource, state: unknown) =>
     : relayInstanceWebRouteStateSchema.parse(state)
 
 /**
- * The web route an instance's primary address names, if it is one. Whether
- * that route still serves is for whoever reads the routes with it to say
- * (`primaryWebRoute`).
+ * The web route an instance's primary address names, if it is one, or its
+ * tunnel name, whole. Whether that route still serves is for whoever reads
+ * the routes with it to say (`primaryWebRoute`); a tunnel name taken away
+ * is no one's.
  */
-async function primaryRouteId(resource: WebHostnameResource) {
+async function primaryOf(resource: WebHostnameResource) {
   const primary = await runAppEffect(
     "primaryAddresses.load",
     loadPrimaryAddressEffect({
@@ -75,15 +77,25 @@ async function primaryRouteId(resource: WebHostnameResource) {
       type: resource.resourceType,
     })
   )
-  return primary?.kind === "route" ? primary.ref : null
+  const name =
+    primary?.kind === "tunnel"
+      ? await runAppEffect(
+          "tunnelNames.load",
+          loadTunnelNameEffect(primary.ref)
+        )
+      : null
+  return {
+    primaryRouteId: primary?.kind === "route" ? primary.ref : null,
+    primaryTunnelName: name ? tunnelNameOf(name) : null,
+  }
 }
 
-/** An instance's web routes, with the one its primary address names. */
+/** An instance's web routes, with the address its primary names. */
 async function withPrimaryRoute<State>(
   resource: WebHostnameResource,
   state: State
 ) {
-  return { ...state, primaryRouteId: await primaryRouteId(resource) }
+  return { ...state, ...(await primaryOf(resource)) }
 }
 
 // Its Relay's name for it: the ID, and the kind as the Relay calls it.
