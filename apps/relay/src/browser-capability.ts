@@ -160,6 +160,13 @@ const browserCapabilityActions: Record<
     preview: ["database.dump.export"],
     resources: ["database.read"],
   },
+  // A tunnel's output is all a browser reads of it.
+  tunnel: {
+    console: [relayConsoleReadActions.tunnel],
+    file: [],
+    preview: [],
+    resources: [],
+  },
   instance: {
     console: [relayConsoleReadActions.instance, "instance.console.write"],
     file: ["instance.files.download", "instance.files.upload"],

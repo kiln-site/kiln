@@ -359,8 +359,9 @@ deployments beside its container's output, as an App's does.
 
 Every kind of instance's deployments are logged the same way. The Relay
 saves each one's log whole, as one file in its data directory, in its
-kind's folder: `server-deployments`, `database-deployments` or
-`app-deployments`, then `<instance>/<deployment>.json`. It keeps each
+kind's folder: `server-deployments`, `database-deployments`,
+`tunnel-deployments` or `app-deployments`, then
+`<instance>/<deployment>.json`. It keeps each
 instance's 20 latest and removes them with the instance. A game server's
 or a database's is named by Hearth, and the Relay rewrites it as each
 phase goes by. An App's is named by the Relay, which follows its output

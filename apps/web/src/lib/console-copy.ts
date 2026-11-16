@@ -20,5 +20,6 @@ export const consoleCopy: Record<RelayBrowserResourceKind, ConsoleCopy> = {
     stream: "console stream",
   },
   platform: { notice: "LOG", search: "Search logs", stream: "log stream" },
+  tunnel: { notice: "LOG", search: "Search logs", stream: "log stream" },
   relay: { notice: "LOG", search: "Search logs", stream: "log stream" },
 }

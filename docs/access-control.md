@@ -221,6 +221,10 @@ Configuring an App, opening its shell, and using its files can reach the
 Relay's host, so those still take permissions on the Relay: `app.manage`,
 `instance.terminal`, and file permissions. Its power takes
 `instance.power.*` and deploying it `instance.deploy`, on the Relay too.
+A tunnel's owner is the owner of the network it came from, or whoever made
+it: they may do everything to it. Anyone else needs the `instance.*`
+permission on the tunnel's Relay, as for an App: a tunnel can't be shared on
+its own yet (`requireTunnelPermission`).
 
 Only the owner or a platform administrator can transfer ownership, to an
 enabled, verified account that already has access there: an active grant on

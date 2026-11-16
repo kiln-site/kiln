@@ -20,6 +20,7 @@ import {
   type RelayApp,
   type RelayInstance,
   type RelayManagedDatabase,
+  type Tunnel,
 } from "@workspace/contracts"
 import { Effect, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
@@ -67,6 +68,7 @@ export interface RelayDrivers {
     app: RelayApp
     database: RelayManagedDatabase
     instance: RelayInstance
+    tunnel: Tunnel
   }>
   readonly runtimeRecovery: RuntimeRecoveryManager
 }
@@ -242,6 +244,8 @@ export async function relayHarness(
           app: (appId, action) => apps.action({ action, appId }),
           database: (databaseId, action) =>
             databases.action({ action, databaseId }),
+          tunnel: (tunnelId, action) =>
+            lifecycle.runTunnelAction(tunnelId, action),
           instance: async (instanceId, action) => {
             const instance = await docker.findInstance(instanceId)
             if (!instance) throw new Error("Instance not found")

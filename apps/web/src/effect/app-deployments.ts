@@ -28,7 +28,9 @@ export type ServerDeploymentTrigger =
   | "update"
 /** A database deployed again as it is, asked for or to take an update. */
 export type DatabaseDeploymentTrigger = "redeploy" | "update"
-export type DeploymentKind = "app" | "database" | "server"
+/** A tunnel deployed again as it is. */
+export type TunnelDeploymentTrigger = "redeploy"
+export type DeploymentKind = "app" | "database" | "server" | "tunnel"
 /** The kinds a deployment is one request to the Relay for. */
 export type RequestDeploymentKind = Exclude<DeploymentKind, "app">
 
@@ -100,11 +102,21 @@ export interface DatabaseDeploymentRecord extends Omit<
   trigger: DatabaseDeploymentTrigger
 }
 
+/** A tunnel's redeploy. */
+export interface TunnelDeploymentRecord extends Omit<
+  ServerDeploymentRecord,
+  "brickId" | "brickName" | "instanceId" | "trigger"
+> {
+  trigger: TunnelDeploymentTrigger
+  tunnelId: string
+}
+
 /** A deployment of any kind, as the Deployments page lists them. */
 export type DeploymentRecord =
   | ({ kind: "app" } & AppDeploymentRecord)
   | ({ kind: "database" } & DatabaseDeploymentRecord)
   | ({ kind: "server" } & ServerDeploymentRecord)
+  | ({ kind: "tunnel" } & TunnelDeploymentRecord)
 
 interface SourceRow extends RowDataPacket {
   app_id: string
@@ -143,6 +155,7 @@ interface DeploymentRow extends RowDataPacket {
     | AppDeploymentTrigger
     | DatabaseDeploymentTrigger
     | ServerDeploymentTrigger
+    | TunnelDeploymentTrigger
   triggered_by: string | null
 }
 
@@ -323,6 +336,7 @@ export const insertServerDeploymentEffect = Effect.fn(
     (
       | { kind: "database"; trigger: DatabaseDeploymentTrigger }
       | { kind: "server"; trigger: ServerDeploymentTrigger }
+      | { kind: "tunnel"; trigger: TunnelDeploymentTrigger }
     )
 ) {
   const database = yield* Database
@@ -571,7 +585,7 @@ export const listDeploymentsEffect = Effect.fn("deployments.list")(
     reachable: Partial<Record<DeploymentKind, ReachableDeployments>>
   }) {
     const parameters: Array<number | string> = []
-    const reachable = (["app", "server", "database"] as const).flatMap((kind) => {
+    const reachable = (["app", "server", "database", "tunnel"] as const).flatMap((kind) => {
       const scope = input.reachable[kind]
       if (!scope) return []
       if (input.instance && input.instance.kind !== kind) return []
@@ -712,6 +726,20 @@ function toRecord(row: DeploymentRow): DeploymentRecord {
       status: row.status,
       trigger: row.trigger as ServerDeploymentTrigger,
       triggeredBy: row.triggered_by,
+    }
+  }
+  if (row.instance_kind === "tunnel") {
+    return {
+      error: row.error,
+      finishedAt: instant(row.finished_at),
+      id: row.id,
+      kind: "tunnel",
+      relayId: row.relay_id,
+      startedAt: new Date(Number(row.started_at)).toISOString(),
+      status: row.status,
+      trigger: row.trigger as TunnelDeploymentTrigger,
+      triggeredBy: row.triggered_by,
+      tunnelId: row.instance_id,
     }
   }
   if (row.instance_kind === "database") {

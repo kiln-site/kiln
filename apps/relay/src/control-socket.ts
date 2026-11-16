@@ -1641,7 +1641,7 @@ function powerAction(
   kind: string | null,
   action: string | null
 ): RelayAction | null {
-  if (kind !== "instance" && kind !== "database" && kind !== "app") return null
+  if (!isInstanceKind(kind)) return null
   if (action === "start") return "instance.power.start"
   if (action === "stop") return "instance.power.stop"
   if (action === "restart") return "instance.power.restart"
@@ -1663,6 +1663,7 @@ function terminalAction(target: object | null): RelayAction | null {
     case "instance":
     case "database":
     case "app":
+    case "tunnel":
       return "instance.terminal"
     // Kiln's own containers are as much as the host's shell.
     case "relay":
@@ -1693,20 +1694,27 @@ function routeKind(kind: string | null): kind is "app" | "instance" {
 // The kinds of instance a request that names its kind can be for.
 function isInstanceKind(
   kind: string | null
-): kind is "app" | "database" | "instance" {
-  return kind === "instance" || kind === "database" || kind === "app"
+): kind is "app" | "database" | "instance" | "tunnel" {
+  return (
+    kind === "instance" ||
+    kind === "database" ||
+    kind === "app" ||
+    kind === "tunnel"
+  )
 }
 
 function kindAuditTarget(
   kind: unknown
-): "appId" | "databaseId" | "instanceId" | null {
+): "appId" | "databaseId" | "instanceId" | "tunnelId" | null {
   return kind === "instance"
     ? "instanceId"
     : kind === "app"
       ? "appId"
       : kind === "database"
         ? "databaseId"
-        : null
+        : kind === "tunnel"
+          ? "tunnelId"
+          : null
 }
 
 // Whether a file operation only reads, for roots with one action to read and

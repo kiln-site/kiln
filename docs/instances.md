@@ -31,12 +31,12 @@ Every kind gets these from the platform.
 
 | Capability  | Target                                          | Today                                                                                                                    |
 | ----------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                          |
-| Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission                                          |
+| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                 |
+| Deployments | One redeploy for every kind                     | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                 |
 | Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                          |
 | Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps; a database has no address yet     |
-| Terminal    | A shell in every kind, on one path              | Done for game servers, databases and Apps: one set of Relay requests, one stream and one permission                      |
-| Logs        | One Logs page, one log store and one permission | Done for game servers, databases and Apps: one page, one store and read request on the Relay, and one permission         |
+| Terminal    | A shell in every kind, on one path              | Done for game servers, databases, Apps and tunnels: one set of Relay requests, one stream and one permission             |
+| Logs        | One Logs page, one log store and one permission | Done for game servers, databases and Apps; a tunnel's store and sources are in place, its page comes with its pages      |
 | Ports       | One list of taken ports and one Ports section   | Done for game servers and Apps: one list on the Relay and one Ports section. Each kind still saves its ports its own way |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                                |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                                                           |
@@ -168,9 +168,11 @@ tunnels in a tailnet: each tunnel is an instance of its own, with its own
 ID, kept in `tunnel` and listed by its Relay with its tailnet's ID, and the
 tailnet is a group Kiln keeps whole (`tailnet` beside it). Its containers
 carry a tunnel's labels, and nothing treats it as a game server. Built so
-far: that, the migration from networks, and the requests' new names; what
-every instance has (power, deployments, logs, terminal), DNS reloading in
-place, names and the pages follow in this stack.
+far: that, the migration from networks, and the requests' new names; and
+what every instance has: power, deploying again (recorded and logged as
+every kind's), its terminal and its logs' sources, each authorized as a
+tunnel is. DNS reloading in place, names and the pages follow in this
+stack.
 
 ### What runs
 

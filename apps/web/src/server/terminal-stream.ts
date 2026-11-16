@@ -44,6 +44,7 @@ function sessionUser(target: TerminalTarget): string {
     case "app":
       return target.service
     case "database":
+    case "tunnel":
       return "shell"
     case "relay":
       return "root"

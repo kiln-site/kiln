@@ -910,6 +910,7 @@ export function terminalTargetKey(target: TerminalTarget): string {
       return `${target.id}:${target.service}`
     case "instance":
     case "database":
+    case "tunnel":
       return target.id
     case "relay":
       return "relay"

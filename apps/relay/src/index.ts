@@ -1133,6 +1133,7 @@ const power = new ResourcePower({
     },
     database: (databaseId, action) => databases.action({ action, databaseId }),
     instance: runInstancePower,
+    tunnel: (tunnelId, action) => lifecycle.runTunnelAction(tunnelId, action),
   },
   lanes,
   // A schedule's power step takes what the same request from Hearth would:
@@ -1673,7 +1674,8 @@ const browserSocket = attachBrowserSocket({
             platformTargetContainer(platformReadContext(), target)
           )
         )?.Id ?? null,
-    }
+    },
+    (id, component) => lifecycle.tunnelContainerName(id, component)
   ),
   docker,
   filesystem,
@@ -2338,6 +2340,22 @@ async function attachTerminal(
             push
           )
         }
+      )
+    // A tunnel's shell is in its Tailscale container.
+    case "tunnel":
+      return inLane(
+        { label: "terminal.attach", locks: instanceReadLocks(target.id) },
+        async () =>
+          terminals.attach(
+            owner,
+            containerShell(
+              target,
+              await lifecycle.tunnelTerminalContainer(target.id),
+              "Start the tunnel to open its terminal"
+            ),
+            input,
+            push
+          )
       )
     case "app":
       return inLane(
@@ -3527,6 +3545,14 @@ async function executeControlRequest(
             )
           )
         }
+        case "tunnel":
+          return deploymentLogs.run(
+            { id: input.id, kind: "tunnel" },
+            input.deploymentId,
+            "Redeploying the tunnel",
+            (onPhase, note) => lifecycle.redeployTunnel(input.id, onPhase, note),
+            "tunnel"
+          )
       }
     }
     // Resource limits, for every kind. Each applies them its own way: a

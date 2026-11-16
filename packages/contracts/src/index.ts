@@ -1212,6 +1212,14 @@ export const relayDeployInstanceSchema = z.discriminatedUnion("kind", [
     .omit({ appId: true })
     .extend({ id: appIdSchema, kind: z.literal("app") })
     .strict(),
+  // Its two containers made again from their images, pulled anew.
+  z
+    .object({
+      deploymentId: z.uuid(),
+      id: instanceIdSchema,
+      kind: z.literal("tunnel"),
+    })
+    .strict(),
 ])
 
 // Asks what each of these instances' image tags name now, against what
@@ -1402,7 +1410,7 @@ export const relayDeploymentReadSchema = z
   .object({
     deploymentId: relayDeploymentIdSchema,
     id: instanceIdSchema,
-    kind: z.enum(["app", "database", "instance"]),
+    kind: z.enum(["app", "database", "instance", "tunnel"]),
   })
   .strict()
 
@@ -2590,6 +2598,8 @@ export const terminalTargetSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("database"), id: databaseIdSchema }).strict(),
+  // A tunnel's shell is in its Tailscale container.
+  z.object({ kind: z.literal("tunnel"), id: instanceIdSchema }).strict(),
   z.object({ kind: z.literal("relay") }).strict(),
   z
     .object({ kind: z.literal("platform"), role: relayPlatformTargetSchema })
@@ -3031,6 +3041,13 @@ export const relayInstanceActionSchema = z.discriminatedUnion("kind", [
       action: relayPowerActionSchema,
       id: databaseIdSchema,
       kind: z.literal("database"),
+    })
+    .strict(),
+  z
+    .object({
+      action: relayPowerActionSchema,
+      id: instanceIdSchema,
+      kind: z.literal("tunnel"),
     })
     .strict(),
 ])

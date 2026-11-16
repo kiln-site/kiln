@@ -14,6 +14,10 @@ import {
 } from "@/effect/instance-updates"
 import { updatesView } from "@/server/instance-updates.server"
 import {
+  listTunnelRecordsEffect,
+  requireTunnelPermission,
+} from "@/server/tunnel-access.server"
+import {
   latestAppDeploymentsEffect,
   listDeploymentsEffect,
   loadAppDeploymentEffect,
@@ -27,6 +31,7 @@ import {
   type DeploymentKind,
   type DeploymentRecord,
   type ServerDeploymentRecord,
+  type TunnelDeploymentRecord,
 } from "@/effect/app-deployments"
 import {
   getGitHubFileEffect,
@@ -126,11 +131,22 @@ export interface DatabaseDeploymentView extends DatabaseDeploymentRecord {
   triggeredByName: string | null
 }
 
+/** A tunnel's redeploy, as listed. */
+export interface TunnelDeploymentView extends TunnelDeploymentRecord {
+  kind: "tunnel"
+  /** Who may read its log on the Relay. */
+  canReadLogs: boolean
+  relayName: string
+  /** The person who asked, by name. */
+  triggeredByName: string | null
+}
+
 /** A deployment of any kind, as the Deployments page lists them. */
 export type DeploymentView =
   | ({ kind: "app" } & AppDeploymentView)
   | DatabaseDeploymentView
   | ServerDeploymentView
+  | TunnelDeploymentView
 
 /** One App's deployments, one Relay's Apps', or every App the person reads. */
 export async function getAppDeploymentsHandler(data: {
@@ -166,7 +182,38 @@ export async function getDeploymentsHandler(data: {
   relayId?: string
 }) {
   const user = await requireEligibleResourceUser()
-  return listDeployments(user, data, ["app", "server", "database"])
+  // A tunnel's are listed on its own page (`getTunnelDeploymentsHandler`).
+  const page = await listDeployments(user, data, ["app", "server", "database"])
+  return {
+    items: page.items.flatMap((item) => (item.kind === "tunnel" ? [] : [item])),
+    nextCursor: page.nextCursor,
+  }
+}
+
+/** One tunnel's deployments, for whoever may read its logs. */
+export async function getTunnelDeploymentsHandler(data: {
+  before?: { id: string; startedAt: string }
+  tunnelId: string
+}) {
+  const user = await requireEligibleResourceUser()
+  const tunnel = await requireTunnelPermission(
+    user,
+    data.tunnelId,
+    "instance.logs.read"
+  )
+  const page = await listDeployments(
+    user,
+    {
+      before: data.before,
+      instance: { id: tunnel.id, kind: "tunnel" },
+      relayId: tunnel.relayId,
+    },
+    ["tunnel"]
+  )
+  return {
+    items: page.items.flatMap((item) => (item.kind === "tunnel" ? [item] : [])),
+    nextCursor: page.nextCursor,
+  }
 }
 
 async function listDeployments(
@@ -178,7 +225,7 @@ async function listDeployments(
   },
   kinds: ReadonlyArray<DeploymentKind>
 ) {
-  const [relays, grants, apps, servers, databases] = await Promise.all([
+  const [relays, grants, apps, servers, databases, tunnels] = await Promise.all([
     listPersistedRelays(),
     isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
     kinds.includes("app")
@@ -192,6 +239,9 @@ async function listDeployments(
           "managedDatabases.directory",
           listManagedDatabaseDirectoryEffect()
         )
+      : Promise.resolve([]),
+    kinds.includes("tunnel")
+      ? runAppEffect("tunnels.list", listTunnelRecordsEffect())
       : Promise.resolve([]),
   ])
   const relayNames = new Map(
@@ -228,6 +278,23 @@ async function listDeployments(
       (isPlatformAdmin(user) ||
         databasePermissions(database).has("database.read"))
         ? [[database.databaseId, database] as const]
+        : []
+    )
+  )
+  // A tunnel's logs are its owner's, and anyone's who reads logs on its
+  // Relay.
+  const canReadTunnelLogs = (tunnel: { ownerId: string | null; relayId: string }) =>
+    isPlatformAdmin(user) ||
+    tunnel.ownerId === user.id ||
+    effectiveScopePermissions(grants, {
+      relayId: tunnel.relayId,
+      resourceId: tunnel.relayId,
+      resourceType: "relay",
+    }).has("instance.logs.read")
+  const readableTunnels = new Map(
+    tunnels.flatMap((tunnel) =>
+      relayNames.has(tunnel.relayId) && canReadTunnelLogs(tunnel)
+        ? [[tunnel.id, tunnel] as const]
         : []
     )
   )
@@ -268,6 +335,15 @@ async function listDeployments(
             relayIds: [],
           },
         }),
+        ...(kinds.includes("tunnel") && {
+          tunnel: {
+            instances: [...readableTunnels.values()].map((tunnel) => ({
+              id: tunnel.id,
+              relayId: tunnel.relayId,
+            })),
+            relayIds: [],
+          },
+        }),
       },
     })
   )
@@ -303,6 +379,14 @@ async function listDeployments(
           relayName,
           serverName:
             readableServers.get(record.instanceId)?.name ?? record.instanceId,
+          triggeredByName: triggeredByName(record, index),
+        }
+      }
+      if (record.kind === "tunnel") {
+        return {
+          ...record,
+          canReadLogs: readableTunnels.has(record.tunnelId),
+          relayName,
           triggeredByName: triggeredByName(record, index),
         }
       }
@@ -677,12 +761,18 @@ const deploymentLogKinds = {
     relayKind: "instance",
     scope: "instanceId",
   },
+  // Authorized as a tunnel is, by its owner or its Relay.
+  tunnel: {
+    noun: "tunnel",
+    relayKind: "tunnel",
+    scope: null,
+  },
 } as const satisfies Record<
   DeploymentKind,
   {
     noun: string
     relayKind: RelayDeploymentRead["kind"]
-    scope: "appId" | "databaseId" | "instanceId"
+    scope: "appId" | "databaseId" | "instanceId" | null
   }
 >
 
@@ -704,12 +794,16 @@ export async function getDeploymentLogHandler(
   if (!record) throw new Error("Deployment not found")
   const kind = deploymentLogKinds[record.kind]
   const instanceId = deploymentInstanceId(record)
-  await requireRelayPermission({
-    [kind.scope]: instanceId,
-    permission: "instance.logs.read",
-    relayId: record.relayId,
-    user,
-  })
+  if (kind.scope === null) {
+    await requireTunnelPermission(user, instanceId, "instance.logs.read")
+  } else {
+    await requireRelayPermission({
+      [kind.scope]: instanceId,
+      permission: "instance.logs.read",
+      relayId: record.relayId,
+      user,
+    })
+  }
   // Its page names the instance, so another's log can't pass as this one's.
   // Only after authorizing, so this says nothing of an instance the person
   // can't read.
@@ -751,6 +845,8 @@ function deploymentInstanceId(record: DeploymentRecord): string {
       return record.databaseId
     case "server":
       return record.instanceId
+    case "tunnel":
+      return record.tunnelId
   }
 }
 

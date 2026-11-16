@@ -38,7 +38,7 @@ import { provisioningStatus } from "./provisioning.js"
 // is named by the Relay, which follows its output live in memory (see
 // `apps.ts`) and saves it here once it ends.
 
-export type DeploymentLogKind = "app" | "database" | "instance"
+export type DeploymentLogKind = "app" | "database" | "instance" | "tunnel"
 
 /** The instance whose deployments a log is one of. */
 export interface DeploymentLogTarget {
@@ -50,6 +50,7 @@ const folders: Record<DeploymentLogKind, string> = {
   app: "app-deployments",
   database: "database-deployments",
   instance: "server-deployments",
+  tunnel: "tunnel-deployments",
 }
 
 const keptPerInstance = 20
