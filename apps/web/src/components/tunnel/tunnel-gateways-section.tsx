@@ -128,7 +128,7 @@ export const TunnelGatewaysSection = React.memo(function TunnelGatewaysSection({
                 <span className="type-meta text-muted-foreground">Not yet</span>
               )
             },
-            meta: dataTableColumnMeta({ hideBelow: "md", width: "8rem" }),
+            meta: dataTableColumnMeta({ hideBelow: "md", width: "10rem" }),
           }),
           columnHelper.accessor((row) => row.connects, {
             id: "connects",
