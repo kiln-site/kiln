@@ -67,7 +67,7 @@ export function DatabaseNetworkPage() {
   )
 }
 
-// The tailnets the database is connected to, keeping its address there when
+// The tunnels the database is connected to, keeping its address there when
 // its container is replaced, and its names in each.
 function DatabaseTunnels({
   database: { id, name, relayId, relayName },

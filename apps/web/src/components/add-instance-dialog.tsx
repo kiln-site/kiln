@@ -118,7 +118,7 @@ function useCreatableKinds(shown: AddableKind): ReadonlyArray<AddableKind> {
     ...accessCapabilitiesQueryOptions(),
     select: canCreateGameServers,
   })
-  // Tailnets are a platform administrator's, until tunnels have permissions
+  // Making a tunnel is a platform administrator's, until tunnels have permissions
   // of their own.
   const { data: tunnels = false } = useQuery({
     ...accessCapabilitiesQueryOptions(),

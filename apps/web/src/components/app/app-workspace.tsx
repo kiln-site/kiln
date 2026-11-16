@@ -308,7 +308,7 @@ function AppHeaderAddress({ app }: { app: App }) {
       <span className="flex min-w-0 items-center gap-1">
         <TailscaleLogo className="size-3 shrink-0 text-muted-foreground" />
         <WorkspaceCopyValueButton
-          label="tailnet name"
+          label="tunnel name"
           value={url.slice(TUNNEL_PREFIX.length)}
         />
       </span>

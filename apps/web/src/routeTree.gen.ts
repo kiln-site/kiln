@@ -82,7 +82,6 @@ import { Route as AppSettingsBillingRouteImport } from './routes/_app.settings.b
 import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.files'
 import { Route as AppSettingsNotificationsRouteImport } from './routes/_app.settings.notifications'
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
-import { Route as AppTailnetTailnetIdRouteImport } from './routes/_app.tailnet.$tailnetId'
 import { Route as AppTunnelTunnelIdRouteImport } from './routes/_app/tunnel/$tunnelId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConsoleInstanceIdRouteImport } from './routes/api.console.$instanceId'
@@ -510,11 +509,6 @@ const AppSettingsRelaysRoute = AppSettingsRelaysRouteImport.update({
   path: '/relays',
   getParentRoute: () => AppSettingsRoute,
 } as any)
-const AppTailnetTailnetIdRoute = AppTailnetTailnetIdRouteImport.update({
-  id: '/tailnet/$tailnetId',
-  path: '/tailnet/$tailnetId',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppTunnelTunnelIdRoute = AppTunnelTunnelIdRouteImport.update({
   id: '/tunnel/$tunnelId',
   path: '/tunnel/$tunnelId',
@@ -895,7 +889,6 @@ export interface FileRoutesByFullPath {
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
-  '/tailnet/$tailnetId': typeof AppTailnetTailnetIdRoute
   '/tunnel/$tunnelId': typeof AppTunnelTunnelIdRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
@@ -1021,7 +1014,6 @@ export interface FileRoutesByTo {
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
-  '/tailnet/$tailnetId': typeof AppTailnetTailnetIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/api/github/manifest': typeof ApiGithubManifestRoute
@@ -1157,7 +1149,6 @@ export interface FileRoutesById {
   '/_app/settings/files': typeof AppSettingsFilesRoute
   '/_app/settings/notifications': typeof AppSettingsNotificationsRoute
   '/_app/settings/relays': typeof AppSettingsRelaysRoute
-  '/_app/tailnet/$tailnetId': typeof AppTailnetTailnetIdRoute
   '/_app/tunnel/$tunnelId': typeof AppTunnelTunnelIdRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
@@ -1294,7 +1285,6 @@ export interface FileRouteTypes {
     | '/settings/files'
     | '/settings/notifications'
     | '/settings/relays'
-    | '/tailnet/$tailnetId'
     | '/tunnel/$tunnelId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
@@ -1420,7 +1410,6 @@ export interface FileRouteTypes {
     | '/settings/files'
     | '/settings/notifications'
     | '/settings/relays'
-    | '/tailnet/$tailnetId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/api/github/manifest'
@@ -1555,7 +1544,6 @@ export interface FileRouteTypes {
     | '/_app/settings/files'
     | '/_app/settings/notifications'
     | '/_app/settings/relays'
-    | '/_app/tailnet/$tailnetId'
     | '/_app/tunnel/$tunnelId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
@@ -2175,13 +2163,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/relays'
       preLoaderRoute: typeof AppSettingsRelaysRouteImport
       parentRoute: typeof AppSettingsRoute
-    }
-    '/_app/tailnet/$tailnetId': {
-      id: '/_app/tailnet/$tailnetId'
-      path: '/tailnet/$tailnetId'
-      fullPath: '/tailnet/$tailnetId'
-      preLoaderRoute: typeof AppTailnetTailnetIdRouteImport
-      parentRoute: typeof AppRoute
     }
     '/_app/tunnel/$tunnelId': {
       id: '/_app/tunnel/$tunnelId'
@@ -2908,7 +2889,6 @@ interface AppRouteChildren {
   AppNotificationsNotificationIdRoute: typeof AppNotificationsNotificationIdRoute
   AppRelayRelayIdRoute: typeof AppRelayRelayIdRouteWithChildren
   AppServerServerIdRoute: typeof AppServerServerIdRouteWithChildren
-  AppTailnetTailnetIdRoute: typeof AppTailnetTailnetIdRoute
   AppTunnelTunnelIdRoute: typeof AppTunnelTunnelIdRouteWithChildren
 }
 
@@ -2929,7 +2909,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppNotificationsNotificationIdRoute: AppNotificationsNotificationIdRoute,
   AppRelayRelayIdRoute: AppRelayRelayIdRouteWithChildren,
   AppServerServerIdRoute: AppServerServerIdRouteWithChildren,
-  AppTailnetTailnetIdRoute: AppTailnetTailnetIdRoute,
   AppTunnelTunnelIdRoute: AppTunnelTunnelIdRouteWithChildren,
 }
 

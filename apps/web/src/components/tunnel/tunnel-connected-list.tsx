@@ -29,10 +29,10 @@ import {
 } from "@/components/instance-picker"
 import { ServerKindIcon } from "@/components/instance-kind-icon"
 import {
-  useTailnetSave,
-  type TailnetBinding,
+  useTunnelConnection,
+  type TunnelBinding,
   type TunnelOverview,
-} from "@/components/tunnel/tailnet-data"
+} from "@/components/tunnel/tunnel-data"
 import { TunnelMemberNames } from "@/components/tunnel/tunnel-member-names"
 import {
   tunnelMemberKey,
@@ -40,32 +40,29 @@ import {
   type TunnelMemberListing,
 } from "@/components/tunnel/tunnel-members"
 
-// What a tailnet connects, through its tunnels or one of them: each game
-// server, App service and database, its address on its tunnel, and its
-// names. Connecting and disconnecting save the tailnet whole.
+// What a tunnel connects: each game server, App service and database, the
+// Relay it's on, its address on the gateway there, and its names. Connecting
+// the first thing on a Relay adds the tunnel's gateway there; the last to
+// leave takes it away.
 
 const noKeys: ReadonlySet<string> = new Set()
 
 export const TunnelConnectedList = React.memo(function TunnelConnectedList({
   canWrite,
-  relayId,
-  tailnet,
+  tunnel,
 }: {
   canWrite: boolean
-  /** One tunnel's Relay, for its own page; every tunnel's without. */
-  relayId?: string
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
 }) {
   const directory = useTunnelMemberDirectory()
   const bindings = React.useMemo(
     () =>
-      tailnet.bindings
-        .filter((binding) => !relayId || binding.relayId === relayId)
+      tunnel.bindings
         .map((binding) => ({ binding, member: directory.listing(binding) }))
         .sort((left, right) =>
           left.member.name.localeCompare(right.member.name)
         ),
-    [directory, relayId, tailnet.bindings]
+    [directory, tunnel.bindings]
   )
   const [disconnecting, setDisconnecting] =
     React.useState<TunnelMemberListing | null>(null)
@@ -77,7 +74,7 @@ export const TunnelConnectedList = React.memo(function TunnelConnectedList({
         <p className="mt-3 text-sm font-semibold">Nothing is connected</p>
         <p className="type-support mx-auto mt-1 max-w-sm text-muted-foreground">
           Connect a game server, App or database to reach it by name from
-          anywhere on {tailnet.name}.
+          anywhere on {tunnel.name}. Kiln adds a gateway on its Relay.
         </p>
       </div>
     )
@@ -91,8 +88,7 @@ export const TunnelConnectedList = React.memo(function TunnelConnectedList({
             binding={binding}
             canWrite={canWrite}
             member={member}
-            showRelay={!relayId}
-            tailnet={tailnet}
+            tunnel={tunnel}
             onDisconnect={setDisconnecting}
           />
         ))}
@@ -100,7 +96,7 @@ export const TunnelConnectedList = React.memo(function TunnelConnectedList({
       {disconnecting ? (
         <DisconnectDialog
           member={disconnecting}
-          tailnet={tailnet}
+          tunnel={tunnel}
           onClose={() => setDisconnecting(null)}
         />
       ) : null}
@@ -112,15 +108,13 @@ const ConnectedRow = React.memo(function ConnectedRow({
   binding,
   canWrite,
   member,
-  showRelay,
-  tailnet,
+  tunnel,
   onDisconnect,
 }: {
-  binding: TailnetBinding
+  binding: TunnelBinding
   canWrite: boolean
   member: TunnelMemberListing
-  showRelay: boolean
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
   onDisconnect: (member: TunnelMemberListing) => void
 }) {
   return (
@@ -132,7 +126,7 @@ const ConnectedRow = React.memo(function ConnectedRow({
           meta={
             <>
               {binding.address || "Address pending"}
-              {showRelay ? ` · ${member.relayName}` : ""}
+              {` · ${member.relayName}`}
               {binding.enabled ? "" : " · Paused"}
             </>
           }
@@ -148,7 +142,7 @@ const ConnectedRow = React.memo(function ConnectedRow({
         canWrite={canWrite}
         memberId={binding.memberId}
         memberName={member.name}
-        tailnet={tailnet}
+        tunnel={tunnel}
       />
       {canWrite ? (
         <Tooltip>
@@ -220,23 +214,29 @@ function MemberLink({
 
 function DisconnectDialog({
   member,
-  tailnet,
+  tunnel,
   onClose,
 }: {
   member: TunnelMemberListing
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
   onClose: () => void
 }) {
-  const save = useTailnetSave()
+  const connection = useTunnelConnection()
+  const last = !tunnel.bindings.some(
+    (binding) =>
+      binding.relayId === member.relayId && binding.memberId !== member.memberId
+  )
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Disconnect {member.name}?</DialogTitle>
           <DialogDescription>
-            {member.name} leaves {tailnet.name}, and its names there are
-            forgotten. Its tunnel on {member.relayName} stays for what else it
-            connects.
+            {member.name} leaves {tunnel.name}, and its names there are
+            forgotten.{" "}
+            {last
+              ? `Nothing else on ${member.relayName} connects to it, so its gateway there is removed too.`
+              : `Its gateway on ${member.relayName} stays for what else connects through it.`}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -246,26 +246,15 @@ function DisconnectDialog({
           <Button
             type="button"
             variant="destructive"
-            disabled={save.isPending}
+            disabled={connection.isPending}
             onClick={() =>
-              save.mutate(
-                {
-                  change: {
-                    bindings: tailnet.bindings.filter(
-                      (binding) =>
-                        binding.relayId !== member.relayId ||
-                        binding.memberId !== member.memberId
-                    ),
-                  },
-                  doing: `Disconnecting ${member.name}`,
-                  done: `${member.name} is disconnected`,
-                  tailnet,
-                },
+              connection.mutate(
+                { connected: false, member, tunnel },
                 { onSuccess: onClose }
               )
             }
           >
-            {save.isPending ? (
+            {connection.isPending ? (
               <LoaderCircle className="animate-spin" />
             ) : (
               <Unplug />
@@ -279,77 +268,62 @@ function DisconnectDialog({
 }
 
 /**
- * Connects a game server or database through the tailnet's tunnel on its
- * Relay; it's named as it connects. An App's services connect from its
- * Network page, which knows them.
+ * Connects a game server or database to the tunnel, through its gateway on
+ * the thing's Relay, which is added if the tunnel has none there. It's named
+ * as it connects. An App's services connect from its Network page, which
+ * knows them.
  */
 export const TunnelConnectPicker = React.memo(function TunnelConnectPicker({
-  relayId,
-  tailnet,
+  tunnel,
 }: {
-  /** One tunnel's Relay; every Relay the tailnet has a tunnel on without. */
-  relayId?: string
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
 }) {
   const [open, setOpen] = React.useState(false)
   const directory = useTunnelMemberDirectory()
-  const save = useTailnetSave()
+  const connection = useTunnelConnection()
+  const gatewayRelays = React.useMemo(
+    () => new Set(tunnel.gateways.map(({ relayId }) => relayId)),
+    [tunnel.gateways]
+  )
   const options = React.useMemo(() => {
-    const relays = new Set(
-      tailnet.gateways
-        .map((deployment) => deployment.relayId)
-        .filter((candidate) => !relayId || candidate === relayId)
-    )
     const connected = new Set(
-      tailnet.bindings.map((binding) =>
+      tunnel.bindings.map((binding) =>
         tunnelMemberKey(binding.relayId, binding.memberId)
       )
     )
     return [...directory.joinable.entries()]
-      .filter(
-        ([key, member]) => relays.has(member.relayId) && !connected.has(key)
-      )
+      .filter(([key]) => !connected.has(key))
       .map(([key, member]): InstancePickerItem => ({
         identity: member.identity,
         key,
-        meta: `${member.relayName} · ${member.meta}`,
+        meta: `${member.relayName} · ${member.meta}${
+          gatewayRelays.has(member.relayId) ? "" : " · adds a gateway"
+        }`,
         name: member.name,
         searchText: `${member.identity.id} ${member.relayName}`,
       }))
       .sort((left, right) => left.name.localeCompare(right.name))
-  }, [directory.joinable, relayId, tailnet.bindings, tailnet.gateways])
+  }, [directory.joinable, gatewayRelays, tunnel.bindings])
   const connect = React.useCallback(
     (option: InstancePickerItem) => {
       const member = directory.joinable.get(option.key)
       if (!member) return
       setOpen(false)
-      save.mutate({
-        change: {
-          bindings: [
-            ...tailnet.bindings,
-            {
-              enabled: true,
-              memberId: member.memberId,
-              relayId: member.relayId,
-            },
-          ],
-        },
-        doing: `Connecting ${member.name}`,
-        done: `${member.name} is connected`,
-        tailnet,
-      })
+      connection.mutate({ connected: true, member, tunnel })
     },
-    [directory.joinable, save, tailnet]
+    [connection, directory.joinable, tunnel]
   )
+  // A gateway it adds logs in with a key made with the tunnel's login.
+  const needsLogin = tunnel.integration === null
   return (
     <DrawerPopover open={open} onOpenChange={setOpen}>
       <DrawerPopoverTrigger asChild>
         <Button
           type="button"
           size="sm"
-          disabled={tailnet.gateways.length === 0 || save.isPending}
+          disabled={connection.isPending || tunnel.cleanup !== null}
         >
-          {save.isPending ? (
+          {connection.isPending ? (
             <LoaderCircle className="animate-spin" />
           ) : (
             <Plus />
@@ -367,13 +341,16 @@ export const TunnelConnectPicker = React.memo(function TunnelConnectPicker({
           emptyMessage={
             directory.pending
               ? "Loading…"
-              : "Everything on its Relays is already connected."
+              : "Every game server and database is already connected."
           }
           items={options}
           selectedKeys={noKeys}
           onSelect={connect}
         />
         <p className="border-t border-border/70 px-3.5 py-2 text-xs text-muted-foreground">
+          {needsLogin
+            ? `Something on a Relay ${tunnel.name} has no gateway on needs its Tailscale login first, on its Info page. `
+            : ""}
           An App's services connect from the App's Network page.
         </p>
       </DrawerPopoverContent>

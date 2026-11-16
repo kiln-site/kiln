@@ -2,7 +2,6 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
-  ChevronDown,
   CircleAlert,
   EllipsisVertical,
   LoaderCircle,
@@ -12,12 +11,12 @@ import {
   Square,
 } from "lucide-react"
 
+import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
@@ -48,19 +47,18 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
 import { TunnelKindIcon } from "@/components/instance-kind-icon"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { StatusIndicator } from "@/components/status-indicator"
-import { TailnetCard, tailnetMeta } from "@/components/tunnel/tailnet-card"
 import {
+  tunnelPermissionsOf,
   tunnelStatus,
-  useTailnets,
+  useTunnels,
   type TunnelOverview,
-  type GatewayOverview,
-} from "@/components/tunnel/tailnet-data"
-import type { IdentityStatusPresentation } from "@/components/identity-name"
+} from "@/components/tunnel/tunnel-data"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -72,69 +70,55 @@ import {
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { ServerAction } from "@/lib/instance-power-state"
+import type { AccessPermission } from "@/lib/permissions"
 import { accessCapabilitiesQueryOptions, queryKeys } from "@/lib/query-options"
 import { heldPowerActions } from "@/lib/use-instance-power"
-import { performGatewayAction } from "@/server/tunnel-instances"
+import { performTunnelAction } from "@/server/tunnel-instances"
 
 // Infrastructure → Tunnels: every tunnel the viewer sees, one row each, as
-// the other kinds' tables are, with the tailnet it joins. Each tailnet's own
-// page is a link away, from its column or the Tailnets menu.
+// the other kinds' tables are. A tunnel's gateways, one on each Relay
+// something it connects is on, are on its own page.
 
 interface TunnelRow {
   connected: number
+  domains: ReadonlyArray<string>
+  gateways: number
+  /** The Relays its gateways are on, by name. */
+  gatewayRelays: string
   id: string
-  ipv4: string | null
   name: string
-  /** What the viewer may do with it, as every kind's pages check. */
-  permissions: ReadonlyArray<string>
-  relayId: string
-  relayName: string
-  status: IdentityStatusPresentation
-  /** Its tailnet is being deleted, and it with it. */
+  /** What the viewer may do with it, as its pages check. */
+  permissions: ReadonlyArray<AccessPermission>
+  /** It's being deleted. */
   removing: boolean
+  /** Any of its gateways runs. */
   running: boolean
-  tailnet: Pick<TunnelOverview, "domains" | "id" | "name"> & {
-    meta: string
-  }
+  status: IdentityStatusPresentation
 }
 
-function tunnelRows(tailnets: ReadonlyArray<TunnelOverview>): Array<TunnelRow> {
-  return tailnets.flatMap((tailnet) => {
-    const meta = tailnetMeta(tailnet)
-    return tailnet.gateways.map((tunnel: GatewayOverview): TunnelRow => ({
-      connected: tailnet.bindings.filter(
-        (binding) => binding.relayId === tunnel.relayId
-      ).length,
-      id: tunnel.id,
-      ipv4: tunnel.status.ipv4Address,
-      name: tunnel.name,
-      permissions: tailnet.access.gateways[tunnel.id] ?? [],
-      relayId: tunnel.relayId,
-      relayName: tunnel.relayName,
-      removing: tailnet.cleanup !== null,
-      running: tunnel.observedState === "running",
-      status: tailnet.cleanup
-        ? { label: "Deleting", pulse: true, tone: "warning" }
-        : tunnelStatus(tunnel),
-      tailnet: {
-        domains: tailnet.domains,
-        id: tailnet.id,
-        meta,
-        name: tailnet.name,
-      },
-    }))
-  })
+function tunnelRows(tunnels: ReadonlyArray<TunnelOverview>): Array<TunnelRow> {
+  return tunnels.map((tunnel) => ({
+    connected: tunnel.bindings.length,
+    domains: tunnel.domains,
+    gatewayRelays: tunnel.gateways.map(({ relayName }) => relayName).join(", "),
+    gateways: tunnel.gateways.length,
+    id: tunnel.id,
+    name: tunnel.name,
+    permissions: tunnelPermissionsOf(tunnel),
+    removing: tunnel.cleanup !== null,
+    running: tunnel.gateways.some(
+      ({ observedState }) => observedState === "running"
+    ),
+    status: tunnelStatus(tunnel),
+  }))
 }
 
 const columnHelper = createDataTableColumnHelper<TunnelRow>()
 const searchFields = [
   (row: TunnelRow) => row.name,
   (row: TunnelRow) => row.id,
-  (row: TunnelRow) => row.relayName,
-  (row: TunnelRow) => row.relayId,
-  (row: TunnelRow) => row.tailnet.name,
-  (row: TunnelRow) => row.tailnet.domains.join(" "),
-  (row: TunnelRow) => row.ipv4,
+  (row: TunnelRow) => row.domains.join(" "),
+  (row: TunnelRow) => row.gatewayRelays,
   (row: TunnelRow) => row.status.label,
 ] as const
 
@@ -143,8 +127,8 @@ export const TunnelsPage = React.memo(function TunnelsPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  // Tailnets are a platform administrator's until tunnels have permissions
-  // of their own.
+  // Making a tunnel is a platform administrator's until tunnels have
+  // permissions of their own.
   const { data: canCreate = false } = useQuery({
     ...accessCapabilitiesQueryOptions(),
     select: (capabilities) => capabilities.isPlatformAdmin,
@@ -152,7 +136,7 @@ export const TunnelsPage = React.memo(function TunnelsPage({
   const [addStore] = React.useState(() =>
     createAddInstanceDialogStore("tunnel")
   )
-  const { data, error, isPending, refetch } = useTailnets()
+  const { data, error, isPending, refetch } = useTunnels()
   const rows = React.useMemo(() => tunnelRows(data.tunnels), [data.tunnels])
   const source = React.useMemo(
     (): DataTableSource<TunnelRow> => ({
@@ -176,9 +160,9 @@ export const TunnelsPage = React.memo(function TunnelsPage({
         >
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            Not shown while away:{" "}
+            Gateways not shown while away:{" "}
             {data.unavailableRelays.map(({ name }) => name).join(", ")}. A
-            tailnet can't change until they're back.
+            tunnel with a gateway there can't change until they're back.
           </span>
         </p>
       ) : null}
@@ -187,7 +171,6 @@ export const TunnelsPage = React.memo(function TunnelsPage({
           <TunnelToolbar
             canCreate={canCreate}
             searchStore={searchStore}
-            tailnets={data.tunnels}
             onCreate={addStore.open}
           />
         }
@@ -208,12 +191,10 @@ const TunnelToolbar = React.memo(function TunnelToolbar({
   canCreate,
   onCreate,
   searchStore,
-  tailnets,
 }: {
   canCreate: boolean
   onCreate: () => void
   searchStore: DataTableSearchStore
-  tailnets: ReadonlyArray<TunnelOverview>
 }) {
   return (
     <DataTableToolbar
@@ -224,7 +205,6 @@ const TunnelToolbar = React.memo(function TunnelToolbar({
           </Button>
         ) : null
       }
-      controls={<TailnetsMenu tailnets={tailnets} />}
       leading={<TunnelSyncButton />}
       search={{
         ariaLabel: "Search tunnels",
@@ -235,41 +215,6 @@ const TunnelToolbar = React.memo(function TunnelToolbar({
         store: searchStore,
       }}
     />
-  )
-})
-
-// Every tailnet's page, a tailnet with no tunnels among them.
-const TailnetsMenu = React.memo(function TailnetsMenu({
-  tailnets,
-}: {
-  tailnets: ReadonlyArray<TunnelOverview>
-}) {
-  if (tailnets.length === 0) return null
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline">
-          Tailnets
-          <ChevronDown className="text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-64">
-        <DropdownMenuLabel className="type-technical-label text-muted-foreground">
-          Tailnets
-        </DropdownMenuLabel>
-        {tailnets.map((tailnet) => (
-          <DropdownMenuItem key={tailnet.id} asChild>
-            <Link
-              to="/tailnet/$tailnetId"
-              params={{ tailnetId: tailnet.id }}
-              preload="intent"
-            >
-              <TailnetCard meta={tailnetMeta(tailnet)} name={tailnet.name} />
-            </Link>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 })
 
@@ -326,12 +271,8 @@ const TunnelTable = React.memo(function TunnelTable({
             >
               <InstanceCard
                 className="min-w-0 flex-1"
-                instance={{
-                  id: tunnel.id,
-                  kind: "tunnel",
-                  relayId: tunnel.relayId,
-                }}
-                meta={tunnel.id}
+                instance={{ id: tunnel.id, kind: "tunnel", relayId: "" }}
+                meta={`Tailscale · ${tunnel.id}`}
                 metaClassName="font-mono"
                 name={tunnel.name}
                 nameClassName="transition-colors group-hover/tunnel-link:text-primary-ink"
@@ -345,42 +286,52 @@ const TunnelTable = React.memo(function TunnelTable({
           width: { base: "minmax(0,1fr)", md: "minmax(0,1.3fr)" },
         }),
       }),
-      columnHelper.accessor((tunnel) => tunnel.tailnet.name, {
-        id: "tailnet",
-        header: "Net",
+      columnHelper.accessor((tunnel) => tunnel.domains.join(" "), {
+        id: "tlds",
+        header: "TLDs",
         sortFn: "text",
         cell: ({ row }) => (
-          <Link
-            to="/tailnet/$tailnetId"
-            params={{ tailnetId: row.original.tailnet.id }}
-            preload="intent"
-            className="relative z-10 flex min-w-0 rounded-md outline-none hover:text-primary-ink focus-visible:ring-2 focus-visible:ring-ring/40"
-          >
-            <TailnetCard
-              meta={row.original.tailnet.meta}
-              name={row.original.tailnet.name}
-            />
-          </Link>
+          <span className="flex min-w-0 flex-wrap gap-1">
+            {row.original.domains.map((domain) => (
+              <Badge key={domain} variant="outline" className="font-mono">
+                .{domain}
+              </Badge>
+            ))}
+          </span>
         ),
         meta: dataTableColumnMeta(
-          { width: { base: dataTablePhoneDetailWidth, md: "minmax(0,1fr)" } },
+          { width: { base: dataTablePhoneDetailWidth, md: "minmax(0,0.8fr)" } },
           {
             cellClassName: dataTablePhoneDetailCellClassName,
             headerClassName: dataTablePhoneDetailCellClassName,
           }
         ),
       }),
-      columnHelper.accessor((tunnel) => tunnel.ipv4 ?? "", {
-        id: "address",
-        header: "IP",
-        sortFn: "text",
+      columnHelper.accessor((tunnel) => tunnel.gateways, {
+        id: "gateways",
+        header: "Gateways",
+        enableSorting: false,
         cell: ({ row }) => (
-          <DataTableTextCell
-            className="font-mono"
-            value={row.original.ipv4 ?? "—"}
-          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="min-w-0">
+                <DataTableTextCell
+                  value={
+                    row.original.gateways === 0
+                      ? "None yet"
+                      : String(row.original.gateways)
+                  }
+                />
+              </span>
+            </TooltipTrigger>
+            {row.original.gatewayRelays ? (
+              <TooltipContent side="bottom">
+                On {row.original.gatewayRelays}
+              </TooltipContent>
+            ) : null}
+          </Tooltip>
         ),
-        meta: dataTableColumnMeta({ hideBelow: "lg", width: "9rem" }),
+        meta: dataTableColumnMeta({ hideBelow: "lg", width: "7rem" }),
       }),
       columnHelper.accessor((tunnel) => tunnel.connected, {
         id: "connected",
@@ -390,16 +341,6 @@ const TunnelTable = React.memo(function TunnelTable({
           <DataTableTextCell value={String(row.original.connected)} />
         ),
         meta: dataTableColumnMeta({ hideBelow: "lg", width: "7rem" }),
-      }),
-      columnHelper.accessor((tunnel) => tunnel.relayName, {
-        id: "relay",
-        header: "Relay",
-        sortFn: "text",
-        cell: ({ row }) => <DataTableTextCell value={row.original.relayName} />,
-        meta: dataTableColumnMeta({
-          hideBelow: "xl",
-          width: "minmax(8rem,0.8fr)",
-        }),
       }),
       columnHelper.display({
         id: "actions",
@@ -437,8 +378,8 @@ const TunnelTable = React.memo(function TunnelTable({
           description={
             <span className="block max-w-sm">
               {searchActive
-                ? "Try a tunnel, tailnet, TLD, Relay, or Tailscale IP."
-                : "A tunnel joins a Relay to your Tailscale tailnet, so what runs there answers to names like survival.kiln."}
+                ? "Try a tunnel, TLD, or Relay."
+                : "A tunnel puts game servers, Apps and databases on your Tailscale tailnet, so they answer to names like survival.kiln."}
             </span>
           }
           icon={<TunnelKindIcon className="size-6" />}
@@ -459,9 +400,19 @@ const TunnelActions = React.memo(function TunnelActions({
   const queryClient = useQueryClient()
   const action = useMutation({
     mutationFn: (next: ServerAction) =>
-      performGatewayAction({ data: { action: next, gatewayId: tunnel.id } }),
+      performTunnelAction({ data: { action: next, tunnelId: tunnel.id } }),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.tunnels }),
+    onSuccess: (outcomes) => {
+      const failed = outcomes.filter(({ error }) => error !== null)
+      if (failed.length > 0) {
+        showToast({
+          description: failed.map(({ error }) => error).join("; "),
+          message: "Some gateways' power didn't change",
+          type: "error",
+        })
+      }
+    },
     onError: (cause) =>
       showToast({
         description: cause.message,
@@ -470,8 +421,8 @@ const TunnelActions = React.memo(function TunnelActions({
       }),
   })
   const power = heldPowerActions(
-    tunnel.permissions as Parameters<typeof heldPowerActions>[0],
-    !tunnel.removing
+    tunnel.permissions,
+    !tunnel.removing && tunnel.gateways > 0
   )
   const canToggle = tunnel.running ? power.stop : power.start
   return (
@@ -504,26 +455,16 @@ const TunnelActions = React.memo(function TunnelActions({
               onSelect={() => action.mutate(tunnel.running ? "stop" : "start")}
             >
               {tunnel.running ? <Square /> : <Play />}
-              {tunnel.running ? "Stop" : "Start"}
+              {tunnel.running ? "Stop all" : "Start all"}
             </DropdownMenuItem>
           ) : null}
           {power.restart ? (
             <DropdownMenuItem onSelect={() => action.mutate("restart")}>
-              <RotateCw /> Restart
+              <RotateCw /> Restart all
             </DropdownMenuItem>
           ) : null}
           {canToggle || power.restart ? <DropdownMenuSeparator /> : null}
-          <DropdownMenuItem asChild>
-            <Link
-              to="/tailnet/$tailnetId"
-              params={{ tailnetId: tunnel.tailnet.id }}
-            >
-              <TunnelKindIcon /> Open {tunnel.tailnet.name}
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Tunnel ID" value={tunnel.id} />
-          <CopyIdentifierMenuItem label="Relay ID" value={tunnel.relayId} />
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>

@@ -27,42 +27,42 @@ import {
 import {
   namesOf,
   useMakeTunnelNamePrimary,
-  useTailnetAliases,
-  useTailnetSave,
+  useTunnelAliases,
+  useTunnelSave,
   wholeName,
   type TunnelMemberName,
   type TunnelOverview,
-} from "@/components/tunnel/tailnet-data"
+} from "@/components/tunnel/tunnel-data"
 import { useCopyFeedback } from "@/components/workspace-header"
 import { notALoginField } from "@/lib/not-a-login-field"
 
-// A connected member's names in one tailnet: the one it was given as it
+// A connected member's names in one tunnel: the one it was given as it
 // connected, which can be renamed but not removed, and its aliases, at any
-// depth under any of the tailnet's TLDs.
+// depth under any of the tunnel's TLDs.
 
 export const TunnelMemberNames = React.memo(function TunnelMemberNames({
   canWrite,
   memberId,
   memberName,
-  tailnet,
+  tunnel,
 }: {
   canWrite: boolean
   memberId: string
   /** What the member is called, for the dialogs' titles. */
   memberName: string
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
 }) {
   // A database has no primary address; a game server's or an App's can be
   // any of its names.
   const canStar = !memberId.startsWith("database:")
   const makePrimary = useMakeTunnelNamePrimary()
   const names = React.useMemo(
-    () => namesOf(tailnet, memberId),
-    [memberId, tailnet]
+    () => namesOf(tunnel, memberId),
+    [memberId, tunnel]
   )
   const [dialog, setDialog] = React.useState<"add" | "rename" | null>(null)
   const generated = names.find((name) => name.generated)
-  const { remove } = useTailnetAliases()
+  const { remove } = useTunnelAliases()
   const close = React.useCallback(() => setDialog(null), [])
 
   return (
@@ -144,7 +144,7 @@ export const TunnelMemberNames = React.memo(function TunnelMemberNames({
         <RenameDialog
           generated={generated}
           memberName={memberName}
-          tailnet={tailnet}
+          tunnel={tunnel}
           onClose={close}
         />
       ) : null}
@@ -152,7 +152,7 @@ export const TunnelMemberNames = React.memo(function TunnelMemberNames({
         <AddAliasDialog
           memberId={memberId}
           memberName={memberName}
-          tailnet={tailnet}
+          tunnel={tunnel}
           onClose={close}
         />
       ) : null}
@@ -241,18 +241,18 @@ function ChipButton({
 function RenameDialog({
   generated,
   memberName,
-  tailnet,
+  tunnel,
   onClose,
 }: {
   generated: TunnelMemberName
   memberName: string
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
   onClose: () => void
 }) {
   const [label, setLabel] = React.useState(generated.label)
-  const save = useTailnetSave()
+  const save = useTunnelSave()
   const next = label.trim().toLowerCase()
-  const domain = tailnet.domains[0] ?? generated.domain
+  const domain = tunnel.domains[0] ?? generated.domain
   const canSave = next.length > 0 && next !== generated.label && !save.isPending
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -269,7 +269,7 @@ function RenameDialog({
                 },
                 doing: `Renaming ${memberName} to ${next}.${domain}`,
                 done: `${memberName} is ${next}.${domain}`,
-                tailnet,
+                tunnel,
               },
               { onSuccess: onClose }
             )
@@ -278,7 +278,7 @@ function RenameDialog({
           <DialogHeader>
             <DialogTitle>Rename {memberName}</DialogTitle>
             <DialogDescription>
-              Its name in {tailnet.name}, under .{domain}. Its aliases stay.
+              Its name in {tunnel.name}, under .{domain}. Its aliases stay.
             </DialogDescription>
           </DialogHeader>
           <LabelField domain={domain} label={label} onChange={setLabel} />
@@ -309,17 +309,17 @@ function RenameDialog({
 function AddAliasDialog({
   memberId,
   memberName,
-  tailnet,
+  tunnel,
   onClose,
 }: {
   memberId: string
   memberName: string
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
   onClose: () => void
 }) {
   const [label, setLabel] = React.useState("")
-  const [domain, setDomain] = React.useState(tailnet.domains[0] ?? "")
-  const { add } = useTailnetAliases()
+  const [domain, setDomain] = React.useState(tunnel.domains[0] ?? "")
+  const { add } = useTunnelAliases()
   const next = label.trim().toLowerCase().replace(/\.+$/u, "")
   const canSave = next.length > 0 && domain.length > 0 && !add.isPending
   return (
@@ -331,7 +331,7 @@ function AddAliasDialog({
             event.preventDefault()
             if (!canSave) return
             add.mutate(
-              { domain, label: next, memberId, tunnelId: tailnet.id },
+              { domain, label: next, memberId, tunnelId: tunnel.id },
               { onSuccess: onClose }
             )
           }}
@@ -339,13 +339,13 @@ function AddAliasDialog({
           <DialogHeader>
             <DialogTitle>Give {memberName} another name</DialogTitle>
             <DialogDescription>
-              Any depth under any of {tailnet.name}'s TLDs, like paper.26.3.
-              {tailnet.domains[0]}. Every name works.
+              Any depth under any of {tunnel.name}'s TLDs, like paper.26.3.
+              {tunnel.domains[0]}. Every name works.
             </DialogDescription>
           </DialogHeader>
           <LabelField
             domain={domain}
-            domains={tailnet.domains}
+            domains={tunnel.domains}
             label={label}
             placeholder="paper.26.3"
             onChange={setLabel}

@@ -332,7 +332,7 @@ function AppDeployButton({ app }: { app: App }) {
   )
 }
 
-// Each service connects to tailnets on its own, keeping its address there
+// Each service connects to tunnels on its own, keeping its address there
 // across deploys, with names of its own in each.
 function AppTunnels({ app, compose }: { app: App; compose: boolean }) {
   const services = appServices(app)
@@ -343,7 +343,7 @@ function AppTunnels({ app, compose }: { app: App; compose: boolean }) {
       <InfoCard>
         <InfoCardHeader icon={<Network />} title="Tunnels" />
         <p className="px-4 py-4 text-xs text-muted-foreground">
-          Deploy this app once so its services can connect to tailnets.
+          Deploy this app once so its services can connect to tunnels.
         </p>
       </InfoCard>
     )

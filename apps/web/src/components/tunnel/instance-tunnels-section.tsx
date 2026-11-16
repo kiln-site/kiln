@@ -17,7 +17,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Skeleton } from "@workspace/ui/components/skeleton"
@@ -31,29 +30,26 @@ import { InfoCard, InfoCardHeader } from "@/components/info-card"
 import { TunnelKindIcon } from "@/components/instance-kind-icon"
 import { StatusIndicator } from "@/components/status-indicator"
 import {
-  tunnelStatus,
-  useTailnetSave,
-  useTailnets,
+  gatewayStatus,
+  useTunnelConnection,
+  useTunnels,
+  type TunnelMemberRef,
   type TunnelOverview,
-} from "@/components/tunnel/tailnet-data"
+} from "@/components/tunnel/tunnel-data"
 import { TunnelMemberNames } from "@/components/tunnel/tunnel-member-names"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 /**
  * A game server, a database, or an App's service, as it connects to
- * tailnets: through each one's tunnel on its own Relay. Named by its member
+ * tunnels: through each one's gateway on its own Relay. Named by its member
  * ID (`instanceTailscaleMemberId`, `appTailscaleMemberId`,
  * `databaseTailscaleMemberId`).
  */
-export interface TunnelMember {
-  memberId: string
-  name: string
-  relayId: string
-  relayName: string
-}
+export type TunnelMember = TunnelMemberRef
 
-// An instance's Network tab: each tailnet it's connected to, with its
-// names there, and connecting to others with a tunnel on its Relay.
+// An instance's Network tab: each tunnel it's connected to, with its names
+// there, and connecting to others. Connecting adds the tunnel's gateway on
+// its Relay when there's none yet.
 export function InstanceTunnelsSection({
   member,
   title = "Tunnels",
@@ -61,28 +57,28 @@ export function InstanceTunnelsSection({
   member: TunnelMember
   title?: string
 }) {
-  const { data, error, isPending } = useTailnets()
+  const { data, error, isPending } = useTunnels()
   const { data: isPlatformAdmin = false } = useQuery({
     ...accessCapabilitiesQueryOptions(),
     select: (capabilities) => capabilities.isPlatformAdmin,
   })
-  const tailnets = React.useMemo(
-    () => data.tunnels.filter((tailnet) => !tailnet.cleanup),
+  const tunnels = React.useMemo(
+    () => data.tunnels.filter((tunnel) => !tunnel.cleanup),
     [data.tunnels]
   )
   const connected = React.useMemo(
     () =>
-      tailnets.filter((tailnet) =>
-        tailnet.bindings.some(
+      tunnels.filter((tunnel) =>
+        tunnel.bindings.some(
           (binding) =>
             binding.memberId === member.memberId &&
             binding.relayId === member.relayId
         )
       ),
-    [member.memberId, member.relayId, tailnets]
+    [member.memberId, member.relayId, tunnels]
   )
-  // Someone who sees no tailnet and can't make one has nothing here.
-  if (!isPending && tailnets.length === 0 && !isPlatformAdmin) return null
+  // Someone who sees no tunnel and can't make one has nothing here.
+  if (!isPending && tunnels.length === 0 && !isPlatformAdmin) return null
 
   return (
     <InfoCard>
@@ -94,7 +90,7 @@ export function InstanceTunnelsSection({
             canAdd={isPlatformAdmin}
             connected={connected}
             member={member}
-            tailnets={tailnets}
+            tunnels={tunnels}
           />
         }
       />
@@ -112,17 +108,13 @@ export function InstanceTunnelsSection({
         </p>
       ) : connected.length === 0 ? (
         <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-          Not connected to a tailnet. Connect it to reach it by name from
-          anywhere on one.
+          Not connected to a tunnel. Connect it to reach it by name from
+          anywhere on your tailnet.
         </p>
       ) : (
         <ul className="divide-y divide-border/65">
-          {connected.map((tailnet) => (
-            <ConnectedTailnet
-              key={tailnet.id}
-              member={member}
-              tailnet={tailnet}
-            />
+          {connected.map((tunnel) => (
+            <ConnectedTunnel key={tunnel.id} member={member} tunnel={tunnel} />
           ))}
         </ul>
       )}
@@ -130,35 +122,35 @@ export function InstanceTunnelsSection({
   )
 }
 
-const ConnectedTailnet = React.memo(function ConnectedTailnet({
+const ConnectedTunnel = React.memo(function ConnectedTunnel({
   member,
-  tailnet,
+  tunnel,
 }: {
   member: TunnelMember
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
 }) {
   const [disconnecting, setDisconnecting] = React.useState(false)
-  const tunnel = tailnet.gateways.find(
-    (deployment) => deployment.relayId === member.relayId
+  const gateway = tunnel.gateways.find(
+    ({ relayId }) => relayId === member.relayId
   )
-  const binding = tailnet.bindings.find(
+  const binding = tunnel.bindings.find(
     (candidate) =>
       candidate.memberId === member.memberId &&
       candidate.relayId === member.relayId
   )
-  const canWrite = tailnet.access.manage
+  const canWrite = tunnel.access.manage
   return (
     <li className="grid gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto] sm:items-center">
       <div className="min-w-0">
         <Link
-          to="/tailnet/$tailnetId"
-          params={{ tailnetId: tailnet.id }}
+          to="/tunnel/$tunnelId/connected"
+          params={{ tunnelId: tunnel.id }}
           className="block truncate text-xs font-semibold hover:text-primary-ink"
         >
-          {tailnet.name}
+          {tunnel.name}
         </Link>
         <p className="type-meta mt-0.5 flex min-w-0 items-center gap-1.5 text-muted-foreground">
-          {tunnel ? <StatusIndicator status={tunnelStatus(tunnel)} /> : null}
+          {gateway ? <StatusIndicator status={gatewayStatus(gateway)} /> : null}
           <span className="truncate font-mono">
             {binding?.address || "Address pending"}
           </span>
@@ -168,7 +160,7 @@ const ConnectedTailnet = React.memo(function ConnectedTailnet({
         canWrite={canWrite}
         memberId={member.memberId}
         memberName={member.name}
-        tailnet={tailnet}
+        tunnel={tunnel}
       />
       {canWrite ? (
         <Tooltip>
@@ -178,7 +170,7 @@ const ConnectedTailnet = React.memo(function ConnectedTailnet({
               size="icon-sm"
               variant="ghost"
               className="justify-self-end text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
-              aria-label={`Disconnect from ${tailnet.name}`}
+              aria-label={`Disconnect from ${tunnel.name}`}
               onClick={() => setDisconnecting(true)}
             >
               <Unplug />
@@ -190,7 +182,7 @@ const ConnectedTailnet = React.memo(function ConnectedTailnet({
       {disconnecting ? (
         <DisconnectDialog
           member={member}
-          tailnet={tailnet}
+          tunnel={tunnel}
           onClose={() => setDisconnecting(false)}
         />
       ) : null}
@@ -200,22 +192,29 @@ const ConnectedTailnet = React.memo(function ConnectedTailnet({
 
 function DisconnectDialog({
   member,
-  tailnet,
+  tunnel,
   onClose,
 }: {
   member: TunnelMember
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
   onClose: () => void
 }) {
-  const save = useTailnetSave()
+  const connection = useTunnelConnection()
+  const last = !tunnel.bindings.some(
+    (binding) =>
+      binding.relayId === member.relayId && binding.memberId !== member.memberId
+  )
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Disconnect from {tailnet.name}?</DialogTitle>
+          <DialogTitle>Disconnect from {tunnel.name}?</DialogTitle>
           <DialogDescription>
-            {member.name} leaves {tailnet.name}, and its names there are
+            {member.name} leaves {tunnel.name}, and its names there are
             forgotten.
+            {last
+              ? ` Nothing else on ${member.relayName} connects to it, so its gateway there is removed too.`
+              : ""}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -225,26 +224,15 @@ function DisconnectDialog({
           <Button
             type="button"
             variant="destructive"
-            disabled={save.isPending}
+            disabled={connection.isPending}
             onClick={() =>
-              save.mutate(
-                {
-                  change: {
-                    bindings: tailnet.bindings.filter(
-                      (binding) =>
-                        binding.memberId !== member.memberId ||
-                        binding.relayId !== member.relayId
-                    ),
-                  },
-                  doing: `Disconnecting ${member.name}`,
-                  done: `${member.name} is disconnected`,
-                  tailnet,
-                },
+              connection.mutate(
+                { connected: false, member, tunnel },
                 { onSuccess: onClose }
               )
             }
           >
-            {save.isPending ? (
+            {connection.isPending ? (
               <LoaderCircle className="animate-spin" />
             ) : (
               <Unplug />
@@ -258,29 +246,25 @@ function DisconnectDialog({
 }
 
 /**
- * The tailnets it can connect to: those with a tunnel on its Relay. One
- * without points to adding a tunnel there.
+ * The tunnels it can connect to: every one the viewer manages. One without
+ * a gateway on its Relay adds one, which needs the tunnel's Tailscale login.
  */
 function ConnectMenu({
   canAdd,
   connected,
   member,
-  tailnets,
+  tunnels,
 }: {
-  /** Whether they may add a tailnet's first tunnel. */
+  /** Whether they may make a tunnel. */
   canAdd: boolean
   connected: ReadonlyArray<TunnelOverview>
   member: TunnelMember
-  tailnets: ReadonlyArray<TunnelOverview>
+  tunnels: ReadonlyArray<TunnelOverview>
 }) {
-  const save = useTailnetSave()
-  const managed = tailnets.filter(
-    (tailnet) => tailnet.access.manage && !connected.includes(tailnet)
+  const connection = useTunnelConnection()
+  const managed = tunnels.filter(
+    (tunnel) => tunnel.access.manage && !connected.includes(tunnel)
   )
-  const reachable = managed.filter((tailnet) =>
-    tailnet.gateways.some(({ relayId }) => relayId === member.relayId)
-  )
-  const unreachable = managed.filter((tailnet) => !reachable.includes(tailnet))
   if (managed.length === 0 && (!canAdd || connected.length > 0)) return null
   return (
     <DropdownMenu>
@@ -289,9 +273,9 @@ function ConnectMenu({
           type="button"
           size="sm"
           variant="outline"
-          disabled={save.isPending}
+          disabled={connection.isPending}
         >
-          {save.isPending ? (
+          {connection.isPending ? (
             <LoaderCircle className="animate-spin" />
           ) : (
             <Plus />
@@ -299,58 +283,40 @@ function ConnectMenu({
           Connect
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        {reachable.length > 0 ? (
-          <DropdownMenuLabel>
-            Through its tunnel on {member.relayName}
-          </DropdownMenuLabel>
+      <DropdownMenuContent align="end" className="w-72">
+        {managed.length > 0 ? (
+          <DropdownMenuLabel>Connect to a tunnel</DropdownMenuLabel>
         ) : null}
-        {reachable.map((tailnet) => (
-          <DropdownMenuItem
-            key={tailnet.id}
-            onSelect={() =>
-              save.mutate({
-                change: {
-                  bindings: [
-                    ...tailnet.bindings,
-                    {
-                      enabled: true,
-                      memberId: member.memberId,
-                      relayId: member.relayId,
-                    },
-                  ],
-                },
-                doing: `Connecting ${member.name}`,
-                done: `${member.name} is connected`,
-                tailnet,
-              })
-            }
-          >
-            <TunnelKindIcon className="size-3.5" />
-            <span className="min-w-0 flex-1 truncate">{tailnet.name}</span>
-            <span className="type-meta font-mono text-muted-foreground">
-              .{tailnet.domains[0]}
-            </span>
-          </DropdownMenuItem>
-        ))}
-        {reachable.length > 0 && unreachable.length > 0 ? (
-          <DropdownMenuSeparator />
-        ) : null}
-        {unreachable.length > 0 ? (
-          <DropdownMenuLabel>
-            No tunnel on {member.relayName} yet
-          </DropdownMenuLabel>
-        ) : null}
-        {unreachable.map((tailnet) => (
-          <DropdownMenuItem key={tailnet.id} asChild>
-            <Link to="/tailnet/$tailnetId" params={{ tailnetId: tailnet.id }}>
-              <Plus className="size-3.5" />
-              <span className="min-w-0 flex-1 truncate">
-                Add one to {tailnet.name}
+        {managed.map((tunnel) => {
+          const gateway = tunnel.gateways.some(
+            ({ relayId }) => relayId === member.relayId
+          )
+          const needsLogin = !gateway && tunnel.integration === null
+          return (
+            <DropdownMenuItem
+              key={tunnel.id}
+              disabled={needsLogin}
+              onSelect={() =>
+                connection.mutate({ connected: true, member, tunnel })
+              }
+            >
+              <TunnelKindIcon className="size-3.5" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{tunnel.name}</span>
+                <span className="type-meta block text-muted-foreground">
+                  {gateway
+                    ? `Through its gateway on ${member.relayName}`
+                    : needsLogin
+                      ? "Needs its Tailscale login first, on its Info page"
+                      : `Adds a gateway on ${member.relayName}`}
+                </span>
               </span>
-            </Link>
-          </DropdownMenuItem>
-        ))}
+              <span className="type-meta font-mono text-muted-foreground">
+                .{tunnel.domains[0]}
+              </span>
+            </DropdownMenuItem>
+          )
+        })}
         {managed.length === 0 ? (
           <DropdownMenuItem asChild>
             <Link to="/infra/tunnels">

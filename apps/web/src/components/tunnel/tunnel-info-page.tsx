@@ -1,8 +1,9 @@
 import * as React from "react"
-import { Link, useNavigate } from "@tanstack/react-router"
-import { Globe2, LoaderCircle, Network, Trash2 } from "lucide-react"
+import { useMutation } from "@tanstack/react-query"
+import { useNavigate } from "@tanstack/react-router"
+import { CircleAlert, LoaderCircle, Network, Trash2 } from "lucide-react"
+import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -12,204 +13,239 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
+import { showToast } from "@workspace/ui/components/sonner"
 
-import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
-import { RelayKindIcon, TunnelKindIcon } from "@/components/instance-kind-icon"
-import { StatusIndicator } from "@/components/status-indicator"
+import { TailscaleLogo } from "@/components/brand-logos"
 import {
-  tunnelStatus,
-  useTailnetSave,
-  type TunnelView,
-} from "@/components/tunnel/tailnet-data"
+  InfoDangerAction,
+  InfoDangerZone,
+  InfoPage,
+  InfoRailGroup,
+  InfoRailLink,
+  InfoRailRow,
+  InfoSection,
+} from "@/components/info-page"
+import { TunnelKindIcon } from "@/components/instance-kind-icon"
+import {
+  InstanceProfile,
+  InstanceProfileBrick,
+} from "@/components/instance-profile"
+import { RenameButton } from "@/components/rename-dialog"
+import { TunnelGatewaysSection } from "@/components/tunnel/tunnel-gateways-section"
+import {
+  tunnelSaveInput,
+  useSetTunnels,
+  type TunnelOverview,
+} from "@/components/tunnel/tunnel-data"
+import { TunnelTldsSection } from "@/components/tunnel/tunnel-settings"
 import { useTunnelWorkspace } from "@/components/tunnel/tunnel-workspace-context"
+import { removeTunnel, saveTunnel } from "@/server/tunnels"
 
-// What a tunnel is: its state and both containers, how its tailnet reaches
-// it, where it runs, and deleting it.
+// What a tunnel is, on the Info page every instance has: its profile, its
+// gateways, its TLDs with its Tailscale login behind Configure, and deleting
+// it, with a rail summing up what it connects.
 export function TunnelInfoPage() {
-  const view = useTunnelWorkspace()
-  const { tailnet, tunnel } = view
-  const connected = tailnet.bindings.filter(
-    (binding) => binding.relayId === tunnel.relayId
-  ).length
+  const { tunnel } = useTunnelWorkspace()
+  const canManage = tunnel.access.manage && !tunnel.cleanup
   return (
-    <main className="min-h-0 flex-1 overflow-y-auto bg-background/55 p-4 sm:p-6">
-      <div className="mx-auto max-w-4xl space-y-4">
-        <InfoCard>
-          <InfoCardHeader
-            icon={<TunnelKindIcon />}
-            title="Tunnel · Tailscale"
-            action={<StatusIndicator status={tunnelStatus(tunnel)} />}
-          />
-          <dl className="grid gap-px bg-border/60 sm:grid-cols-2">
-            <Fact label="Tailnet">
-              <Link
-                to="/tailnet/$tailnetId"
-                params={{ tailnetId: tailnet.id }}
-                className="font-medium hover:text-primary-ink"
-              >
-                {tailnet.name}
-              </Link>
-            </Fact>
-            <Fact label="Relay">
-              <Link
-                to="/relay/$relayId"
-                params={{ relayId: tunnel.relayId }}
-                className="inline-flex items-center gap-1.5 font-medium hover:text-primary-ink"
-              >
-                <RelayKindIcon className="size-3.5" />
-                {tunnel.relayName}
-              </Link>
-            </Fact>
-            <Fact label="Tailscale">
-              {tunnel.components.tailscaleRunning ? "Running" : "Stopped"}
-            </Fact>
-            <Fact label="CoreDNS">
-              {tunnel.components.coreDnsRunning ? "Running" : "Stopped"}
-            </Fact>
-            <Fact label="Connected">{connected}</Fact>
-            <Fact label="TLDs">
-              <span className="flex flex-wrap gap-1">
-                {tunnel.domains.map((domain) => (
-                  <Badge key={domain} variant="outline" className="font-mono">
-                    .{domain}
-                  </Badge>
-                ))}
-              </span>
-            </Fact>
-          </dl>
-          {tunnel.status.message ? (
-            <p className="border-t px-4 py-3 text-xs text-muted-foreground">
-              {tunnel.status.message}
-            </p>
-          ) : null}
-        </InfoCard>
-
-        <InfoCard>
-          <InfoCardHeader icon={<Globe2 />} title="On the tailnet" />
-          <CopyMetaRow
-            copyable={tunnel.status.ipv4Address !== null}
-            display={tunnel.status.ipv4Address ?? "Not yet"}
-            label="Tailscale IPv4"
-            value={tunnel.status.ipv4Address ?? ""}
-          />
-          {tunnel.status.ipv6Address ? (
-            <CopyMetaRow
-              label="Tailscale IPv6"
-              value={tunnel.status.ipv6Address}
-            />
-          ) : null}
-          <CopyMetaRow label="Machine name" value={tunnel.hostname} />
-          <CopyMetaRow
-            icon={Network}
-            label="Subnet it routes"
-            value={tunnel.subnet}
-          />
-        </InfoCard>
-
-        {tailnet.access.manage && !tailnet.cleanup ? (
-          <DeleteTunnel view={view} />
-        ) : null}
-      </div>
-    </main>
+    <InfoPage rail={<TunnelInfoRail tunnel={tunnel} />}>
+      {tunnel.cleanup ? <TunnelCleanupState tunnel={tunnel} /> : null}
+      <InstanceProfile
+        brick={
+          <InstanceProfileBrick icon={<TailscaleLogo />}>
+            {tunnel.brickSource ?? "Tailscale"}
+          </InstanceProfileBrick>
+        }
+        favorite={null}
+        icon={
+          <span className="relative grid size-16 shrink-0 place-items-center rounded-xl border border-border/70 bg-background/60 text-muted-foreground [&_svg]:size-7">
+            <TunnelKindIcon />
+          </span>
+        }
+        id={tunnel.id}
+        idLabel="tunnel ID"
+        name={tunnel.name}
+        rename={canManage ? <TunnelRenameButton tunnel={tunnel} /> : null}
+      />
+      <TunnelGatewaysSection tunnel={tunnel} />
+      <TunnelTldsSection canManage={canManage} tunnel={tunnel} />
+      {canManage ? (
+        <InfoDangerZone>
+          <InfoDangerAction
+            dialog={(onOpenChange) => (
+              <DeleteTunnelDialog tunnel={tunnel} onOpenChange={onOpenChange} />
+            )}
+          >
+            Delete tunnel
+          </InfoDangerAction>
+        </InfoDangerZone>
+      ) : null}
+    </InfoPage>
   )
 }
 
-function Fact({
-  children,
-  label,
+// What it connects and where, at a glance.
+const TunnelInfoRail = React.memo(function TunnelInfoRail({
+  tunnel,
 }: {
-  children: React.ReactNode
-  label: string
+  tunnel: TunnelOverview
 }) {
+  const connected = tunnel.bindings.length
+  const gateways = tunnel.gateways.length
   return (
-    <div className="min-w-0 bg-background/45 px-4 py-3">
-      <dt className="type-technical-label text-muted-foreground">{label}</dt>
-      <dd className="mt-1 min-w-0 truncate text-sm">{children}</dd>
-    </div>
+    <InfoRailGroup card>
+      <InfoRailLink
+        to="/tunnel/$tunnelId/connected"
+        params={{ tunnelId: tunnel.id }}
+        leading={<Network />}
+        detail={connected}
+      >
+        Connected
+      </InfoRailLink>
+      <InfoRailRow leading={<TunnelKindIcon />} detail={gateways}>
+        {gateways === 1 ? "Gateway" : "Gateways"}
+      </InfoRailRow>
+    </InfoRailGroup>
+  )
+})
+
+// Hearth keeps the name, so renaming doesn't wait on its gateways.
+function TunnelRenameButton({ tunnel }: { tunnel: TunnelOverview }) {
+  const setTunnels = useSetTunnels()
+  const rename = React.useCallback(
+    async (name: string) =>
+      setTunnels(await saveTunnel({ data: tunnelSaveInput(tunnel, { name }) })),
+    [setTunnels, tunnel]
+  )
+  return (
+    <RenameButton
+      compact
+      id={tunnel.id}
+      maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
+      name={tunnel.name}
+      noun="tunnel"
+      rename={rename}
+    />
   )
 }
 
-function DeleteTunnel({ view }: { view: TunnelView }) {
-  const { tailnet, tunnel } = view
-  const [open, setOpen] = React.useState(false)
-  const save = useTailnetSave()
+function DeleteTunnelDialog({
+  onOpenChange,
+  tunnel,
+}: {
+  onOpenChange: (open: boolean) => void
+  tunnel: TunnelOverview
+}) {
+  const setTunnels = useSetTunnels()
   const navigate = useNavigate()
-  const connected = tailnet.bindings.filter(
-    (binding) => binding.relayId === tunnel.relayId
-  ).length
+  const remove = useMutation({
+    mutationFn: () => removeTunnel({ data: { id: tunnel.id } }),
+    onSuccess: (next) => {
+      setTunnels(next)
+      showToast({
+        message: `Deleting ${tunnel.name} in the background`,
+        type: "success",
+      })
+      onOpenChange(false)
+      void navigate({ replace: true, to: "/infra/tunnels" })
+    },
+  })
+  const count = tunnel.gateways.length
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/30 px-4 py-3">
-      <div className="min-w-0">
-        <p className="text-sm font-semibold">Delete this tunnel</p>
-        <p className="type-meta mt-0.5 text-muted-foreground">
-          Tailscale and CoreDNS leave {tunnel.relayName}. {tailnet.name} keeps
-          its other tunnels.
-        </p>
-      </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="destructive"
-        onClick={() => setOpen(true)}
-      >
-        <Trash2 />
-        Delete tunnel
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete {tunnel.name}?</DialogTitle>
-            <DialogDescription>
-              {connected === 0
-                ? `Tailscale and CoreDNS leave ${tunnel.relayName}, and the machine leaves ${tailnet.name}.`
-                : `${connected} connected ${connected === 1 ? "instance is" : "instances are"} disconnected and ${connected === 1 ? "its" : "their"} names in ${tailnet.name} forgotten. Tailscale and CoreDNS leave ${tunnel.relayName}.`}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={save.isPending}
-              onClick={() =>
-                save.mutate(
-                  {
-                    change: {
-                      bindings: tailnet.bindings.filter(
-                        (binding) => binding.relayId !== tunnel.relayId
-                      ),
-                    },
-                    doing: `Deleting its tunnel on ${tunnel.relayName}`,
-                    done: `Its tunnel on ${tunnel.relayName} is deleted`,
-                    tailnet,
-                  },
-                  {
-                    onSuccess: () =>
-                      void navigate({
-                        params: { tailnetId: tailnet.id },
-                        replace: true,
-                        to: "/tailnet/$tailnetId",
-                      }),
-                  }
-                )
-              }
-            >
-              {save.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Trash2 />
-              )}
-              Delete tunnel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+    <Dialog
+      open
+      onOpenChange={(open) => !remove.isPending && onOpenChange(open)}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete {tunnel.name}?</DialogTitle>
+          <DialogDescription>
+            {count === 0
+              ? "Its Tailscale login and split DNS are forgotten."
+              : `Its ${count === 1 ? "gateway is" : `${count} gateways are`} removed, everything it connects is disconnected, and its Tailscale login and split DNS are forgotten. A Relay that's away finishes when it's back.`}
+          </DialogDescription>
+        </DialogHeader>
+        {remove.error ? (
+          <p className="text-xs text-destructive" role="alert">
+            {remove.error.message}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={remove.isPending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Trash2 />
+            )}
+            Delete tunnel
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const retryFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+})
+
+/** A tunnel being deleted: how far it got, and when it tries again. */
+function TunnelCleanupState({
+  tunnel,
+}: {
+  tunnel: Pick<TunnelOverview, "cleanup" | "name">
+}) {
+  const cleanup = tunnel.cleanup
+  if (!cleanup) return null
+  const nextAttemptAt = cleanup.nextAttemptAt
+    ? retryFormatter.format(new Date(cleanup.nextAttemptAt))
+    : null
+  return (
+    <InfoSection
+      icon={<LoaderCircle className="animate-spin text-primary-ink" />}
+      title={`Deleting ${tunnel.name}`}
+      content
+    >
+      <p className="type-support text-muted-foreground">
+        {cleanup.pendingRelays}{" "}
+        {cleanup.pendingRelays === 1 ? "Relay" : "Relays"} to go. It carries on
+        by itself.
+      </p>
+      {cleanup.lastError ? (
+        <div
+          className="mt-3 flex items-start gap-2.5 border border-destructive/30 bg-destructive/5 px-3 py-2.5 light:bg-destructive/10"
+          role="status"
+        >
+          <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div className="min-w-0">
+            <p className="text-xs break-words text-destructive">
+              {cleanup.lastError}
+            </p>
+            <p className="type-meta mt-1 text-muted-foreground">
+              {nextAttemptAt
+                ? `Tries again ${nextAttemptAt}`
+                : "Tries again shortly"}
+              {cleanup.attempts > 0
+                ? ` · ${cleanup.attempts} ${cleanup.attempts === 1 ? "attempt" : "attempts"}`
+                : ""}
+            </p>
+          </div>
+        </div>
+      ) : null}
+    </InfoSection>
   )
 }

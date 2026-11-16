@@ -360,7 +360,7 @@ export const tunnelDestinations = [
   {
     icon: SlidersHorizontal,
     id: "info",
-    keywords: ["details", "tailscale", "status"],
+    keywords: ["details", "settings", "tlds", "login", "tailscale", "gateways"],
     label: "Info",
     permission: "instance.read",
     to: "/tunnel/$tunnelId/info",
@@ -392,8 +392,8 @@ export const tunnelDestinations = [
 ] as const satisfies ReadonlyArray<TunnelDestination>
 
 /**
- * A tunnel's pages the viewer may open, from what they may do with it,
- * which its tailnet's listing says (`getTunnels`).
+ * A tunnel's pages the viewer may open, from what they may do with it
+ * (`tunnelPermissionsOf`).
  */
 export function accessibleDestinationsForTunnel(
   permissions: ReadonlyArray<AccessPermission>

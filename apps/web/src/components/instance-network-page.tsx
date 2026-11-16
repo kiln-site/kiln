@@ -1833,7 +1833,7 @@ function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "The network change failed."
 }
 
-// The tailnets the game server is connected to, and its names in each.
+// The tunnels the game server is connected to, and its names in each.
 function GameServerTunnels({
   instance: { id, name, relayId, relayName },
 }: {

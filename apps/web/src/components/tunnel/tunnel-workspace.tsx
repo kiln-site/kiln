@@ -1,12 +1,11 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 import { RefreshCw } from "lucide-react"
 
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { TunnelKindIcon } from "@/components/instance-kind-icon"
-import { recoverPromise } from "@/effect/promise"
 import { RedeployDialog } from "@/components/redeploy-dialog"
 import {
   ResourceWorkspaceBoundary,
@@ -17,30 +16,36 @@ import {
 } from "@/components/resource-workspace"
 import {
   selectTunnel,
+  tunnelPermissionsOf,
+  type TunnelOverview,
   type TunnelsResult,
-  type TunnelView,
-} from "@/components/tunnel/tailnet-data"
-import { TunnelWorkspaceContext } from "@/components/tunnel/tunnel-workspace-context"
+} from "@/components/tunnel/tunnel-data"
+import {
+  TunnelWorkspaceContext,
+  type TunnelWorkspaceValue,
+} from "@/components/tunnel/tunnel-workspace-context"
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import {
-  WorkspaceCopyValueButton,
   WorkspaceHeader,
   WorkspaceIdCopyButton,
   WorkspaceIdentity,
   WorkspaceMetaSeparator,
 } from "@/components/workspace-header"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
+import { recoverPromise } from "@/effect/promise"
+import type { ServerAction } from "@/lib/instance-power-state"
 import { tunnelDestinations } from "@/lib/navigation-destinations"
 import { queryKeys, tunnelsQueryOptions } from "@/lib/query-options"
-import type { ServerAction } from "@/lib/instance-power-state"
 import { heldPowerActions } from "@/lib/use-instance-power"
 import {
-  performGatewayAction,
-  redeployGateway,
+  performTunnelAction,
+  redeployTunnel,
+  type GatewayOutcome,
 } from "@/server/tunnel-instances"
 
-// A tunnel's pages: Info, Connected, Logs and Terminal, in the frame every
-// instance's pages share, with its power and deploying it again.
+// A tunnel's pages: Info, Connected, Logs and Terminal, in the
+// frame every instance's pages share. Its power and deploying it again act
+// on every gateway it has.
 
 export const TunnelWorkspaceShell = React.memo(function TunnelWorkspaceShell({
   children,
@@ -66,9 +71,14 @@ export const TunnelWorkspaceShell = React.memo(function TunnelWorkspaceShell({
 
 function useTunnelWorkspaceQuery(
   tunnelId: string | undefined
-): ResourceWorkspaceQuery<TunnelView> {
+): ResourceWorkspaceQuery<TunnelWorkspaceValue> {
   const select = React.useCallback(
-    (result: TunnelsResult) => selectTunnel(result, tunnelId),
+    (result: TunnelsResult): TunnelWorkspaceValue | null => {
+      const tunnel = selectTunnel(result, tunnelId)
+      return tunnel
+        ? { permissions: tunnelPermissionsOf(tunnel), tunnel }
+        : null
+    },
     [tunnelId]
   )
   const query = useQuery({ ...tunnelsQueryOptions(), select })
@@ -82,11 +92,11 @@ function useTunnelWorkspaceQuery(
 const TunnelWorkspaceHeader = React.memo(function TunnelWorkspaceHeader({
   workspace,
 }: {
-  workspace: ResourceWorkspaceQuery<TunnelView>
+  workspace: ResourceWorkspaceQuery<TunnelWorkspaceValue>
 }) {
   const [error, setError] = React.useState<string | null>(null)
   if (workspace.status !== "found") return <WorkspaceHeader identity={null} />
-  const { tailnet, tunnel } = workspace.value
+  const { tunnel } = workspace.value
   return (
     <WorkspaceHeader
       identity={
@@ -106,36 +116,19 @@ const TunnelWorkspaceHeader = React.memo(function TunnelWorkspaceHeader({
             <span>Tunnel · Tailscale</span>
             <WorkspaceMetaSeparator />
           </span>
-          {/* Its TLDs, login and names are its tailnet's, set there. */}
-          <span className="inline-flex min-w-0 shrink items-center gap-1.5">
-            <Link
-              className="truncate transition-colors hover:text-foreground"
-              params={{ tailnetId: tailnet.id }}
-              title={`${tailnet.name}'s TLDs, login and names`}
-              to="/tailnet/$tailnetId"
-            >
-              {tailnet.name}
-            </Link>
-            <WorkspaceMetaSeparator />
-          </span>
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
             <WorkspaceIdCopyButton id={tunnel.id} label="tunnel ID" />
             <WorkspaceMetaSeparator />
           </span>
-          {tunnel.status.ipv4Address ? (
-            <WorkspaceCopyValueButton
-              label="Tailscale IP"
-              value={tunnel.status.ipv4Address}
-            />
-          ) : (
-            <span>No Tailscale IP yet</span>
-          )}
+          <span className="min-w-0 truncate font-mono">
+            {tunnel.domains.map((domain) => `.${domain}`).join(" ")}
+          </span>
         </WorkspaceIdentity>
       }
       actions={
         <TunnelPowerControls
           key={tunnel.id}
-          view={workspace.value}
+          tunnel={tunnel}
           onError={setError}
         />
       }
@@ -143,29 +136,71 @@ const TunnelWorkspaceHeader = React.memo(function TunnelWorkspaceHeader({
   )
 })
 
+// Its gateways as one: running while any runs, stopped once all are.
+function tunnelObservedState(tunnel: TunnelOverview) {
+  const states = tunnel.gateways.map(({ observedState }) => observedState)
+  if (states.length === 0) return "stopped" as const
+  if (states.includes("running")) return "running" as const
+  if (states.every((state) => state === "stopped")) return "stopped" as const
+  return states[0]!
+}
+
+/** What a change to every gateway left undone, by Relay. */
+function failedOutcomes(
+  tunnel: TunnelOverview,
+  outcomes: ReadonlyArray<GatewayOutcome>
+): string | null {
+  const failed = outcomes.filter(({ error }) => error !== null)
+  if (failed.length === 0) return null
+  return failed
+    .map(({ error, relayId }) => {
+      const relay =
+        tunnel.gateways.find((gateway) => gateway.relayId === relayId)
+          ?.relayName ?? relayId
+      return `${relay}: ${error}`
+    })
+    .join("; ")
+}
+
 function TunnelPowerControls({
   onError,
-  view,
+  tunnel,
 }: {
   onError: (error: string | null) => void
-  view: TunnelView
+  tunnel: TunnelOverview
 }) {
-  const { permissions, tailnet, tunnel } = view
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  // A tailnet being deleted takes its tunnels with it.
-  const available = !tailnet.cleanup
+  const permissions = React.useMemo(() => tunnelPermissionsOf(tunnel), [tunnel])
+  // A tunnel being deleted takes its gateways with it, and one without any
+  // has nothing to power.
+  const available = !tunnel.cleanup && tunnel.gateways.length > 0
   const powerPermissions = React.useMemo(
     () => heldPowerActions(permissions, available),
     [available, permissions]
   )
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: queryKeys.tunnels })
+  const reportOutcomes = (
+    outcomes: ReadonlyArray<GatewayOutcome>,
+    failure: string,
+    success?: string
+  ) => {
+    const failed = failedOutcomes(tunnel, outcomes)
+    if (failed) {
+      onError(failed)
+      showToast({ description: failed, message: failure, type: "error" })
+    } else if (success) {
+      showToast({ message: success, type: "success" })
+    }
+  }
   const power = useMutation({
     mutationFn: (action: ServerAction) =>
-      performGatewayAction({ data: { action, gatewayId: tunnel.id } }),
+      performTunnelAction({ data: { action, tunnelId: tunnel.id } }),
     onMutate: () => onError(null),
     onSettled: refresh,
+    onSuccess: (outcomes) =>
+      reportOutcomes(outcomes, "Some gateways' power didn't change"),
     onError: (cause) => {
       onError(cause.message)
       showToast({
@@ -178,10 +213,10 @@ function TunnelPowerControls({
   const canDeploy = available && permissions.includes("instance.deploy")
   const [redeployOpen, setRedeployOpen] = React.useState(false)
   const redeploy = useMutation({
-    mutationFn: () => redeployGateway({ data: { gatewayId: tunnel.id } }),
+    mutationFn: () => redeployTunnel({ data: { tunnelId: tunnel.id } }),
     onMutate: () => {
       setRedeployOpen(false)
-      // Follow the deployment as it happens, as every kind's is.
+      // Follow the deployments as they happen, as every kind's are.
       if (permissions.includes("instance.logs.read")) {
         void navigate({
           params: { tunnelId: tunnel.id },
@@ -191,8 +226,12 @@ function TunnelPowerControls({
       }
     },
     onSettled: refresh,
-    onSuccess: () =>
-      showToast({ message: `${tunnel.name} redeployed`, type: "success" }),
+    onSuccess: (outcomes) =>
+      reportOutcomes(
+        outcomes,
+        "Some gateways weren't redeployed",
+        `${tunnel.name} redeployed`
+      ),
     onError: (cause) =>
       showToast({
         description: cause.message,
@@ -210,16 +249,17 @@ function TunnelPowerControls({
     },
     [power]
   )
+  const count = tunnel.gateways.length
   return (
     <>
       <WorkspacePowerControls
         action={power.isPending ? power.variables : null}
-        killWarning="This immediately stops Tailscale and CoreDNS. Names on the tailnet stop answering until it's started again."
+        killWarning="This immediately stops Tailscale and CoreDNS on every gateway. Names on the tunnel stop answering until it's started again."
         menuAction={
           canDeploy
             ? {
                 description:
-                  "Pull Tailscale and CoreDNS again and recreate both",
+                  "Pull Tailscale and CoreDNS again and recreate every gateway",
                 disabled: redeploy.isPending,
                 icon: <RefreshCw className="size-3.5" />,
                 label: "Redeploy",
@@ -230,7 +270,10 @@ function TunnelPowerControls({
         noun="tunnel"
         powerPermissions={powerPermissions}
         relayConnected
-        target={{ name: tunnel.name, observedState: tunnel.observedState }}
+        target={{
+          name: tunnel.name,
+          observedState: tunnelObservedState(tunnel),
+        }}
         onAction={onAction}
       />
       {canDeploy ? (
@@ -242,9 +285,10 @@ function TunnelPowerControls({
           onConfirm={() => redeploy.mutate()}
           onOpenChange={setRedeployOpen}
         >
-          Pulls Tailscale and CoreDNS again and recreates both containers. It
-          keeps its Tailscale identity, its subnet and every address, and names
-          on {tailnet.name} stop answering through it for a moment.
+          Pulls Tailscale and CoreDNS again and recreates{" "}
+          {count === 1 ? "its gateway" : `its ${count} gateways, one by one`}.
+          Each keeps its Tailscale identity, its subnet and every address, and
+          names stop answering through it for a moment.
         </RedeployDialog>
       ) : null}
     </>
