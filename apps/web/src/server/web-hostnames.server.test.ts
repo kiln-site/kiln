@@ -648,7 +648,6 @@ describeMysql("web route hostnames", () => {
           assert.deepInclude(relay.routes[0], { id: appId, kind: "app" })
           assert.deepInclude(relay.routes[0]?.routes[0], {
             hostname,
-            primary: true,
             service: "app",
             targetPort: 3000,
           })

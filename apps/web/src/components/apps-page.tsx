@@ -625,13 +625,12 @@ const AppLinkCell = React.memo(function AppLinkCell({
 }) {
   const selectLink = React.useCallback(
     (routes: Awaited<ReturnType<typeof getRelayWebRoutes>>) => {
+      const own = (routes ?? [])
+        .filter(({ owner }) => owner.kind === "app" && owner.id === appId)
+        .map((candidate) => ({ ...candidate, redirect: candidate.redirectTo }))
       const route = primaryWebRoute(
-        (routes ?? [])
-          .filter(({ owner }) => owner.kind === "app" && owner.id === appId)
-          .map((candidate) => ({
-            ...candidate,
-            redirect: candidate.redirectTo,
-          }))
+        own,
+        own.find((candidate) => candidate.primary)?.id
       )
       return route ? `${route.hostname}${route.path ?? ""}` : null
     },

@@ -133,7 +133,6 @@ export function WebRouteDialog({
       id: route?.id,
       name,
       path: path.trim() || null,
-      primary: route?.primary ?? false,
       redirect:
         mode === "redirect"
           ? { permanent, preservePath, to: normalizeUrl(redirectTo) }

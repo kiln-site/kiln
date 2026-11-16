@@ -31,7 +31,6 @@ const route: RelayStoredWebRoute = {
   instanceId: "a".repeat(12),
   name: "Shop",
   path: null,
-  primary: true,
   redirect: null,
   stripPrefix: false,
   targetPort: 8080,

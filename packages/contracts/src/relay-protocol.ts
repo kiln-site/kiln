@@ -243,6 +243,8 @@ export const relayControlOperations = [
   "instance.network.ports.write",
   "instance.network.routes.read",
   "instance.network.routes.write",
+  "instance.network.primaries.carried",
+  "instance.network.primaries.forget",
   "instance.network.databases.remove",
   "hearth.terminal.output",
   "sftp.authorization.resolve",
@@ -398,6 +400,7 @@ export function relayControlOperationChanges(
     case "instance.console.history":
     case "instance.deployment.read":
     case "instance.network.routes.read":
+    case "instance.network.primaries.carried":
     case "terminal.attach":
     case "terminal.heartbeat":
     case "terminal.detach":
@@ -488,6 +491,7 @@ export function relayControlOperationChanges(
     case "instance.network.ports.release":
     case "instance.network.ports.write":
     case "instance.network.routes.write":
+    case "instance.network.primaries.forget":
     case "instance.network.databases.remove":
     case "resource.freeze":
     case "resource.unfreeze":

@@ -526,6 +526,7 @@ export function controlRequestLocks(
     case "instance.logs.share":
     case "instance.deployment.read":
     case "instance.network.routes.read":
+    case "instance.network.primaries.carried":
     // Port leases are their own reservation, with their own lock.
     case "instance.network.ports.reserve":
     case "instance.network.ports.release":
@@ -832,6 +833,9 @@ export function controlRequestLocks(
         ...instanceLifecycleLocks(id),
         exclusive(laneKeys.routes),
       ])
+    // The carried primary routes Hearth has taken, beside the routes.
+    case "instance.network.primaries.forget":
+      return [exclusive(laneKeys.routes)]
     // An instance's web routes, whatever kind's they are: held with its
     // lifecycle, and with every route on the Relay, which they mustn't
     // collide with.

@@ -309,9 +309,10 @@ function AppHeaderAddress({ app }: { app: App }) {
 }
 
 function selectPrimaryUrl(state: {
+  primaryRouteId: string | null
   routes: ReadonlyArray<RelayInstanceWebRoute>
 }): string | null {
-  const route = primaryWebRoute(state.routes)
+  const route = primaryWebRoute(state.routes, state.primaryRouteId)
   return route ? webRouteUrl(route) : null
 }
 

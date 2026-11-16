@@ -78,7 +78,7 @@ import {
   webRoutesQueryOptions,
 } from "@/lib/query-options"
 import { deployApp, updateAppConfig, updateAppNetwork } from "@/server/apps"
-import { updateWebRoutes } from "@/server/domains"
+import { updatePrimaryWebRoute, updateWebRoutes } from "@/server/domains"
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
 export function AppNetworkPage() {
@@ -193,6 +193,18 @@ function AppWebRoutes({
     },
     [app.id, app.relayId, dnsResource, queryClient, services]
   )
+  const makePrimary = React.useCallback(
+    async (routeId: string) => {
+      const next = await updatePrimaryWebRoute({
+        data: { appId: app.id, relayId: app.relayId, routeId },
+      })
+      queryClient.setQueryData(
+        queryKeys.relay.webRoutes(app.relayId, app.id),
+        next
+      )
+    },
+    [app.id, app.relayId, queryClient]
+  )
 
   // The ports its running services listen on that could be its website's:
   // a name nothing serves yet is offered to them.
@@ -221,6 +233,7 @@ function AppWebRoutes({
       dnsResource={dnsResource}
       error={state.error}
       kind="app"
+      primaryRouteId={state.data?.primaryRouteId}
       routes={state.data?.routes}
       services={services}
       status={state.data ? appWebRouteStatus(state.data) : null}
@@ -230,6 +243,7 @@ function AppWebRoutes({
         ) : null
       }
       targets={targets}
+      onMakePrimary={makePrimary}
       onSave={save}
     />
   )

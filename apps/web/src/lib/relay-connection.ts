@@ -2462,6 +2462,24 @@ class RelayConnection {
           )
         )
       )
+      forkAppEffect(
+        "primaryAddresses.adoptOnConnect",
+        Effect.tryPromise({
+          try: async () => {
+            const { adoptCarriedPrimaryRoutes } =
+              await import("@/lib/primary-addresses.server")
+            await adoptCarriedPrimaryRoutes(this.#relay.id)
+          },
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "Taking the Relay's primary routes after it connected failed",
+              { cause, relayId: this.#relay.id }
+            )
+          )
+        )
+      )
       // Until the Relay has its Apps' database connections: tried now, and
       // again while it fails or the Relay is paused.
       this.#connectionsFiber?.interruptUnsafe()

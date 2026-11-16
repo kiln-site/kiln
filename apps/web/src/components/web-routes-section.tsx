@@ -56,7 +56,7 @@ import {
   defineDataTable,
 } from "@/lib/data-table"
 import type { DataTableSource } from "@/lib/data-table-source"
-import { forkPromise } from "@/effect/promise"
+import { ensuringPromise, forkPromise } from "@/effect/promise"
 import type { ResourceWebHostname } from "@/server/domains"
 
 const AdoptRecordDialog = React.lazy(async () => ({
@@ -101,18 +101,22 @@ export function WebRoutesSection({
   dnsResource,
   error,
   kind,
+  primaryRouteId,
   routes,
   services,
   status,
   statusAction,
   targets = noTargets,
   onSave,
+  onMakePrimary,
 }: {
   canWrite: boolean
   // Whose DNS records the domains' badges read.
   dnsResource: WebHostnameResourceRef
   error: Error | null
   kind: "app" | "server"
+  // The route its instance's primary address names, if one does.
+  primaryRouteId?: string | null
   routes:
     | ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>
     | undefined
@@ -130,6 +134,8 @@ export function WebRoutesSection({
     routes: Array<WebRouteRow>,
     proxy?: WebRouteProxyChange
   ) => Promise<unknown>
+  // Makes a route its App's primary address; a game server has none.
+  onMakePrimary?: (routeId: string) => Promise<unknown>
 }) {
   const [editing, setEditing] = React.useState<
     | { hostname?: string; mode: "add" }
@@ -154,15 +160,14 @@ export function WebRoutesSection({
       proxy?: WebRouteProxyChange
       routes: Array<WebRouteRow>
     }) => {
-      const next = withPrimary(routes)
       // The checks every route list gets; an app's also names services.
       const parsed = relayInstanceWebRouteInputsSchema.safeParse(
-        next.map(({ service: _service, ...route }) => route)
+        routes.map(({ service: _service, ...route }) => route)
       )
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? "Routes are invalid")
       }
-      await onSave(next, proxy)
+      await onSave(routes, proxy)
     },
     // Which names its routes serve decides what each can do: one that
     // nothing serves any more can be deleted.
@@ -190,7 +195,11 @@ export function WebRoutesSection({
       ),
     [save.isPending, save.variables, saved]
   )
-  const primary = displayed ? primaryWebRoute(displayed) : undefined
+  // While a choice of primary saves, the table shows it.
+  const [choosing, setChoosing] = React.useState<string | null>(null)
+  const primary = displayed
+    ? primaryWebRoute(displayed, choosing ?? primaryRouteId)
+    : undefined
   // The routes, then each name held that none of them serves.
   const rows = React.useMemo((): Array<DomainRow> | undefined => {
     if (!displayed || !held) return undefined
@@ -204,7 +213,7 @@ export function WebRoutesSection({
   }, [displayed, held])
   // A game server is reached at its own address; only an app's header and
   // list show a domain.
-  const showPrimary = kind === "app"
+  const showPrimary = kind === "app" && onMakePrimary !== undefined
 
   // Saves in the background; a failure puts the table back and says why.
   const commit = React.useCallback(
@@ -225,16 +234,24 @@ export function WebRoutesSection({
   )
   const makePrimary = React.useCallback(
     (route: DisplayedRoute) => {
-      if (!saved || save.isPending) return
-      commit(
-        saved.map((candidate) => ({
-          ...candidate,
-          primary: candidate.id === route.id,
-        })),
-        "Could not change the primary domain"
+      const id = route.id
+      if (!onMakePrimary || !id || choosing !== null) return
+      setChoosing(id)
+      forkPromise(
+        () =>
+          ensuringPromise(
+            () => onMakePrimary(id),
+            () => setChoosing(null)
+          ),
+        (cause) =>
+          showToast({
+            description: errorMessage(cause),
+            message: "Could not change the primary domain",
+            type: "error",
+          })
       )
     },
-    [commit, save.isPending, saved]
+    [choosing, onMakePrimary]
   )
   // Undo acts on the routes as they are when it's clicked, not as they were
   // when the toast appeared. Leaving the page takes its Undo away, since
@@ -260,9 +277,8 @@ export function WebRoutesSection({
       const index = saved.findIndex((candidate) => candidate.id === route.id)
       const { rowId: _rowId, ...removed } = route
       const remaining = saved.filter((candidate) => candidate.id !== route.id)
-      const wasPrimary = primaryWebRoute(saved)?.id === route.id
-      // The route that became primary in its place, if it was primary.
-      const promoted = wasPrimary ? primaryWebRoute(remaining)?.id : undefined
+      // Put back with its ID, it is primary again if it was and nothing
+      // else was chosen since.
       const restore = () => {
         const current = latest.current
         if (!current.saved || current.pending) {
@@ -275,13 +291,8 @@ export function WebRoutesSection({
         if (current.saved.some((candidate) => candidate.id === route.id)) {
           return
         }
-        // It's primary again only if no other route was chosen since.
-        const primary =
-          wasPrimary && primaryWebRoute(current.saved)?.id === promoted
-        const next = current.saved.map((candidate) =>
-          primary ? { ...candidate, primary: false } : candidate
-        )
-        next.splice(Math.min(index, next.length), 0, { ...removed, primary })
+        const next = current.saved.slice()
+        next.splice(Math.min(index, next.length), 0, removed)
         commit(next, "Could not restore the domain")
       }
       // A name the instance holds anyway stays in the table, served by
@@ -333,7 +344,6 @@ export function WebRoutesSection({
             httpsRedirect: true,
             name: "",
             path: null,
-            primary: !primaryWebRoute(saved),
             redirect: null,
             service: target.service,
             stripPrefix: true,
@@ -412,18 +422,12 @@ export function WebRoutesSection({
               editing.mode === "edit"
                 ? saved.map((candidate) =>
                     candidate.id === editing.route.id
-                      ? {
-                          ...route,
-                          id: candidate.id,
-                          primary: candidate.primary,
-                        }
+                      ? { ...route, id: candidate.id }
                       : candidate
                   )
-                : [
-                    ...saved,
-                    // The first domain a server or app gets is its primary.
-                    { ...route, primary: !primaryWebRoute(saved) },
-                  ]
+                : // The first domain an App gets is its primary until
+                  // another is chosen.
+                  [...saved, route]
             await save.mutateAsync({
               proxy:
                 proxied === undefined
@@ -460,12 +464,6 @@ export function WebRoutesSection({
       ) : null}
     </section>
   )
-}
-
-// Exactly one route that serves is primary: the one marked, else the first.
-function withPrimary(routes: Array<WebRouteRow>): Array<WebRouteRow> {
-  const primary = primaryWebRoute(routes)
-  return routes.map((route) => ({ ...route, primary: route === primary }))
 }
 
 const noTargets: ReadonlyArray<WebRouteTarget> = []

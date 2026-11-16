@@ -19,6 +19,7 @@ const KEEP_PREFIX_OPTION = "keep-prefix"
 const NAME_OPTION_PREFIX = "name="
 const WWW_OPTION_PREFIX = "www="
 const HTTP_OPTION = "http"
+// Written before Hearth kept primary addresses; read and ignored.
 const PRIMARY_OPTION = "primary"
 const REDIRECT_OPTION_PREFIX = "redirect="
 const REDIRECT_TEMPORARY_OPTION = "redirect-temporary"
@@ -41,7 +42,7 @@ const MAX_INSTANCE_WEB_ROUTES = 16
 // kiln.relay.web-routes.<id>=hostname[:port][/path]|name=<encoded>[,options]
 // A configured path is stripped unless keep-prefix is present. The other
 // options are www=redirect|serve, http (plain HTTP is served rather than
-// redirected), primary, and, for a route without a port,
+// redirected), and, for a route without a port,
 // redirect=<encoded URL> with redirect-temporary and redirect-drop-path.
 export interface RelayWebRouteLabelSnapshot {
   readonly instanceId: string
@@ -111,9 +112,7 @@ function decodeWebRouteRecoveryLabels(
       )
       continue
     }
-    const route = routes.some((recovered) => recovered.primary)
-      ? { ...parsed.route, primary: false }
-      : parsed.route
+    const route = parsed.route
     const claimed = webRouteEndpoints(route)
     const duplicate = claimed.find((endpoint) => endpoints.has(endpoint))
     if (duplicate) {
@@ -188,7 +187,6 @@ function encodeWebRouteRecoveryValue(route: RelayInstanceWebRoute): string {
   if (!route.stripPrefix) options.push(KEEP_PREFIX_OPTION)
   if (route.www !== "none") options.push(`${WWW_OPTION_PREFIX}${route.www}`)
   if (!route.httpsRedirect) options.push(HTTP_OPTION)
-  if (route.primary) options.push(PRIMARY_OPTION)
   if (route.redirect) {
     options.push(
       `${REDIRECT_OPTION_PREFIX}${encodeURIComponent(route.redirect.to)}`
@@ -269,7 +267,6 @@ function parseWebRouteRecoveryValue(
     id,
     name,
     path,
-    primary: options.includes(PRIMARY_OPTION),
     redirect:
       redirectTo.success === undefined
         ? null

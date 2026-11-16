@@ -773,6 +773,8 @@ const backupArchiveServerConfigurationSchema = z
                 id: z.union([z.string().regex(/^[a-f0-9]{8}$/u), z.uuid()]),
                 name: z.string().trim().min(1).max(32),
                 path: z.string().trim().min(1).max(256).nullable(),
+                // Backups made before Hearth kept primary addresses mark
+                // the route that was. Nothing reads it.
                 primary: z.literal(true).optional(),
                 redirect: z
                   .object({

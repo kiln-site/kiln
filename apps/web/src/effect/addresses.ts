@@ -11,6 +11,12 @@ import {
   releaseUnusedHostnamesEffect,
   type HostnameOwner,
 } from "@/effect/hostname-claims"
+import {
+  clearPrimaryAddressesEffect,
+  forgetPrimaryAddressEffect,
+  primaryAddressTable,
+  setPrimaryAddressEffect,
+} from "@/effect/primary-addresses"
 import { databaseTable } from "@/lib/database-config"
 
 // One row per hostname an instance holds, with the one address record Kiln
@@ -174,14 +180,22 @@ interface AddressRow extends RowDataPacket {
   zone_id: string | null
 }
 
+// Whether a game address is its game server's primary comes from the row
+// that names the primary (see `primary-addresses.ts`).
 const addressSelect = `SELECT id, hostname, relay_id, resource_type,
        resource_id, integration_id, zone_id, vanity_domain, game, routed,
-       is_generated, is_primary, next_hostname, next_vanity_domain,
+       is_generated, (chosen.address_ref IS NOT NULL) AS is_primary,
+       next_hostname, next_vanity_domain,
        public_port, supports_srv, srv_service, srv_protocol, srv_record_id,
        record_id, record_type, target, proxied, existing_record_id,
        existing_record_type, existing_record_content,
        existing_record_proxied, status, last_error, created_at
-  FROM ${addressTable}`
+  FROM ${addressTable}
+  LEFT JOIN ${primaryAddressTable} chosen
+    ON chosen.instance_type = resource_type
+   AND chosen.instance_id = resource_id
+   AND chosen.address_kind = 'join'
+   AND chosen.address_ref = id`
 
 const ofResource = "relay_id = ? AND resource_type = ? AND resource_id = ?"
 const resourceValues = (resource: HostnameOwner) => [
@@ -448,10 +462,10 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         "addresses.insertGame",
         `INSERT INTO ${addressTable}
            (id, hostname, relay_id, resource_type, resource_id,
-            integration_id, zone_id, vanity_domain, game, is_primary, target,
+            integration_id, zone_id, vanity_domain, game, target,
             public_port, supports_srv, srv_service, srv_protocol, status,
             last_error, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?,
                 'pending', NULL, ?, ?
            FROM ${databaseTable("domain_zone")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
@@ -463,7 +477,6 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
           input.connectionId,
           input.zoneId,
           input.domain,
-          input.primary,
           input.endpoint.publicHost,
           input.endpoint.publicPort,
           input.endpoint.srv !== null,
@@ -480,6 +493,12 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         return yield* DomainConfigurationError.make({
           message: `${input.domain} isn't taking new game server domains`,
         })
+      }
+      if (input.primary) {
+        yield* setPrimaryAddressEffect(
+          { id: input.instanceId, type: "instance" },
+          { kind: "join", ref: input.id }
+        )
       }
     })
   )
@@ -938,7 +957,7 @@ export const setWebHostnamesRoutedEffect = Effect.fn("addresses.routed")(
   }
 )
 
-const removingSet = `status = 'removing', is_primary = 0, last_error = NULL,
+const removingSet = `status = 'removing', last_error = NULL,
   attempts = 0, next_attempt_at = NULL`
 
 /**
@@ -958,6 +977,7 @@ export const markAddressesRemovingEffect = Effect.fn("addresses.markRemoving")(
         WHERE id IN (${ids.map(() => "?").join(", ")})`,
       [now, ...ids]
     )
+    yield* clearPrimaryAddressesEffect("join", ids)
   }
 )
 
@@ -974,6 +994,10 @@ export const markResourceAddressesRemovingEffect = Effect.fn(
       WHERE ${ofResource}`,
     [now, ...resourceValues(resource)]
   )
+  yield* forgetPrimaryAddressEffect({
+    id: resource.resourceId,
+    type: resource.resourceType,
+  })
 })
 
 /**
@@ -992,6 +1016,14 @@ export const markRelayAddressesRemovingEffect = Effect.fn(
         SET ${removingSet}, updated_at = ?
       WHERE relay_id = ?`,
     [now, relayId]
+  )
+  yield* database.execute(
+    "addresses.markRelayRemoving.primary",
+    `DELETE chosen FROM ${primaryAddressTable} chosen
+       JOIN ${addressTable} address
+         ON address.id = chosen.address_ref AND chosen.address_kind = 'join'
+      WHERE address.relay_id = ?`,
+    [relayId]
   )
   yield* database.execute(
     "addresses.optOuts.deleteRelay",
@@ -1128,13 +1160,14 @@ export const stopGameAddressEffect = Effect.fn("addresses.stopGame")(function* (
       yield* database.execute(
         "addresses.stopGame",
         `UPDATE ${addressTable}
-              SET game = 0, is_primary = 0, public_port = NULL,
+              SET game = 0, public_port = NULL,
                   next_hostname = NULL, next_vanity_domain = NULL,
                   status = 'pending', last_error = NULL, attempts = 0,
                   next_attempt_at = NULL, updated_at = ?
             WHERE id = ? AND game = 1`,
         [now, row.id]
       )
+      yield* clearPrimaryAddressesEffect("join", [row.id])
       if (row.next) {
         yield* releaseUnusedHostnamesEffect(row, [row.next.hostname])
       }
@@ -1142,17 +1175,12 @@ export const stopGameAddressEffect = Effect.fn("addresses.stopGame")(function* (
   )
 })
 
-/** Makes one address its instance's primary and demotes the rest. */
+/** Makes one join address its game server's primary address. */
 export const setInstanceDomainPrimaryEffect = Effect.fn("addresses.setPrimary")(
   function* (input: HostnameOwner & { id: string }) {
-    const database = yield* Database
-    const now = yield* Clock.currentTimeMillis
-    yield* database.execute(
-      "addresses.setPrimary",
-      `UPDATE ${addressTable}
-          SET is_primary = (id = ?), updated_at = ?
-        WHERE ${ofResource}`,
-      [input.id, now, ...resourceValues(input)]
+    yield* setPrimaryAddressEffect(
+      { id: input.resourceId, type: input.resourceType },
+      { kind: "join", ref: input.id }
     )
   }
 )

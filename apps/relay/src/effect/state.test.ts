@@ -342,6 +342,68 @@ describe("Relay state", () => {
   )
 
   it.effect(
+    "keeps the routes marked primary for Hearth to take once it keeps primary addresses",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, RelayStateStore>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const route = (id: string, hostname: string) => ({
+            hostname,
+            httpsRedirect: true,
+            id,
+            name: "",
+            path: null,
+            redirect: null,
+            stripPrefix: true,
+            targetPort: 8_080,
+            www: "none" as const,
+          })
+          yield* open(
+            Effect.gen(function* () {
+              const store = yield* RelayStateStore
+              yield* store.replaceInstanceRoutes("a".repeat(12), [
+                route("aaaaaaaa", "one.example.com"),
+                route("bbbbbbbb", "two.example.com"),
+              ])
+            })
+          )
+          // As a Relay left them while it kept which route was primary.
+          yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            yield* sql`DROP TABLE relay_carried_primary_routes`
+            yield* sql`
+              ALTER TABLE relay_web_routes ADD COLUMN is_primary INTEGER
+              NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1))
+            `
+            yield* sql`
+              UPDATE relay_web_routes SET is_primary = 1 WHERE id = 'bbbbbbbb'
+            `
+            yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 47`
+          }).pipe(Effect.provide(SqliteClient.layer({ filename })))
+
+          yield* open(
+            Effect.gen(function* () {
+              const store = yield* RelayStateStore
+              assert.deepStrictEqual(yield* store.listCarriedPrimaryRoutes(), [
+                { instanceId: "a".repeat(12), routeId: "bbbbbbbb" },
+              ])
+              assert.lengthOf(yield* store.listWebRoutes(), 2)
+              yield* store.forgetCarriedPrimaryRoutes(["bbbbbbbb"])
+              assert.deepStrictEqual(
+                yield* store.listCarriedPrimaryRoutes(),
+                []
+              )
+            })
+          )
+        })
+      )
+  )
+
+  it.effect(
     "keeps what a client or invitation could do to an App's files, to a database's and an App's power, to deploy an App or change its limits, and to open its shell, as the actions every instance takes",
     () =>
       withTemporaryDirectory((directory) =>

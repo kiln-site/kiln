@@ -12,6 +12,11 @@ import { Effect } from "effect"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type { WebHostnameResource } from "@/effect/addresses"
+import {
+  loadPrimaryAddressEffect,
+  setPrimaryAddressEffect,
+} from "@/effect/primary-addresses"
+import { DomainConfigurationError } from "@/effect/errors"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
@@ -57,6 +62,30 @@ const stateOf = (resource: WebHostnameResource, state: unknown) =>
     ? relayAppWebRouteStateSchema.parse(state)
     : relayInstanceWebRouteStateSchema.parse(state)
 
+/**
+ * The web route an instance's primary address names, if it is one. Whether
+ * that route still serves is for whoever reads the routes with it to say
+ * (`primaryWebRoute`).
+ */
+async function primaryRouteId(resource: WebHostnameResource) {
+  const primary = await runAppEffect(
+    "primaryAddresses.load",
+    loadPrimaryAddressEffect({
+      id: resource.resourceId,
+      type: resource.resourceType,
+    })
+  )
+  return primary?.kind === "route" ? primary.ref : null
+}
+
+/** An instance's web routes, with the one its primary address names. */
+async function withPrimaryRoute<State>(
+  resource: WebHostnameResource,
+  state: State
+) {
+  return { ...state, primaryRouteId: await primaryRouteId(resource) }
+}
+
 // Its Relay's name for it: the ID, and the kind as the Relay calls it.
 const relayInstance = (resource: WebHostnameResource) => ({
   id: resource.resourceId,
@@ -70,14 +99,17 @@ export async function getWebRoutesHandler(
 ) {
   await requireResourcePermission(user, resource, false)
   const relay = await activeRelay(resource.relayId)
-  return stateOf(
+  return withPrimaryRoute(
     resource,
-    await relayRpc(
-      relay,
-      "instance.network.routes.read",
-      relayInstance(resource),
-      30_000,
-      user.id
+    stateOf(
+      resource,
+      await relayRpc(
+        relay,
+        "instance.network.routes.read",
+        relayInstance(resource),
+        30_000,
+        user.id
+      )
     )
   )
 }
@@ -135,7 +167,87 @@ async function saveWebRoutesHandler(
   })
   // Kiln keeps the DNS records of hostnames in zones it manages.
   await syncWebRouteHostnames(resource)
-  return state
+  return withPrimaryRoute(resource, state)
+}
+
+/** Which of an App's web routes is its primary address. */
+export interface SetPrimaryWebRouteInput {
+  appId: string
+  relayId: string
+  routeId: string
+}
+
+/**
+ * Makes one of an App's web routes its primary address: the domain its
+ * header and lists show. A game server's is one of its join addresses.
+ */
+export const setPrimaryWebRoute = operation<SetPrimaryWebRouteInput>()({
+  name: "webRoutes.primary",
+  doing: "Changing its primary domain",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireResourcePermission(person, appResource(input), true)
+        )
+      )
+    ),
+  locks: ({ input }) => [exclusive(dnsKey(appResource(input)))],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => setPrimaryWebRouteHandler(user, input)),
+  audit: ({ input }) => ({
+    id: input.appId,
+    kind: "app",
+    relayId: input.relayId,
+  }),
+})
+
+const appResource = (input: { appId: string; relayId: string }) =>
+  ({
+    relayId: input.relayId,
+    resourceId: input.appId,
+    resourceType: "app",
+  }) as const
+
+async function setPrimaryWebRouteHandler(
+  user: AuthenticatedUser,
+  input: SetPrimaryWebRouteInput
+) {
+  const resource = appResource(input)
+  const relay = await activeRelay(resource.relayId)
+  const state = stateOf(
+    resource,
+    await relayRpc(
+      relay,
+      "instance.network.routes.read",
+      relayInstance(resource),
+      30_000,
+      user.id
+    )
+  )
+  const route = state.routes.find((candidate) => candidate.id === input.routeId)
+  if (!route) {
+    throw new DomainConfigurationError({ message: "That route is gone" })
+  }
+  if (route.redirect) {
+    throw new DomainConfigurationError({
+      message: "A route that redirects can't be the primary domain",
+    })
+  }
+  await runAppEffect(
+    "primaryAddresses.set",
+    setPrimaryAddressEffect(
+      { id: input.appId, type: "app" },
+      { kind: "route", ref: route.id }
+    )
+  )
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relay.id] },
+    scope: { instanceId: input.appId, relayId: relay.id },
+    topics: ["instance-web-routes"],
+    type: "hearth.invalidate",
+  })
+  return withPrimaryRoute(resource, state)
 }
 
 /** A new App, and where its Brick says its website answers. */
@@ -203,7 +315,6 @@ async function serveNewAppHandler(
         httpsRedirect: true,
         name: "",
         path: null,
-        primary: true,
         redirect: null,
         service: input.web.service ?? APP_SERVICE,
         stripPrefix: true,

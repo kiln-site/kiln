@@ -237,16 +237,17 @@ tailnet. Nothing here is built yet.
   server, the address it advertises. It changes nothing about routing: every
   name works, starred or not. A tunnel name shown as primary carries the
   Tailscale mark, since only its tailnet reaches it.
-- Hearth keeps it, one row per instance naming the address, so an instance
-  can't have two. The Relay forgets it: the web-route star on its routes
-  and in their labels goes. A game server no longer has one star among its
-  join addresses and another among its domains.
-- Removing the primary address stars another active one, as a failing one
-  does now. Stars carry over once: each Relay lists the web-route stars it
-  had until Hearth has taken them, for instances without a star; where a
-  game server had both, its join address wins. Restoring a backup made
-  before keeps the star its routes had, for an instance without one; newer
-  backups don't carry it.
+- Hearth keeps it, one row per instance naming the address
+  (`kiln_instance_primary_address`), so an instance can't have two. The
+  Relay forgets it: the web-route star on its routes and in their labels
+  goes. A game server's star is among its join addresses, an App's among
+  its domains. Built.
+- A primary address that's gone leaves the first active one standing in
+  until another is chosen, as a failing one does. Stars carried over once:
+  a game server's join address keeps its star, and each Relay lists the
+  web-route stars it had until Hearth has taken them, for Apps without one.
+  Backups no longer record the star; restoring one never applied its
+  routes.
 
 ### Who may do what
 

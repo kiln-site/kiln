@@ -2418,7 +2418,6 @@ function backupWebRoute(route: RelayInstanceWebRoute) {
     stripPrefix: route.stripPrefix,
     targetPort: route.targetPort,
     ...(route.httpsRedirect ? {} : { httpsRedirect: false as const }),
-    ...(route.primary ? { primary: true as const } : {}),
     ...(route.redirect ? { redirect: route.redirect } : {}),
     ...(route.www === "none" ? {} : { www: route.www }),
   }
