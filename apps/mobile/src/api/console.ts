@@ -5,7 +5,12 @@ import { useEffect, useState } from "react"
 import { z } from "zod"
 
 import { useSession } from "../session/SessionProvider"
-import { apiRequest, errorMessage, HearthError, type HearthSession } from "./hearth"
+import {
+  apiRequest,
+  errorMessage,
+  HearthError,
+  type HearthSession,
+} from "./hearth"
 
 // Mirrors relayConsoleLineSchema in @workspace/contracts. That module's index
 // pulls in every contract, so the app keeps the fields it renders.

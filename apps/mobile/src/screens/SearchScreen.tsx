@@ -25,7 +25,11 @@ const DESTINATIONS = [
     label: page.label,
     symbol: page.symbol,
     area: "Manage",
-    params: { area: "manage", page: page.id, sub: page.pages[0]?.id } satisfies SectionParams,
+    params: {
+      area: "manage",
+      page: page.id,
+      sub: page.pages[0]?.id,
+    } satisfies SectionParams,
   })),
 ]
 
@@ -55,7 +59,7 @@ export function SearchScreen(): ReactElement {
 
   return (
     <FlatList
-      className="flex-1 bg-screen"
+      className="bg-screen flex-1"
       contentInsetAdjustmentBehavior="automatic"
       keyboardShouldPersistTaps="handled"
       data={results}
@@ -64,19 +68,21 @@ export function SearchScreen(): ReactElement {
         <Pressable
           accessibilityRole="button"
           onPress={() => showSection(navigation, item.params)}
-          className="flex-row items-center gap-3 border-b border-border px-4 py-3 active:bg-raised"
+          className="active:bg-raised flex-row items-center gap-3 border-b border-border px-4 py-3"
         >
           <View className="size-8 items-center justify-center border border-border bg-card">
             <Icon name={item.symbol} size={15} color="muted" />
           </View>
-          <AppText className="flex-1 font-medium text-base">{item.label}</AppText>
-          <MonoText className="text-2xs uppercase tracking-widest text-foreground-muted">
+          <AppText className="flex-1 text-base font-medium">
+            {item.label}
+          </AppText>
+          <MonoText className="text-2xs text-foreground-muted tracking-widest uppercase">
             {item.area}
           </MonoText>
         </Pressable>
       )}
       ListEmptyComponent={
-        <AppText className="p-8 text-center text-sm text-foreground-muted">
+        <AppText className="text-foreground-muted p-8 text-center text-sm">
           Nothing matches “{query.trim()}”.
         </AppText>
       }

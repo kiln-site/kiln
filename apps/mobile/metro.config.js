@@ -34,11 +34,7 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     context.originModulePath.startsWith(packagesRoot)
   )
     return resolve(context, moduleName.slice(0, -3), platform)
-  return resolve(
-    context,
-    moduleName,
-    platform
-  )
+  return resolve(context, moduleName, platform)
 }
 
 module.exports = withUniwindConfig(config, {

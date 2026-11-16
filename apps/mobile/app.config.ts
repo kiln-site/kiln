@@ -14,9 +14,21 @@ const font = (pkg: string, file: string) =>
   `node_modules/@expo-google-fonts/${pkg}/${file.split("_")[1]}/${file}.ttf`
 
 const fonts = [
-  { family: "Geist-Regular", file: font("geist", "Geist_400Regular"), weight: 400 },
-  { family: "Geist-Medium", file: font("geist", "Geist_500Medium"), weight: 500 },
-  { family: "Geist-SemiBold", file: font("geist", "Geist_600SemiBold"), weight: 600 },
+  {
+    family: "Geist-Regular",
+    file: font("geist", "Geist_400Regular"),
+    weight: 400,
+  },
+  {
+    family: "Geist-Medium",
+    file: font("geist", "Geist_500Medium"),
+    weight: 500,
+  },
+  {
+    family: "Geist-SemiBold",
+    file: font("geist", "Geist_600SemiBold"),
+    weight: 600,
+  },
   {
     family: "JetBrainsMono-Regular",
     file: font("jetbrains-mono", "JetBrainsMono_400Regular"),

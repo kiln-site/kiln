@@ -36,7 +36,9 @@ const LEVEL_CLASS: Record<string, string> = {
   warning: "text-warning",
 }
 
-const ConsoleRow = memo(function ConsoleRow(props: { readonly line: ConsoleLine }) {
+const ConsoleRow = memo(function ConsoleRow(props: {
+  readonly line: ConsoleLine
+}) {
   const { line } = props
   return (
     <Text
@@ -47,7 +49,9 @@ const ConsoleRow = memo(function ConsoleRow(props: { readonly line: ConsoleLine 
       )}
     >
       {line.timestamp ? (
-        <Text className="text-foreground-muted">{formatClock(line.timestamp)} </Text>
+        <Text className="text-foreground-muted">
+          {formatClock(line.timestamp)}{" "}
+        </Text>
       ) : null}
       {line.segments?.length
         ? line.segments.map((segment, index) => (
@@ -109,7 +113,7 @@ export function ConsoleScreen({ route }: Props): ReactElement {
               consoleState.status === "live" ? "bg-success" : "bg-warning"
             )}
           />
-          <MonoText className="text-xs text-foreground-muted">
+          <MonoText className="text-foreground-muted text-xs">
             {consoleState.status}
           </MonoText>
         </View>
@@ -118,7 +122,10 @@ export function ConsoleScreen({ route }: Props): ReactElement {
   }, [navigation, consoleState.status])
 
   // The status belongs to the console; another page of the server drops it.
-  useEffect(() => () => navigation.setOptions({ headerRight: undefined }), [navigation])
+  useEffect(
+    () => () => navigation.setOptions({ headerRight: undefined }),
+    [navigation]
+  )
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent
@@ -137,7 +144,7 @@ export function ConsoleScreen({ route }: Props): ReactElement {
 
   return (
     <KeyboardAvoidingView
-      className="flex-1 bg-screen"
+      className="bg-screen flex-1"
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <FlatList
@@ -163,19 +170,25 @@ export function ConsoleScreen({ route }: Props): ReactElement {
         maxToRenderPerBatch={40}
         windowSize={9}
         ListEmptyComponent={
-          <AppText className="px-4 py-8 text-center text-sm text-foreground-muted">
-            {consoleState.status === "connecting" ? "Connecting…" : "No output yet."}
+          <AppText className="text-foreground-muted px-4 py-8 text-center text-sm">
+            {consoleState.status === "connecting"
+              ? "Connecting…"
+              : "No output yet."}
           </AppText>
         }
       />
       {consoleState.error && consoleState.status !== "live" ? (
         <View className="border-t border-border bg-card px-4 py-2">
-          <AppText className="text-xs text-warning">{consoleState.error}</AppText>
+          <AppText className="text-warning text-xs">
+            {consoleState.error}
+          </AppText>
         </View>
       ) : null}
       {send.isError ? (
         <View className="border-t border-border bg-card px-4 py-2">
-          <AppText className="text-xs text-danger">{errorMessage(send.error)}</AppText>
+          <AppText className="text-danger text-xs">
+            {errorMessage(send.error)}
+          </AppText>
         </View>
       ) : null}
       {readOnly ? null : (

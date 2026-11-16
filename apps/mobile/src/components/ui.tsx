@@ -60,8 +60,8 @@ export function SectionLabel(props: {
   readonly trailing?: ReactNode
 }) {
   return (
-    <View className="mb-2 mt-6 flex-row items-end justify-between px-1">
-      <AppText className="font-mono-medium text-2xs uppercase tracking-widest text-foreground-muted">
+    <View className="mt-6 mb-2 flex-row items-end justify-between px-1">
+      <AppText className="font-mono-medium text-2xs text-foreground-muted tracking-widest uppercase">
         {props.children}
       </AppText>
       {props.trailing}
@@ -99,20 +99,20 @@ export function Row(props: {
     <View className="min-h-14 flex-row items-center gap-3 px-4 py-3">
       {props.leading}
       <View className="min-w-0 flex-1">
-        <AppText className="font-medium text-base" numberOfLines={1}>
+        <AppText className="text-base font-medium" numberOfLines={1}>
           {props.title}
         </AppText>
         {props.subtitle ? (
           props.mono ? (
             <MonoText
-              className="mt-0.5 text-xs text-foreground-muted"
+              className="text-foreground-muted mt-0.5 text-xs"
               numberOfLines={1}
             >
               {props.subtitle}
             </MonoText>
           ) : (
             <AppText
-              className="mt-0.5 text-xs text-foreground-muted"
+              className="text-foreground-muted mt-0.5 text-xs"
               numberOfLines={1}
             >
               {props.subtitle}
@@ -139,10 +139,21 @@ export function Row(props: {
 }
 
 const BUTTON_TONES = {
-  primary: { box: "bg-primary border-primary", text: "text-primary-foreground", icon: "primaryForeground" },
-  secondary: { box: "bg-card border-border", text: "text-foreground", icon: "foreground" },
+  primary: {
+    box: "bg-primary border-primary",
+    text: "text-primary-foreground",
+    icon: "primaryForeground",
+  },
+  secondary: {
+    box: "bg-card border-border",
+    text: "text-foreground",
+    icon: "foreground",
+  },
   danger: { box: "bg-card border-danger", text: "text-danger", icon: "danger" },
-} as const satisfies Record<string, { box: string; text: string; icon: PaletteColor }>
+} as const satisfies Record<
+  string,
+  { box: string; text: string; icon: PaletteColor }
+>
 
 export function Button(props: {
   readonly label: string
@@ -175,7 +186,7 @@ export function Button(props: {
       ) : props.icon ? (
         <Icon name={props.icon} size={16} color={tone.icon} />
       ) : null}
-      <AppText className={cn("font-semibold text-sm", tone.text)}>
+      <AppText className={cn("text-sm font-semibold", tone.text)}>
         {props.label}
       </AppText>
     </Pressable>
@@ -238,7 +249,8 @@ export function Meter(props: {
   /** Usage without a hard limit, like CPU across cores, never warns. */
   readonly neutral?: boolean
 }) {
-  const ratio = props.ratio === null ? null : Math.min(Math.max(props.ratio, 0), 1)
+  const ratio =
+    props.ratio === null ? null : Math.min(Math.max(props.ratio, 0), 1)
   const tone =
     ratio === null
       ? "bg-foreground-muted"
@@ -251,17 +263,22 @@ export function Meter(props: {
             : "bg-primary"
   return (
     <View className="flex-1 gap-2 p-4">
-      <AppText className="font-mono-medium text-2xs uppercase tracking-widest text-foreground-muted">
+      <AppText className="font-mono-medium text-2xs text-foreground-muted tracking-widest uppercase">
         {props.label}
       </AppText>
       <MonoText className="font-mono-medium text-xl">{props.value}</MonoText>
-      <View className="h-1 bg-raised">
+      <View className="bg-raised h-1">
         {ratio !== null ? (
-          <View className={cn("h-1", tone)} style={{ width: `${ratio * 100}%` }} />
+          <View
+            className={cn("h-1", tone)}
+            style={{ width: `${ratio * 100}%` }}
+          />
         ) : null}
       </View>
       {props.detail ? (
-        <MonoText className="text-2xs text-foreground-muted">{props.detail}</MonoText>
+        <MonoText className="text-2xs text-foreground-muted">
+          {props.detail}
+        </MonoText>
       ) : null}
     </View>
   )
@@ -276,7 +293,7 @@ export function Screen(props: {
   const barInset = useBarInset()
   return (
     <ScrollView
-      className="flex-1 bg-screen"
+      className="bg-screen flex-1"
       contentContainerClassName="px-4"
       contentContainerStyle={{ paddingBottom: barInset }}
       contentInsetAdjustmentBehavior="automatic"
@@ -305,11 +322,13 @@ export function Notice(props: {
   const danger = props.tone === "danger"
   return (
     <Card className={cn("gap-1 p-4", danger && "border-danger")}>
-      <AppText className={cn("font-semibold text-sm", danger && "text-danger")}>
+      <AppText className={cn("text-sm font-semibold", danger && "text-danger")}>
         {props.title}
       </AppText>
       {props.message ? (
-        <AppText className="text-sm text-foreground-muted">{props.message}</AppText>
+        <AppText className="text-foreground-muted text-sm">
+          {props.message}
+        </AppText>
       ) : null}
       {props.action ? (
         <Button
@@ -338,7 +357,10 @@ const KIND_ICONS = {
   server: { name: "server.rack", color: "kindServer" },
   database: { name: "cylinder", color: "kindDatabase" },
   app: { name: "cube", color: "kindApp" },
-  tunnel: { name: "point.3.connected.trianglepath.dotted", color: "kindTunnel" },
+  tunnel: {
+    name: "point.3.connected.trianglepath.dotted",
+    color: "kindTunnel",
+  },
 } as const satisfies Record<
   InstanceKind,
   { name: SymbolViewProps["name"]; color: PaletteColor }
@@ -357,14 +379,18 @@ export function KindTile(props: {
   const icon = KIND_ICONS[props.kind]
   return (
     <View
-      className="items-center justify-center border border-border bg-screen"
+      className="bg-screen items-center justify-center border border-border"
       style={{ width: size, height: size }}
     >
-      <Icon name={icon.name} size={Math.round(size * 0.47)} color={icon.color} />
+      <Icon
+        name={icon.name}
+        size={Math.round(size * 0.47)}
+        color={icon.color}
+      />
       {props.state ? (
         <View
           className={cn(
-            "absolute -bottom-[3px] -right-[3px] size-2.5 rounded-full border-2 border-card",
+            "absolute -right-[3px] -bottom-[3px] size-2.5 rounded-full border-2 border-card",
             DOT[stateTone(props.state)]
           )}
         />
@@ -380,12 +406,12 @@ export function PageHeading(props: {
   readonly trailing?: ReactNode
 }) {
   return (
-    <View className="flex-row items-end justify-between pb-5 pt-1">
+    <View className="flex-row items-end justify-between pt-1 pb-5">
       <View accessibilityRole="header" accessible>
-        <MonoText className="text-2xs uppercase tracking-widest text-foreground-muted">
+        <MonoText className="text-2xs text-foreground-muted tracking-widest uppercase">
           {props.eyebrow}
         </MonoText>
-        <AppText className="mt-1 font-semibold text-3xl tracking-tight">
+        <AppText className="mt-1 text-3xl font-semibold tracking-tight">
           {props.title}
         </AppText>
       </View>

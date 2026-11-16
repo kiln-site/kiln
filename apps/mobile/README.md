@@ -15,21 +15,21 @@ your linked CLIs and is unlinked the same way.
 
 ## Layout
 
-| Path                         | What                                                      |
-| ---------------------------- | --------------------------------------------------------- |
-| `app.config.ts`              | App name, bundle ID, fonts, splash, ATS                   |
-| `metro.config.js`            | Monorepo watch, workspace sources, Uniwind                |
-| `global.css`                 | Hearth's palette as Uniwind (Tailwind 4) theme tokens     |
-| `src/App.tsx`                | Providers, the native stack, and the header               |
-| `src/navigation.ts`          | Routes and Hearth's Infra, Manage and game server pages   |
-| `src/components/NavBar.tsx`  | The floating bar: section menus and the page menu         |
-| `modules/kiln-native/`       | The bar's UIKit view (liquid glass, native menus)         |
-| `src/api/hearth.ts`          | Effect-based fetch client and `HearthError`               |
-| `src/api/sign-in.ts`         | Sign-in through Hearth's page in a browser sheet          |
-| `src/api/queries.ts`         | TanStack Query hooks; polling only while a screen is open |
-| `src/api/console.ts`         | Console history plus NDJSON follow stream (`expo/fetch`)  |
-| `src/session/`               | Session in secure storage, sign-in state                  |
-| `src/screens/`, `src/components/ui.tsx` | Screens and shared primitives                  |
+| Path                                    | What                                                      |
+| --------------------------------------- | --------------------------------------------------------- |
+| `app.config.ts`                         | App name, bundle ID, fonts, splash, ATS                   |
+| `metro.config.js`                       | Monorepo watch, workspace sources, Uniwind                |
+| `global.css`                            | Hearth's palette as Uniwind (Tailwind 4) theme tokens     |
+| `src/App.tsx`                           | Providers, the native stack, and the header               |
+| `src/navigation.ts`                     | Routes and Hearth's Infra, Manage and game server pages   |
+| `src/components/NavBar.tsx`             | The floating bar: section menus and the page menu         |
+| `modules/kiln-native/`                  | The bar's UIKit view (liquid glass, native menus)         |
+| `src/api/hearth.ts`                     | Effect-based fetch client and `HearthError`               |
+| `src/api/sign-in.ts`                    | Sign-in through Hearth's page in a browser sheet          |
+| `src/api/queries.ts`                    | TanStack Query hooks; polling only while a screen is open |
+| `src/api/console.ts`                    | Console history plus NDJSON follow stream (`expo/fetch`)  |
+| `src/session/`                          | Session in secure storage, sign-in state                  |
+| `src/screens/`, `src/components/ui.tsx` | Screens and shared primitives                             |
 
 Response shapes come from `@workspace/contracts/cli`, the same zod schemas the
 CLI uses, so a contract change breaks the app's typecheck rather than its
@@ -70,6 +70,7 @@ rebuild.
    export KILN_IOS_TEAM_ID=ABCDE12345          # Xcode → Settings → Accounts
    export KILN_IOS_BUNDLE_ID=com.yourname.kiln
    ```
+
 4. Build a standalone Release app, which runs without Metro:
 
    ```sh
@@ -80,6 +81,7 @@ rebuild.
    Pick your phone when asked. Without `KILN_IOS_TEAM_ID`, choose the team
    in Xcode instead: open `ios/Kiln.xcworkspace`, select the **Kiln** target
    → Signing & Capabilities, and pick your Personal Team.
+
 5. On the phone, trust the developer profile: Settings → General → VPN &
    Device Management → your Apple ID → **Trust**.
 

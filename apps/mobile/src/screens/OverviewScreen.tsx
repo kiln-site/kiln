@@ -43,20 +43,27 @@ function Summary(props: {
 }) {
   return (
     <View className="flex-1 gap-1.5 px-3.5 py-3">
-      <MonoText className="text-2xs uppercase tracking-widest text-foreground-muted">
+      <MonoText className="text-2xs text-foreground-muted tracking-widest uppercase">
         {props.label}
       </MonoText>
       <View className="flex-row items-baseline">
         <MonoText
-          className={cn("font-mono-medium text-2xl", props.alert && "text-danger")}
+          className={cn(
+            "font-mono-medium text-2xl",
+            props.alert && "text-danger"
+          )}
         >
           {props.value ?? "–"}
         </MonoText>
         {props.total != null ? (
-          <MonoText className="text-sm text-foreground-muted">/{props.total}</MonoText>
+          <MonoText className="text-foreground-muted text-sm">
+            /{props.total}
+          </MonoText>
         ) : null}
       </View>
-      <AppText className="text-xs text-foreground-muted">{props.detail}</AppText>
+      <AppText className="text-foreground-muted text-xs">
+        {props.detail}
+      </AppText>
     </View>
   )
 }
@@ -70,16 +77,20 @@ function NodeStat(props: {
   return (
     <View className="flex-1 gap-1.5 px-3.5 py-2.5">
       <View className="flex-row items-baseline justify-between">
-        <MonoText className="text-2xs uppercase tracking-widest text-foreground-muted">
+        <MonoText className="text-2xs text-foreground-muted tracking-widest uppercase">
           {props.label}
         </MonoText>
         <MonoText className="text-2xs">{props.value}</MonoText>
       </View>
-      <View className="h-0.5 bg-raised">
+      <View className="bg-raised h-0.5">
         <View
           className={cn(
             "h-0.5",
-            ratio > 0.9 ? "bg-danger" : ratio > 0.75 ? "bg-warning" : "bg-primary"
+            ratio > 0.9
+              ? "bg-danger"
+              : ratio > 0.75
+                ? "bg-warning"
+                : "bg-primary"
           )}
           style={{ width: `${ratio * 100}%` }}
         />
@@ -106,7 +117,7 @@ function ServerBranch(props: {
           page: "console",
         })
       }
-      className="flex-row items-center gap-3 py-2 pr-4 active:bg-raised"
+      className="active:bg-raised flex-row items-center gap-3 py-2 pr-4"
       style={{ paddingLeft: TRUNK_X + 18 }}
     >
       {/* The trunk down from the Relay, and this branch's elbow. */}
@@ -120,7 +131,7 @@ function ServerBranch(props: {
       />
       <KindTile kind="server" state={server.state} size={30} />
       <View className="min-w-0 flex-1">
-        <AppText className="font-medium text-sm" numberOfLines={1}>
+        <AppText className="text-sm font-medium" numberOfLines={1}>
           {server.name}
         </AppText>
         <MonoText className="text-2xs text-foreground-muted" numberOfLines={1}>
@@ -155,7 +166,7 @@ function RelayNode(props: {
         onPress={() =>
           navigation.navigate("Relay", { relayId: relay.id, name: relay.name })
         }
-        className="flex-row items-center gap-3 py-3 pr-4 active:bg-raised"
+        className="active:bg-raised flex-row items-center gap-3 py-3 pr-4"
         style={{ paddingLeft: ROW_X }}
       >
         {servers.length > 0 ? (
@@ -166,11 +177,19 @@ function RelayNode(props: {
         ) : null}
         <KindTile kind="relay" state={relay.status} size={TILE} />
         <View className="min-w-0 flex-1">
-          <AppText className="font-semibold text-base" numberOfLines={1}>
+          <AppText className="text-base font-semibold" numberOfLines={1}>
             {relay.name}
           </AppText>
-          <MonoText className="text-2xs text-foreground-muted" numberOfLines={1}>
-            {[version, relay.platform && relay.arch ? `${relay.platform}/${relay.arch}` : null]
+          <MonoText
+            className="text-2xs text-foreground-muted"
+            numberOfLines={1}
+          >
+            {[
+              version,
+              relay.platform && relay.arch
+                ? `${relay.platform}/${relay.arch}`
+                : null,
+            ]
               .filter(Boolean)
               .join(" · ") || relay.id}
           </MonoText>
@@ -224,9 +243,11 @@ function RecentActivity() {
           <Pressable
             accessibilityRole="button"
             hitSlop={10}
-            onPress={() => showSection(navigation, { area: "manage", page: "activity" })}
+            onPress={() =>
+              showSection(navigation, { area: "manage", page: "activity" })
+            }
           >
-            <MonoText className="text-2xs uppercase tracking-widest text-primary-text">
+            <MonoText className="text-2xs text-primary-text tracking-widest uppercase">
               All activity
             </MonoText>
           </Pressable>
@@ -237,7 +258,11 @@ function RecentActivity() {
       {activity.isPending ? (
         <Loading />
       ) : activity.isError ? (
-        <Notice tone="danger" title="Couldn't load activity" message={errorMessage(activity.error)} />
+        <Notice
+          tone="danger"
+          title="Couldn't load activity"
+          message={errorMessage(activity.error)}
+        />
       ) : recent.length === 0 ? (
         <Notice title="Nothing has happened yet" />
       ) : (
@@ -260,12 +285,18 @@ export function OverviewScreen(): ReactElement {
   const servers = useServers()
   const relays = useRelays()
 
-  const running = servers.data?.filter((server) => server.state === "running").length
-  const online = relays.data?.filter((relay) => relay.status === "connected").length
+  const running = servers.data?.filter(
+    (server) => server.state === "running"
+  ).length
+  const online = relays.data?.filter(
+    (relay) => relay.status === "connected"
+  ).length
   const attention =
     servers.data && relays.data
-      ? servers.data.filter((server) => stateTone(server.state) === "danger").length +
-        relays.data.filter((relay) => stateTone(relay.status) === "danger").length
+      ? servers.data.filter((server) => stateTone(server.state) === "danger")
+          .length +
+        relays.data.filter((relay) => stateTone(relay.status) === "danger")
+          .length
       : null
 
   return (
@@ -321,7 +352,10 @@ export function OverviewScreen(): ReactElement {
           <RelayNode
             key={relay.id}
             relay={relay}
-            servers={servers.data?.filter((server) => server.relayId === relay.id) ?? []}
+            servers={
+              servers.data?.filter((server) => server.relayId === relay.id) ??
+              []
+            }
           />
         ))
       )}

@@ -1,6 +1,10 @@
 import { requireNativeView } from "expo"
 import type { ComponentType } from "react"
-import { Platform, type NativeSyntheticEvent, type ViewProps } from "react-native"
+import {
+  Platform,
+  type NativeSyntheticEvent,
+  type ViewProps,
+} from "react-native"
 
 export interface NavItem {
   readonly id: string

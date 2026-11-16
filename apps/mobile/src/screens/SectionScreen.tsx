@@ -37,13 +37,13 @@ function InstanceRow(props: {
       accessibilityLabel={`${props.name}, ${props.state}`}
       onPress={props.onPress}
       className={cn(
-        "flex-row items-center gap-3 px-4 py-3 active:bg-raised",
+        "active:bg-raised flex-row items-center gap-3 px-4 py-3",
         props.divider && "border-b border-border"
       )}
     >
       <KindTile kind={props.kind} state={props.state} />
       <View className="min-w-0 flex-1">
-        <AppText className="font-medium text-base" numberOfLines={1}>
+        <AppText className="text-base font-medium" numberOfLines={1}>
           {props.name}
         </AppText>
         <MonoText className="text-2xs text-foreground-muted" numberOfLines={1}>
@@ -59,7 +59,10 @@ function ServersPage(): ReactElement {
   const navigation = useNavigation()
   const servers = useServers()
   return (
-    <Screen refreshing={servers.isRefetching} onRefresh={() => void servers.refetch()}>
+    <Screen
+      refreshing={servers.isRefetching}
+      onRefresh={() => void servers.refetch()}
+    >
       <PageHeading eyebrow="Infrastructure" title="Game Servers" />
       {servers.isPending ? (
         <Loading />
@@ -70,7 +73,10 @@ function ServersPage(): ReactElement {
           message={errorMessage(servers.error)}
         />
       ) : servers.data.length === 0 ? (
-        <Notice title="No game servers yet" message="Create one from Hearth or the Kiln CLI." />
+        <Notice
+          title="No game servers yet"
+          message="Create one from Hearth or the Kiln CLI."
+        />
       ) : (
         <Card>
           {servers.data.map((server, index) => (
@@ -101,14 +107,24 @@ function RelaysPage(): ReactElement {
   const navigation = useNavigation()
   const relays = useRelays()
   return (
-    <Screen refreshing={relays.isRefetching} onRefresh={() => void relays.refetch()}>
+    <Screen
+      refreshing={relays.isRefetching}
+      onRefresh={() => void relays.refetch()}
+    >
       <PageHeading eyebrow="Infrastructure" title="Relays" />
       {relays.isPending ? (
         <Loading />
       ) : relays.isError ? (
-        <Notice tone="danger" title="Couldn't load Relays" message={errorMessage(relays.error)} />
+        <Notice
+          tone="danger"
+          title="Couldn't load Relays"
+          message={errorMessage(relays.error)}
+        />
       ) : relays.data.length === 0 ? (
-        <Notice title="No Relays paired" message="Pair a Relay from Hearth to run game servers." />
+        <Notice
+          title="No Relays paired"
+          message="Pair a Relay from Hearth to run game servers."
+        />
       ) : (
         <Card>
           {relays.data.map((relay, index) => (
@@ -127,7 +143,10 @@ function RelaysPage(): ReactElement {
               state={relay.status}
               divider={index < relays.data.length - 1}
               onPress={() =>
-                navigation.navigate("Relay", { relayId: relay.id, name: relay.name })
+                navigation.navigate("Relay", {
+                  relayId: relay.id,
+                  name: relay.name,
+                })
               }
             />
           ))}
@@ -138,15 +157,18 @@ function RelaysPage(): ReactElement {
 }
 
 /** A page Hearth has that the CLI API can't serve the app yet. */
-export function NotYet(props: { readonly eyebrow: string; readonly title: string }): ReactElement {
+export function NotYet(props: {
+  readonly eyebrow: string
+  readonly title: string
+}): ReactElement {
   return (
     <Screen>
       <PageHeading eyebrow={props.eyebrow} title={props.title} />
       <Card className="gap-1 p-4">
-        <AppText className="font-semibold text-sm">Not on mobile yet</AppText>
-        <AppText className="text-sm text-foreground-muted">
-          Open {props.title} in Hearth for now. It comes to the app once the CLI API
-          serves it.
+        <AppText className="text-sm font-semibold">Not on mobile yet</AppText>
+        <AppText className="text-foreground-muted text-sm">
+          Open {props.title} in Hearth for now. It comes to the app once the CLI
+          API serves it.
         </AppText>
       </Card>
     </Screen>

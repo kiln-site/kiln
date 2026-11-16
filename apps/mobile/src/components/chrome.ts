@@ -21,11 +21,13 @@ export function useKeyboardOpen(): boolean {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     const ios = Platform.OS === "ios"
-    const shown = Keyboard.addListener(ios ? "keyboardWillShow" : "keyboardDidShow", () =>
-      setOpen(true)
+    const shown = Keyboard.addListener(
+      ios ? "keyboardWillShow" : "keyboardDidShow",
+      () => setOpen(true)
     )
-    const hidden = Keyboard.addListener(ios ? "keyboardWillHide" : "keyboardDidHide", () =>
-      setOpen(false)
+    const hidden = Keyboard.addListener(
+      ios ? "keyboardWillHide" : "keyboardDidHide",
+      () => setOpen(false)
     )
     return () => {
       shown.remove()

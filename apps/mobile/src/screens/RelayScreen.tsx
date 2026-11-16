@@ -25,8 +25,12 @@ type Props = StaticScreenProps<{ relayId: string; name: string }>
 function Detail(props: { readonly label: string; readonly value: string }) {
   return (
     <View className="flex-row items-center justify-between gap-4 px-4 py-3">
-      <AppText className="text-sm text-foreground-muted">{props.label}</AppText>
-      <MonoText className="shrink text-right text-sm" numberOfLines={1} selectable>
+      <AppText className="text-foreground-muted text-sm">{props.label}</AppText>
+      <MonoText
+        className="shrink text-right text-sm"
+        numberOfLines={1}
+        selectable
+      >
         {props.value}
       </MonoText>
     </View>
@@ -38,7 +42,8 @@ export function RelayScreen({ route }: Props): ReactElement {
   const navigation = useNavigation()
   const info = useRelayInfo(relayId)
   const servers = useServers()
-  const hosted = servers.data?.filter((server) => server.relayId === relayId) ?? []
+  const hosted =
+    servers.data?.filter((server) => server.relayId === relayId) ?? []
 
   if (info.isPending)
     return (
@@ -63,10 +68,13 @@ export function RelayScreen({ route }: Props): ReactElement {
   const { relay, node } = info.data
 
   return (
-    <Screen refreshing={info.isRefetching} onRefresh={() => void info.refetch()}>
+    <Screen
+      refreshing={info.isRefetching}
+      onRefresh={() => void info.refetch()}
+    >
       <Card className="mt-2 flex-row items-center justify-between p-4">
         <StatePill state={relay.status} />
-        <MonoText className="text-xs text-foreground-muted">
+        <MonoText className="text-foreground-muted text-xs">
           {node ? `up ${formatDuration(node.uptimeSeconds)}` : "no node data"}
         </MonoText>
       </Card>
@@ -136,7 +144,11 @@ export function RelayScreen({ route }: Props): ReactElement {
         <Divider />
         <Detail
           label="Platform"
-          value={relay.platform && relay.arch ? `${relay.platform}/${relay.arch}` : "—"}
+          value={
+            relay.platform && relay.arch
+              ? `${relay.platform}/${relay.arch}`
+              : "—"
+          }
         />
         <Divider />
         <Detail label="ID" value={relay.id} />

@@ -11,11 +11,19 @@ interface Destination<TId extends string> {
 // so a page sits in the same place on the phone as in the browser.
 export const INFRA_PAGES = [
   { id: "overview", label: "Overview", symbol: "square.grid.2x2" },
-  { id: "relays", label: "Relays", symbol: "antenna.radiowaves.left.and.right" },
+  {
+    id: "relays",
+    label: "Relays",
+    symbol: "antenna.radiowaves.left.and.right",
+  },
   { id: "servers", label: "Game Servers", symbol: "server.rack" },
   { id: "databases", label: "Databases", symbol: "cylinder" },
   { id: "apps", label: "Apps", symbol: "cube" },
-  { id: "tunnels", label: "Tunnels", symbol: "point.3.connected.trianglepath.dotted" },
+  {
+    id: "tunnels",
+    label: "Tunnels",
+    symbol: "point.3.connected.trianglepath.dotted",
+  },
   { id: "domains", label: "Domains", symbol: "globe" },
   { id: "sources", label: "Sources", symbol: "arrow.triangle.branch" },
   { id: "deployments", label: "Deployments", symbol: "paperplane" },
@@ -30,14 +38,33 @@ const AUTOMATION_PAGES = [
 
 const BACKUP_PAGES = [
   { id: "runs", label: "Runs", symbol: "clock.arrow.circlepath" },
-  { id: "destinations", label: "Destinations", symbol: "externaldrive.badge.icloud" },
+  {
+    id: "destinations",
+    label: "Destinations",
+    symbol: "externaldrive.badge.icloud",
+  },
   { id: "settings", label: "Settings", symbol: "slider.horizontal.3" },
 ] as const satisfies readonly Destination<string>[]
 
 export const MANAGE_PAGES = [
-  { id: "automations", label: "Automations", symbol: "calendar.badge.clock", pages: AUTOMATION_PAGES },
-  { id: "backups", label: "Backups", symbol: "externaldrive", pages: BACKUP_PAGES },
-  { id: "activity", label: "Activity", symbol: "list.bullet.rectangle", pages: [] },
+  {
+    id: "automations",
+    label: "Automations",
+    symbol: "calendar.badge.clock",
+    pages: AUTOMATION_PAGES,
+  },
+  {
+    id: "backups",
+    label: "Backups",
+    symbol: "externaldrive",
+    pages: BACKUP_PAGES,
+  },
+  {
+    id: "activity",
+    label: "Activity",
+    symbol: "list.bullet.rectangle",
+    pages: [],
+  },
   { id: "access", label: "Access", symbol: "person.2", pages: [] },
 ] as const satisfies readonly (Destination<string> & {
   readonly pages: readonly Destination<string>[]
@@ -59,7 +86,11 @@ export type ServerPage = (typeof SERVER_PAGES)[number]["id"]
 
 export type SectionParams =
   | { readonly area: "infra"; readonly page: InfraPage }
-  | { readonly area: "manage"; readonly page: ManagePage; readonly sub?: string }
+  | {
+      readonly area: "manage"
+      readonly page: ManagePage
+      readonly sub?: string
+    }
 
 export const HOME: SectionParams = { area: "infra", page: "overview" }
 

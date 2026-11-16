@@ -5,7 +5,13 @@ import {
 import * as Haptics from "expo-haptics"
 import type { SFSymbol } from "expo-symbols"
 import { useState, type ReactElement } from "react"
-import { Modal, Pressable, View, useColorScheme, type ViewStyle } from "react-native"
+import {
+  Modal,
+  Pressable,
+  View,
+  useColorScheme,
+  type ViewStyle,
+} from "react-native"
 
 import {
   NativeNavBar,
@@ -32,7 +38,11 @@ import { AppText, Icon } from "./ui"
 
 /** The page under any sheet: what the bar describes and acts on. */
 export type ContentRoute =
-  | { readonly key: string; readonly name: "Section"; readonly params: SectionParams }
+  | {
+      readonly key: string
+      readonly name: "Section"
+      readonly params: SectionParams
+    }
   | {
       readonly key: string
       readonly name: "Server"
@@ -127,7 +137,10 @@ function select(navigation: Navigation, route: ContentRoute, id: string) {
   const [kind, value = ""] = id.split(":")
   void Haptics.selectionAsync()
   const setParams = (params: object) =>
-    navigation.dispatch({ ...CommonActions.setParams(params), source: route.key })
+    navigation.dispatch({
+      ...CommonActions.setParams(params),
+      source: route.key,
+    })
 
   if (kind === "infra") {
     const page = INFRA_PAGES.find((entry) => entry.id === value)
@@ -135,7 +148,11 @@ function select(navigation: Navigation, route: ContentRoute, id: string) {
   } else if (kind === "manage") {
     const page = MANAGE_PAGES.find((entry) => entry.id === value)
     if (page)
-      showSection(navigation, { area: "manage", page: page.id, sub: page.pages[0]?.id })
+      showSection(navigation, {
+        area: "manage",
+        page: page.id,
+        sub: page.pages[0]?.id,
+      })
   } else if (kind === "page") {
     setParams({ page: value })
   } else if (kind === "sub") {
@@ -219,7 +236,9 @@ function FallbackNavBar(props: {
               accessibilityRole="button"
               accessibilityLabel={section.title}
               accessibilityState={{ selected }}
-              onPress={() => setMenu({ title: section.menuTitle, items: section.items })}
+              onPress={() =>
+                setMenu({ title: section.menuTitle, items: section.items })
+              }
               className={cn(
                 "w-20 items-center justify-center gap-0.5 rounded-full",
                 selected && "bg-raised"
@@ -230,7 +249,10 @@ function FallbackNavBar(props: {
                 color={selected ? "primaryText" : "foreground"}
               />
               <AppText
-                className={cn("font-medium text-2xs", selected && "text-primary-text")}
+                className={cn(
+                  "text-2xs font-medium",
+                  selected && "text-primary-text"
+                )}
               >
                 {section.title}
               </AppText>
@@ -251,10 +273,18 @@ function FallbackNavBar(props: {
           <Icon name={props.context.systemImage as SFSymbol} size={20} />
         </Pressable>
       ) : null}
-      <Modal visible={menu !== null} transparent animationType="fade" onRequestClose={close}>
-        <Pressable className="flex-1 justify-end bg-black/50 p-3" onPress={close}>
+      <Modal
+        visible={menu !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={close}
+      >
+        <Pressable
+          className="flex-1 justify-end bg-black/50 p-3"
+          onPress={close}
+        >
           <View className="border border-border bg-card py-2">
-            <AppText className="px-4 pb-2 pt-1 font-mono-medium text-2xs uppercase tracking-widest text-foreground-muted">
+            <AppText className="font-mono-medium text-2xs text-foreground-muted px-4 pt-1 pb-2 tracking-widest uppercase">
               {menu?.title}
             </AppText>
             {menu?.items.map((item) => (
@@ -265,14 +295,17 @@ function FallbackNavBar(props: {
                   close()
                   props.onSelect(item.id)
                 }}
-                className="min-h-12 flex-row items-center gap-3 px-4 active:bg-raised"
+                className="active:bg-raised min-h-12 flex-row items-center gap-3 px-4"
               >
                 <Icon
                   name={item.systemImage as SFSymbol}
                   color={item.selected ? "primaryText" : "muted"}
                 />
                 <AppText
-                  className={cn("flex-1 text-base", item.selected && "text-primary-text")}
+                  className={cn(
+                    "flex-1 text-base",
+                    item.selected && "text-primary-text"
+                  )}
                 >
                   {item.title}
                 </AppText>

@@ -35,8 +35,12 @@ const TRANSITIONAL = new Set(["starting", "stopping", "provisioning"])
 function Detail(props: { readonly label: string; readonly value: string }) {
   return (
     <View className="flex-row items-center justify-between gap-4 px-4 py-3">
-      <AppText className="text-sm text-foreground-muted">{props.label}</AppText>
-      <MonoText className="shrink text-right text-sm" numberOfLines={1} selectable>
+      <AppText className="text-foreground-muted text-sm">{props.label}</AppText>
+      <MonoText
+        className="shrink text-right text-sm"
+        numberOfLines={1}
+        selectable
+      >
         {props.value}
       </MonoText>
     </View>
@@ -97,11 +101,14 @@ export function ServerScreen({ route }: Props): ReactElement {
   }
 
   return (
-    <Screen refreshing={info.isRefetching} onRefresh={() => void info.refetch()}>
+    <Screen
+      refreshing={info.isRefetching}
+      onRefresh={() => void info.refetch()}
+    >
       <Card className="mt-2 gap-4 p-4">
         <View className="flex-row items-center justify-between">
           <StatePill state={state} />
-          <MonoText className="text-xs text-foreground-muted">
+          <MonoText className="text-foreground-muted text-xs">
             wants {server.desiredState}
           </MonoText>
         </View>
@@ -109,15 +116,18 @@ export function ServerScreen({ route }: Props): ReactElement {
           accessibilityRole="button"
           accessibilityLabel={`Copy address ${address}`}
           onPress={copyAddress}
-          className="flex-row items-center justify-between gap-3 border border-border bg-surface-low px-3 py-3 active:bg-raised"
+          className="bg-surface-low active:bg-raised flex-row items-center justify-between gap-3 border border-border px-3 py-3"
         >
-          <MonoText className="font-mono-medium shrink text-base" numberOfLines={1}>
+          <MonoText
+            className="font-mono-medium shrink text-base"
+            numberOfLines={1}
+          >
             {address}
           </MonoText>
           <Icon name="doc.on.doc" size={15} color="muted" />
         </Pressable>
         {readOnly ? (
-          <AppText className="text-xs text-foreground-muted">
+          <AppText className="text-foreground-muted text-xs">
             This device has read-only access. Approve a full-access sign-in to
             control power.
           </AppText>
@@ -195,7 +205,11 @@ export function ServerScreen({ route }: Props): ReactElement {
           <Meter
             label="Memory"
             value={formatBytes(resources?.memoryUsedBytes)}
-            detail={server.memoryLimitBytes ? `of ${formatBytes(server.memoryLimitBytes)}` : "no limit"}
+            detail={
+              server.memoryLimitBytes
+                ? `of ${formatBytes(server.memoryLimitBytes)}`
+                : "no limit"
+            }
             ratio={
               resources && server.memoryLimitBytes
                 ? resources.memoryUsedBytes / server.memoryLimitBytes
@@ -208,7 +222,11 @@ export function ServerScreen({ route }: Props): ReactElement {
           <Meter
             label="Disk"
             value={formatBytes(resources?.storageUsedBytes)}
-            detail={server.diskLimitBytes ? `of ${formatBytes(server.diskLimitBytes)}` : "no limit"}
+            detail={
+              server.diskLimitBytes
+                ? `of ${formatBytes(server.diskLimitBytes)}`
+                : "no limit"
+            }
             ratio={
               resources?.storageUsedBytes != null && server.diskLimitBytes
                 ? resources.storageUsedBytes / server.diskLimitBytes
@@ -238,7 +256,12 @@ export function ServerScreen({ route }: Props): ReactElement {
           title={relay.name}
           subtitle="Relay"
           leading={<Icon name="server.rack" color="muted" />}
-          onPress={() => navigation.navigate("Relay", { relayId: relay.id, name: relay.name })}
+          onPress={() =>
+            navigation.navigate("Relay", {
+              relayId: relay.id,
+              name: relay.name,
+            })
+          }
         />
       </Card>
 
@@ -246,7 +269,10 @@ export function ServerScreen({ route }: Props): ReactElement {
       <Card>
         <Detail label="Game" value={server.game} />
         <Divider />
-        <Detail label="Software" value={`${server.implementation} ${server.version}`} />
+        <Detail
+          label="Software"
+          value={`${server.implementation} ${server.version}`}
+        />
         {server.javaVersion ? (
           <>
             <Divider />

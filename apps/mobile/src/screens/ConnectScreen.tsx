@@ -18,7 +18,8 @@ import { AppText, Button, MonoText } from "../components/ui"
 import { usePalette } from "../lib/palette"
 import { useSessionContext } from "../session/SessionProvider"
 
-const DEVICE_NAME = Platform.OS === "ios" ? "Kiln for iPhone" : "Kiln for Android"
+const DEVICE_NAME =
+  Platform.OS === "ios" ? "Kiln for iPhone" : "Kiln for Android"
 
 export function ConnectScreen(): ReactElement {
   const { signIn } = useSessionContext()
@@ -47,12 +48,16 @@ export function ConnectScreen(): ReactElement {
       Effect.flatMap((session) =>
         session
           ? Effect.promise(() => {
-              void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+              void Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success
+              )
               return signIn(session)
             })
           : Effect.void
       ),
-      Effect.catch((failure) => Effect.sync(() => setError(errorMessage(failure)))),
+      Effect.catch((failure) =>
+        Effect.sync(() => setError(errorMessage(failure)))
+      ),
       Effect.ensuring(Effect.sync(() => setBusy(false)))
     )
     running.current = Effect.runFork(program)
@@ -75,7 +80,7 @@ export function ConnectScreen(): ReactElement {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      className="flex-1 bg-screen"
+      className="bg-screen flex-1"
     >
       <ScrollView
         contentContainerClassName="flex-grow justify-center px-6 py-16"
@@ -87,16 +92,16 @@ export function ConnectScreen(): ReactElement {
             style={{ width: 64, height: 64, tintColor: palette.primary }}
             accessibilityIgnoresInvertColors
           />
-          <AppText className="font-semibold text-3xl tracking-tight">
+          <AppText className="text-3xl font-semibold tracking-tight">
             Welcome to Kiln
           </AppText>
-          <AppText className="text-center text-sm text-foreground-muted">
+          <AppText className="text-foreground-muted text-center text-sm">
             Sign in to your control plane.
           </AppText>
         </View>
 
         <View className="gap-3">
-          <MonoText className="px-1 text-2xs uppercase tracking-widest text-foreground-muted">
+          <MonoText className="text-2xs text-foreground-muted px-1 tracking-widest uppercase">
             Hearth address
           </MonoText>
           <TextInput
@@ -115,7 +120,7 @@ export function ConnectScreen(): ReactElement {
             className="min-h-12 border border-input bg-card px-4 font-mono text-base text-foreground"
           />
           {error ? (
-            <AppText className="px-1 text-sm text-danger">{error}</AppText>
+            <AppText className="text-danger px-1 text-sm">{error}</AppText>
           ) : null}
           <Button
             label="Sign in"
@@ -123,7 +128,7 @@ export function ConnectScreen(): ReactElement {
             loading={busy}
             onPress={() => begin()}
           />
-          <AppText className="px-1 pt-2 text-xs text-foreground-muted">
+          <AppText className="text-foreground-muted px-1 pt-2 text-xs">
             You sign in on your Hearth's own page. This phone then shows with
             your linked CLIs in Hearth, where you can unlink it.
           </AppText>

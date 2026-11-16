@@ -56,7 +56,10 @@ export const signInWithHearth = Effect.fn("SignIn.browser")(function* (
   const returned = new URL(result.url)
   const code = returned.searchParams.get("code")
   if (!code || returned.searchParams.get("state") !== state) {
-    return yield* failed("invalid_state", "The sign-in didn't come back intact. Try again.")
+    return yield* failed(
+      "invalid_state",
+      "The sign-in didn't come back intact. Try again."
+    )
   }
 
   const token = yield* publicRequest(

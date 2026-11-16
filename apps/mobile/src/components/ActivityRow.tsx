@@ -37,7 +37,11 @@ export function ActivityRow(props: {
       <View className="min-w-0 flex-1 gap-1">
         <AppText className="text-sm">{entry.label}</AppText>
         <MonoText className="text-2xs text-foreground-muted" numberOfLines={1}>
-          {[entry.actor.name, entry.server?.name ?? entry.relay.name, entry.source]
+          {[
+            entry.actor.name,
+            entry.server?.name ?? entry.relay.name,
+            entry.source,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </MonoText>
@@ -48,4 +52,3 @@ export function ActivityRow(props: {
     </View>
   )
 }
-

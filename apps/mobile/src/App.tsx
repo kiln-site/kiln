@@ -84,7 +84,7 @@ function Brand(): ReactElement {
         source={MARK}
         style={{ width: 26, height: 26, tintColor: palette.primary }}
       />
-      <AppText className="font-semibold text-xl tracking-tight">Kiln</AppText>
+      <AppText className="text-xl font-semibold tracking-tight">Kiln</AppText>
     </View>
   )
 }
@@ -212,7 +212,9 @@ const CONTENT_ROUTES = new Set(["Section", "Server", "Relay"])
 
 /** The top page under any sheet, which the bar describes. */
 function contentRoute(): ContentRoute | null {
-  const routes = navigationRef.isReady() ? (navigationRef.getRootState()?.routes ?? []) : []
+  const routes = navigationRef.isReady()
+    ? (navigationRef.getRootState()?.routes ?? [])
+    : []
   const route = routes.findLast((entry) => CONTENT_ROUTES.has(entry.name))
   return (route as ContentRoute | undefined) ?? null
 }

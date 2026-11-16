@@ -13,14 +13,14 @@ export function ActivityScreen(): ReactElement {
 
   if (activity.isPending)
     return (
-      <View className="flex-1 bg-screen">
+      <View className="bg-screen flex-1">
         <Loading />
       </View>
     )
 
   return (
     <FlatList
-      className="flex-1 bg-screen"
+      className="bg-screen flex-1"
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ paddingBottom: barInset }}
       data={activity.data ?? []}
@@ -44,7 +44,7 @@ export function ActivityScreen(): ReactElement {
       }
       ListEmptyComponent={
         activity.isError ? undefined : (
-          <AppText className="p-8 text-center text-sm text-foreground-muted">
+          <AppText className="text-foreground-muted p-8 text-center text-sm">
             Nothing has happened yet.
           </AppText>
         )

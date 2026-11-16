@@ -3,15 +3,27 @@ import { useState } from "react"
 import { Alert, View } from "react-native"
 
 import { useWhoami } from "../api/queries"
-import { AppText, Button, Card, Divider, MonoText, Screen, SectionLabel } from "../components/ui"
+import {
+  AppText,
+  Button,
+  Card,
+  Divider,
+  MonoText,
+  Screen,
+  SectionLabel,
+} from "../components/ui"
 import { formatRelative } from "../lib/format"
 import { useSession, useSessionContext } from "../session/SessionProvider"
 
 function Detail(props: { readonly label: string; readonly value: string }) {
   return (
     <View className="flex-row items-center justify-between gap-4 px-4 py-3">
-      <AppText className="text-sm text-foreground-muted">{props.label}</AppText>
-      <MonoText className="shrink text-right text-sm" numberOfLines={1} selectable>
+      <AppText className="text-foreground-muted text-sm">{props.label}</AppText>
+      <MonoText
+        className="shrink text-right text-sm"
+        numberOfLines={1}
+        selectable
+      >
         {props.value}
       </MonoText>
     </View>
@@ -25,27 +37,31 @@ export function AccountScreen(): ReactElement {
   const [signingOut, setSigningOut] = useState(false)
 
   const confirmSignOut = () =>
-    Alert.alert("Sign out?", "This revokes this device's access to your Hearth.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign out",
-        style: "destructive",
-        onPress: () => {
-          setSigningOut(true)
-          void signOut()
+    Alert.alert(
+      "Sign out?",
+      "This revokes this device's access to your Hearth.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign out",
+          style: "destructive",
+          onPress: () => {
+            setSigningOut(true)
+            void signOut()
+          },
         },
-      },
-    ])
+      ]
+    )
 
   const { credential } = session
   return (
     <Screen>
       <SectionLabel>Signed in as</SectionLabel>
       <Card className="gap-1 p-4">
-        <AppText className="font-semibold text-lg">
+        <AppText className="text-lg font-semibold">
           {whoami.data?.user.name ?? "…"}
         </AppText>
-        <AppText className="text-sm text-foreground-muted">
+        <AppText className="text-foreground-muted text-sm">
           {whoami.data?.user.email ?? " "}
         </AppText>
       </Card>
@@ -61,7 +77,11 @@ export function AccountScreen(): ReactElement {
         <Divider />
         <Detail
           label="Expires"
-          value={credential.expiresAt ? formatRelative(credential.expiresAt) : "never"}
+          value={
+            credential.expiresAt
+              ? formatRelative(credential.expiresAt)
+              : "never"
+          }
         />
         <Divider />
         <Detail label="Name" value={credential.name} />
