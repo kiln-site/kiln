@@ -325,27 +325,27 @@ both a name under a domain. What differs is the domain's provider:
 
 ### Names
 
-- One `address` row per name: the hostname, its domain, the instance it
-  belongs to (its kind, its ID, and an App's service), whether Kiln generated
-  it, its uses (game join, web routes, or tunnel member, which follows from a
-  tunnel domain), a rename's next name, and its status with retries.
-- A public name is unique across every Relay; a tunnel name within its
-  tunnel. `hostname_claim` stays as the reservation of every name held,
-  current or a rename's next, scoped the same way; who holds it is the
-  address.
+- A public name is an `instance_address` row, unique across every Relay. A
+  tunnel name stays a `tunnel_name` row, unique within its tunnel: the two
+  share a hostname, an owner, being generated, and the primary address, but
+  not who writes their DNS, their locks, their uniqueness, or their status,
+  so one table would only add a filter to every public query. What makes
+  them one model is the domain each sits under, the one Domains list, and
+  the one primary address.
+- `hostname_claim` stays as the reservation of every public name held,
+  current or a rename's next; who holds it is the address.
 - A member has one generated name per tunnel, which can be renamed but not
   removed.
 - Generated public names are `adjective-noun`; tunnel names stay made from
   the instance's name (`survival.kiln`), since they only need to be unique in
   their tunnel and people type them.
-- The primary address points at an address, or at a web route, which can
-  carry a path, until routes themselves move to Hearth.
-- One DNS worker finishes work for every provider. A DNS service's names
-  keep their status and retries per name. A tunnel's DNS is one hosts file
-  per gateway: a change rewrites it right away, each gateway records whether
-  it has the latest, and the worker brings a gateway that missed it up to
-  date, never sending a file that leaves out an away gateway's members. The
-  stopgap that undoes an alias whose DNS failed goes.
+- The primary address points at a public address, a web route (which can
+  carry a path, until routes move to Hearth), or a tunnel name.
+- Public names keep their status and retries per name in the DNS worker. A
+  tunnel's DNS is one hosts file per gateway: a change rewrites it right
+  away, each gateway records whether it has the latest, and the worker brings
+  one that missed it up to date, never sending a file that leaves out an away
+  gateway's members. The stopgap that undoes an alias whose DNS failed goes.
 - An instance's Network page shows its names in one Domains list, each
   marked public or on a tunnel, with its provider's mark.
 
@@ -374,22 +374,18 @@ change.
 1. One address shape in the code: `WebHostname` and
    `InstanceDomainAssignment` fold into `Address`, and status means the same
    for a game address and a web name. Operation names stay, since the audit
-   log keeps them.
+   log keeps them. Done.
 2. Domains get a provider: `domain_zone` becomes `domain` with its
-   provider, and every zone a name uses today gets a domain row that offers
-   no generated names. A custom hostname is placed under its most specific
-   domain; Cloudflare sits behind the provider interface.
-3. Managed elsewhere: added on the Domains page, its names held and
-   checked; hostnames Relays route outside every domain are attached to one
-   when someone adds it.
-4. Scoped names: `hostname_claim` and `instance_address` get a scope,
-   public or a tunnel; addresses can belong to a database and name an App's
-   service.
-5. Tunnel TLDs are domains: `tunnel_domain` rows become domains whose
-   provider is their tunnel, the first its default.
-6. Tunnel names are addresses: `tunnel_name` rows move into the address
-   table with their IDs, tunnel primaries become `address` in the same
-   migration, and tunnel DNS keeps per-gateway state for the worker.
+   provider. Done.
+3. Managed elsewhere: added on the Domains page, its names held; hostnames
+   Relays route under it are taken in when it's added. Done.
+4. Tunnel TLDs are domains: `tunnel_domain` rows become domains whose
+   provider is their tunnel, in order, the first its default. Done.
+5. Tunnel DNS with retries: each gateway records the hosts file it has, the
+   DNS worker brings one that missed a change up to date, and the undo
+   stopgap goes.
+6. One Domains list: an instance's Network page lists its public and tunnel
+   names together, marked by where they live.
 
 Not in this: HTTPS for tunnel names, Hearth owning web routes, DNS
 following a Relay's proxy mode, and tunnel domains shared per tailnet.

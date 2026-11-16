@@ -316,6 +316,12 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
         const requested = new Map(
           input.domains.map((domain) => [domain.domain, domain])
         )
+        for (const domain of requested.keys()) {
+          const conflict = yield* publicDomainConflictEffect(domain)
+          if (conflict) {
+            return yield* DomainConfigurationError.make({ message: conflict })
+          }
+        }
         // Domains are unique across connections: two can't hand out the
         // same names.
         if (requested.size > 0) {
@@ -742,6 +748,10 @@ export const addManualDomainEffect = Effect.fn("domains.manual.add")(function* (
   ownerId: string | null
 ) {
   const database = yield* Database
+  const conflict = yield* publicDomainConflictEffect(domain)
+  if (conflict) {
+    return yield* DomainConfigurationError.make({ message: conflict })
+  }
   const now = yield* Clock.currentTimeMillis
   const result = yield* database.execute(
     "domains.manual.add",
@@ -795,5 +805,76 @@ export const removeManualDomainEffect = Effect.fn("domains.manual.remove")(
         )
       })
     )
+  }
+)
+
+interface DomainOverlapRow extends RowDataPacket {
+  domain: string
+  provider: "cloudflare" | "manual" | "tunnel"
+  tunnel_id: string | null
+}
+
+const overlaps = (left: string, right: string) =>
+  left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`)
+
+/**
+ * Why a tunnel can't have these TLDs, or null. A domain is one Kiln has
+ * once, and on its tailnet a tunnel's answers for every name beneath it, so
+ * it can't equal, sit under, or contain a public domain either: a zone a
+ * connection reaches, a vanity domain, or one managed elsewhere.
+ */
+export const tunnelDomainConflictEffect = Effect.fn("domains.tunnelConflict")(
+  function* (domains: ReadonlyArray<string>, tunnelId: string) {
+    const database = yield* Database
+    const [rows, connections] = yield* Effect.all(
+      [
+        database.queryRows<DomainOverlapRow>(
+          "domains.tunnelConflict",
+          `SELECT domain, provider, tunnel_id FROM ${databaseTable("domain")}`
+        ),
+        database.queryRows<RowDataPacket & { zones: unknown }>(
+          "domains.tunnelConflict.zones",
+          `SELECT zones FROM ${databaseTable("domain_integration")}`
+        ),
+      ],
+      { concurrency: 2 }
+    )
+    const zones = connections.flatMap((row) =>
+      parseZones(row.zones).map((zone) => zone.name)
+    )
+    for (const domain of domains) {
+      for (const row of rows) {
+        if (row.provider === "tunnel") {
+          if (row.tunnel_id !== tunnelId && row.domain === domain) {
+            return `.${domain} is already a domain in Kiln`
+          }
+          continue
+        }
+        if (overlaps(domain, row.domain)) {
+          return `.${domain} would answer for ${row.domain} on the tailnet, which is a public domain in Kiln`
+        }
+      }
+      const zone = zones.find((name) => overlaps(domain, name))
+      if (zone) {
+        return `.${domain} would answer for ${zone} on the tailnet, which a Cloudflare connection manages`
+      }
+    }
+    return null
+  }
+)
+
+/** Why a public domain can't be added because of a tunnel's, or null. */
+export const publicDomainConflictEffect = Effect.fn("domains.publicConflict")(
+  function* (domain: string) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<DomainOverlapRow>(
+      "domains.publicConflict",
+      `SELECT domain, provider, tunnel_id FROM ${databaseTable("domain")}
+        WHERE provider = 'tunnel'`
+    )
+    const tunnel = rows.find((row) => overlaps(domain, row.domain))
+    return tunnel
+      ? `${domain} overlaps .${tunnel.domain}, a tunnel's domain, which would answer for it on its tailnet`
+      : null
   }
 )

@@ -45,6 +45,7 @@ import {
   type TailscaleOAuthCredential,
 } from "@/effect/tunnels"
 import { reserveInstanceId } from "@/effect/instance-ids"
+import { tunnelDomainConflictEffect } from "@/effect/domains"
 import { recoverPromise } from "@/effect/promise"
 import {
   addTunnelAliasEffect,
@@ -245,7 +246,7 @@ async function createTunnelHandler(
   data: z.infer<typeof createTunnelSchema> & { id: string }
 ) {
   const definitions = await loadTunnelDefinitions()
-  requireUnusedDomains(definitions, data.id, data.domains)
+  await requireUnusedDomains(definitions, data.id, data.domains)
   // Checked now, so a tunnel never names a Brick it can't run.
   await requiredTunnelBrick(data.brick)
   const verified = await runAppEffect(
@@ -518,7 +519,7 @@ async function saveTunnelHandler(
     throw new Error("This tunnel is being removed")
   }
   const currentRelayIds = new Set(currentForStack.map(({ relayId }) => relayId))
-  requireUnusedDomains(definitions, id, data.domains)
+  await requireUnusedDomains(definitions, id, data.domains)
   requireCompleteGatewayList(currentResult.unavailableRelays)
   const [appRecords, databaseRecords] = await Promise.all([
     data.bindings.some((binding) => appTailscaleMember(binding.memberId))
@@ -1495,11 +1496,11 @@ function replaceTunnelDefinition(
   ]
 }
 
-function requireUnusedDomains(
+async function requireUnusedDomains(
   definitions: ReadonlyArray<TunnelDefinition>,
   id: string,
   domains: ReadonlyArray<string>
-): void {
+): Promise<void> {
   for (const definition of definitions) {
     if (definition.id === id) continue
     const taken = domains.find((domain) => definition.domains.includes(domain))
@@ -1507,6 +1508,13 @@ function requireUnusedDomains(
       throw new Error(`.${taken} is already a TLD of ${definition.name}`)
     }
   }
+  // Nor may it overlap a public domain, which it would answer for on its
+  // tailnet.
+  const conflict = await runAppEffect(
+    "domains.tunnelConflict",
+    tunnelDomainConflictEffect(domains, id)
+  )
+  if (conflict) throw new Error(conflict)
 }
 
 export function requireCompleteGatewayList(

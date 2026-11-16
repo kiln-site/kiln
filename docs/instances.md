@@ -206,8 +206,11 @@ permissions of its own follow.
 
 - Hearth keeps it in `kiln_tunnel`: its name, its owner, the Brick its
   gateways run, its Tailscale login (an OAuth client and secret, which it
-  needs: Kiln makes each new gateway's key with it), and its TLDs in order
-  (`kiln_tunnel_domain`). It is no instance group.
+  needs: Kiln makes each new gateway's key with it), and its TLDs in order,
+  which are domains whose provider is the tunnel (`kiln_domain`; see
+  [Domains](domains.md#domains)). A TLD can't equal, sit under, or contain a
+  public domain, which it would answer for on the tailnet. It is no instance
+  group.
 - Creating it takes its name, its first TLD, its Tailscale login and its
   Brick, and makes no gateway. A tunnel from before that has no login (one
   made with a one-time key) keeps running, but connecting something on a
