@@ -126,7 +126,9 @@ function tunnelLabelOf(name: string): string {
 
 /**
  * Gives each member its generated name, or renames the one it has. A name
- * another member of the tunnel has fails it, as each is unique.
+ * that is already the member's own alias becomes its generated one, keeping
+ * the alias's place as its primary address; one another member of the tunnel
+ * has fails it all, as each name is unique.
  */
 export const setGeneratedTunnelNamesEffect = Effect.fn(
   "tunnelNames.setGenerated"
@@ -141,23 +143,56 @@ export const setGeneratedTunnelNamesEffect = Effect.fn(
     Effect.forEach(
       names,
       (name) =>
-        transaction.execute(
-          `INSERT INTO ${nameTable}
-             (id, tunnel_id, member_id, label, domain, generated_for,
-              created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE label = VALUES(label),
-             domain = VALUES(domain)`,
-          [
-            randomUUID(),
-            tunnelId,
-            name.memberId,
-            name.label,
-            name.domain,
-            name.memberId,
-            now,
-          ]
-        ),
+        Effect.gen(function* () {
+          const rows = yield* transaction.queryRows<NameRow>(
+            `SELECT id, tunnel_id, member_id, label, domain, generated_for
+               FROM ${nameTable}
+              WHERE tunnel_id = ?
+                AND (generated_for = ? OR (label = ? AND domain = ?))
+                FOR UPDATE`,
+            [tunnelId, name.memberId, name.label, name.domain]
+          )
+          const own = rows.find((row) => row.generated_for === name.memberId)
+          const alias = rows.find(
+            (row) =>
+              row.generated_for === null && row.member_id === name.memberId
+          )
+          if (alias) {
+            yield* transaction.execute(
+              `DELETE FROM ${nameTable} WHERE id = ?`,
+              [alias.id]
+            )
+            if (own) {
+              yield* transaction.execute(
+                `UPDATE ${primaryAddressTable} SET address_ref = ?
+                  WHERE address_kind = 'tunnel' AND address_ref = ?`,
+                [own.id, alias.id]
+              )
+            }
+          }
+          if (own) {
+            yield* transaction.execute(
+              `UPDATE ${nameTable} SET label = ?, domain = ? WHERE id = ?`,
+              [name.label, name.domain, own.id]
+            )
+            return
+          }
+          yield* transaction.execute(
+            `INSERT INTO ${nameTable}
+               (id, tunnel_id, member_id, label, domain, generated_for,
+                created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              alias?.id ?? randomUUID(),
+              tunnelId,
+              name.memberId,
+              name.label,
+              name.domain,
+              name.memberId,
+              now,
+            ]
+          )
+        }),
       { discard: true }
     )
   )
@@ -185,17 +220,21 @@ export const keepTunnelNamesOfEffect = Effect.fn("tunnelNames.keep")(function* (
   )
 })
 
-/** Gives a member another name in its tunnel. */
+/**
+ * Gives a member another name in its tunnel; with an ID, puts back one taken
+ * away, which keeps its place as a primary address.
+ */
 export const addTunnelAliasEffect = Effect.fn("tunnelNames.addAlias")(
   function* (name: {
     domain: string
+    id?: string
     label: string
     memberId: string
     tunnelId: string
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const id = randomUUID()
+    const id = name.id ?? randomUUID()
     yield* database.execute(
       "tunnelNames.addAlias",
       `INSERT INTO ${nameTable}

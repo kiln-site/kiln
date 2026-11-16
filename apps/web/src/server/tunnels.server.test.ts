@@ -9,7 +9,13 @@ import { runOperationPromise } from "@/operations/operation"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertInstance, insertRelay, selectRows } from "@/test/seed"
 
-import { connectTunnelOperation } from "./tunnels.server"
+import {
+  addTunnelAliasOperation,
+  connectTunnelOperation,
+  pruneEmptyGateways,
+  saveTunnelOperation,
+  setPrimaryTunnelNameOperation,
+} from "./tunnels.server"
 
 // The Relays and the Tailscale API are the fakes. Each Relay keeps its
 // gateways as it would (`tunnel.*`, its own name for one), with addresses for
@@ -289,10 +295,63 @@ const connect = (memberId: string, connected = true) =>
     )
   )
 
+// What an operation said went wrong, or null once it's done.
+const outcome = (run: () => Promise<unknown>) =>
+  Effect.promise(() =>
+    run().then(
+      () => null,
+      (error: unknown) =>
+        error instanceof Error ? error.message : String(error)
+    )
+  )
+
+// Its TLDs in this order, its members as they are, as its Info page saves.
+const saveDomains = (domains: Array<string>) =>
+  outcome(() =>
+    runOperationPromise(
+      saveTunnelOperation,
+      {
+        bindings: [...fake.gateways.values()].flatMap((gateways) =>
+          [...gateways.values()].flatMap((gateway) =>
+            (
+              gateway.bindings as Array<{ enabled: boolean; memberId: string }>
+            ).map(({ enabled, memberId }) => ({
+              enabled,
+              memberId,
+              relayId: relayOne,
+            }))
+          )
+        ),
+        domains,
+        id: tunnelId,
+        name: "Home",
+      },
+      { user: admin }
+    )
+  )
+
+const addAlias = (memberId: string, label: string, domain: string) =>
+  outcome(() =>
+    runOperationPromise(
+      addTunnelAliasOperation,
+      { domain, label, memberId: `instance:${memberId}`, tunnelId },
+      { user: admin }
+    )
+  )
+
 const gatewayRows = selectRows<{ id: string; relay_id: string }>(
   "tunnel_gateway"
 )
-const nameRows = selectRows<{ label: string; member_id: string }>("tunnel_name")
+const nameRows = selectRows<{
+  domain: string
+  generated_for: string | null
+  id: string
+  label: string
+  member_id: string
+}>("tunnel_name")
+const primaryRows = selectRows<{ address_ref: string; instance_id: string }>(
+  "instance_primary_address"
+)
 
 describeMysql("a tunnel's gateways", () => {
   layer(TestDatabase)((it) => {
@@ -409,6 +468,119 @@ describeMysql("a tunnel's gateways", () => {
         const refused = yield* connect(survival)
 
         assert.include(refused ?? "", "CoreDNS could not be reached")
+        assert.strictEqual(gatewaysOn(relayOne).size, 0)
+        assert.strictEqual(fake.devices.size, 0)
+        assert.deepEqual(yield* gatewayRows, [])
+        assert.deepEqual(yield* nameRows, [])
+      })
+    )
+    // A member's own alias under the TLD its generated name moves to is
+    // that name: it becomes the generated one, as its primary still.
+    it.effect(
+      "moves a generated name onto its own alias as the TLDs reorder",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          assert.isNull(yield* connect(survival))
+          assert.isNull(yield* saveDomains(["kiln", "test"]))
+          assert.isNull(yield* addAlias(survival, "survival-cc", "test"))
+          const alias = (yield* nameRows).find(
+            ({ domain }) => domain === "test"
+          )
+          assert.isNull(
+            yield* outcome(() =>
+              runOperationPromise(
+                setPrimaryTunnelNameOperation,
+                { id: alias!.id, tunnelId },
+                { user: admin }
+              )
+            )
+          )
+
+          assert.isNull(yield* saveDomains(["test", "kiln"]))
+
+          const names = yield* nameRows
+          assert.deepEqual(
+            names.map(({ domain, generated_for, label }) => [
+              label,
+              domain,
+              generated_for,
+            ]),
+            [["survival-cc", "test", `instance:${survival}`]]
+          )
+          assert.deepEqual(
+            (yield* primaryRows).map(({ address_ref }) => address_ref),
+            [names[0]!.id]
+          )
+        })
+    )
+
+    it.effect(
+      "refuses a TLD order that gives a member another's alias, changing nothing",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          assert.isNull(yield* connect(survival))
+          assert.isNull(yield* connect(creative))
+          assert.isNull(yield* saveDomains(["kiln", "test"]))
+          assert.isNull(yield* addAlias(creative, "survival-cc", "test"))
+          const applies = fake.applies.length
+
+          const refused = yield* saveDomains(["test", "kiln"])
+
+          assert.include(refused ?? "", "survival-cc.test")
+          assert.strictEqual(fake.applies.length, applies)
+          assert.sameDeepMembers(
+            (yield* nameRows).map(({ domain, label, member_id }) => [
+              label,
+              domain,
+              member_id,
+            ]),
+            [
+              ["survival-cc", "kiln", `instance:${survival}`],
+              ["survival-dd", "kiln", `instance:${creative}`],
+              ["survival-cc", "test", `instance:${creative}`],
+            ]
+          )
+        })
+    )
+
+    // An alias its gateways couldn't all serve isn't kept, so asking again
+    // adds it rather than finding it there already.
+    it.effect("takes back an alias its gateways couldn't serve", () =>
+      Effect.gen(function* () {
+        yield* seed
+        assert.isNull(yield* connect(survival))
+        fake.failDns = true
+
+        const refused = yield* addAlias(survival, "spawn", "kiln")
+
+        assert.include(refused ?? "", "CoreDNS could not be reached")
+        assert.deepEqual(
+          (yield* nameRows).map(({ label }) => label),
+          ["survival-cc"]
+        )
+        fake.failDns = false
+        assert.isNull(yield* addAlias(survival, "spawn", "kiln"))
+        assert.sameMembers(
+          (yield* nameRows).map(({ label }) => label),
+          ["survival-cc", "spawn"]
+        )
+      })
+    )
+
+    // Deleting the last thing a gateway connects takes it off its gateway on
+    // the Relay, which leaves the gateway with nothing; the deletion then
+    // prunes it.
+    it.effect("takes away a gateway left connecting nothing", () =>
+      Effect.gen(function* () {
+        yield* seed
+        assert.isNull(yield* connect(survival))
+        const [gateway] = [...gatewaysOn(relayOne).values()]
+        gateway!.bindings = []
+
+        yield* Effect.promise(() => pruneEmptyGateways(tunnelId, "system"))
+
         assert.strictEqual(gatewaysOn(relayOne).size, 0)
         assert.strictEqual(fake.devices.size, 0)
         assert.deepEqual(yield* gatewayRows, [])

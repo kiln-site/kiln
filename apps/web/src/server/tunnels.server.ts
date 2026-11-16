@@ -45,6 +45,7 @@ import {
   type TailscaleOAuthCredential,
 } from "@/effect/tunnels"
 import { reserveInstanceId } from "@/effect/instance-ids"
+import { recoverPromise } from "@/effect/promise"
 import {
   addTunnelAliasEffect,
   generateTunnelNamesEffect,
@@ -379,7 +380,7 @@ export const saveTunnelOperation = operation<
   authorize: ({ user }) => tailscaleAdministrator(user),
   locks: ({ input }) => [exclusive(tunnelSettingsKey(input.id))],
   run: ({ context: user, input }) =>
-    promiseEffect(() => saveTunnelHandler(user, input)),
+    promiseEffect(() => saveTunnelHandler(user.id, input)),
   audit: ({ input }) => ({ id: input.id, kind: "tunnel" }),
 })
 
@@ -448,7 +449,7 @@ async function connectTunnelHandler(
   const others = tunnel.bindings
     .filter(({ memberId }) => memberId !== input.memberId)
     .map(({ enabled, memberId, relayId }) => ({ enabled, memberId, relayId }))
-  return saveTunnelHandler(user, {
+  return saveTunnelHandler(user.id, {
     bindings: input.connected
       ? [
           ...others,
@@ -467,24 +468,13 @@ async function connectTunnelHandler(
 }
 
 async function saveTunnelHandler(
-  user: AuthenticatedUser,
+  subject: string,
   data: z.infer<typeof saveTunnelSchema>
 ) {
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const id = data.id
   const firstDomain = data.domains[0]!
-  const duplicateLabel = data.bindings.find(
-    (binding, index, bindings) =>
-      binding.label !== undefined &&
-      bindings.findIndex((candidate) => candidate.label === binding.label) !==
-        index
-  )
-  if (duplicateLabel) {
-    throw new Error(
-      `${duplicateLabel.label}.${firstDomain} is chosen more than once`
-    )
-  }
   const duplicateMember = data.bindings.find(
     (binding, index, bindings) =>
       bindings.findIndex(
@@ -494,25 +484,10 @@ async function saveTunnelHandler(
   if (duplicateMember) {
     throw new Error("Something connects to a tunnel through one tunnel")
   }
-  // A name is unique in its tunnel: another member's, alias or not, stays.
   const names = await runAppEffect(
     "tunnelNames.list",
     listTunnelNamesEffect([id])
   )
-  for (const binding of data.bindings) {
-    if (binding.label === undefined) continue
-    const taken = names.find(
-      (name) =>
-        name.memberId !== binding.memberId &&
-        name.label === binding.label &&
-        name.domain === firstDomain
-    )
-    if (taken) {
-      throw new Error(
-        `${binding.label}.${firstDomain} is already another member's name`
-      )
-    }
-  }
 
   const [currentResult, definitions] = await Promise.all([
     loadGateways(relays),
@@ -524,13 +499,9 @@ async function saveTunnelHandler(
   if (!definition) throw new Error("Tunnel not found")
 
   // Its gateways follow what it connects: a Relay something connects on has
-  // one, made as the first thing there connects, and one whose last member
-  // leaves goes. A gateway that has connected nothing yet stays.
-  const grouped = new Map<string, typeof data.bindings>(
-    currentForStack
-      .filter(({ bindings }) => bindings.length === 0)
-      .map(({ relayId }) => [relayId, []])
-  )
+  // one, made as the first thing there connects, and one with nothing left
+  // to connect goes, as its last member leaves or is deleted.
+  const grouped = new Map<string, typeof data.bindings>()
   for (const binding of data.bindings) {
     const relayBindings = grouped.get(binding.relayId) ?? []
     relayBindings.push(binding)
@@ -636,6 +607,32 @@ async function saveTunnelHandler(
   )
   const labelOf = (memberId: string, label: string | undefined) =>
     label ?? kept.get(memberId) ?? generated.get(memberId)!
+  // A name is unique in its tunnel, so each member's generated name under
+  // the first TLD is checked before anything changes: no two members take
+  // the same one, and none takes an alias of another member that stays. One
+  // of its own aliases becomes its generated name.
+  const bound = new Set(data.bindings.map(({ memberId }) => memberId))
+  const chosen = new Set<string>()
+  for (const binding of data.bindings) {
+    const label = labelOf(binding.memberId, binding.label)
+    if (chosen.has(label)) {
+      throw new Error(`${label}.${firstDomain} is chosen more than once`)
+    }
+    chosen.add(label)
+    const taken = names.find(
+      (name) =>
+        !name.generated &&
+        name.memberId !== binding.memberId &&
+        bound.has(name.memberId) &&
+        name.label === label &&
+        name.domain === firstDomain
+    )
+    if (taken) {
+      throw new Error(
+        `${label}.${firstDomain} is already another member's name`
+      )
+    }
+  }
 
   const nextDefinition: TunnelDefinition = {
     ...definition,
@@ -713,7 +710,7 @@ async function saveTunnelHandler(
         // Where it's going and where it was, for DNS after a rollback too.
         { id, relayIds: [...desiredRelayIds, ...currentRelayIds] },
         relayById,
-        user.id,
+        subject,
         integrationCredential
           ? (gateway) =>
               removeTailscaleControlPlaneDevice(integrationCredential, gateway)
@@ -764,7 +761,7 @@ async function saveTunnelHandler(
         }
         await Effect.runPromise(
           promiseEffect(() =>
-            saveTunnelDefinition(nextDefinition, user.id)
+            saveTunnelDefinition(nextDefinition, subject)
           ).pipe(
             Effect.catch((cause) =>
               Effect.gen(function* () {
@@ -836,6 +833,13 @@ async function saveTunnelHandler(
   await runAppEffect(
     "tunnelNames.save",
     Effect.gen(function* () {
+      const members = data.bindings.map(({ memberId }) => memberId)
+      // The names of members that left go first, so none is in the way of
+      // a name that moves; names under a TLD it no longer has go last, once
+      // generated ones moved off it, keeping their IDs and primaries.
+      yield* keepTunnelNamesOfEffect(id, members, [
+        ...new Set([...data.domains, ...definition.domains]),
+      ])
       yield* setGeneratedTunnelNamesEffect(
         id,
         data.bindings.map(({ label, memberId }) => ({
@@ -844,14 +848,10 @@ async function saveTunnelHandler(
           memberId,
         }))
       )
-      yield* keepTunnelNamesOfEffect(
-        id,
-        data.bindings.map(({ memberId }) => memberId),
-        data.domains
-      )
+      yield* keepTunnelNamesOfEffect(id, members, data.domains)
     })
   )
-  await writeTunnelDns({ id, relayIds: [...desiredRelayIds] }, user.id)
+  await writeTunnelDns({ id, relayIds: [...desiredRelayIds] }, subject)
   publishTailscaleChange()
   return {
     tunnels: groupGateways(
@@ -871,6 +871,48 @@ async function saveTunnelHandler(
     ),
     unavailableRelays: currentResult.unavailableRelays,
   }
+}
+
+/**
+ * The tunnels with a gateway that connects nothing, as one does once the
+ * last thing on its Relay is deleted.
+ */
+export async function tunnelsWithEmptyGateways(): Promise<Array<string>> {
+  const { tunnels } = await loadTunnels()
+  return tunnels
+    .filter(
+      (tunnel) =>
+        !tunnel.cleanup &&
+        tunnel.gateways.some(
+          (gateway) =>
+            !tunnel.bindings.some(({ relayId }) => relayId === gateway.relayId)
+        )
+    )
+    .map(({ id }) => id)
+}
+
+/**
+ * Saves a tunnel as it is, which takes away each gateway that connects
+ * nothing. Run it holding the tunnel's `#settings`.
+ */
+export async function pruneEmptyGateways(tunnelId: string, subject: string) {
+  const tunnel = (await loadTunnels()).tunnels.find(({ id }) => id === tunnelId)
+  if (!tunnel || tunnel.cleanup) return
+  const empty = tunnel.gateways.some(
+    (gateway) =>
+      !tunnel.bindings.some(({ relayId }) => relayId === gateway.relayId)
+  )
+  if (!empty) return
+  await saveTunnelHandler(subject, {
+    bindings: tunnel.bindings.map(({ enabled, memberId, relayId }) => ({
+      enabled,
+      memberId,
+      relayId,
+    })),
+    domains: tunnel.domains,
+    id: tunnel.id,
+    name: tunnel.name,
+  })
 }
 
 export const tunnelAliasSchema = z.strictObject({
@@ -912,16 +954,57 @@ async function addTunnelAliasHandler(
   ) {
     throw new Error("Connect it to this tunnel before giving it a name")
   }
+  const existing = names.find(
+    (name) => name.label === input.label && name.domain === input.domain
+  )
+  // The same alias again is a retry of one whose DNS failed: only that
+  // runs again.
   if (
-    names.some(
-      (name) => name.label === input.label && name.domain === input.domain
-    )
+    existing &&
+    (existing.generated || existing.memberId !== input.memberId)
   ) {
     throw new Error(`${input.label}.${input.domain} is already a name here`)
   }
-  await runAppEffect("tunnelNames.addAlias", addTunnelAliasEffect(input))
-  await rewriteTunnelNames(input.tunnelId, user.id)
+  if (existing) {
+    await rewriteTunnelNames(input.tunnelId, user.id)
+    return loadTunnels()
+  }
+  const id = await runAppEffect(
+    "tunnelNames.addAlias",
+    addTunnelAliasEffect(input)
+  )
+  await serveNamesOrUndo(input.tunnelId, user.id, () =>
+    runAppEffect("tunnelNames.removeAlias", removeTunnelAliasEffect(id))
+  )
   return loadTunnels()
+}
+
+/**
+ * Serves a tunnel's names after one changed. If its gateways can't all take
+ * them, the change is undone and what they serve put back, so the name
+ * stays as it was and asking again tries again.
+ */
+async function serveNamesOrUndo(
+  tunnelId: string,
+  subject: string,
+  undo: () => Promise<unknown>
+) {
+  const failure = await recoverPromise(
+    async () => {
+      await rewriteTunnelNames(tunnelId, subject)
+      return null
+    },
+    (cause) => ({ cause })
+  )
+  if (!failure) return
+  await undo()
+  // Gateways that took the change before another failed take it back; one
+  // that still can't is told again by the next change.
+  await recoverPromise(
+    () => rewriteTunnelNames(tunnelId, subject),
+    () => undefined
+  )
+  throw failure.cause
 }
 
 export const removeTunnelAliasSchema = z.strictObject({ id: z.uuid() })
@@ -935,13 +1018,22 @@ export const removeTunnelAliasOperation = operation<
   locks: ({ input }) => [exclusive(tunnelSettingsKey(input.tunnelId))],
   run: ({ context: user, input }) =>
     promiseEffect(async () => {
+      const name = await runAppEffect(
+        "tunnelNames.load",
+        loadTunnelNameEffect(input.id)
+      )
+      if (!name || name.tunnelId !== input.tunnelId) {
+        throw new Error("That name is gone")
+      }
       const removed = await runAppEffect(
         "tunnelNames.removeAlias",
         removeTunnelAliasEffect(input.id)
       )
       if (!removed)
         throw new Error("A generated name can be renamed, not removed")
-      await rewriteTunnelNames(input.tunnelId, user.id)
+      await serveNamesOrUndo(input.tunnelId, user.id, () =>
+        runAppEffect("tunnelNames.addAlias", addTunnelAliasEffect(name))
+      )
       return loadTunnels()
     }),
   audit: ({ input }) => ({ id: input.tunnelId, kind: "tunnel" }),
