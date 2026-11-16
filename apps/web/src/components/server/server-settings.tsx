@@ -8,7 +8,10 @@ import {
   LoaderCircle,
   TriangleAlert,
 } from "lucide-react"
-import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
+import {
+  instanceTailscaleMember,
+  MAXIMUM_INSTANCE_NAME_LENGTH,
+} from "@workspace/contracts"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -37,6 +40,7 @@ import {
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
+import { TunnelNameFacts } from "@/components/tunnel/tunnel-name-facts"
 import { hostPortAddress } from "@/lib/domain-address"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import { instanceRecipeQueryOptions } from "@/lib/query-options"
@@ -186,6 +190,11 @@ export function ServerConnectionSettings({
       : instance.connectAddress
   const configuredAddress =
     instance.connectAddress !== rawAddress ? instance.connectAddress : null
+  // Its names in the tunnels it's connected to.
+  const isMember = React.useCallback(
+    (memberId: string) => instanceTailscaleMember(memberId) === instance.id,
+    [instance.id]
+  )
 
   return (
     <InfoSection
@@ -212,6 +221,7 @@ export function ServerConnectionSettings({
       <InfoFact label="Raw connect address">
         <AddressValue label="raw connect address" value={rawAddress} />
       </InfoFact>
+      <TunnelNameFacts isMember={isMember} />
       {/* A count only; the Network page lists them. */}
       {instance.ports.length > 0 ? (
         <InfoFact label="Ports">

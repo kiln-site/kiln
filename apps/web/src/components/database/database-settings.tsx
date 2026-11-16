@@ -5,6 +5,7 @@ import {
   databaseConnectionUrl,
   databaseEngineHasNamedDatabase,
   type ResourceLimits,
+  databaseTailscaleMember,
 } from "@workspace/contracts"
 import {
   ArrowRight,
@@ -53,6 +54,7 @@ import {
   InstanceProfileBrick,
 } from "@/components/instance-profile"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
+import { TunnelNameFacts } from "@/components/tunnel/tunnel-name-facts"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
@@ -507,6 +509,11 @@ export function DatabaseConnectionSettings({
   database: ManagedDatabase
 }) {
   const connected = database.members.length
+  // Its names in the tunnels it's connected to.
+  const isMember = React.useCallback(
+    (memberId: string) => databaseTailscaleMember(memberId) === database.id,
+    [database.id]
+  )
   return (
     <InfoSection
       icon={<Cable />}
@@ -533,6 +540,7 @@ export function DatabaseConnectionSettings({
           {connected === 0 ? "None" : connected}
         </span>
       </InfoFact>
+      <TunnelNameFacts isMember={isMember} />
     </InfoSection>
   )
 }
@@ -576,10 +584,7 @@ export function DatabaseContainerSection({
     [database.id, database.relayId]
   )
   const running = database.observedState === "running"
-  const usage = React.useMemo(
-    () => ({ ...target, running }),
-    [running, target]
-  )
+  const usage = React.useMemo(() => ({ ...target, running }), [running, target])
   const container = React.useMemo(
     () => ({
       id: database.containerId,

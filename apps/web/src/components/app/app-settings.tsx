@@ -1,8 +1,8 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { primaryWebRoute } from "@workspace/contracts"
+import { appTailscaleMember, primaryWebRoute } from "@workspace/contracts"
 import type { RelayAppWebRoute } from "@workspace/contracts"
-import { Cable, LoaderCircle, Rocket } from "lucide-react"
+import { Cable, Globe2, LoaderCircle, Rocket } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
@@ -17,6 +17,10 @@ import {
 } from "@/components/app/app-presentation"
 import { InfoSection, InfoSectionLink } from "@/components/info-page"
 import { StatusIndicator } from "@/components/status-indicator"
+import {
+  TunnelNameFacts,
+  useHasTunnelNames,
+} from "@/components/tunnel/tunnel-name-facts"
 import {
   appConfigQueryOptions,
   appDeploymentSummaryQueryOptions,
@@ -65,7 +69,13 @@ export function AppWebRouteSettings({
     })
   )
   const routes = state.data?.routes ?? []
-  const empty = !state.data || routes.length === 0
+  // Its services' names in tunnels are rows here too.
+  const isMember = React.useCallback(
+    (memberId: string) => appTailscaleMember(memberId)?.appId === app.id,
+    [app.id]
+  )
+  const hasTunnelNames = useHasTunnelNames(isMember)
+  const empty = !state.data || (routes.length === 0 && !hasTunnelNames)
   // None of them while its primary address is a tunnel name.
   const primary = state.data?.primaryTunnelName
     ? undefined
@@ -102,20 +112,23 @@ export function AppWebRouteSettings({
         </div>
       ) : state.isError ? (
         <p className="text-xs text-destructive">{state.error.message}</p>
-      ) : routes.length === 0 ? (
+      ) : empty ? (
         <p className="text-[0.8125rem] text-muted-foreground">
           No domains point at this app. Add one on the Network page to serve a
           service over HTTPS.
         </p>
       ) : (
-        orderedRoutes.map((route) => (
-          <WebRouteFact
-            key={route.id}
-            app={app}
-            primary={route === primary}
-            route={route}
-          />
-        ))
+        <>
+          {orderedRoutes.map((route) => (
+            <WebRouteFact
+              key={route.id}
+              app={app}
+              primary={route === primary}
+              route={route}
+            />
+          ))}
+          <TunnelNameFacts isMember={isMember} />
+        </>
       )}
     </InfoSection>
   )
@@ -135,7 +148,12 @@ const WebRouteFact = React.memo(function WebRouteFact({
   const address = `${route.hostname}${route.path ?? ""}`
   return (
     <div className="flex min-h-10 items-center gap-3 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0">
-      <dt className="flex min-w-0 flex-1 items-baseline gap-2">
+      <dt className="flex min-w-0 flex-1 items-center gap-2">
+        <Globe2
+          className="size-3.5 shrink-0 text-muted-foreground"
+          aria-label="Public"
+          role="img"
+        />
         <a
           className="truncate font-medium transition-colors hover:text-primary-ink"
           href={`https://${address}`}
