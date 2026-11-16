@@ -240,7 +240,9 @@ hostname.
 - `domain_integration`: one row per connection, with `owner_id` (NULL for
   Kiln's), its encrypted token, its reserved names in
   `blacklist_patterns`, and the zones it reached when last checked.
-- `domain_zone`: vanity domains, unique across connections.
+- `domain`: every domain, unique across Kiln, with its provider
+  (`cloudflare`, `manual`, `tunnel`). A Cloudflare domain is a vanity domain,
+  with its connection and zone.
 - `hostname_claim`: the game server or app each hostname belongs to,
   lowercase, one row per name.
 - `instance_address`: one row per hostname a game server or app holds,
@@ -290,10 +292,11 @@ both a name under a domain. What differs is the domain's provider:
   certificate. A hostname a Relay already routes outside every domain is
   attached to a managed-elsewhere domain someone adds; Kiln never guesses a
   parent domain, and a name two Relays both route is shown as a conflict.
-- A connection is a provider's credentials. The provider is an interface in
-  code (list zones, write, find and delete a record, whether it can proxy,
-  whether it has SRV), and Cloudflare is its one implementation until people
-  ask for another. Record columns (ID, type, proxied, SRV) stay as they are.
+- A connection is a provider's credentials, and says which service it is
+  (`domain_integration.provider`). Cloudflare's API sits in one module
+  (`effect/cloudflare-api.ts`); another service gets its own module beside
+  it when people ask for one, and the connection's provider picks it. Record
+  columns (ID, type, proxied, SRV) stay as they are.
 
 ### Names
 

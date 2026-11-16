@@ -441,7 +441,7 @@ export const insertGameAddressEffect = Effect.fn("addresses.insertGame")(
             last_error, created_at, updated_at)
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?,
                 'pending', NULL, ?, ?
-           FROM ${databaseTable("domain_zone")}
+           FROM ${databaseTable("domain")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
             AND enabled = 1`,
           [
@@ -500,7 +500,7 @@ export const reserveGameAddressEffect = Effect.fn("addresses.reserve")(
     yield* database.transaction("addresses.reserve", (transaction) =>
       Effect.gen(function* () {
         const zones = yield* transaction.queryRows<RowDataPacket>(
-          `SELECT 1 FROM ${databaseTable("domain_zone")}
+          `SELECT 1 FROM ${databaseTable("domain")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
           LOCK IN SHARE MODE`,
           [input.domain, input.zoneId, input.connectionId]
@@ -567,8 +567,8 @@ export const beginInstanceDomainRenameEffect = Effect.fn(
     Effect.gen(function* () {
       const zones = yield* database.queryRows<RowDataPacket>(
         "addresses.beginRename",
-        `SELECT 1 FROM ${databaseTable("domain_zone")}
-          WHERE domain = ?
+        `SELECT 1 FROM ${databaseTable("domain")}
+          WHERE domain = ? AND provider = 'cloudflare'
           LOCK IN SHARE MODE`,
         [input.domain]
       )

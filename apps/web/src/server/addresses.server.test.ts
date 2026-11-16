@@ -300,7 +300,7 @@ const seed = Effect.gen(function* () {
     created_at: 0,
     updated_at: 0,
   })
-  yield* insertRows("domain_zone", {
+  yield* insertRows("domain", {
     domain: zone.name,
     integration_id: "cloudflare",
     zone_id: zone.id,

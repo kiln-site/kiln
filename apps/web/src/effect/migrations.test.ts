@@ -2419,5 +2419,65 @@ describeMysql("database migrations", () => {
         }),
       schemaBuildTimeout
     )
+    it.effect(
+      "keeps every vanity domain as a domain Cloudflare writes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 84)
+          )
+          yield* insertRows("domain_integration", {
+            api_token_ciphertext: "token",
+            blacklist_patterns: "[]",
+            created_at: 1,
+            id: "cloudflare",
+            name: "Cloudflare",
+            owner_id: null,
+            provider: "cloudflare",
+            updated_at: 1,
+            zones: "[]",
+          })
+          yield* insertRows("domain_zone", {
+            created_at: 1,
+            domain: "kiln.test",
+            enabled: 1,
+            integration_id: "cloudflare",
+            is_default: 1,
+            updated_at: 1,
+            zone_id: "z".repeat(32),
+            zone_name: "kiln.test",
+          })
+
+          yield* applyMigrations(migrations)
+
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT domain, provider, integration_id, zone_name, is_default
+                FROM ${sql(databaseTableName("domain"))}
+            `
+          ).toEqual([
+            {
+              domain: "kiln.test",
+              integration_id: "cloudflare",
+              is_default: 1,
+              provider: "cloudflare",
+              zone_name: "kiln.test",
+            },
+          ])
+          // A domain with no connection, as a tunnel's or one managed
+          // elsewhere has, fits.
+          yield* insertRows("domain", {
+            created_at: 1,
+            domain: "kiln",
+            enabled: 1,
+            is_default: 0,
+            provider: "tunnel",
+            updated_at: 1,
+          })
+        }),
+      schemaBuildTimeout
+    )
   })
 })

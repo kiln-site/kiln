@@ -116,7 +116,7 @@ const insertCredential = (
       updated_at: 0,
     })
     yield* insertRows(
-      "domain_zone",
+      "domain",
       domains.map((domain, index) => ({
         domain,
         integration_id: "cloudflare",

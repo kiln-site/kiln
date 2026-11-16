@@ -99,7 +99,7 @@ const connectionColumns = `id, provider, owner_id, name, api_token_ciphertext,
        blacklist_patterns, zones, last_verified_at, last_error`
 const domainZoneSelect = `SELECT zone.domain, zone.integration_id, zone.zone_id,
        zone.zone_name, zone.is_default, zone.enabled, connection.owner_id
-  FROM ${databaseTable("domain_zone")} zone
+  FROM ${databaseTable("domain")} zone
   JOIN ${databaseTable("domain_integration")} connection
     ON connection.id = zone.integration_id`
 
@@ -308,7 +308,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
         const previous = yield* transaction.queryRows<DomainZoneRow>(
           `SELECT domain, integration_id, zone_id, zone_name, is_default,
                   enabled, NULL AS owner_id
-             FROM ${databaseTable("domain_zone")}
+             FROM ${databaseTable("domain")}
             WHERE integration_id = ?
             FOR UPDATE`,
           [input.id]
@@ -322,8 +322,8 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
           const taken = yield* transaction.queryRows<
             RowDataPacket & { domain: string }
           >(
-            `SELECT domain FROM ${databaseTable("domain_zone")}
-              WHERE integration_id <> ?
+            `SELECT domain FROM ${databaseTable("domain")}
+              WHERE (integration_id IS NULL OR integration_id <> ?)
                 AND domain IN (${[...requested.keys()].map(() => "?").join(", ")})
               LOCK IN SHARE MODE`,
             [input.id, ...requested.keys()]
@@ -331,7 +331,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
           const [conflict] = taken
           if (conflict) {
             return yield* DomainConfigurationError.make({
-              message: `${conflict.domain} is already a vanity domain on another Cloudflare connection`,
+              message: `${conflict.domain} is already a domain elsewhere in Kiln`,
             })
           }
         }
@@ -341,7 +341,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
           // A domain a rename is moving onto counts as used too.
           `SELECT zone.domain
              FROM ${databaseTable("instance_address")} assignment
-             JOIN ${databaseTable("domain_zone")} zone
+             JOIN ${databaseTable("domain")} zone
                ON zone.domain = assignment.vanity_domain
                OR zone.domain = assignment.next_vanity_domain
             WHERE zone.integration_id = ? AND assignment.game = 1
@@ -408,7 +408,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
         // One default per owner, across their connections.
         if (input.domains.some((domain) => domain.isDefault)) {
           yield* transaction.execute(
-            `UPDATE ${databaseTable("domain_zone")} zone
+            `UPDATE ${databaseTable("domain")} zone
                JOIN ${databaseTable("domain_integration")} connection
                  ON connection.id = zone.integration_id
                 SET zone.is_default = 0
@@ -417,13 +417,13 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
           )
         }
         yield* transaction.execute(
-          `DELETE FROM ${databaseTable("domain_zone")}
+          `DELETE FROM ${databaseTable("domain")}
             WHERE integration_id = ?`,
           [input.id]
         )
         for (const domain of [...input.domains, ...kept]) {
           yield* transaction.execute(
-            `INSERT INTO ${databaseTable("domain_zone")}
+            `INSERT INTO ${databaseTable("domain")}
                (domain, integration_id, zone_id, zone_name, is_default,
                 enabled, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -493,9 +493,9 @@ export const requireConnectionUnusedEffect = Effect.fn(
 // being renamed onto them.
 const connectionDomainsMatch = `game = 1 AND (integration_id = ?
   OR vanity_domain IN (
-  SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?)
+  SELECT domain FROM ${databaseTable("domain")} WHERE integration_id = ?)
   OR next_vanity_domain IN (
-  SELECT domain FROM ${databaseTable("domain_zone")} WHERE integration_id = ?))`
+  SELECT domain FROM ${databaseTable("domain")} WHERE integration_id = ?))`
 
 // The rows of the address table that are web hostnames: every one that
 // isn't only a game server's address (`effect/addresses.ts`).
@@ -529,7 +529,7 @@ export const deleteDomainConnectionEffect = Effect.fn(
   yield* database.transaction("domains.connection.delete", (transaction) =>
     Effect.gen(function* () {
       yield* transaction.queryRows(
-        `SELECT domain FROM ${databaseTable("domain_zone")}
+        `SELECT domain FROM ${databaseTable("domain")}
           WHERE integration_id = ?
           FOR UPDATE`,
         [id]
@@ -555,7 +555,7 @@ export const deleteDomainConnectionEffect = Effect.fn(
       )
       yield* connectionHostnamesFailure(Number(hostnames?.total ?? 0))
       yield* transaction.execute(
-        `DELETE FROM ${databaseTable("domain_zone")} WHERE integration_id = ?`,
+        `DELETE FROM ${databaseTable("domain")} WHERE integration_id = ?`,
         [id]
       )
       yield* transaction.execute(

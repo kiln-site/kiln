@@ -226,7 +226,7 @@ const insertConnection = (connection: {
       updated_at: 0,
     })
     for (const [index, domain] of (connection.vanity ?? []).entries()) {
-      yield* insertRows("domain_zone", {
+      yield* insertRows("domain", {
         domain: domain.domain,
         integration_id: connection.id,
         zone_id: domain.zoneId,
