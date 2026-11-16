@@ -43,6 +43,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 import { rewriteTailscaleDnsOf, tunnelsOf } from "@/lib/tunnel-dns.server"
+import { pruneTunnelGatewaysAfter } from "@/lib/tunnel-gateway-pruning.server"
 import { currentActingUser } from "@/operations/acting-user"
 import {
   durableOperation,
@@ -237,6 +238,14 @@ const deletionSteps = (input: DeletionInput) =>
       yield* DurableClock.sleep({
         duration: retryAfter,
         name: `cleanup/retry/${round}`,
+      })
+    }
+    // The last thing a tunnel connected on its Relay leaves its gateway
+    // there with nothing to connect, which goes now.
+    if (input.kind !== "volume") {
+      yield* pruneTunnelGatewaysAfter({
+        idempotencyKey: `${input.deletionId}:${input.attempt}:gateways`,
+        name: "tunnel-gateways",
       })
     }
     if (input.kind === "app") yield* deleteNamedVolumes(input)

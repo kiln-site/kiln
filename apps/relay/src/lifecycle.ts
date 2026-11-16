@@ -3892,6 +3892,10 @@ export class LifecycleDriver {
         TS_AUTH_ONCE: "true",
         TS_HOSTNAME: config.hostname,
         TS_EXTRA_ARGS: "--accept-dns=false",
+        // Its own forwarding and masquerading rules go through the backend
+        // its network namespace already uses: left to default, it takes
+        // legacy iptables, which a kernel with only nftables refuses.
+        TS_DEBUG_FIREWALL_MODE: "auto",
         ...(authKey !== undefined && { TS_AUTHKEY: authKey }),
       },
       hostname: config.hostname,
@@ -3976,8 +3980,9 @@ export class LifecycleDriver {
   async #ensureTunnelFirewall(config: TunnelConfig): Promise<void> {
     const container = this.#resources.tunnelContainer(config.id)
     const chain = TUNNEL_FORWARD_CHAIN
+    const program = await this.#tunnelIptables(container)
     const iptables = (...arguments_: Array<string>) =>
-      runLifecycle(this.#engine.exec(container, ["iptables", ...arguments_]))
+      runLifecycle(this.#engine.exec(container, [program, ...arguments_]))
     const [hook, specification] = await Promise.all([
       recoverPromise(
         () => iptables("-C", "FORWARD", "-i", "tailscale0", "-j", chain),
@@ -4011,6 +4016,22 @@ export class LifecycleDriver {
     )) {
       await iptables(...rule)
     }
+  }
+
+  // The Tailscale image's `iptables` is the legacy one, which a kernel with
+  // only nftables, as recent distributions ship, refuses; `iptables-nft`
+  // takes the same rules there.
+  async #tunnelIptables(container: string): Promise<string> {
+    const legacy = await recoverPromise(
+      async () => {
+        await runLifecycle(
+          this.#engine.exec(container, ["iptables", "-S", "FORWARD"])
+        )
+        return true
+      },
+      () => false
+    )
+    return legacy ? "iptables" : "iptables-nft"
   }
 
   async #rollbackTunnelApply(

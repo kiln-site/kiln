@@ -311,7 +311,9 @@ function upsertDeployment(
   now: number
 ) {
   // A gateway Hearth sees for the first time is its tunnel's. One of a
-  // tunnel Hearth doesn't know is left out.
+  // tunnel Hearth doesn't know is left out. A tunnel has one gateway on a
+  // Relay, so the one its Relay reports there takes the place of any other
+  // Hearth kept, such as one a failed connect left.
   return tx.execute(
     `INSERT INTO ${databaseTable("tunnel_gateway")}
          (id, tunnel_id, relay_id, owner_id, state, cleanup_next_attempt_at,
@@ -320,6 +322,7 @@ function upsertDeployment(
          FROM ${databaseTable("tunnel")} tunnel
         WHERE tunnel.id = ?
        ON DUPLICATE KEY UPDATE
+         id = VALUES(id),
          state = VALUES(state),
          observed_at = VALUES(observed_at),
          updated_at = VALUES(updated_at)`,
