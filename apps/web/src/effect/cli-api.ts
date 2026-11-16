@@ -255,10 +255,18 @@ export const getCliRelayInfoEffect = Effect.fn("cli.api.relays.info")(
         cpuCores: snapshot.node.cpu.cores,
         cpuLoadPercent: snapshot.node.cpu.loadPercent,
         id: snapshot.node.id,
-        memory: snapshot.node.memory,
+        // The CLI response is strict; the snapshot's usage objects carry
+        // more than it promises.
+        memory: {
+          totalBytes: snapshot.node.memory.totalBytes,
+          usedBytes: snapshot.node.memory.usedBytes,
+        },
         name: snapshot.node.name,
         startedAt: snapshot.node.startedAt,
-        storage: snapshot.node.storage,
+        storage: {
+          totalBytes: snapshot.node.storage.totalBytes,
+          usedBytes: snapshot.node.storage.usedBytes,
+        },
         uptimeSeconds: snapshot.node.uptimeSeconds,
       },
     })
@@ -1057,16 +1065,33 @@ export const uploadCliFileFromUrlEffect = Effect.fn("cli.api.files.uploadUrl")(
   }
 )
 
-export function cliActivityResponse(
-  entries: ReadonlyArray<Readonly<Record<string, unknown>>>,
+type ActivityEntry = Awaited<
+  ReturnType<typeof getActivityForUser>
+>["entries"][number]
+
+// Hearth's activity entries grow fields for its own pages; the CLI response is
+// strict, so it names each field it promises.
+function cliActivityResponse(
+  entries: ReadonlyArray<ActivityEntry>,
   limit: number
 ) {
-  const safeEntries = entries.slice(0, limit).map((entry) => {
-    const { rawEvent, ...safeEntry } = entry
-    void rawEvent
-    return safeEntry
+  return cliActivityResponseSchema.parse({
+    entries: entries.slice(0, limit).map((entry) => ({
+      actor: entry.actor,
+      id: entry.id,
+      label: entry.label,
+      occurredAt: entry.occurredAt,
+      permission: entry.permission,
+      relay: { id: entry.relay.id, name: entry.relay.name },
+      // The CLI names game servers only; Apps and databases aren't servers.
+      server:
+        entry.target?.kind === "server"
+          ? { id: entry.target.id, name: entry.target.name }
+          : null,
+      source: entry.source,
+      type: entry.type,
+    })),
   })
-  return cliActivityResponseSchema.parse({ entries: safeEntries })
 }
 
 function relayRemoteUploadInput(
