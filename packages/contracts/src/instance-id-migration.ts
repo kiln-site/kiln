@@ -101,3 +101,26 @@ export function legacyIdRewriter(
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 }
+
+const TUNNEL_NAMESPACE = "kiln-tunnel-id-v1"
+
+/**
+ * The ID a Tailscale network's tunnel on one Relay takes, once each tunnel
+ * is an instance of its own: worked out the same way on Hearth and on that
+ * Relay from the network's ID and the Relay's, so each arrives at it on its
+ * own. Hearth reserves it, refusing to go on if it was ever taken.
+ */
+export async function migratedTunnelId(
+  networkId: string,
+  relayId: string
+): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(
+      [TUNNEL_NAMESPACE, networkId, relayId].join("\u0000")
+    )
+  )
+  return Array.from(new Uint8Array(digest).subarray(0, 6), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("")
+}

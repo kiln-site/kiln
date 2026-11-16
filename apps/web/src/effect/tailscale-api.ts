@@ -1,7 +1,7 @@
 import { Effect, Schedule, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
-import type { TailscaleOAuthCredential } from "@/effect/tailscale-networks"
+import type { TailscaleOAuthCredential } from "@/effect/tailnets"
 
 const tailscaleApiBaseUrl = "https://api.tailscale.com/api/v2"
 const tailscaleOAuthTokenUrl = `${tailscaleApiBaseUrl}/oauth/token`

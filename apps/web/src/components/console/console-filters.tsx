@@ -1,7 +1,7 @@
 import * as React from "react"
 import { flushSync } from "react-dom"
 import type { RelayConsoleLevel } from "@workspace/contracts"
-import { Boxes, Check, ListFilter, Search, X } from "lucide-react"
+import { Check, ListFilter, Search, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -13,12 +13,10 @@ import {
 
 import {
   consoleLevels,
-  consoleServices,
   type ConsoleUiStore,
 } from "@/components/console/console-stores"
 import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
-import { RelayKindIcon } from "@/components/instance-kind-icon"
 
 // Below `sm` the search collapses to an icon so the toolbar fits on one line.
 // Opening it hides the toolbar's other children until the input loses focus.
@@ -214,156 +212,6 @@ function ConsoleLevelFilterAction({
       level={level === "all" ? undefined : level}
       onClick={() => uiStore.toggleLevel(level)}
     />
-  )
-}
-
-export function ConsoleRelayMenu({
-  relays,
-  uiStore,
-}: {
-  relays: Array<{ id: string; label: string }>
-  uiStore: ConsoleUiStore
-}) {
-  const selected = React.useSyncExternalStore(
-    uiStore.subscribe,
-    uiStore.getRelayIdsSnapshot,
-    uiStore.getRelayIdsSnapshot
-  )
-  const all = selected === null
-  const relayIds = React.useMemo(() => relays.map(({ id }) => id), [relays])
-
-  return (
-    <Popover>
-      <ConsoleTooltip content="Filter Relay">
-        <PopoverTrigger asChild>
-          <Button
-            variant={all ? "ghost" : "secondary"}
-            size="icon"
-            className="relative size-9 shrink-0"
-            aria-label={
-              all
-                ? "Filter console relays"
-                : `Filter console relays, ${selected.size} active`
-            }
-          >
-            <RelayKindIcon />
-            {!all ? (
-              <span
-                className="absolute top-1 right-1 size-1.5 bg-primary"
-                aria-hidden="true"
-              />
-            ) : null}
-          </Button>
-        </PopoverTrigger>
-      </ConsoleTooltip>
-      <PopoverContent
-        align="start"
-        side="bottom"
-        sideOffset={7}
-        className="w-56 p-1"
-      >
-        <ConsoleFilterMenuSummary
-          active={selected?.size ?? relays.length}
-          label="Relays"
-          total={relays.length}
-        />
-        <ConsoleLevelFilter
-          active={all}
-          label="All relays"
-          onClick={() => uiStore.toggleRelay("all", relayIds)}
-        />
-        <div className="my-1 border-t" />
-        {relays.map((relay) => (
-          <ConsoleLevelFilter
-            key={relay.id}
-            active={all || selected.has(relay.id)}
-            label={relay.label}
-            onClick={() => uiStore.toggleRelay(relay.id, relayIds)}
-          />
-        ))}
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-export function ConsoleServiceMenu({ uiStore }: { uiStore: ConsoleUiStore }) {
-  const selected = React.useSyncExternalStore(
-    uiStore.subscribe,
-    uiStore.getServicesSnapshot,
-    uiStore.getServicesSnapshot
-  )
-  const all = selected === null
-
-  return (
-    <Popover>
-      <ConsoleTooltip content="Filter Service">
-        <PopoverTrigger asChild>
-          <Button
-            variant={all ? "ghost" : "secondary"}
-            size="icon"
-            className="relative size-9 shrink-0"
-            aria-label={
-              all
-                ? "Filter console services"
-                : `Filter console services, ${selected.size} active`
-            }
-          >
-            <Boxes />
-            {!all ? (
-              <span
-                className="absolute top-1 right-1 size-1.5 bg-primary"
-                aria-hidden="true"
-              />
-            ) : null}
-          </Button>
-        </PopoverTrigger>
-      </ConsoleTooltip>
-      <PopoverContent
-        align="start"
-        side="bottom"
-        sideOffset={7}
-        className="w-52 p-1"
-      >
-        <ConsoleFilterMenuSummary
-          active={selected?.size ?? consoleServices.length}
-          label="Services"
-          total={consoleServices.length}
-        />
-        <ConsoleLevelFilter
-          active={all}
-          label="All services"
-          onClick={() => uiStore.toggleService("all")}
-        />
-        <div className="my-1 border-t" />
-        {consoleServices.map((service) => (
-          <ConsoleLevelFilter
-            key={service}
-            active={all || selected.has(service)}
-            label={service === "coredns" ? "CoreDNS" : "Tailscale"}
-            onClick={() => uiStore.toggleService(service)}
-          />
-        ))}
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function ConsoleFilterMenuSummary({
-  active,
-  label,
-  total,
-}: {
-  active: number
-  label: string
-  total: number
-}) {
-  return (
-    <div className="flex items-center justify-between border-b px-2 py-2">
-      <p className="type-technical-label text-muted-foreground">{label}</p>
-      <span className="type-meta font-mono text-muted-foreground tabular-nums">
-        {active}/{total}
-      </span>
-    </div>
   )
 }
 

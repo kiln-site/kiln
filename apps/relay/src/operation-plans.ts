@@ -321,7 +321,7 @@ export function transferInstallLocks(rootId: string): Array<LaneLock> {
  * A Tailscale stack's members as saved now, for planning a change to it.
  * The change checks, once it runs, that they're still what it planned for.
  */
-export type TailscaleStackReader = (
+export type TunnelReader = (
   stackId: string
 ) => Promise<
   ReadonlyArray<{ readonly enabled: boolean; readonly memberId: string }>
@@ -430,7 +430,7 @@ export function controlRequestLocks(
   payload: Readonly<Record<string, unknown>>,
   resolveInstance: InstanceResolver,
   resolveAppVolumes: AppVolumesResolver,
-  readTailscaleStack?: TailscaleStackReader,
+  readTunnel?: TunnelReader,
   isFrozen?: FrozenResourceCheck
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null {
   const instance = (
@@ -481,8 +481,8 @@ export function controlRequestLocks(
     case "relay.docker.storage":
     case "relay.rename":
     case "relay.audit.list":
-    case "relay.tailscale.stack.list":
-    case "relay.tailscale.stack.state":
+    case "tunnel.list":
+    case "tunnel.state":
     case "relay.host.read":
     case "relay.database.read":
     case "relay.proxy.read":
@@ -658,21 +658,21 @@ export function controlRequestLocks(
       )
     }
     // DNS records change nothing of a stack's members.
-    case "relay.tailscale.stack.dns":
+    case "tunnel.dns":
       return instance((id) => instanceReplaceLocks(id), "id")
     // Applying a stack joins and leaves members, and removing one leaves
     // them all, so each waits for those members' power changes, as theirs
     // wait for it. A stack runs as a game server of its own.
-    case "relay.tailscale.stack.apply":
-    case "relay.tailscale.stack.remove": {
+    case "tunnel.apply":
+    case "tunnel.remove": {
       const reference = stringField(payload, "id")
       if (reference === null) return null
       const resolved = resolveInstance(reference)
       return Promise.resolve(resolved).then(async (stackId) => [
         ...instanceReplaceLocks(stackId),
         ...tailscaleMemberLocks(
-          (await readTailscaleStack?.(stackId)) ?? [],
-          operation === "relay.tailscale.stack.apply"
+          (await readTunnel?.(stackId)) ?? [],
+          operation === "tunnel.apply"
             ? requestedTailscaleBindings(payload)
             : null,
           isFrozen

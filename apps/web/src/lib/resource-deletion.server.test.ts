@@ -40,7 +40,7 @@ import {
   reconcileResourceDeletions,
   requestResourceDeletionEffect,
 } from "./resource-deletion.server"
-import { rewriteTailscaleDns } from "./tailscale-dns.server"
+import { rewriteTailscaleDns } from "./tunnel-dns.server"
 
 // The Relay is the only fake (test/resource-deletion.ts).
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({

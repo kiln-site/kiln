@@ -2,7 +2,6 @@ import * as React from "react"
 import {
   formatRelayInstanceStateReason,
   type RelayInstanceStateReason,
-  isTailscaleNode,
 } from "@workspace/contracts"
 
 import {
@@ -22,7 +21,6 @@ import {
   ConsoleWrapButton,
 } from "@/components/console/console-toolbar-actions"
 import { ConsoleShareButton } from "@/components/console/console-share-button"
-import { TailscaleConsoleFilterMenus } from "@/components/console/console-tailscale-filters"
 import { ConsoleWarning } from "@/components/console/console-warning"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { useServerSnapshot } from "@/lib/use-server-workspace"
@@ -52,12 +50,6 @@ export const ConsoleToolbar = React.memo(function ConsoleToolbar({
       <ConsoleSearchControl uiStore={uiStore} />
       <ConsoleLevelMenu uiStore={uiStore} />
       <ConsoleRetryButton streamStore={streamStore} />
-      {isTailscaleNode(instance) ? (
-        <TailscaleConsoleFilterMenus
-          instanceId={instance.id}
-          uiStore={uiStore}
-        />
-      ) : null}
       <ConsoleRuntimeReason
         instanceId={instance.id}
         relayId={instance.relayId}

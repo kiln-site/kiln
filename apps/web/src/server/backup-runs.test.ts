@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import {
-  builtinTailscaleBrick,
   relayInstanceSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
@@ -24,6 +23,7 @@ import {
   insertRows,
   selectRows,
 } from "@/test/seed"
+import { testBrick } from "@/test/bricks"
 
 const relayId = "1".repeat(12)
 const databaseId = "d".repeat(12)
@@ -101,7 +101,7 @@ afterAll(() => disposeAppRuntime())
 relay.snapshot = relaySnapshotSchema.parse({
   instances: [
     relayInstanceSchema.parse({
-      brickSource: builtinTailscaleBrick.source,
+      brickSource: testBrick.source,
       connectAddress: "play.example.test:25565",
       containerId: "container",
       desiredState: "stopped",

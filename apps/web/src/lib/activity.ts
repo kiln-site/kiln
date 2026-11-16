@@ -270,13 +270,13 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (operation === "relay.tailscale.write") {
     return "Updated Tailscale settings"
   }
-  if (operation === "relay.tailscale.stack.apply") {
+  if (operation === "tunnel.apply") {
     return "Applied a Tailscale stack"
   }
-  if (operation === "relay.tailscale.stack.dns") {
+  if (operation === "tunnel.dns") {
     return "Updated Tailscale DNS"
   }
-  if (operation === "relay.tailscale.stack.remove") {
+  if (operation === "tunnel.remove") {
     return "Removed a Tailscale stack"
   }
   if (operation === "relay.update.apply") return "Applied a Relay update"
@@ -355,11 +355,11 @@ export function activityPermissionForAudit(
   ) {
     return "relay.configure"
   }
-  if (operation === "relay.tailscale.stack.apply") return "instance.create"
-  if (operation === "relay.tailscale.stack.dns") {
+  if (operation === "tunnel.apply") return "instance.create"
+  if (operation === "tunnel.dns") {
     return "instance.network.write"
   }
-  if (operation === "relay.tailscale.stack.remove") return "instance.delete"
+  if (operation === "tunnel.remove") return "instance.delete"
   if (
     operation === "instance.files.database.write" ||
     operation === "instance.files.put"

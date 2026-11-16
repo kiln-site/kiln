@@ -1,6 +1,5 @@
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
 import {
-  isTailscaleNode,
   relayInstanceLifecycleEventTime,
 } from "@workspace/contracts"
 
@@ -122,21 +121,13 @@ export function selectRelayConnectionSummary(
 export function selectSidebarInstances(
   snapshot: RelayFleetSnapshot
 ): Array<SidebarInstance> {
-  const instances: Array<SidebarInstance> = []
-  for (const instance of snapshot.instances) {
-    if (isServerInstance(instance)) instances.push(sidebarInstance(instance))
-  }
-  return instances
+  return snapshot.instances.map(sidebarInstance)
 }
 
 export function selectSidebarInstanceCount(
   snapshot: RelayFleetSnapshot
 ): number {
-  let count = 0
-  for (const instance of snapshot.instances) {
-    if (isServerInstance(instance)) count += 1
-  }
-  return count
+  return snapshot.instances.length
 }
 
 // How many servers one Relay runs, and how many of those are running.
@@ -144,7 +135,7 @@ export function selectRelayServerCount(relayId: string) {
   return (snapshot: RelayFleetSnapshot): number => {
     let total = 0
     for (const instance of snapshot.instances) {
-      if (instance.relayId === relayId && isServerInstance(instance)) total += 1
+      if (instance.relayId === relayId) total += 1
     }
     return total
   }
@@ -162,12 +153,6 @@ function sidebarInstance(
     relayName: instance.relayName,
     version: instance.version,
   }
-}
-
-function isServerInstance(
-  instance: RelayFleetSnapshot["instances"][number]
-): boolean {
-  return !isTailscaleNode(instance)
 }
 
 export function selectRelayConfigured(connection: RelayConnection): boolean {

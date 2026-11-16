@@ -36,9 +36,9 @@ export interface RelayResourceNames {
   relayEdgeNetwork: string
   /** Retired: removed as the Relay starts, if still there. */
   tailscaleContainer: string
-  tailscaleStackContainer(stackId: string): string
-  tailscaleStackDnsContainer(stackId: string): string
-  tailscaleStackNetwork(stackId: string): string
+  tunnelContainer(stackId: string): string
+  tunnelDnsContainer(stackId: string): string
+  tunnelNetwork(stackId: string): string
   traefikContainer: string
 }
 
@@ -72,11 +72,11 @@ export function relayResourceNames(
     relayEdgeAlias: "kiln-relay",
     relayEdgeNetwork: name("kiln-relay-edge"),
     tailscaleContainer: name("kiln-tailscale"),
-    tailscaleStackContainer: (stackId) =>
+    tunnelContainer: (stackId) =>
       name(`kiln-ts-${physicalShortKey(stackId)}`),
-    tailscaleStackDnsContainer: (stackId) =>
+    tunnelDnsContainer: (stackId) =>
       name(`kiln-ts-${physicalShortKey(stackId)}-dns`),
-    tailscaleStackNetwork: (stackId) =>
+    tunnelNetwork: (stackId) =>
       name(`kiln-ts-${physicalShortKey(stackId)}-network`),
     traefikContainer: name("kiln-traefik"),
   }

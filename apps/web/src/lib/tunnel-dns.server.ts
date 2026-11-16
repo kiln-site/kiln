@@ -2,16 +2,16 @@ import {
   appTailscaleMember,
   databaseTailscaleMember,
   instanceTailscaleMember,
-  relayTailscaleStackStatesSchema,
-  type RelayTailscaleStackState,
+  tunnelStatesSchema,
+  type TunnelState,
 } from "@workspace/contracts"
 import { Effect, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
-import { tailscaleNetworkRelaysEffect } from "@/effect/tailscale-networks"
+import { tailnetRelaysEffect } from "@/effect/tailnets"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
-import { tailscaleNetworkSettingsKey } from "@/lib/tailscale-lanes"
+import { tailnetSettingsKey } from "@/lib/tunnel-lanes"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 import { exclusive } from "@/operations/lanes"
 
@@ -37,7 +37,7 @@ export class TailscaleDnsError extends Schema.TaggedError<TailscaleDnsError>()(
  * Run it holding the network's `#settings`; it returns only once every
  * write it sent has ended, so none outlives the lane.
  */
-export async function writeTailscaleNetworkDns(
+export async function writeTailnetDns(
   network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   subject?: string
 ): Promise<void> {
@@ -50,11 +50,13 @@ export async function writeTailscaleNetworkDns(
   const nodes = (
     await Promise.all(
       relays.map(async (relay) =>
-        relayTailscaleStackStatesSchema
+        tunnelStatesSchema
           .parse(
-            await relayRpc(relay, "relay.tailscale.stack.state", {}, 15_000)
+            await relayRpc(relay, "tunnel.state", {}, 15_000)
           )
-          .filter((stack) => stack.id === network.id && !stack.removalPending)
+          .filter(
+            (stack) => stack.tailnetId === network.id && !stack.removalPending
+          )
           .map((stack) => ({ relay, stack }))
       )
     )
@@ -65,11 +67,11 @@ export async function writeTailscaleNetworkDns(
     )
   )
   const written = await Promise.allSettled(
-    nodes.map(({ relay }) =>
+    nodes.map(({ relay, stack }) =>
       relayRpc(
         relay,
-        "relay.tailscale.stack.dns",
-        { id: network.id, records },
+        "tunnel.dns",
+        { id: stack.id, records },
         60_000,
         subject
       )
@@ -90,16 +92,16 @@ export async function writeTailscaleNetworkDns(
 }
 
 /** The networks a resource is a member of, as its Relay holds them. */
-export async function tailscaleNetworksOf(resource: {
+export async function tailnetsOf(resource: {
   readonly id: string
   readonly kind: "app" | "database" | "instance" | "volume"
   readonly relayId: string
 }): Promise<Array<string>> {
   if (resource.kind === "volume") return []
-  const stacks = relayTailscaleStackStatesSchema.parse(
+  const stacks = tunnelStatesSchema.parse(
     await relayRpc(
       await activeRelay(resource.relayId),
-      "relay.tailscale.stack.state",
+      "tunnel.state",
       {},
       15_000
     )
@@ -108,13 +110,13 @@ export async function tailscaleNetworksOf(resource: {
     .filter((stack) =>
       stack.bindings.some(({ memberId }) => isMemberOf(resource, memberId))
     )
-    .map(({ id }) => id)
+    .map(({ tailnetId }) => tailnetId)
     .sort()
 }
 
 function isMemberOf(
   resource: { readonly id: string; readonly kind: string },
-  memberId: RelayTailscaleStackState["bindings"][number]["memberId"]
+  memberId: TunnelState["bindings"][number]["memberId"]
 ): boolean {
   switch (resource.kind) {
     case "app":
@@ -145,7 +147,7 @@ export const rewriteTailscaleDns = durableOperation({
   }),
   kind: "tailscale.network.dns",
   locks: ({ networkIds }) =>
-    networkIds.map((id) => exclusive(tailscaleNetworkSettingsKey(id))),
+    networkIds.map((id) => exclusive(tailnetSettingsKey(id))),
   run: ({ alsoOn, networkIds }) =>
     Activity.make({
       name: "rewrite",
@@ -153,11 +155,11 @@ export const rewriteTailscaleDns = durableOperation({
       execute: Effect.gen(function* () {
         // The Relays each network is on, as Hearth recorded them when it
         // last saved it, read once its turn has come.
-        const deployed = yield* tailscaleNetworkRelaysEffect(networkIds)
+        const deployed = yield* tailnetRelaysEffect(networkIds)
         yield* Effect.tryPromise({
           try: async () => {
             for (const id of networkIds) {
-              await writeTailscaleNetworkDns({
+              await writeTailnetDns({
                 id,
                 relayIds: [...(deployed.get(id) ?? []), ...alsoOn],
               })
@@ -184,7 +186,7 @@ export const rewriteTailscaleDns = durableOperation({
  * journal under `name`, so a run that resumes waits on the same one.
  */
 export const rewriteTailscaleDnsOf = (
-  resource: Parameters<typeof tailscaleNetworksOf>[0],
+  resource: Parameters<typeof tailnetsOf>[0],
   options: { readonly idempotencyKey: string; readonly name: string }
 ) =>
   Effect.gen(function* () {
@@ -193,7 +195,7 @@ export const rewriteTailscaleDnsOf = (
       success: Schema.Array(Schema.String),
       error: TailscaleDnsError,
       execute: Effect.tryPromise({
-        try: () => tailscaleNetworksOf(resource),
+        try: () => tailnetsOf(resource),
         catch: (cause) =>
           new TailscaleDnsError({
             message: cause instanceof Error ? cause.message : String(cause),

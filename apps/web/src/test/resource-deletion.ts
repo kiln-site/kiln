@@ -105,32 +105,47 @@ const deletionOf = (resourceId: string) =>
     Effect.map((rows) => rows.find((row) => row.resource_id === resourceId))
   )
 
+/** A tailnet's tunnel on a Relay: an ID of its own. */
+export const tunnelOf = (tailnetId: string, relay = relayId) =>
+  `${relay.slice(0, 6)}${tailnetId.slice(0, 6)}`
+
 /**
- * A Tailscale network on the seeded Relay with these members, as Hearth
+ * A tailnet with a tunnel on the seeded Relay with these members, as Hearth
  * records it and the Relay holds it.
  */
 export const seedNetwork = (
   id: string,
   members: ReadonlyArray<string>,
-  // Other Relays Hearth recorded the network on.
+  // Other Relays Hearth recorded a tunnel of it on.
   alsoOn: ReadonlyArray<string> = []
 ) =>
   Effect.gen(function* () {
-    yield* insertRows("tailscale_network", {
+    yield* insertRows("instance_group", {
       created_at: at,
-      domain: "test",
+      created_by: owner.id,
       id,
       name: "Test network",
       updated_at: at,
     })
+    yield* insertRows("tailnet", {
+      created_at: at,
+      domain: "test",
+      id,
+      updated_at: at,
+    })
     yield* insertRows(
-      "tailscale_network_deployment",
+      "tunnel",
       [relayId, ...alsoOn].map((relay) => ({
         cleanup_next_attempt_at: at,
-        deployment: JSON.stringify({ id, relayId: relay }),
-        network_id: id,
+        id: tunnelOf(id, relay),
         observed_at: at,
         relay_id: relay,
+        state: JSON.stringify({
+          id: tunnelOf(id, relay),
+          relayId: relay,
+          tailnetId: id,
+        }),
+        tailnet_id: id,
         updated_at: at,
       }))
     )
@@ -189,7 +204,7 @@ export const deletionRelay = {
   journal: new Map<string, unknown>(),
   servers: new Set<string>(),
   // Tailscale networks by ID, with their members' IDs, as
-  // `relay.tailscale.stack.state` reports them; and the hostnames Hearth
+  // `tunnel.state` reports them; and the hostnames Hearth
   // last wrote to each network's DNS.
   stacks: new Map<string, Array<string>>(),
   stackDns: new Map<string, Array<string>>(),
@@ -276,10 +291,12 @@ export const deletionRelayConnection = {
       return operation === "app.list" && state.apps.has(id) ? [{ id }] : []
     }
     if (operation === "relay.volumes.read") return listedVolumes()
-    if (operation === "relay.tailscale.stack.state") return stackStates()
-    if (operation === "relay.tailscale.stack.dns") {
+    if (operation === "tunnel.state") return stackStates()
+    if (operation === "tunnel.dns") {
+      const tunnelId = String(payload.id)
       state.stackDns.set(
-        String(payload.id),
+        [...state.stacks.keys()].find((id) => tunnelOf(id) === tunnelId) ??
+          tunnelId,
         (payload.records as Array<{ hostname: string }>).map(
           ({ hostname }) => hostname
         )
@@ -350,8 +367,9 @@ function stackStates() {
       hostname: memberId.replaceAll(":", "-"),
       memberId,
     })),
-    id,
+    id: tunnelOf(id),
     removalPending: false,
+    tailnetId: id,
   }))
 }
 

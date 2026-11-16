@@ -86,7 +86,7 @@ has, and never one someone connected or disconnected on it: every such
 change leaves a record (`relay_database_connection_choices`), so a handover
 repeated, or sent by another Hearth, overrules nobody.
 
-A Tailscale network's members are named by kind: `instance:<id>` for a game
+A tunnel's members are named by kind: `instance:<id>` for a game
 server, `app:<id>:<service>` for an App's service, and `database:<id>` for a
 database, which keeps its address when its container is replaced. Every
 member takes its addresses again as it starts, a game server's crash
@@ -95,32 +95,33 @@ container lost, as when the Relay stopped between replacing a container and
 reattaching it, comes back. A start can attach a member at the same time as
 an apply that keeps it, since that apply holds the member only shared; each
 accepts the endpoint the other put there. Deleting any of them takes it
-off its networks once the resource itself is deleted; Hearth has already
-written their DNS without it. Applying a network (`relay.tailscale.stack.apply`) holds
-the network's own stack exclusively and
+off its tunnels once the resource itself is deleted; Hearth has already
+written their DNS without it. Applying a tunnel (`tunnel.apply`) holds the
+tunnel exclusively and
 takes the lifecycle lock of each game server or App it joins or takes off
 (a database it holds whole), so it waits
 for that member's power changes as they wait for it; a member it leaves as it
 is is held shared, so it isn't deleted or replaced meanwhile. Removing a
-network does the same for all its members. The locks are planned from the
-members the network has when the change is admitted, and the change refuses
+tunnel does the same for all its members. The locks are planned from the
+members the tunnel has when the change is admitted, and the change refuses
 to run if they've changed by its turn. Taking a deleted resource's members
-off its networks rereads each network's configuration inside the network's
+off its tunnels rereads each tunnel's configuration inside the tunnel's
 own exclusive lane, so deletions at the same time can't overwrite each
-other's bindings.
+other's bindings. A tunnel never moves to another tailnet: an apply naming
+another one is refused.
 
-Hearth alone writes a network's DNS records (`relay.tailscale.stack.dns`),
-each time from what the network's Relays hold then
-(`relay.tailscale.stack.state`). It asks only those: the ones a save is
-applying it to, or, for a deletion, the ones Hearth recorded when it last
-saved it. Records are the enabled members of nodes not being removed,
-leaving out members whose resource is frozen for its deletion. Each node keeps the records Hearth
-last sent and serves them again whenever it recreates its DNS container;
-it never makes up records of its own. In Hearth, saving a network,
-connecting it to Tailscale, syncing it and rewriting its DNS all take its
-`tailscale-network:<id>#settings`, so they go one after the other and the
+Hearth alone writes a tailnet's DNS records (`tunnel.dns`), each time from
+what its tunnels hold then (`tunnel.state`, which says each tunnel's
+tailnet). It asks only the Relays they're on: the ones a save is applying
+it to, or, for a deletion, the ones Hearth recorded when it last saved it.
+Records are the enabled members of tunnels not being removed, leaving out
+members whose resource is frozen for its deletion. Each tunnel keeps the
+records Hearth last sent and serves them again whenever it recreates its
+DNS container; it never makes up records of its own. In Hearth, saving a
+tailnet, connecting it to Tailscale, syncing it and rewriting its DNS all
+take its `tailnet:<id>#settings`, so they go one after the other and the
 last one read the latest state; creating or removing it takes it whole. A
-resource's deletion rewrites its networks' DNS as its own durable operation
+resource's deletion rewrites its tailnets' DNS as its own durable operation
 (`tailscale.network.dns`) right after freezing it, and waits for that to
 succeed before backing it up or asking its Relay to delete it; keeping it
 rewrites them again once it's let go. A member's DNS is gone from the
@@ -262,12 +263,12 @@ lifecycle lock, which its build takes again when it runs:
   does (`transferInstallLocks`), so no upload or SFTP write changes the
   folder while it's written. Serving and fetching the artifact take no
   lock. See [Relay transfers](relay-transfers.md#between-relays).
-- **Tailscale forwarding rules** are checked every 10 seconds and restored
-  once a network's stack container has started again. Each network's
-  repair (`relay.tailscale.stack.firewall`) holds its stack exclusively, as
-  applying or removing it does, and reads its configuration again once it
-  holds it, so it never puts back rules a change has since replaced. A
-  network something else holds is skipped until the next check.
+- **Tunnel forwarding rules** are checked every 10 seconds and restored
+  once a tunnel's Tailscale container has started again. Each tunnel's
+  repair (`tunnel.firewall`) holds it exclusively, as applying or removing
+  it does, and reads its configuration again once it holds it, so it never
+  puts back rules a change has since replaced. A tunnel something else
+  holds is skipped until the next check.
 
 Exports, prunes, and backup deletes touch only stored artifacts and take no
 lock.

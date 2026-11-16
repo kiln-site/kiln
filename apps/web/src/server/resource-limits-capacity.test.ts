@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import {
-  builtinTailscaleBrick,
   relayInstanceSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
@@ -15,6 +14,7 @@ import type { AccessPermission } from "@/lib/permissions"
 import { getResourceLimitsCapacityHandler } from "@/server/resource-limits.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows } from "@/test/seed"
+import { testBrick } from "@/test/bricks"
 
 // The Relay is the only network boundary: it reports its node and servers.
 const relay = vi.hoisted(() => ({ snapshot: undefined as unknown }))
@@ -60,7 +60,7 @@ const instance = relayInstanceSchema.parse({
   javaVersion: "21",
   version: "1.21",
   connectAddress: "play.example.test:25565",
-  brickSource: builtinTailscaleBrick.source,
+  brickSource: testBrick.source,
   variables: {},
   limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
 })

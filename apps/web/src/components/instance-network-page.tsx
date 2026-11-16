@@ -11,7 +11,6 @@ import { CircleAlert, LoaderCircle, Plus, RotateCw } from "lucide-react"
 import {
   instanceTailscaleMemberId,
   relayInstancePortInputSchema,
-  isTailscaleNode,
 } from "@workspace/contracts"
 import type {
   RelayInstancePendingPrimaryPort,
@@ -101,21 +100,10 @@ export function InstanceNetworkPage({
 }: {
   editGamePort?: boolean
 }) {
-  const instance = useInstanceIdentity()
   const { data: isPlatformAdmin } = useSuspenseQuery({
     ...accessCapabilitiesQueryOptions(),
     select: (capabilities) => capabilities.isPlatformAdmin,
   })
-
-  if (isTailscaleNode(instance)) {
-    return (
-      <div className="grid min-h-0 flex-1 place-items-center bg-background/55 px-6 text-center">
-        <p className="text-sm text-muted-foreground">
-          This internal service is managed from Infrastructure → Tailscale.
-        </p>
-      </div>
-    )
-  }
 
   return (
     <WebRoutesNetworkPage

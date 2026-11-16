@@ -2,7 +2,6 @@ import { createHash } from "node:crypto"
 
 import {
   brickSourceLineage,
-  isTailscaleNode,
   relaySnapshotSchema,
   type BrickRecipe,
 } from "@workspace/contracts"
@@ -417,10 +416,7 @@ const relayServers = (relay: PersistedRelay) =>
     const { requestRelay } = await import("@/server/bricks.server")
     return relaySnapshotSchema
       .parse(await requestRelay(relay, "/v1/snapshot"))
-      .instances.filter(
-        // A Tailscale network's node isn't a game server to anyone.
-        (instance) => instance.managedByRelay && !isTailscaleNode(instance)
-      )
+      .instances.filter((instance) => instance.managedByRelay)
   })
 
 const databases: UpdatedKind = {

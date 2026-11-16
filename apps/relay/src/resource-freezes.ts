@@ -158,8 +158,8 @@ export class ResourceFreezes implements FrozenResources {
       const separator = resource.indexOf(":")
       const kind = resource.slice(0, separator) as FrozenKind
       if (allowed[kind]?.has(label)) continue
-      return label.startsWith("relay.tailscale.stack.")
-        ? `${memberNouns[kind]} ${resource.slice(separator + 1, separator + 9)} on this network is being deleted`
+      return label.startsWith("tunnel.")
+        ? `${memberNouns[kind]} ${resource.slice(separator + 1, separator + 9)} in this tunnel is being deleted`
         : refusals[kind]
     }
     return null

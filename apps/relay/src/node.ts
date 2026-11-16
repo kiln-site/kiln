@@ -52,8 +52,6 @@ export async function nodeSnapshot(
     version: relayVersion,
     capabilities: [
       "schedule-continue-on-failure",
-      "tailscale-stacks",
-      "tailscale-staged-removal",
     ],
     canProvisionInstances: config.canProvisionInstances,
     platform: platform(),

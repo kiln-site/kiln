@@ -1242,29 +1242,29 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
               AND state IN ('confirming', 'needs_review')`,
           [now, id]
         )
-        // A network being deleted that had this as its last Relay is ready
-        // to finish deleting, at its operation's next round.
+        // A tailnet being deleted that had its last tunnel here is ready to
+        // finish deleting, at its operation's next round.
         yield* transaction.execute(
-          `UPDATE ${databaseTable("tailscale_network")} network
-             JOIN ${databaseTable("tailscale_network_deployment")} target
-               ON target.network_id = network.id
+          `UPDATE ${databaseTable("tailnet")} tailnet
+             JOIN ${databaseTable("tunnel")} target
+               ON target.tailnet_id = tailnet.id
               AND target.relay_id = ?
-              SET network.cleanup_attempts = 0,
-                  network.cleanup_next_attempt_at = ?,
-                  network.cleanup_last_error = NULL,
-                  network.updated_at = ?
-            WHERE network.deletion_requested_at IS NOT NULL
+              SET tailnet.cleanup_attempts = 0,
+                  tailnet.cleanup_next_attempt_at = ?,
+                  tailnet.cleanup_last_error = NULL,
+                  tailnet.updated_at = ?
+            WHERE tailnet.deletion_requested_at IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1
-                  FROM ${databaseTable("tailscale_network_deployment")} remaining
-                 WHERE remaining.network_id = network.id
+                  FROM ${databaseTable("tunnel")} remaining
+                 WHERE remaining.tailnet_id = tailnet.id
                    AND remaining.relay_id <> ?
               )`,
           [id, now, now, id]
         )
+        // Its tunnels went with it.
         yield* transaction.execute(
-          `DELETE FROM ${databaseTable("tailscale_network_deployment")}
-            WHERE relay_id = ?`,
+          `DELETE FROM ${databaseTable("tunnel")} WHERE relay_id = ?`,
           [id]
         )
         // Its instances leave their groups with it.

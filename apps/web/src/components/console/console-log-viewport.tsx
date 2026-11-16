@@ -12,7 +12,6 @@ import {
   type ConsoleDisplayLine,
 } from "@/components/console/console-log-row"
 import type {
-  ConsoleService,
   ConsoleStreamSnapshot,
   ConsoleStreamStore,
   ConsoleUiStore,
@@ -58,23 +57,8 @@ export const ConsoleLogViewportController = React.memo(
       const filtered: Array<ConsoleDisplayLine> = []
       for (const line of consoleData?.lines ?? []) {
         const prepared = prepareLine(line, filters.redactSensitive)
-        const source = line as RelayConsoleLine & {
-          relayId?: string
-          service?: ConsoleService
-        }
-        const relayMatches =
-          filters.relayIds === null ||
-          !source.relayId ||
-          filters.relayIds.has(source.relayId)
-        const service = consoleLineService(source)
-        const serviceMatches =
-          filters.services === null ||
-          service === null ||
-          filters.services.has(service)
         if (
           filters.levels.has(line.level) &&
-          relayMatches &&
-          serviceMatches &&
           (!normalizedQuery || prepared.searchText.includes(normalizedQuery))
         ) {
           filtered.push(prepared.display)
@@ -153,15 +137,6 @@ function prepareLine(line: RelayConsoleLine, redact: boolean): PreparedLine {
   const prepared = { display, searchText: display.text.toLowerCase() }
   cache.set(line, prepared)
   return prepared
-}
-
-function consoleLineService(
-  line: RelayConsoleLine & { service?: ConsoleService }
-): ConsoleService | null {
-  if (line.service) return line.service
-  if (line.text.startsWith("[tailscale] ")) return "tailscale"
-  if (line.text.startsWith("[coredns] ")) return "coredns"
-  return null
 }
 
 interface ConsoleLogViewportProps {

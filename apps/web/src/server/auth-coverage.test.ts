@@ -80,7 +80,7 @@ const readsOverPost: Record<string, string> = {
   "relays.ts:checkRelay":
     "Probes the Relay, recording only what it saw, as its connection does",
   "relays.ts:previewRelayPairing": "Carries the pairing link's secret",
-  "tailscale.ts:previewTailscaleIntegration": "Carries the OAuth client secret",
+  "tunnels.ts:previewTailscaleIntegration": "Carries the OAuth client secret",
 }
 
 // Server functions that change nothing an operation orders: sessions,

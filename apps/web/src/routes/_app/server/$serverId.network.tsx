@@ -6,7 +6,7 @@ import { pageTitle } from "@/lib/page-title"
 import {
   accessCapabilitiesQueryOptions,
   webRoutesQueryOptions,
-  tailscaleStacksQueryOptions,
+  tailnetsQueryOptions,
 } from "@/lib/query-options"
 import { requireServerDestinationAccess } from "@/lib/route-access"
 
@@ -38,7 +38,7 @@ export const Route = createFileRoute("/_app/server/$serverId/network")({
       accessCapabilitiesQueryOptions().queryKey
     )
     if (capabilities?.isPlatformAdmin)
-      void queryClient.prefetchQuery(tailscaleStacksQueryOptions())
+      void queryClient.prefetchQuery(tailnetsQueryOptions())
   },
   component: NetworkRoute,
   head: () => ({ meta: [{ title: pageTitle("Network") }] }),

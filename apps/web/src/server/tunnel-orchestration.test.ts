@@ -2,20 +2,20 @@ import { Effect } from "effect"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  applyTailscaleDeploymentPlanEffect,
-  type DesiredTailscaleDeployment,
-  type TailscaleDeploymentState,
-} from "./tailscale-orchestration"
+  applyTunnelPlanEffect,
+  type DesiredTunnel,
+  type TunnelPlanState,
+} from "./tunnel-orchestration"
 
-interface TestDeployment extends TailscaleDeploymentState {
+interface TestDeployment extends TunnelPlanState {
   revision: string
 }
 
 const applyTailscaleDeploymentPlan = <
-  TDeployment extends TailscaleDeploymentState,
+  TDeployment extends TunnelPlanState,
 >(
-  input: Parameters<typeof applyTailscaleDeploymentPlanEffect<TDeployment>>[0]
-) => Effect.runPromise(applyTailscaleDeploymentPlanEffect(input))
+  input: Parameters<typeof applyTunnelPlanEffect<TDeployment>>[0]
+) => Effect.runPromise(applyTunnelPlanEffect(input))
 
 describe("Tailscale deployment orchestration", () => {
   it("rolls back a new node whose allocated subnet is already reserved", async () => {
@@ -85,15 +85,21 @@ describe("Tailscale deployment orchestration", () => {
   })
 })
 
-function target(relayId: string): DesiredTailscaleDeployment {
+function target(relayId: string): DesiredTunnel {
   return {
     bindings: [
       { enabled: true, hostname: `new-${relayId}`, memberId: relayId },
     ],
     hostname: `network-${relayId}`,
+    id: tunnelId(relayId),
     relayId,
     relayName: relayId,
   }
+}
+
+// Each Relay's tunnel has an ID of its own.
+function tunnelId(relayId: string): string {
+  return relayId.at(-1)!.repeat(12)
 }
 
 function deployment(
@@ -112,11 +118,12 @@ function deployment(
     ],
     domain: "test",
     hostname: `network-${relayId}`,
-    id: "a".repeat(12),
+    id: tunnelId(relayId),
     name: "Test network",
     relayId,
     relayName: relayId,
     revision,
     subnet: `10.128.${relayId.at(-1)?.charCodeAt(0) ?? 0}.0/24`,
+    tailnetId: "f".repeat(12),
   }
 }

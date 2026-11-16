@@ -29,7 +29,6 @@ const invitation = (
 
 const network = (id: string) => ({
   id: id.padEnd(12, "0"),
-  name: id,
   domain: `${id}.ts.net`,
   deletion_requested_at: 1,
   cleanup_attempts: 5,
@@ -40,9 +39,10 @@ const network = (id: string) => ({
 })
 
 const deployment = (networkId: string, relayId: string) => ({
-  network_id: networkId.padEnd(12, "0"),
+  id: `${networkId.slice(0, 4)}${relayId.slice(-4)}`.padEnd(12, "0"),
+  tailnet_id: networkId.padEnd(12, "0"),
   relay_id: relayId,
-  deployment: "{}",
+  state: "{}",
   cleanup_next_attempt_at: 0,
   observed_at: 0,
   updated_at: 0,
@@ -77,11 +77,8 @@ describeMysql("Relay deletion", () => {
           })
           // A deleting network held only by this Relay can finish cleanup; one
           // still deployed elsewhere keeps waiting on that Relay.
-          yield* insertRows("tailscale_network", [
-            network("solo"),
-            network("shared"),
-          ])
-          yield* insertRows("tailscale_network_deployment", [
+          yield* insertRows("tailnet", [network("solo"), network("shared")])
+          yield* insertRows("tunnel", [
             deployment("solo", "relay-one"),
             deployment("shared", "relay-one"),
             deployment("shared", "relay-two"),
@@ -115,15 +112,15 @@ describeMysql("Relay deletion", () => {
             { accepted: null, elsewhere: null, pending: 1_000 }
           )
           const networks = yield* selectRows<{
-            name: string
+            id: string
             cleanup_attempts: number
             cleanup_next_attempt_at: number
             cleanup_last_error: string | null
-          }>("tailscale_network")
+          }>("tailnet")
           assert.deepEqual(
             Object.fromEntries(
               networks.map((row) => [
-                row.name,
+                row.id.replace(/0+$/u, ""),
                 [
                   row.cleanup_attempts,
                   Number(row.cleanup_next_attempt_at),
@@ -137,7 +134,7 @@ describeMysql("Relay deletion", () => {
             }
           )
           const deployments = yield* selectRows<{ relay_id: string }>(
-            "tailscale_network_deployment"
+            "tunnel"
           )
           assert.deepEqual(
             deployments.map((row) => row.relay_id),

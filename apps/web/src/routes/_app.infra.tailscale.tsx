@@ -5,7 +5,7 @@ import { TailscalePage } from "@/components/tailscale-page"
 import { pageTitle } from "@/lib/page-title"
 import {
   relaysQueryOptions,
-  tailscaleStacksQueryOptions,
+  tailnetsQueryOptions,
 } from "@/lib/query-options"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
@@ -22,7 +22,7 @@ export const Route = createFileRoute("/_app/infra/tailscale")({
   loader: ({ context }) =>
     Promise.all([
       context.queryClient.ensureQueryData(relaysQueryOptions()),
-      context.queryClient.ensureQueryData(tailscaleStacksQueryOptions()),
+      context.queryClient.ensureQueryData(tailnetsQueryOptions()),
     ]),
   head: () => ({ meta: [{ title: pageTitle("Tailscale") }] }),
   component: TailscaleRoute,
