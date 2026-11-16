@@ -998,60 +998,11 @@ function s3(action) {
 // docs/development.md.
 async function share(action) {
   switch (action) {
-    case "up": {
-      const hearth = captureCompose(
-        ["ps", "--quiet", "hearth"],
-        composeEnvironment
-      )
-      if (!hearth) {
-        fail("Hearth isn't running. Start the stack with pnpm dev:docker:up.")
-      }
-      const self = tailscaleSelf()
-      const saved = savedShare()
-      const status = requireServeStatus()
-      // Only an unclaimed port or this link's own; never another listener.
-      const entry = saved && status.TCP?.[String(saved.public)]
-      const ports =
-        saved && (!entry || entry.TCPForward === `127.0.0.1:${saved.local}`)
-          ? saved
-          : await chooseSharePorts(status)
-      const link = `https://${self.host}:${ports.public}`
-      const current = { ...ports, origin: link }
-      writeFileSync(
-        shareFile,
-        `${current.public} ${current.local} ${current.origin}\n`
-      )
-      Object.assign(composeEnvironment, shareEnvironment(current))
-      // Sign-in sends the page's own origin as its callback, so Hearth has to
-      // trust the link. That takes a new container, once per link, made the
-      // way `up` makes it.
-      if (hearthTrustedOrigins(hearth) !== trustedOrigins(current)) {
-        console.log("Restarting Hearth so it accepts sign-ins from the link.")
-        await withStackLock(stack, async () => {
-          await prepareStack()
-          compose(["up", "--detach", "--wait", "hearth"], composeEnvironment)
-        })
-      }
-      compose(
-        // Recreated, so it always runs this checkout's proxy.
-        ["up", "--detach", "--no-deps", "--force-recreate", "--wait", "share"],
-        composeEnvironment
-      )
-      run(
-        "tailscale",
-        [
-          "serve",
-          "--bg",
-          `--tls-terminated-tcp=${ports.public}`,
-          `tcp://127.0.0.1:${ports.local}`,
-        ],
-        process.env
-      )
-      await waitForShare(link)
-      console.log(`\nHearth is on the tailnet at ${link}`)
-      console.log("Stop sharing with pnpm dev:docker:share off.")
+    case "up":
+      // Held throughout, so a destroy can't remove the stack between the
+      // check that Hearth runs and the link going up.
+      await withStackLock(stack, shareUp)
       break
-    }
     case "status": {
       const saved = savedShare()
       if (!saved) {
@@ -1065,14 +1016,65 @@ async function share(action) {
       break
     }
     case "off":
-      unserveShare({ strict: true })
-      compose(["rm", "--stop", "--force", "share"], composeEnvironment)
-      rmSync(shareFile, { force: true })
+      await withStackLock(stack, () => {
+        unserveShare({ strict: true })
+        compose(["rm", "--stop", "--force", "share"], composeEnvironment)
+        rmSync(shareFile, { force: true })
+      })
       console.log("This stack is no longer shared.")
       break
     default:
       fail("Usage: pnpm dev:docker:share [up|status|off]")
   }
+}
+
+async function shareUp() {
+  const hearth = captureCompose(["ps", "--quiet", "hearth"], composeEnvironment)
+  if (!hearth) {
+    fail("Hearth isn't running. Start the stack with pnpm dev:docker:up.")
+  }
+  const self = tailscaleSelf()
+  const saved = savedShare()
+  const status = requireServeStatus()
+  // Only an unclaimed port or this link's own; never another listener.
+  const entry = saved && status.TCP?.[String(saved.public)]
+  const ports =
+    saved && (!entry || entry.TCPForward === `127.0.0.1:${saved.local}`)
+      ? saved
+      : await chooseSharePorts(status)
+  const link = `https://${self.host}:${ports.public}`
+  const current = { ...ports, origin: link }
+  writeFileSync(
+    shareFile,
+    `${current.public} ${current.local} ${current.origin}\n`
+  )
+  Object.assign(composeEnvironment, shareEnvironment(current))
+  // Sign-in sends the page's own origin as its callback, so Hearth has to
+  // trust the link. That takes a new container, once per link, made the way
+  // `up` makes it.
+  if (!hearthTrustedOrigins(hearth).includes(link)) {
+    console.log("Restarting Hearth so it accepts sign-ins from the link.")
+    await prepareStack()
+    compose(["up", "--detach", "--wait", "hearth"], composeEnvironment)
+  }
+  compose(
+    // Recreated, so it always runs this checkout's proxy.
+    ["up", "--detach", "--no-deps", "--force-recreate", "--wait", "share"],
+    composeEnvironment
+  )
+  run(
+    "tailscale",
+    [
+      "serve",
+      "--bg",
+      `--tls-terminated-tcp=${ports.public}`,
+      `tcp://127.0.0.1:${ports.local}`,
+    ],
+    process.env
+  )
+  await waitForShare(link)
+  console.log(`\nHearth is on the tailnet at ${link}`)
+  console.log("Stop sharing with pnpm dev:docker:share off.")
 }
 
 function savedShare() {
@@ -1088,23 +1090,11 @@ function savedShare() {
 function shareEnvironment(saved) {
   if (!saved) return {}
   return {
-    BETTER_AUTH_TRUSTED_ORIGINS: trustedOrigins(saved),
     KILN_DEV_SHARE_LOCAL_PORT: String(saved.local),
     KILN_DEV_SHARE_ORIGIN: saved.origin,
+    // Compose appends it to the configured origins, read its own way.
+    KILN_DEV_SHARE_TRUSTED_ORIGIN: `,${saved.origin}`,
   }
-}
-
-// The stack's own trusted origins, from the shell or .env, plus the link.
-function trustedOrigins(saved) {
-  const configured =
-    process.env.BETTER_AUTH_TRUSTED_ORIGINS ??
-    settings.get("BETTER_AUTH_TRUSTED_ORIGINS") ??
-    ""
-  const origins = configured
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin && origin !== saved.origin)
-  return [...origins, saved.origin].join(",")
 }
 
 function hearthTrustedOrigins(container) {
@@ -1117,7 +1107,9 @@ function hearthTrustedOrigins(container) {
   ])
     .split("\n")
     .find((entry) => entry.startsWith(prefix))
-  return line?.slice(prefix.length) ?? ""
+  return (line?.slice(prefix.length) ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
 }
 
 // Null when Tailscale can't say, which is never the same as an unused port.
