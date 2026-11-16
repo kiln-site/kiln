@@ -12,6 +12,7 @@ import {
 
 import { cn } from "../lib/cn"
 import { usePalette, type PaletteColor } from "../lib/palette"
+import { useBarInset } from "./chrome"
 
 export function AppText(props: TextProps & { readonly className?: string }) {
   const { className, ...rest } = props
@@ -272,10 +273,12 @@ export function Screen(props: {
   readonly onRefresh?: () => void
 }) {
   const palette = usePalette()
+  const barInset = useBarInset()
   return (
     <ScrollView
       className="flex-1 bg-screen"
-      contentContainerClassName="px-4 pb-16"
+      contentContainerClassName="px-4"
+      contentContainerStyle={{ paddingBottom: barInset }}
       contentInsetAdjustmentBehavior="automatic"
       keyboardShouldPersistTaps="handled"
       refreshControl={
@@ -324,6 +327,69 @@ export function Loading() {
   return (
     <View className="items-center py-10">
       <ActivityIndicator color={palette.primary} />
+    </View>
+  )
+}
+
+export type InstanceKind = "relay" | "server" | "database" | "app" | "tunnel"
+
+const KIND_ICONS = {
+  relay: { name: "antenna.radiowaves.left.and.right", color: "kindRelay" },
+  server: { name: "server.rack", color: "kindServer" },
+  database: { name: "cylinder", color: "kindDatabase" },
+  app: { name: "cube", color: "kindApp" },
+  tunnel: { name: "point.3.connected.trianglepath.dotted", color: "kindTunnel" },
+} as const satisfies Record<
+  InstanceKind,
+  { name: SymbolViewProps["name"]; color: PaletteColor }
+>
+
+/**
+ * An instance's icon as Hearth draws it: the kind's glyph in its own colour,
+ * in a square tile, with the status dot on its corner.
+ */
+export function KindTile(props: {
+  readonly kind: InstanceKind
+  readonly state?: string
+  readonly size?: number
+}) {
+  const size = props.size ?? 36
+  const icon = KIND_ICONS[props.kind]
+  return (
+    <View
+      className="items-center justify-center border border-border bg-screen"
+      style={{ width: size, height: size }}
+    >
+      <Icon name={icon.name} size={Math.round(size * 0.47)} color={icon.color} />
+      {props.state ? (
+        <View
+          className={cn(
+            "absolute -bottom-[3px] -right-[3px] size-2.5 rounded-full border-2 border-card",
+            DOT[stateTone(props.state)]
+          )}
+        />
+      ) : null}
+    </View>
+  )
+}
+
+/** The page title, under the area it belongs to, as Hearth's breadcrumb. */
+export function PageHeading(props: {
+  readonly eyebrow: string
+  readonly title: string
+  readonly trailing?: ReactNode
+}) {
+  return (
+    <View className="flex-row items-end justify-between pb-5 pt-1">
+      <View accessibilityRole="header" accessible>
+        <MonoText className="text-2xs uppercase tracking-widest text-foreground-muted">
+          {props.eyebrow}
+        </MonoText>
+        <AppText className="mt-1 font-semibold text-3xl tracking-tight">
+          {props.title}
+        </AppText>
+      </View>
+      {props.trailing}
     </View>
   )
 }

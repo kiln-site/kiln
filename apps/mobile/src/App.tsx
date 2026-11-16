@@ -3,10 +3,15 @@ import "../global.css"
 import {
   DarkTheme,
   DefaultTheme,
+  createNavigationContainerRef,
   createStaticNavigation,
   useNavigation,
+  type StaticScreenProps,
 } from "@react-navigation/native"
-import { createNativeStackNavigator } from "@react-navigation/native-stack"
+import {
+  createNativeStackNavigator,
+  type NativeStackNavigationOptions,
+} from "@react-navigation/native-stack"
 import {
   QueryClient,
   QueryClientProvider,
@@ -14,19 +19,32 @@ import {
 } from "@tanstack/react-query"
 import * as SplashScreen from "expo-splash-screen"
 import { StatusBar } from "expo-status-bar"
-import { useEffect, type ReactElement } from "react"
-import { AppState, Platform, Pressable, useColorScheme } from "react-native"
+import { useEffect, useState, type ReactElement } from "react"
+import {
+  AppState,
+  Image,
+  Platform,
+  Pressable,
+  View,
+  useColorScheme,
+} from "react-native"
 import { SafeAreaProvider } from "react-native-safe-area-context"
 
-import { Icon } from "./components/ui"
+import { NavBar, type ContentRoute } from "./components/NavBar"
+import { AppText, Icon } from "./components/ui"
 import { usePalette } from "./lib/palette"
-import type { RootStackParamList } from "./navigation"
+import {
+  HOME,
+  SERVER_PAGES,
+  sectionLabel,
+  type RootStackParamList,
+} from "./navigation"
 import { AccountScreen } from "./screens/AccountScreen"
-import { ActivityScreen } from "./screens/ActivityScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { ConsoleScreen } from "./screens/ConsoleScreen"
-import { HomeScreen } from "./screens/HomeScreen"
 import { RelayScreen } from "./screens/RelayScreen"
+import { SearchScreen } from "./screens/SearchScreen"
+import { NotYet, SectionScreen } from "./screens/SectionScreen"
 import { ServerScreen } from "./screens/ServerScreen"
 import {
   SessionProvider,
@@ -51,31 +69,69 @@ const queryClient = new QueryClient({
   },
 })
 
-function AccountButton(): ReactElement {
-  const navigation = useNavigation()
+const MARK = require("../assets/mark.png")
+
+function Brand(): ReactElement {
+  const palette = usePalette()
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Account"
-      hitSlop={8}
-      onPress={() => navigation.navigate("Account")}
+    <View
+      accessible
+      accessibilityRole="header"
+      accessibilityLabel="Kiln"
+      className="flex-row items-center gap-2 pr-2"
     >
-      <Icon name="person.crop.circle" size={22} color="primaryText" />
-    </Pressable>
+      <Image
+        source={MARK}
+        style={{ width: 26, height: 26, tintColor: palette.primary }}
+      />
+      <AppText className="font-semibold text-xl tracking-tight">Kiln</AppText>
+    </View>
   )
 }
 
-const titleOf = (params: unknown) =>
+/** Android has no native bar items; the same two buttons in React Native. */
+function HeaderActions(): ReactElement {
+  const navigation = useNavigation()
+  return (
+    <View className="flex-row items-center gap-5">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Search"
+        hitSlop={8}
+        onPress={() => navigation.navigate("Search")}
+      >
+        <Icon name="magnifyingglass" size={20} />
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Account"
+        hitSlop={8}
+        onPress={() => navigation.navigate("Account")}
+      >
+        <Icon name="person.crop.circle" size={22} />
+      </Pressable>
+    </View>
+  )
+}
+
+function ServerRouteScreen({
+  route,
+}: StaticScreenProps<RootStackParamList["Server"]>): ReactElement {
+  if (route.params.page === "console") return <ConsoleScreen route={route} />
+  if (route.params.page === "info") return <ServerScreen route={route} />
+  const page = SERVER_PAGES.find((entry) => entry.id === route.params.page)
+  return <NotYet eyebrow={route.params.name} title={page?.label ?? ""} />
+}
+
+const relayTitle = (params: unknown) =>
   (params as RootStackParamList["Relay"] | undefined)?.name ?? ""
 
 const RootStack = createNativeStackNavigator({
   screenOptions: {
-    headerLargeTitleShadowVisible: false,
     headerShadowVisible: false,
     headerBackButtonDisplayMode: "minimal",
     headerTransparent: Platform.OS === "ios",
     headerTitleStyle: { fontFamily: "Geist-SemiBold" },
-    headerLargeTitleStyle: { fontFamily: "Geist-SemiBold" },
   },
   groups: {
     SignedOut: {
@@ -87,29 +143,52 @@ const RootStack = createNativeStackNavigator({
     SignedIn: {
       if: useIsSignedIn,
       screens: {
-        Home: {
-          screen: HomeScreen,
-          options: {
-            title: "Kiln",
-            headerLargeTitle: true,
-            headerRight: () => <AccountButton />,
-          },
+        Section: {
+          screen: SectionScreen,
+          initialParams: HOME,
+          options: ({ navigation, route }): NativeStackNavigationOptions => ({
+            // The page names itself in its heading; the title only labels
+            // the back button's history menu.
+            title: sectionLabel(route.params as RootStackParamList["Section"]),
+            headerTitle: "",
+            headerLeft: () => <Brand />,
+            headerLeftBackgroundVisible: false,
+            headerRight: () => <HeaderActions />,
+            unstable_headerRightItems: () => [
+              {
+                type: "button",
+                label: "Search",
+                icon: { type: "sfSymbol", name: "magnifyingglass" },
+                onPress: () => navigation.navigate("Search"),
+              },
+              {
+                type: "button",
+                label: "Account",
+                icon: { type: "sfSymbol", name: "person.crop.circle" },
+                onPress: () => navigation.navigate("Account"),
+              },
+            ],
+            // Switching sections swaps the root page; cross-fade like a tab.
+            animation: "fade",
+          }),
         },
         Server: {
-          screen: ServerScreen,
-          options: ({ route }) => ({ title: titleOf(route.params) }),
-        },
-        Console: {
-          screen: ConsoleScreen,
-          options: ({ route }) => ({ title: titleOf(route.params) }),
+          screen: ServerRouteScreen,
+          options: ({ route }) => ({ title: relayTitle(route.params) }),
         },
         Relay: {
           screen: RelayScreen,
-          options: ({ route }) => ({ title: titleOf(route.params) }),
+          options: ({ route }) => ({ title: relayTitle(route.params) }),
         },
-        Activity: {
-          screen: ActivityScreen,
-          options: { title: "Activity", headerLargeTitle: true },
+        Search: {
+          screen: SearchScreen,
+          options: {
+            title: "Search",
+            presentation: "formSheet",
+            sheetAllowedDetents: [1],
+            sheetGrabberVisible: true,
+            headerTransparent: false,
+          },
         },
         Account: {
           screen: AccountScreen,
@@ -127,12 +206,24 @@ const RootStack = createNativeStackNavigator({
 })
 
 const Navigation = createStaticNavigation(RootStack)
+const navigationRef = createNavigationContainerRef<RootStackParamList>()
+
+const CONTENT_ROUTES = new Set(["Section", "Server", "Relay"])
+
+/** The top page under any sheet, which the bar describes. */
+function contentRoute(): ContentRoute | null {
+  const routes = navigationRef.isReady() ? (navigationRef.getRootState()?.routes ?? []) : []
+  const route = routes.findLast((entry) => CONTENT_ROUTES.has(entry.name))
+  return (route as ContentRoute | undefined) ?? null
+}
 
 function Root() {
   const scheme = useColorScheme()
   const palette = usePalette()
   const { state } = useSessionContext()
   const ready = state.status !== "loading"
+  const [content, setContent] = useState<ContentRoute | null>(null)
+  const syncContent = () => setContent(contentRoute())
 
   useEffect(() => {
     if (ready) void SplashScreen.hideAsync()
@@ -143,7 +234,7 @@ function Root() {
     ...base,
     colors: {
       ...base.colors,
-      primary: palette.primaryText,
+      primary: palette.foreground,
       background: palette.screen,
       card: palette.screen,
       text: palette.foreground,
@@ -156,7 +247,13 @@ function Root() {
   return (
     <>
       <StatusBar style={scheme === "light" ? "dark" : "light"} />
-      <Navigation theme={theme} />
+      <Navigation
+        ref={navigationRef}
+        theme={theme}
+        onReady={syncContent}
+        onStateChange={syncContent}
+      />
+      {content ? <NavBar navigation={navigationRef} route={content} /> : null}
     </>
   )
 }

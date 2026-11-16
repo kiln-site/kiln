@@ -71,6 +71,8 @@
   --text-xl--line-height: 28px;
   --text-2xl: 28px;
   --text-2xl--line-height: 34px;
+  --text-3xl: 32px;
+  --text-3xl--line-height: 38px;
 }
 
 @utility font-medium {

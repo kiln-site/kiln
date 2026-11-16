@@ -106,9 +106,10 @@ export function useServerInfo(target: { relayId: string; instanceId: string }) {
   })
 }
 
-export function useRelayInfo(relayId: string) {
+export function useRelayInfo(relayId: string, options?: { enabled?: boolean }) {
   const session = useSession()
   return useQuery({
+    enabled: options?.enabled ?? true,
     queryKey: keys.relay(session, relayId),
     queryFn: ({ signal }) =>
       run(

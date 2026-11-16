@@ -231,9 +231,7 @@ export function ServerScreen({ route }: Props): ReactElement {
           title="Console"
           subtitle="Live output and commands"
           leading={<Icon name="terminal" color="muted" />}
-          onPress={() =>
-            navigation.navigate("Console", { relayId, instanceId, name: server.name })
-          }
+          onPress={() => navigation.setParams({ page: "console" })}
         />
         <Divider />
         <Row

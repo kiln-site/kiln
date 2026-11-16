@@ -121,6 +121,7 @@ export function RelayScreen({ route }: Props): ReactElement {
                     relayId: server.relayId,
                     instanceId: server.instanceId,
                     name: server.name,
+                    page: "console",
                   })
                 }
               />

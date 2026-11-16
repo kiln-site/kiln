@@ -15,6 +15,12 @@ const dark = {
   success: "#47b777",
   warning: "#daa843",
   info: "#4896d3",
+  // Hearth's instance kind tones (instance-kind-icon.tsx): fixed per kind.
+  kindRelay: "#f97316",
+  kindServer: "#6ee7b7",
+  kindDatabase: "#93c5fd",
+  kindApp: "#f87171",
+  kindTunnel: "#67e8f9",
 }
 
 const light: typeof dark = {
@@ -30,6 +36,11 @@ const light: typeof dark = {
   success: "#007e46",
   warning: "#aa6a00",
   info: "#2f6fa3",
+  kindRelay: "#f97316",
+  kindServer: "#047857",
+  kindDatabase: "#2563eb",
+  kindApp: "#dc2626",
+  kindTunnel: "#0e7490",
 }
 
 export type Palette = typeof dark

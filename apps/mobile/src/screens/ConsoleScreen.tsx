@@ -14,11 +14,11 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from "react-native"
-import { useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { useConsole, useSendCommand, type ConsoleLine } from "../api/console"
 import { errorMessage } from "../api/hearth"
 import { AppText, Icon, MonoText } from "../components/ui"
+import { useBarInset } from "../components/chrome"
 import { cn } from "../lib/cn"
 import { formatClock } from "../lib/format"
 import { usePalette } from "../lib/palette"
@@ -69,16 +69,21 @@ export function ConsoleScreen({ route }: Props): ReactElement {
   const navigation = useNavigation()
   const session = useSession()
   const palette = usePalette()
-  const insets = useSafeAreaInsets()
+  const barInset = useBarInset()
   const consoleState = useConsole({ relayId, instanceId })
   const send = useSendCommand({ relayId, instanceId })
   const [command, setCommand] = useState("")
   const list = useRef<FlatList<ConsoleLine>>(null)
   const pinnedToBottom = useRef(true)
+  const viewport = useRef({ list: 0, content: 0 })
   const readOnly = session.credential.mode === "read_only"
   const [keyboardOpen, setKeyboardOpen] = useState(false)
 
-  const scrollToEnd = () => list.current?.scrollToEnd({ animated: false })
+  // Output shorter than the list stays at the top, under the header's inset.
+  const scrollToEnd = () => {
+    if (viewport.current.content > viewport.current.list)
+      list.current?.scrollToEnd({ animated: false })
+  }
 
   useEffect(() => {
     const shown = Keyboard.addListener("keyboardDidShow", () => {
@@ -112,6 +117,9 @@ export function ConsoleScreen({ route }: Props): ReactElement {
     })
   }, [navigation, consoleState.status])
 
+  // The status belongs to the console; another page of the server drops it.
+  useEffect(() => () => navigation.setOptions({ headerRight: undefined }), [navigation])
+
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent
     pinnedToBottom.current =
@@ -135,17 +143,20 @@ export function ConsoleScreen({ route }: Props): ReactElement {
       <FlatList
         ref={list}
         className="flex-1"
-        contentContainerClassName="py-3"
+        contentContainerClassName="pt-3"
+        contentContainerStyle={{ paddingBottom: readOnly ? barInset : 12 }}
         contentInsetAdjustmentBehavior="automatic"
         data={consoleState.lines}
         keyExtractor={(line) => line.id}
         renderItem={({ item }) => <ConsoleRow line={item} />}
         onScroll={onScroll}
         scrollEventThrottle={64}
-        onContentSizeChange={() => {
+        onContentSizeChange={(_width, height) => {
+          viewport.current.content = height
           if (pinnedToBottom.current) scrollToEnd()
         }}
-        onLayout={() => {
+        onLayout={(event) => {
+          viewport.current.list = event.nativeEvent.layout.height
           if (pinnedToBottom.current) scrollToEnd()
         }}
         initialNumToRender={40}
@@ -170,8 +181,8 @@ export function ConsoleScreen({ route }: Props): ReactElement {
       {readOnly ? null : (
         <View
           className="flex-row items-center gap-2 border-t border-border bg-card px-3 pt-2"
-          // Above the keyboard the home indicator inset no longer applies.
-          style={{ paddingBottom: keyboardOpen ? 8 : Math.max(insets.bottom, 8) }}
+          // The bar hides while the keyboard is up; otherwise sit above it.
+          style={{ paddingBottom: keyboardOpen ? 8 : barInset - 12 }}
         >
           <MonoText className="text-primary-text">›</MonoText>
           <TextInput
