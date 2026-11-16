@@ -23,7 +23,6 @@ import {
   activateAddressEffect,
   addressHostnames,
   adoptWebHostnameRecordEffect,
-  assignmentOf,
   beginInstanceDomainRenameEffect,
   clearAddressErrorEffect,
   clearAddressRecordEffect,
@@ -33,14 +32,14 @@ import {
   deleteAddressEffect,
   deleteRelayAddressesEffect,
   finishInstanceDomainRenameEffect,
-  insertInstanceDomainAssignmentEffect,
+  insertGameAddressEffect,
   insertWebHostnameEffect,
   listAddressesEffect,
   listDueAddressResourcesEffect,
   listResourceAddressesEffect,
-  loadActiveInstanceDomainAssignmentsEffect,
+  listActiveGameAddressesEffect,
   loadAddressEffect,
-  loadInstanceDomainAssignmentsForInstanceEffect,
+  listInstanceGameAddressesEffect,
   loadInstanceDomainOptOutEffect,
   markAddressesRemovingEffect,
   markRelayAddressesRemovingEffect,
@@ -49,7 +48,7 @@ import {
   reassignAddressesEffect,
   recordAddressErrorEffect,
   renameTakingNameEffect,
-  reserveInstanceDomainAssignmentEffect,
+  reserveGameAddressEffect,
   reviveWebHostnamesEffect,
   saveAddressRecordEffect,
   setAddressPendingEffect,
@@ -59,10 +58,9 @@ import {
   setWebHostnamesRoutedEffect,
   stopGameAddressEffect,
   type Address,
+  vanityLabelOf,
   type ExistingWebRecord,
   type GameEndpoint,
-  type InstanceDomainAssignment,
-  type WebHostname,
   type WebHostnameResource,
 } from "@/effect/addresses"
 import { Database } from "@/effect/database"
@@ -196,10 +194,7 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   const [assignments, { choice, vanityDomains }] = await Promise.all([
     runAppEffect(
       "domains.assignments.instance",
-      loadInstanceDomainAssignmentsForInstanceEffect(
-        data.relayId,
-        data.instanceId
-      )
+      listInstanceGameAddressesEffect(data.relayId, data.instanceId)
     ),
     runAppEffect(
       "domains.instance.vanityDomains",
@@ -448,7 +443,7 @@ export const loadManagedDomainAddressesEffect = Effect.fn(
     decode: managedDomainAddressMapSchema.parse,
     load: Effect.all(
       [
-        loadActiveInstanceDomainAssignmentsEffect(),
+        listActiveGameAddressesEffect(),
         loadPrimaryTunnelNamesEffect("instance"),
       ],
       { concurrency: 2 }
@@ -461,11 +456,11 @@ export const loadManagedDomainAddressesEffect = Effect.fn(
         // Primaries come first, so a game server advertises its primary,
         // or another active address while the primary is failing.
         for (const assignment of assignments) {
-          const key = assignmentKey(assignment.relayId, assignment.instanceId)
+          const key = assignmentKey(assignment.relayId, assignment.resourceId)
           addresses[key] ??= {
             address: managedDomainConnectAddress(assignment),
-            publicHost: assignment.publicHost,
-            publicPort: assignment.publicPort,
+            publicHost: assignment.target ?? "",
+            publicPort: assignment.publicPort ?? 0,
           }
         }
         return addresses
@@ -884,7 +879,7 @@ const applyRenameEffect = Effect.fnUntraced(function* (row: Address) {
     // Records can't move between zones, and ones Cloudflare no longer has
     // can't move at all: start over under the new name.
     yield* releaseRecordsEffect(row, apiToken)
-    yield* reserveInstanceDomainAssignmentEffect({
+    yield* reserveGameAddressEffect({
       connectionId: domain.connectionId,
       domain: domain.domain,
       hostname: next.hostname,
@@ -1209,7 +1204,7 @@ const addGameAddressEffect = Effect.fnUntraced(function* (
   named: { primary: boolean; vanityLabel: string }
 ) {
   const id = randomUUID()
-  yield* insertInstanceDomainAssignmentEffect({
+  yield* insertGameAddressEffect({
     connectionId: domain.connectionId,
     domain: domain.domain,
     endpoint,
@@ -1296,7 +1291,7 @@ const createGameAddressEffect = Effect.fn("domains.instance.create")(function* (
       Effect.ensuring(invalidateManagedDomainAddressesEffect)
     )
   }
-  return assignmentOverview(assignmentOf(created))
+  return assignmentOverview(created)
 })
 
 const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
@@ -1382,7 +1377,7 @@ const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
       Effect.ensuring(invalidateManagedDomainAddressesEffect)
     )
   }
-  return assignmentOverview(assignmentOf(updated))
+  return assignmentOverview(updated)
 })
 
 /**
@@ -2057,7 +2052,7 @@ function mayAdoptRecords(ownerId: string | null, actor: DomainActor) {
  * moves there when it's handed over, so the person needs to know.
  */
 export const adoptableWebHostnamesEffect = Effect.fn("addresses.adoptable")(
-  function* (rows: ReadonlyArray<WebHostname>, actor: DomainActor) {
+  function* (rows: ReadonlyArray<Address>, actor: DomainActor) {
     const candidates = rows.filter(
       (row) => row.status === "external" && row.existingRecord !== null
     )
@@ -2332,10 +2327,7 @@ export const moveInstanceDomainsEffect = Effect.fn("domains.instance.move")(
     yield* invalidateManagedDomainAddressesEffect
     // Its records still point at the old server until now, also when a run
     // cut short before this moved them and this run moved none.
-    const assigned = yield* loadInstanceDomainAssignmentsForInstanceEffect(
-      to.relayId,
-      to.id
-    )
+    const assigned = yield* listInstanceGameAddressesEffect(to.relayId, to.id)
     if (moved > 0 || assigned.length > 0) {
       yield* provisionInstanceDomainEffect(to)
     }
@@ -2463,22 +2455,25 @@ function srvRecordInput(
   }
 }
 
-function assignmentOverview(
-  assignment: InstanceDomainAssignment
-): InstanceDomainOverview {
+function assignmentOverview(assignment: Address): InstanceDomainOverview {
   return {
     address: managedDomainConnectAddress(assignment),
     directAddress: hostPortAddress(
-      assignment.publicHost,
-      assignment.publicPort
+      assignment.target ?? "",
+      assignment.publicPort ?? 0
     ),
-    domain: assignment.domain,
+    domain: assignment.vanityDomain ?? "",
     lastError: assignment.lastError,
     srvActive: domainHasActiveSrvRecord(assignment),
-    status: assignment.status,
+    status: gameStatus(assignment.status),
     supportsSrv: assignment.supportsSrv,
-    vanityLabel: assignment.vanityLabel,
+    vanityLabel: vanityLabelOf(assignment.hostname, assignment.vanityDomain),
   }
+}
+
+// A game address is never `external` (see `address`).
+function gameStatus(status: Address["status"]) {
+  return status === "external" ? "error" : status
 }
 
 function assignmentKey(relayId: string, instanceId: string): string {

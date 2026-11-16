@@ -4,7 +4,6 @@ import { afterAll, afterEach, vi } from "vite-plus/test"
 import { relayInstanceSchema } from "@workspace/contracts"
 
 import { AppCache } from "@/effect/cache"
-import type { InstanceDomainAssignment } from "@/effect/addresses"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
@@ -35,7 +34,7 @@ const disabledCache = Layer.succeed(AppCache)({
 })
 
 // A domain, and the name it holds.
-const insertAssignment = (assignment: InstanceDomainAssignment) =>
+const insertAssignment = (assignment: TestAssignment) =>
   Effect.all([
     insertRows("hostname_claim", {
       hostname: `${assignment.vanityLabel}.${assignment.domain}`,
@@ -47,7 +46,7 @@ const insertAssignment = (assignment: InstanceDomainAssignment) =>
     insertDomainRow(assignment),
   ])
 
-const insertDomainRow = (assignment: InstanceDomainAssignment) =>
+const insertDomainRow = (assignment: TestAssignment) =>
   Effect.all([
     insertDomainAddress(assignment),
     assignment.primary
@@ -61,7 +60,7 @@ const insertDomainRow = (assignment: InstanceDomainAssignment) =>
       : Effect.void,
   ])
 
-const insertDomainAddress = (assignment: InstanceDomainAssignment) =>
+const insertDomainAddress = (assignment: TestAssignment) =>
   insertRows("instance_address", {
     id: assignment.id,
     game: true,
@@ -459,22 +458,25 @@ function testInstance() {
   }
 }
 
-function testAssignment(): InstanceDomainAssignment {
+// A game server's address, as the rows below are written.
+type TestAssignment = ReturnType<typeof testAssignment>
+
+function testAssignment() {
   return {
-    addressRecordId: "address-record",
-    addressRecordType: "A",
+    addressRecordId: "address-record" as string | null,
+    addressRecordType: "A" as string | null,
     domain: "kiln.site",
     id: "00000000-0000-4000-8000-000000000001",
     instanceId,
     integrationId: "cloudflare",
-    lastError: null,
+    lastError: null as string | null,
     next: null,
     primary: true,
     publicHost: "203.0.113.10",
     publicPort: 25_565,
     relayId,
     srvProtocol: "tcp",
-    srvRecordId: "srv-record",
+    srvRecordId: "srv-record" as string | null,
     srvService: "minecraft",
     status: "active",
     supportsSrv: true,

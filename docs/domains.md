@@ -251,3 +251,117 @@ hostname.
   for those it also keeps whether the record is proxied and, while one is
   `external`, the address record Cloudflare already had. A game server's web
   route on its own address is that address's row, with both.
+
+## Where this is going: one model for every name
+
+Planned; built in the steps below. Today Kiln keeps names three ways:
+Cloudflare names in `instance_address`, hostnames outside every connected
+zone only on the Relays that route them, and tunnel names in `tunnel_name`
+under a tunnel's TLDs (see [Tunnels](instances.md#tunnels)). They become one
+model: a **domain** says who writes its DNS, a **name** (an address) sits
+under a domain and belongs to an instance, and where the name points follows
+from its domain.
+
+### Domains
+
+A TLD is a domain like any other: `paper.kiln` and `paper.example.com` are
+both a name under a domain. What differs is the domain's provider:
+
+| Provider                         | Who writes the records                                                    | Names point at                                                           | A name is unique   |
+| -------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------ |
+| A DNS service (Cloudflare today) | Kiln, through the service's API                                           | the Relay (web routes, through its proxy) or a game server's public port | across every Relay |
+| Managed elsewhere                | the domain's owner, by hand                                               | the Relay or a public port, like a DNS service's                         | across every Relay |
+| A tunnel                         | Kiln, in its gateways' CoreDNS, with split DNS sending the domain to them | the member's own address on its gateway, every port, no proxy            | within the tunnel  |
+
+- One `domain` table replaces `domain_zone` and `tunnel_domain`. A row has
+  the domain, its provider, the connection (with its zone) or tunnel behind
+  it, whether it offers generated names, which one is the default, and
+  whether it takes new names. A connection's and a tunnel's domains take
+  their owner from them; a managed-elsewhere domain keeps its own.
+- Public domains (a DNS service's and managed elsewhere) are unique among
+  themselves. Tunnel domains stay unique across Kiln too, until Hearth knows
+  which tailnet each tunnel's login belongs to: split DNS is one map per
+  tailnet, so two tunnels on one would overwrite each other's. A tunnel
+  domain can't equal, sit under, or contain a public one, since on the
+  tailnet it would answer for every public name beneath it.
+- **Managed elsewhere** domains are added on the Domains page. Their names
+  are real addresses: held, unique across Relays, and shown with the record
+  to create, with the same resolve check the Relay makes before asking for a
+  certificate. A hostname a Relay already routes outside every domain is
+  attached to a managed-elsewhere domain someone adds; Kiln never guesses a
+  parent domain, and a name two Relays both route is shown as a conflict.
+- A connection is a provider's credentials. The provider is an interface in
+  code (list zones, write, find and delete a record, whether it can proxy,
+  whether it has SRV), and Cloudflare is its one implementation until people
+  ask for another. Record columns (ID, type, proxied, SRV) stay as they are.
+
+### Names
+
+- One `address` row per name: the hostname, its domain, the instance it
+  belongs to (its kind, its ID, and an App's service), whether Kiln generated
+  it, its uses (game join, web routes, or tunnel member, which follows from a
+  tunnel domain), a rename's next name, and its status with retries.
+- A public name is unique across every Relay; a tunnel name within its
+  tunnel. `hostname_claim` stays as the reservation of every name held,
+  current or a rename's next, scoped the same way; who holds it is the
+  address.
+- A member has one generated name per tunnel, which can be renamed but not
+  removed.
+- Generated public names are `adjective-noun`; tunnel names stay made from
+  the instance's name (`survival.kiln`), since they only need to be unique in
+  their tunnel and people type them.
+- The primary address points at an address, or at a web route, which can
+  carry a path, until routes themselves move to Hearth.
+- One DNS worker finishes work for every provider. A DNS service's names
+  keep their status and retries per name. A tunnel's DNS is one hosts file
+  per gateway: a change rewrites it right away, each gateway records whether
+  it has the latest, and the worker brings a gateway that missed it up to
+  date, never sending a file that leaves out an away gateway's members. The
+  stopgap that undoes an alias whose DNS failed goes.
+- An instance's Network page shows its names in one Domains list, each
+  marked public or on a tunnel, with its provider's mark.
+
+### Who may use a domain
+
+Unchanged by the move, written down here so each provider keeps its rule:
+
+- A DNS service's domain: a single name under one offering generated names
+  for anyone who may use it (the owner's, or Kiln's for everyone), with
+  reserved names and its `www` counterpart; any name in its zone for the
+  connection's owner, the resource's owner's only for that owner, and Kiln's
+  whole zones only for platform administrators.
+- A managed-elsewhere domain: its owner, and platform administrators for
+  Kiln's.
+- A tunnel's domain: names there take the tunnel's manager and the member's
+  network permission; aliases can be several labels deep; the generated
+  name can't be removed.
+
+### Steps
+
+Each step is its own PR in one stack; every migration keeps row IDs, since
+Cloudflare records carry `kiln:<id>` and primaries point at IDs, and fails
+on a collision rather than skipping a row. The Relay protocol doesn't
+change.
+
+1. One address shape in the code: `WebHostname` and
+   `InstanceDomainAssignment` fold into `Address`, and status means the same
+   for a game address and a web name. Operation names stay, since the audit
+   log keeps them.
+2. Domains get a provider: `domain_zone` becomes `domain` with its
+   provider, and every zone a name uses today gets a domain row that offers
+   no generated names. A custom hostname is placed under its most specific
+   domain; Cloudflare sits behind the provider interface.
+3. Managed elsewhere: added on the Domains page, its names held and
+   checked; hostnames Relays route outside every domain are attached to one
+   when someone adds it.
+4. Scoped names: `hostname_claim` and `instance_address` get a scope,
+   public or a tunnel; addresses can belong to a database and name an App's
+   service.
+5. Tunnel TLDs are domains: `tunnel_domain` rows become domains whose
+   provider is their tunnel, the first its default.
+6. Tunnel names are addresses: `tunnel_name` rows move into the address
+   table with their IDs, tunnel primaries become `address` in the same
+   migration, and tunnel DNS keeps per-gateway state for the worker.
+
+Not in this: HTTPS for tunnel names, Hearth owning web routes, DNS
+following a Relay's proxy mode, and tunnel domains shared per tailnet.
