@@ -612,5 +612,9 @@ from a tag or an image name today.
     takes the Relay's permissions. Owning a game server without its
     terminal is an exception in code until then.
 
+15. One model for every name: domains with a DNS provider (a DNS service,
+    a tunnel, or managed elsewhere) and every name an address under one.
+    See [Domains](domains.md#where-this-is-going-one-model-for-every-name).
+
 The CLI is reworked after this, and isn't changed along the way beyond what
 keeps it working.
