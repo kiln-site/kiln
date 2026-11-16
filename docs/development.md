@@ -60,6 +60,38 @@ to be unique across running stacks.
 | `pnpm dev:docker:test`    | Run web tests on the box's MySQL                 |
 | `pnpm dev:docker:shared`  | Manage the box's shared MySQL and Valkey         |
 | `pnpm dev:docker:s3`      | Manage the tailnet's S3 endpoint                 |
+| `pnpm dev:docker:share`   | Put Hearth on the tailnet for other devices      |
+
+## Sharing a stack
+
+`pnpm dev:docker:share` gives a running stack's Hearth a tailnet-only HTTPS
+link, for opening it on a phone or another machine. It needs Tailscale with
+HTTPS on, and the account as a Tailscale operator.
+
+```sh
+pnpm dev:docker:share         # start, or print the link again
+pnpm dev:docker:share status  # the link and its container
+pnpm dev:docker:share off     # stop sharing
+```
+
+The link is `https://<box>.<tailnet>.ts.net:<port>`, with a port from 8600
+that the stack keeps. `dev:docker:refresh` leaves it up. `dev:docker:down`
+takes it down, and the next `share` brings it back at the same address.
+`dev:docker:destroy` removes it for good.
+
+A stack only accepts its own `KILN_URL`, so the stack's `share` service
+(`scripts/dev-share-proxy.mjs`) forwards to Hearth as that host and points
+redirects back at the link. Tailscale Serve terminates TLS and passes it each
+connection (`--tls-terminated-tcp`) rather than proxying HTTP itself. A first
+dev load fetches about 1,300 modules, and one failed module keeps the page
+from hydrating, so buttons stay disabled. Tailscale's HTTP proxy reuses
+connections the dev server has already closed and answers those requests with
+502s. The proxy also compresses responses, which cuts that first load from
+about 80 MB to about a quarter of that.
+
+With OrbStack, the browser reaches the Relay at its own `.orb.local` address,
+which other devices can't resolve, so Relay-backed views such as the console
+and files don't load through the link.
 
 ## Shared services
 

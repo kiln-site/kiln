@@ -320,6 +320,22 @@ services:
       io.kiln.installation: ${KILN_INSTALLATION_ID:-}
       io.kiln.resource: hearth
 
+  # Hearth on the tailnet, started only by `pnpm dev:docker:share`, which
+  # points Tailscale Serve at this loopback port. See docs/development.md.
+  share:
+    image: node:24-alpine
+    restart: unless-stopped
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
+    environment:
+      KILN_DEV_SHARE_ORIGIN: ${KILN_DEV_SHARE_ORIGIN:-http://localhost}
+      KILN_DEV_SHARE_UPSTREAM: http://hearth:3000
+      KILN_URL: ${KILN_URL:-http://localhost:3000}
+    command: ["node", "/share/proxy.mjs"]
+    volumes:
+      - ./scripts/dev-share-proxy.mjs:/share/proxy.mjs:ro
+    ports:
+      - "127.0.0.1:${KILN_DEV_SHARE_LOCAL_PORT:-0}:3000"
+
 networks:
   shared:
     external: true
