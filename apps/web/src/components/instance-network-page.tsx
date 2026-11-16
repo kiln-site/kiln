@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router"
 import { Effect } from "effect"
 import { CircleAlert, LoaderCircle, Plus, RotateCw } from "lucide-react"
 import {
+  instanceTailscaleMember,
   instanceTailscaleMemberId,
   relayInstancePortInputSchema,
 } from "@workspace/contracts"
@@ -58,6 +59,7 @@ import {
   type PortNotice,
 } from "@/components/ports-section"
 import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
+import { useInstanceTunnelNames } from "@/components/tunnel/tunnel-data"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
   WebRoutesSection,
@@ -111,6 +113,12 @@ function WebRoutesNetworkPage({ editGamePort }: { editGamePort: boolean }) {
     () => queryKeys.relay.webRoutes(instance.relayId, instance.id),
     [instance.id, instance.relayId]
   )
+  // Its names in the tunnels it's connected to, listed with its domains.
+  const isServerMember = React.useCallback(
+    (memberId: string) => instanceTailscaleMember(memberId) === instance.id,
+    [instance.id]
+  )
+  const tunnelNames = useInstanceTunnelNames(isServerMember)
   const routes = useQuery({
     ...webRoutesQueryOptions(dnsResource),
     enabled: permissions.networkRead,
@@ -209,6 +217,7 @@ function WebRoutesNetworkPage({ editGamePort }: { editGamePort: boolean }) {
               />
             ) : null
           }
+          tunnelNames={tunnelNames}
           onSave={saveWebRoutes}
         />
         <GameServerTunnels instance={instance} />

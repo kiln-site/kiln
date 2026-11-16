@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
   appPortSchema,
+  appTailscaleMember,
   appTailscaleMemberId,
   webPortCandidates,
 } from "@workspace/contracts"
@@ -62,6 +63,11 @@ import {
   type PortNotice,
 } from "@/components/ports-section"
 import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
+import {
+  useInstanceTunnelNames,
+  useMakeTunnelNamePrimary,
+  type InstanceTunnelName,
+} from "@/components/tunnel/tunnel-data"
 import { useHeldWebHostnames } from "@/components/web-hostname-dns"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
@@ -205,6 +211,19 @@ function AppWebRoutes({
     [app.id, app.relayId, queryClient]
   )
 
+  // Its services' names in the tunnels they're connected to, listed with
+  // its domains; one can be its primary address.
+  const isAppMember = React.useCallback(
+    (memberId: string) => appTailscaleMember(memberId)?.appId === app.id,
+    [app.id]
+  )
+  const tunnelNames = useInstanceTunnelNames(isAppMember)
+  const makeTunnelPrimary = useMakeTunnelNamePrimary()
+  const makeTunnelNamePrimary = React.useCallback(
+    (name: InstanceTunnelName) => makeTunnelPrimary.mutate(name.name),
+    [makeTunnelPrimary]
+  )
+
   // The ports its running services listen on that could be its website's:
   // a name nothing serves yet is offered to them.
   const targets = React.useMemo(
@@ -243,7 +262,9 @@ function AppWebRoutes({
         ) : null
       }
       targets={targets}
+      tunnelNames={tunnelNames}
       onMakePrimary={makePrimary}
+      onMakeTunnelPrimary={makeTunnelNamePrimary}
       onSave={save}
     />
   )
