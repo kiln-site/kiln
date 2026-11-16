@@ -11,7 +11,10 @@
     "android": "expo run:android",
     "prebuild": "expo prebuild --clean",
     "typecheck": "tsc --noEmit",
-    "lint": "vp lint src"
+    "lint": "vp lint src",
+    "dev": "APP_VARIANT=development expo start --dev-client",
+    "dev:tailscale": "node scripts/dev-tailscale.mjs",
+    "ios:dev": "APP_VARIANT=development expo run:ios --device"
   },
   "dependencies": {
     "@expo-google-fonts/geist": "^0.4.2",
@@ -29,6 +32,7 @@
     "expo-clipboard": "~58.0.4",
     "expo-constants": "~58.0.16",
     "expo-crypto": "~58.0.8",
+    "expo-dev-client": "~58.0.20",
     "expo-font": "~58.0.12",
     "expo-haptics": "~58.0.8",
     "expo-linking": "~58.0.17",
