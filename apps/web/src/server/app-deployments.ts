@@ -35,7 +35,7 @@ const deploymentLogInputSchema = z.strictObject({
   deploymentId: z.uuid(),
   instance: z.strictObject({
     id: instanceIdSchema,
-    kind: z.enum(["app", "database", "server", "tunnel"]),
+    kind: z.enum(["app", "database", "server", "gateway"]),
   }),
 })
 
@@ -67,7 +67,7 @@ const allDeploymentsInputSchema = z.strictObject({
   instance: z
     .strictObject({
       id: instanceIdSchema,
-      kind: z.enum(["app", "server", "database", "tunnel"]),
+      kind: z.enum(["app", "server", "database", "gateway"]),
     })
     .optional(),
   relayId: relayIdSchema.optional(),

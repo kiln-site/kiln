@@ -10,12 +10,15 @@ import type { AccessPermission } from "@/lib/permissions"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
-import { requireTunnelPermission } from "./tunnel-access.server"
+import {
+  requireGatewayPermission,
+  requireTunnelManager,
+} from "./tunnel-access.server"
 
 const relayId = "1".repeat(12)
 const otherRelayId = "2".repeat(12)
-const tailnetId = "a".repeat(12)
-const tunnelId = "b".repeat(12)
+const tunnelId = "a".repeat(12)
+const gatewayId = "b".repeat(12)
 
 afterAll(() => disposeAppRuntime())
 
@@ -56,9 +59,18 @@ const grant = (
     )
   })
 
+// Changing the tunnel itself, and connecting to it, is its owner's.
+const manages = (userId: string) =>
+  Effect.promise(() =>
+    requireTunnelManager(member(userId), tunnelId).then(
+      () => true,
+      () => false
+    )
+  )
+
 const allowed = (userId: string, permission: AccessPermission) =>
   Effect.promise(() =>
-    requireTunnelPermission(member(userId), tunnelId, permission).then(
+    requireGatewayPermission(member(userId), gatewayId, permission).then(
       () => true,
       () => false
     )
@@ -67,7 +79,7 @@ const allowed = (userId: string, permission: AccessPermission) =>
 describeMysql("Who may act on a tunnel", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "is its owner, and whoever holds the permission on its Relay",
+      "is its owner's, and whoever holds the permission on a gateway's Relay",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -76,27 +88,21 @@ describeMysql("Who may act on a tunnel", () => {
           for (const id of ["owner", "operator", "elsewhere", "stranger"]) {
             yield* insertUser(id)
           }
-          yield* insertRows("instance_group", {
+          yield* insertRows("tunnel", {
             created_at: at,
-            created_by: "owner",
-            id: tailnetId,
+            id: tunnelId,
             name: "Home",
-            updated_at: at,
-          })
-          yield* insertRows("tailnet", {
-            created_at: at,
-            id: tailnetId,
             owner_id: "owner",
             updated_at: at,
           })
-          yield* insertRows("tunnel", {
+          yield* insertRows("tunnel_gateway", {
             cleanup_next_attempt_at: at,
-            id: tunnelId,
+            id: gatewayId,
             observed_at: at,
             owner_id: "owner",
             relay_id: relayId,
             state: "{}",
-            tailnet_id: tailnetId,
+            tunnel_id: tunnelId,
             updated_at: at,
           })
           // A grant on its Relay reaches it, as it reaches everything there.
@@ -110,6 +116,11 @@ describeMysql("Who may act on a tunnel", () => {
           assert.isFalse(yield* allowed("operator", "instance.deploy"))
           assert.isFalse(yield* allowed("elsewhere", "instance.terminal"))
           assert.isFalse(yield* allowed("stranger", "instance.logs.read"))
+
+          // A grant reaching a gateway's Relay doesn't reach the tunnel.
+          assert.isTrue(yield* manages("owner"))
+          assert.isFalse(yield* manages("operator"))
+          assert.isFalse(yield* manages("stranger"))
         })
     )
   })

@@ -18,6 +18,11 @@ User-facing name, then what the code calls it:
   keep `server` (`kiln servers list`, `kiln server info`).
 - **App**: `app`. **Database**: `database`.
 - **Relay**: `relay`, the host node that runs the containers.
+- **Tunnel**: `tunnel` (`kiln_tunnel`), one instance. Hearth calls its
+  part on one Relay a **gateway** (`gateway`, `kiln_tunnel_gateway`); the
+  Relay still calls a gateway a `tunnel`, in its `tunnel.*` requests, the
+  shared requests' `kind: "tunnel"`, and its labels, folders and state,
+  where `tailnetId` names its tunnel.
 - **Hearth**: the web panel (`apps/web`).
 
 - Write "game server" in user-facing copy wherever a server sits beside Apps,

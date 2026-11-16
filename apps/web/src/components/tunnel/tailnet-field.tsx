@@ -11,7 +11,7 @@ import {
   pickerCreateItem,
 } from "@/components/instance-picker-field"
 import { TailnetCard, tailnetMeta } from "@/components/tunnel/tailnet-card"
-import type { TailnetOverview } from "@/components/tunnel/tailnet-data"
+import type { TunnelOverview } from "@/components/tunnel/tailnet-data"
 import type { GroupPickerIdentity } from "@/lib/instance-picker-filters"
 
 // The tailnet a new tunnel joins: one that has no tunnel on its Relay yet,
@@ -26,10 +26,10 @@ type TailnetPickerItem = InstancePickerItem<GroupPickerIdentity>
 
 const CREATE_KEY = "tailnet:create"
 
-function tailnetItem(tailnet: TailnetOverview): TailnetPickerItem {
+function tailnetItem(tailnet: TunnelOverview): TailnetPickerItem {
   const meta =
     tailnet.integration === null
-      ? `${tailnetMeta(tailnet)} · needs an auth key`
+      ? `${tailnetMeta(tailnet)} · needs a Tailscale login`
       : tailnetMeta(tailnet)
   return {
     card: <TailnetCard meta={meta} name={tailnet.name} />,
@@ -50,7 +50,7 @@ export const TailnetField = React.memo(function TailnetField({
   disabled: boolean
   onChange: (choice: TailnetChoice) => void
   /** The tailnets a tunnel on this Relay could join. */
-  tailnets: ReadonlyArray<TailnetOverview>
+  tailnets: ReadonlyArray<TunnelOverview>
   value: TailnetChoice | null
 }) {
   const items = React.useMemo(() => tailnets.map(tailnetItem), [tailnets])

@@ -14,8 +14,9 @@ import {
 } from "@/effect/instance-updates"
 import { updatesView } from "@/server/instance-updates.server"
 import {
-  listTunnelRecordsEffect,
-  requireTunnelPermission,
+  listGatewayRecordsEffect,
+  requireGatewayPermission,
+  requireTunnelGateways,
 } from "@/server/tunnel-access.server"
 import {
   latestAppDeploymentsEffect,
@@ -31,7 +32,7 @@ import {
   type DeploymentKind,
   type DeploymentRecord,
   type ServerDeploymentRecord,
-  type TunnelDeploymentRecord,
+  type GatewayDeploymentRecord,
 } from "@/effect/app-deployments"
 import {
   getGitHubFileEffect,
@@ -132,8 +133,8 @@ export interface DatabaseDeploymentView extends DatabaseDeploymentRecord {
 }
 
 /** A tunnel's redeploy, as listed. */
-export interface TunnelDeploymentView extends TunnelDeploymentRecord {
-  kind: "tunnel"
+export interface GatewayDeploymentView extends GatewayDeploymentRecord {
+  kind: "gateway"
   /** Who may read its log on the Relay. */
   canReadLogs: boolean
   relayName: string
@@ -146,7 +147,7 @@ export type DeploymentView =
   | ({ kind: "app" } & AppDeploymentView)
   | DatabaseDeploymentView
   | ServerDeploymentView
-  | TunnelDeploymentView
+  | GatewayDeploymentView
 
 /** One App's deployments, one Relay's Apps', or every App the person reads. */
 export async function getAppDeploymentsHandler(data: {
@@ -185,33 +186,60 @@ export async function getDeploymentsHandler(data: {
   // A tunnel's are listed on its own page (`getTunnelDeploymentsHandler`).
   const page = await listDeployments(user, data, ["app", "server", "database"])
   return {
-    items: page.items.flatMap((item) => (item.kind === "tunnel" ? [] : [item])),
+    items: page.items.flatMap((item) =>
+      item.kind === "gateway" ? [] : [item]
+    ),
     nextCursor: page.nextCursor,
   }
 }
 
-/** One tunnel's deployments, for whoever may read its logs. */
+/**
+ * Every deployment of a tunnel's gateways, of those whose logs the viewer
+ * may read: its owner's, and anyone's who reads logs on a gateway's Relay.
+ */
 export async function getTunnelDeploymentsHandler(data: {
   before?: { id: string; startedAt: string }
   tunnelId: string
 }) {
   const user = await requireEligibleResourceUser()
-  const tunnel = await requireTunnelPermission(
+  await requireTunnelGateways(user, data.tunnelId, "instance.logs.read")
+  const page = await listDeployments(
     user,
-    data.tunnelId,
+    { before: data.before, tunnelId: data.tunnelId },
+    ["gateway"]
+  )
+  return {
+    items: page.items.flatMap((item) =>
+      item.kind === "gateway" ? [item] : []
+    ),
+    nextCursor: page.nextCursor,
+  }
+}
+
+/** One gateway's deployments, for whoever may read its logs. */
+export async function getGatewayDeploymentsHandler(data: {
+  before?: { id: string; startedAt: string }
+  gatewayId: string
+}) {
+  const user = await requireEligibleResourceUser()
+  const gateway = await requireGatewayPermission(
+    user,
+    data.gatewayId,
     "instance.logs.read"
   )
   const page = await listDeployments(
     user,
     {
       before: data.before,
-      instance: { id: tunnel.id, kind: "tunnel" },
-      relayId: tunnel.relayId,
+      instance: { id: gateway.id, kind: "gateway" },
+      relayId: gateway.relayId,
     },
-    ["tunnel"]
+    ["gateway"]
   )
   return {
-    items: page.items.flatMap((item) => (item.kind === "tunnel" ? [item] : [])),
+    items: page.items.flatMap((item) =>
+      item.kind === "gateway" ? [item] : []
+    ),
     nextCursor: page.nextCursor,
   }
 }
@@ -222,28 +250,34 @@ async function listDeployments(
     before?: { id: string; startedAt: string }
     instance?: { id: string; kind: DeploymentKind }
     relayId?: string
+    /** Only the gateways of this tunnel. */
+    tunnelId?: string
   },
   kinds: ReadonlyArray<DeploymentKind>
 ) {
-  const [relays, grants, apps, servers, databases, tunnels] = await Promise.all([
-    listPersistedRelays(),
-    isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
-    kinds.includes("app")
-      ? runAppEffect("apps.directory", listAppRecordsEffect())
-      : Promise.resolve([]),
-    kinds.includes("server")
-      ? runAppEffect("Infra.directory.servers", readInfraServerDirectory(user))
-      : Promise.resolve([]),
-    kinds.includes("database")
-      ? runAppEffect(
-          "managedDatabases.directory",
-          listManagedDatabaseDirectoryEffect()
-        )
-      : Promise.resolve([]),
-    kinds.includes("tunnel")
-      ? runAppEffect("tunnels.list", listTunnelRecordsEffect())
-      : Promise.resolve([]),
-  ])
+  const [relays, grants, apps, servers, databases, gateways] =
+    await Promise.all([
+      listPersistedRelays(),
+      isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
+      kinds.includes("app")
+        ? runAppEffect("apps.directory", listAppRecordsEffect())
+        : Promise.resolve([]),
+      kinds.includes("server")
+        ? runAppEffect(
+            "Infra.directory.servers",
+            readInfraServerDirectory(user)
+          )
+        : Promise.resolve([]),
+      kinds.includes("database")
+        ? runAppEffect(
+            "managedDatabases.directory",
+            listManagedDatabaseDirectoryEffect()
+          )
+        : Promise.resolve([]),
+      kinds.includes("gateway")
+        ? runAppEffect("tunnels.list", listGatewayRecordsEffect())
+        : Promise.resolve([]),
+    ])
   const relayNames = new Map(
     relays
       .filter(
@@ -283,18 +317,23 @@ async function listDeployments(
   )
   // A tunnel's logs are its owner's, and anyone's who reads logs on its
   // Relay.
-  const canReadTunnelLogs = (tunnel: { ownerId: string | null; relayId: string }) =>
+  const canReadGatewayLogs = (gateway: {
+    ownerId: string | null
+    relayId: string
+  }) =>
     isPlatformAdmin(user) ||
-    tunnel.ownerId === user.id ||
+    gateway.ownerId === user.id ||
     effectiveScopePermissions(grants, {
-      relayId: tunnel.relayId,
-      resourceId: tunnel.relayId,
+      relayId: gateway.relayId,
+      resourceId: gateway.relayId,
       resourceType: "relay",
     }).has("instance.logs.read")
-  const readableTunnels = new Map(
-    tunnels.flatMap((tunnel) =>
-      relayNames.has(tunnel.relayId) && canReadTunnelLogs(tunnel)
-        ? [[tunnel.id, tunnel] as const]
+  const readableGateways = new Map(
+    gateways.flatMap((gateway) =>
+      relayNames.has(gateway.relayId) &&
+      (data.tunnelId === undefined || gateway.tunnelId === data.tunnelId) &&
+      canReadGatewayLogs(gateway)
+        ? [[gateway.id, gateway] as const]
         : []
     )
   )
@@ -335,11 +374,11 @@ async function listDeployments(
             relayIds: [],
           },
         }),
-        ...(kinds.includes("tunnel") && {
-          tunnel: {
-            instances: [...readableTunnels.values()].map((tunnel) => ({
-              id: tunnel.id,
-              relayId: tunnel.relayId,
+        ...(kinds.includes("gateway") && {
+          gateway: {
+            instances: [...readableGateways.values()].map((gateway) => ({
+              id: gateway.id,
+              relayId: gateway.relayId,
             })),
             relayIds: [],
           },
@@ -382,10 +421,10 @@ async function listDeployments(
           triggeredByName: triggeredByName(record, index),
         }
       }
-      if (record.kind === "tunnel") {
+      if (record.kind === "gateway") {
         return {
           ...record,
-          canReadLogs: readableTunnels.has(record.tunnelId),
+          canReadLogs: readableGateways.has(record.gatewayId),
           relayName,
           triggeredByName: triggeredByName(record, index),
         }
@@ -761,9 +800,9 @@ const deploymentLogKinds = {
     relayKind: "instance",
     scope: "instanceId",
   },
-  // Authorized as a tunnel is, by its owner or its Relay.
-  tunnel: {
-    noun: "tunnel",
+  // Authorized as a gateway is, by its owner or its Relay.
+  gateway: {
+    noun: "gateway",
     relayKind: "tunnel",
     scope: null,
   },
@@ -795,7 +834,7 @@ export async function getDeploymentLogHandler(
   const kind = deploymentLogKinds[record.kind]
   const instanceId = deploymentInstanceId(record)
   if (kind.scope === null) {
-    await requireTunnelPermission(user, instanceId, "instance.logs.read")
+    await requireGatewayPermission(user, instanceId, "instance.logs.read")
   } else {
     await requireRelayPermission({
       [kind.scope]: instanceId,
@@ -845,8 +884,8 @@ function deploymentInstanceId(record: DeploymentRecord): string {
       return record.databaseId
     case "server":
       return record.instanceId
-    case "tunnel":
-      return record.tunnelId
+    case "gateway":
+      return record.gatewayId
   }
 }
 

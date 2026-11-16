@@ -42,10 +42,7 @@ import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.se
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
-import {
-  rewriteTailscaleDnsOf,
-  tailnetsOf,
-} from "@/lib/tunnel-dns.server"
+import { rewriteTailscaleDnsOf, tunnelsOf } from "@/lib/tunnel-dns.server"
 import { currentActingUser } from "@/operations/acting-user"
 import {
   durableOperation,
@@ -421,15 +418,13 @@ const finalBackup = (
 const deletionPlan = (input: DeletionInput) =>
   loadResourceDeletionEffect(input.deletionId).pipe(
     Effect.orDie,
-    Effect.map(
-      (deletion): DeletionPlan => ({
-        parts:
-          input.kind === "app"
-            ? []
-            : [{ id: input.resourceId, kind: input.kind }],
-        volumeIds: [...(deletion?.volumeIds ?? [])],
-      })
-    )
+    Effect.map((deletion): DeletionPlan => ({
+      parts:
+        input.kind === "app"
+          ? []
+          : [{ id: input.resourceId, kind: input.kind }],
+      volumeIds: [...(deletion?.volumeIds ?? [])],
+    }))
   )
 
 // Deletes the volumes an App's deletion named, once the App is gone from
@@ -508,9 +503,7 @@ const queueVolumeDeletion = (
     publishDeletionChange(asked)
     return null
   }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.succeed(messageOf(Cause.squash(cause)))
-    )
+    Effect.catchCause((cause) => Effect.succeed(messageOf(Cause.squash(cause))))
   )
 
 const reserveFinalBackup = (
@@ -734,7 +727,7 @@ const resourceOnRelay = (input: DeletionInput) =>
   )
 
 // Whether the Relay has anything of the resource left to delete: the
-// resource, or its place on a tailnet, which its Relay takes off
+// resource, or its place on a tunnel, which its Relay takes off
 // once it has deleted the resource.
 const leftOnRelay = (input: DeletionInput) =>
   resourceOnRelay(input).pipe(
@@ -742,7 +735,7 @@ const leftOnRelay = (input: DeletionInput) =>
       present
         ? Effect.succeed(true)
         : promiseEffect(() =>
-            tailnetsOf({
+            tunnelsOf({
               id: input.resourceId,
               kind: input.kind,
               relayId: input.relayId,

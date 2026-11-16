@@ -1,20 +1,20 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import { selectTunnel } from "@/components/tunnel/tailnet-data"
-import { tailnetsQueryOptions } from "@/lib/query-options"
+import { tunnelsQueryOptions } from "@/lib/query-options"
 
 export const Route = createFileRoute("/_app/tunnel/$tunnelId")({
   staleTime: Infinity,
   beforeLoad: async ({ context, params }) => {
     const tailnets = await context.queryClient.ensureQueryData(
-      tailnetsQueryOptions()
+      tunnelsQueryOptions()
     )
     // A tunnel added moments ago may not be in the cached list yet.
     const view =
       selectTunnel(tailnets, params.tunnelId) ??
       selectTunnel(
         await context.queryClient.fetchQuery({
-          ...tailnetsQueryOptions(),
+          ...tunnelsQueryOptions(),
           staleTime: 0,
         }),
         params.tunnelId

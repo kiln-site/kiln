@@ -5,7 +5,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { authorizedAppFor } from "@/server/app-access"
 import { requiredRelay } from "@/server/managed-database-access"
-import { requireTunnelPermission } from "@/server/tunnel-access.server"
+import { requireGatewayPermission } from "@/server/tunnel-access.server"
 
 // The one check every terminal request makes: opening its stream, checking
 // again while the stream stays open, and each write, claim, and restart.
@@ -45,12 +45,12 @@ export async function authorizeTerminal(
       return requiredRelay(relayId)
     // A tunnel's is its owner's, or anyone's who may on its Relay.
     case "tunnel": {
-      const tunnel = await requireTunnelPermission(
+      const gateway = await requireGatewayPermission(
         user,
         target.id,
         "instance.terminal"
       )
-      if (tunnel.relayId !== relayId) throw new Error("Tunnel not found")
+      if (gateway.relayId !== relayId) throw new Error("Tunnel not found")
       return requiredRelay(relayId)
     }
     case "relay":
@@ -64,7 +64,9 @@ export async function authorizeTerminal(
     case "platform": {
       const { platformRelay } = await import("@/server/platform-access.server")
       if (!isPlatformAdmin(user)) {
-        throw new Error("Only platform administrators can open Kiln's terminals")
+        throw new Error(
+          "Only platform administrators can open Kiln's terminals"
+        )
       }
       return platformRelay(relayId)
     }

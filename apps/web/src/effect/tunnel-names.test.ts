@@ -12,24 +12,18 @@ import {
   setGeneratedTunnelNamesEffect,
 } from "./tunnel-names"
 
-const tailnetId = "a".repeat(12)
+const tunnelId = "a".repeat(12)
 const at = Date.UTC(2026, 0, 1)
 
 afterAll(() => disposeAppRuntime())
 
-const tailnet = Effect.gen(function* () {
+const tunnel = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertUser("owner")
-  yield* insertRows("instance_group", {
-    created_at: at,
-    created_by: "owner",
-    id: tailnetId,
+  yield* insertRows("tunnel", {
     name: "Home",
-    updated_at: at,
-  })
-  yield* insertRows("tailnet", {
     created_at: at,
-    id: tailnetId,
+    id: tunnelId,
     owner_id: "owner",
     updated_at: at,
   })
@@ -45,8 +39,8 @@ describeMysql("A connected member's generated name", () => {
   layer(TestDatabase)((it) => {
     it.effect("is made once from what it's called", () =>
       Effect.gen(function* () {
-        yield* tailnet
-        const names = yield* generateTunnelNamesEffect(tailnetId, "kiln", [
+        yield* tunnel
+        const names = yield* generateTunnelNamesEffect(tunnelId, "kiln", [
           member("instance:aaaaaa111111", "Paper 26.3 — Survival!"),
           member("instance:bbbbbb222222", "  --Lobby   Hub--  "),
           member("instance:cccccc333333", "✨✨"),
@@ -66,12 +60,12 @@ describeMysql("A connected member's generated name", () => {
       })
     )
 
-    // A name is unique in its tailnet: another member's, an alias, or one
+    // A name is unique in its tunnel: another member's, an alias, or one
     // chosen in the same save keeps it, and the next free number is added.
     it.effect("takes the next number while the name is taken", () =>
       Effect.gen(function* () {
-        yield* tailnet
-        yield* setGeneratedTunnelNamesEffect(tailnetId, [
+        yield* tunnel
+        yield* setGeneratedTunnelNamesEffect(tunnelId, [
           {
             domain: "kiln",
             label: "survival",
@@ -82,17 +76,17 @@ describeMysql("A connected member's generated name", () => {
           domain: "kiln",
           label: "survival-2",
           memberId: "instance:aaaaaa111111",
-          tailnetId,
+          tunnelId,
         })
         // Under another TLD it's free.
         yield* addTunnelAliasEffect({
           domain: "test",
           label: "lobby",
           memberId: "instance:aaaaaa111111",
-          tailnetId,
+          tunnelId,
         })
         const names = yield* generateTunnelNamesEffect(
-          tailnetId,
+          tunnelId,
           "kiln",
           [
             member("instance:bbbbbb222222", "Survival"),

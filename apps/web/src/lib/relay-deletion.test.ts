@@ -39,7 +39,7 @@ const network = (id: string) => ({
 
 const deployment = (networkId: string, relayId: string) => ({
   id: `${networkId.slice(0, 4)}${relayId.slice(-4)}`.padEnd(12, "0"),
-  tailnet_id: networkId.padEnd(12, "0"),
+  tunnel_id: networkId.padEnd(12, "0"),
   relay_id: relayId,
   state: "{}",
   cleanup_next_attempt_at: 0,
@@ -76,8 +76,8 @@ describeMysql("Relay deletion", () => {
           })
           // A deleting network held only by this Relay can finish cleanup; one
           // still deployed elsewhere keeps waiting on that Relay.
-          yield* insertRows("tailnet", [network("solo"), network("shared")])
-          yield* insertRows("tunnel", [
+          yield* insertRows("tunnel", [network("solo"), network("shared")])
+          yield* insertRows("tunnel_gateway", [
             deployment("solo", "relay-one"),
             deployment("shared", "relay-one"),
             deployment("shared", "relay-two"),
@@ -115,7 +115,7 @@ describeMysql("Relay deletion", () => {
             cleanup_attempts: number
             cleanup_next_attempt_at: number
             cleanup_last_error: string | null
-          }>("tailnet")
+          }>("tunnel")
           assert.deepEqual(
             Object.fromEntries(
               networks.map((row) => [
@@ -133,7 +133,7 @@ describeMysql("Relay deletion", () => {
             }
           )
           const deployments = yield* selectRows<{ relay_id: string }>(
-            "tunnel"
+            "tunnel_gateway"
           )
           assert.deepEqual(
             deployments.map((row) => row.relay_id),

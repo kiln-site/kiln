@@ -31,7 +31,7 @@ import { ServerKindIcon } from "@/components/instance-kind-icon"
 import {
   useTailnetSave,
   type TailnetBinding,
-  type TailnetOverview,
+  type TunnelOverview,
 } from "@/components/tunnel/tailnet-data"
 import { TunnelMemberNames } from "@/components/tunnel/tunnel-member-names"
 import {
@@ -54,7 +54,7 @@ export const TunnelConnectedList = React.memo(function TunnelConnectedList({
   canWrite: boolean
   /** One tunnel's Relay, for its own page; every tunnel's without. */
   relayId?: string
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   const directory = useTunnelMemberDirectory()
   const bindings = React.useMemo(
@@ -120,7 +120,7 @@ const ConnectedRow = React.memo(function ConnectedRow({
   canWrite: boolean
   member: TunnelMemberListing
   showRelay: boolean
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
   onDisconnect: (member: TunnelMemberListing) => void
 }) {
   return (
@@ -224,7 +224,7 @@ function DisconnectDialog({
   onClose,
 }: {
   member: TunnelMemberListing
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
   onClose: () => void
 }) {
   const save = useTailnetSave()
@@ -289,14 +289,14 @@ export const TunnelConnectPicker = React.memo(function TunnelConnectPicker({
 }: {
   /** One tunnel's Relay; every Relay the tailnet has a tunnel on without. */
   relayId?: string
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   const [open, setOpen] = React.useState(false)
   const directory = useTunnelMemberDirectory()
   const save = useTailnetSave()
   const options = React.useMemo(() => {
     const relays = new Set(
-      tailnet.deployments
+      tailnet.gateways
         .map((deployment) => deployment.relayId)
         .filter((candidate) => !relayId || candidate === relayId)
     )
@@ -317,7 +317,7 @@ export const TunnelConnectPicker = React.memo(function TunnelConnectPicker({
         searchText: `${member.identity.id} ${member.relayName}`,
       }))
       .sort((left, right) => left.name.localeCompare(right.name))
-  }, [directory.joinable, relayId, tailnet.bindings, tailnet.deployments])
+  }, [directory.joinable, relayId, tailnet.bindings, tailnet.gateways])
   const connect = React.useCallback(
     (option: InstancePickerItem) => {
       const member = directory.joinable.get(option.key)
@@ -347,7 +347,7 @@ export const TunnelConnectPicker = React.memo(function TunnelConnectPicker({
         <Button
           type="button"
           size="sm"
-          disabled={tailnet.deployments.length === 0 || save.isPending}
+          disabled={tailnet.gateways.length === 0 || save.isPending}
         >
           {save.isPending ? (
             <LoaderCircle className="animate-spin" />

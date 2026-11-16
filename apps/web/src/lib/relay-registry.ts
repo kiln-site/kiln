@@ -1242,29 +1242,29 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
               AND state IN ('confirming', 'needs_review')`,
           [now, id]
         )
-        // A tailnet being deleted that had its last tunnel here is ready to
+        // A tunnel being deleted that had its last gateway here is ready to
         // finish deleting, at its operation's next round.
         yield* transaction.execute(
-          `UPDATE ${databaseTable("tailnet")} tailnet
-             JOIN ${databaseTable("tunnel")} target
-               ON target.tailnet_id = tailnet.id
+          `UPDATE ${databaseTable("tunnel")} tunnel
+             JOIN ${databaseTable("tunnel_gateway")} target
+               ON target.tunnel_id = tunnel.id
               AND target.relay_id = ?
-              SET tailnet.cleanup_attempts = 0,
-                  tailnet.cleanup_next_attempt_at = ?,
-                  tailnet.cleanup_last_error = NULL,
-                  tailnet.updated_at = ?
-            WHERE tailnet.deletion_requested_at IS NOT NULL
+              SET tunnel.cleanup_attempts = 0,
+                  tunnel.cleanup_next_attempt_at = ?,
+                  tunnel.cleanup_last_error = NULL,
+                  tunnel.updated_at = ?
+            WHERE tunnel.deletion_requested_at IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1
-                  FROM ${databaseTable("tunnel")} remaining
-                 WHERE remaining.tailnet_id = tailnet.id
+                  FROM ${databaseTable("tunnel_gateway")} remaining
+                 WHERE remaining.tunnel_id = tunnel.id
                    AND remaining.relay_id <> ?
               )`,
           [id, now, now, id]
         )
-        // Its tunnels went with it.
+        // Its gateways went with it.
         yield* transaction.execute(
-          `DELETE FROM ${databaseTable("tunnel")} WHERE relay_id = ?`,
+          `DELETE FROM ${databaseTable("tunnel_gateway")} WHERE relay_id = ?`,
           [id]
         )
         // Its instances leave their groups with it.

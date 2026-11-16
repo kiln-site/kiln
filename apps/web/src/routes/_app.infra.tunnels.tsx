@@ -7,7 +7,7 @@ import {
   useDataTableSearchStore,
 } from "@/lib/data-table-search"
 import { pageTitle } from "@/lib/page-title"
-import { tailnetsQueryOptions } from "@/lib/query-options"
+import { tunnelsQueryOptions } from "@/lib/query-options"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/tunnels")({
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_app/infra/tunnels")({
     )
   },
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(tailnetsQueryOptions()),
+    context.queryClient.ensureQueryData(tunnelsQueryOptions()),
   head: () => ({ meta: [{ title: pageTitle("Tunnels") }] }),
   component: InfraTunnelsRoute,
 })

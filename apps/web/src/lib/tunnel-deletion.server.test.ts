@@ -5,14 +5,11 @@ import { afterAll, vi } from "vite-plus/test"
 import { tunnelSchema } from "@workspace/contracts"
 
 import {
-  requestTailnetCleanupEffect,
-  type PersistedTunnel,
-} from "@/effect/tunnels"
-import { createTailnetDefinitionEffect } from "@/effect/tailnets"
-import {
-  deleteTailnet,
-  startTailnetDeletion,
-} from "@/lib/tailnet-deletion.server"
+  requestTunnelCleanupEffect,
+  type PersistedGateway,
+} from "@/effect/tunnel-gateways"
+import { createTunnelDefinitionEffect } from "@/effect/tunnels"
+import { deleteTunnel, startTunnelDeletion } from "@/lib/tunnel-deletion.server"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { loadOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
@@ -20,14 +17,14 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
 
 // The Relay and the Tailscale API are the only fakes: Relays holding
-// Tailscale stacks as `<relay>/<stack>`, and a tailnet with device hostnames
+// Tailscale stacks as `<relay>/<stack>`, and a tunnel with device hostnames
 // and split-DNS resolvers.
 const fake = vi.hoisted(() => ({
   relayStacks: new Set<string>(),
-  tailnetDevices: new Set<string>(),
-  tailnetDns: new Map<string, ReadonlyArray<string>>(),
-  tailnetDown: false,
-  tailnetSecret: "tailscale-client-secret",
+  tunnelDevices: new Set<string>(),
+  tunnelDns: new Map<string, ReadonlyArray<string>>(),
+  tunnelDown: false,
+  tunnelSecret: "tailscale-client-secret",
 }))
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
@@ -50,10 +47,10 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
 
 vi.mock("@/effect/tailscale-api", async (importOriginal) => {
   const { Effect } = await import("effect")
-  const tailnet = (credential: {
+  const tunnel = (credential: {
     clientSecret: string
   }): import("effect").Effect.Effect<void, Error> =>
-    fake.tailnetDown || credential.clientSecret !== fake.tailnetSecret
+    fake.tunnelDown || credential.clientSecret !== fake.tunnelSecret
       ? Effect.fail(new Error("Tailscale returned HTTP 503"))
       : Effect.void
   return {
@@ -62,28 +59,28 @@ vi.mock("@/effect/tailscale-api", async (importOriginal) => {
       credential: { clientSecret: string },
       deployment: { hostname: string }
     ) =>
-      tailnet(credential).pipe(
+      tunnel(credential).pipe(
         Effect.andThen(
           Effect.sync(() => {
-            fake.tailnetDevices.delete(deployment.hostname)
+            fake.tunnelDevices.delete(deployment.hostname)
           })
         )
       ),
     syncTailscaleControlPlaneEffect: (
       credential: { clientSecret: string },
       network: {
-        deployments: ReadonlyArray<{ status: { ipv4Address: string | null } }>
+        gateways: ReadonlyArray<{ status: { ipv4Address: string | null } }>
         domains: ReadonlyArray<string>
       }
     ) =>
-      tailnet(credential).pipe(
+      tunnel(credential).pipe(
         Effect.map(() => {
-          const resolvers = network.deployments.flatMap(({ status }) =>
+          const resolvers = network.gateways.flatMap(({ status }) =>
             status.ipv4Address ? [status.ipv4Address] : []
           )
           for (const domain of network.domains) {
-            if (resolvers.length > 0) fake.tailnetDns.set(domain, resolvers)
-            else fake.tailnetDns.delete(domain)
+            if (resolvers.length > 0) fake.tunnelDns.set(domain, resolvers)
+            else fake.tunnelDns.delete(domain)
           }
           return { resolvers }
         })
@@ -95,42 +92,47 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
 const networkId = "a".repeat(12)
 const relayId = "b".repeat(12)
-const tunnelId = "c".repeat(12)
+const gatewayId = "c".repeat(12)
 const domain = "private.test"
 const hostname = "private-network"
-const stack = `${relayId}/${tunnelId}`
+const stack = `${relayId}/${gatewayId}`
 
-const networkRows = selectRows<{ cleanup_last_error: string | null }>("tailnet")
+const networkRows = selectRows<{ cleanup_last_error: string | null }>("tunnel")
 const deploymentRows = selectRows<{
   cleanup_attempts: number
   cleanup_last_error: string | null
-}>("tunnel")
+}>("tunnel_gateway")
 
 // A Tailscale-integrated network deployed on one Relay, with deletion
 // requested.
 const seedNetworkBeingDeleted = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertRelay(relayId, { name: "Relay One" })
-  yield* createTailnetDefinitionEffect(
-    { domains: [domain], id: networkId, name: "Private Network" },
+  yield* createTunnelDefinitionEffect(
+    {
+      brickSource: null,
+      domains: [domain],
+      id: networkId,
+      name: "Private Network",
+    },
     { clientId: "tailscale-client", scopes: [], tags: ["tag:kiln"] },
-    fake.tailnetSecret,
+    fake.tunnelSecret,
     "user-one"
   )
-  yield* requestTailnetCleanupEffect(networkId, "user-one", [deployment()])
+  yield* requestTunnelCleanupEffect(networkId, "user-one", [deployment()])
 
   fake.relayStacks.clear()
   fake.relayStacks.add(stack)
-  fake.tailnetDown = false
-  fake.tailnetDevices.clear()
-  fake.tailnetDevices.add(hostname)
-  fake.tailnetDns.clear()
-  fake.tailnetDns.set(domain, ["100.64.0.10"])
+  fake.tunnelDown = false
+  fake.tunnelDevices.clear()
+  fake.tunnelDevices.add(hostname)
+  fake.tunnelDns.clear()
+  fake.tunnelDns.set(domain, ["100.64.0.10"])
 })
 
 afterAll(() => disposeAppRuntime())
 
-const Cleanup = testOperationsEngine(deleteTailnet.layer).pipe(
+const Cleanup = testOperationsEngine(deleteTunnel.layer).pipe(
   Layer.provideMerge(TestDatabase)
 )
 
@@ -143,7 +145,7 @@ const until = <A, E, R>(
     Effect.timeout("20 seconds")
   )
 
-describeMysql("tailnet deletion", () => {
+describeMysql("tunnel deletion", () => {
   // Live clock: retries wait real time, and the engine keeps it.
   layer(Cleanup, { excludeTestServices: true })((it) => {
     it.effect(
@@ -151,9 +153,9 @@ describeMysql("tailnet deletion", () => {
       () =>
         Effect.gen(function* () {
           yield* seedNetworkBeingDeleted
-          fake.tailnetDown = true
+          fake.tunnelDown = true
 
-          const id = yield* startTailnetDeletion(networkId, "user-one")
+          const id = yield* startTunnelDeletion(networkId, "user-one")
           const [queued] = yield* until(
             deploymentRows,
             ([row]) => row?.cleanup_attempts === 1
@@ -166,12 +168,12 @@ describeMysql("tailnet deletion", () => {
           assert.strictEqual((yield* loadOperation(id))?.state, "running")
 
           // The first retry is due two seconds later.
-          fake.tailnetDown = false
+          fake.tunnelDown = false
           yield* until(loadOperation(id), (op) => op?.state === "succeeded")
 
           assert.isFalse(fake.relayStacks.has(stack))
-          assert.isFalse(fake.tailnetDevices.has(hostname))
-          assert.isFalse(fake.tailnetDns.has(domain))
+          assert.isFalse(fake.tunnelDevices.has(hostname))
+          assert.isFalse(fake.tunnelDns.has(domain))
           assert.deepStrictEqual(yield* deploymentRows, [])
           assert.deepStrictEqual(yield* networkRows, [])
         })
@@ -179,7 +181,7 @@ describeMysql("tailnet deletion", () => {
   })
 })
 
-function deployment(): PersistedTunnel {
+function deployment(): PersistedGateway {
   const parsed = tunnelSchema.parse({
     bindings: [],
     brick: {
@@ -194,7 +196,7 @@ function deployment(): PersistedTunnel {
     components: { coreDnsRunning: true, tailscaleRunning: true },
     domains: [domain],
     hostname,
-    id: tunnelId,
+    id: gatewayId,
     name: "Private Network",
     observedState: "running",
     status: {

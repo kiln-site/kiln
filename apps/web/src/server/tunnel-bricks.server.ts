@@ -1,7 +1,7 @@
 import {
   tunnelBrickProblem,
   type Brick,
-  type TunnelApply,
+  type TunnelApply as GatewayApply,
 } from "@workspace/contracts"
 
 import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
@@ -23,11 +23,23 @@ export async function tunnelBricks(): Promise<Array<Brick>> {
 /** The tunnel Brick at a source, as its Relay takes it. */
 export async function requiredTunnelBrick(
   source: string
-): Promise<NonNullable<TunnelApply["brick"]>> {
+): Promise<NonNullable<GatewayApply["brick"]>> {
   const brick = (await tunnelBricks()).find(
     (candidate) => candidate.source === source
   )
   if (!brick) throw new Error("This isn't one of Kiln's tunnel Bricks")
   const { iconSvg: _iconSvg, source: _source, ...definition } = brick
   return { definition, source }
+}
+
+/**
+ * Kiln's own `tailscale` tunnel Brick, by source: what a tunnel made before
+ * tunnels had Bricks runs.
+ */
+export async function officialTunnelBrickSource(): Promise<string> {
+  const brick = (await tunnelBricks()).find(
+    (candidate) => candidate.type === "tailscale"
+  )
+  if (!brick) throw new Error("Kiln's catalog has no Tailscale tunnel Brick")
+  return brick.source
 }

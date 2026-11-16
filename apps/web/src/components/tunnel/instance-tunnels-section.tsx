@@ -34,7 +34,7 @@ import {
   tunnelStatus,
   useTailnetSave,
   useTailnets,
-  type TailnetOverview,
+  type TunnelOverview,
 } from "@/components/tunnel/tailnet-data"
 import { TunnelMemberNames } from "@/components/tunnel/tunnel-member-names"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
@@ -67,8 +67,8 @@ export function InstanceTunnelsSection({
     select: (capabilities) => capabilities.isPlatformAdmin,
   })
   const tailnets = React.useMemo(
-    () => data.stacks.filter((tailnet) => !tailnet.cleanup),
-    [data.stacks]
+    () => data.tunnels.filter((tailnet) => !tailnet.cleanup),
+    [data.tunnels]
   )
   const connected = React.useMemo(
     () =>
@@ -135,10 +135,10 @@ const ConnectedTailnet = React.memo(function ConnectedTailnet({
   tailnet,
 }: {
   member: TunnelMember
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   const [disconnecting, setDisconnecting] = React.useState(false)
-  const tunnel = tailnet.deployments.find(
+  const tunnel = tailnet.gateways.find(
     (deployment) => deployment.relayId === member.relayId
   )
   const binding = tailnet.bindings.find(
@@ -204,7 +204,7 @@ function DisconnectDialog({
   onClose,
 }: {
   member: TunnelMember
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
   onClose: () => void
 }) {
   const save = useTailnetSave()
@@ -269,16 +269,16 @@ function ConnectMenu({
 }: {
   /** Whether they may add a tailnet's first tunnel. */
   canAdd: boolean
-  connected: ReadonlyArray<TailnetOverview>
+  connected: ReadonlyArray<TunnelOverview>
   member: TunnelMember
-  tailnets: ReadonlyArray<TailnetOverview>
+  tailnets: ReadonlyArray<TunnelOverview>
 }) {
   const save = useTailnetSave()
   const managed = tailnets.filter(
     (tailnet) => tailnet.access.manage && !connected.includes(tailnet)
   )
   const reachable = managed.filter((tailnet) =>
-    tailnet.deployments.some(({ relayId }) => relayId === member.relayId)
+    tailnet.gateways.some(({ relayId }) => relayId === member.relayId)
   )
   const unreachable = managed.filter((tailnet) => !reachable.includes(tailnet))
   if (managed.length === 0 && (!canAdd || connected.length > 0)) return null

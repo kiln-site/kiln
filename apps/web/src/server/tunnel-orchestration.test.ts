@@ -2,20 +2,20 @@ import { Effect } from "effect"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  applyTunnelPlanEffect,
-  type DesiredTunnel,
-  type TunnelPlanState,
+  applyGatewayPlanEffect,
+  type DesiredGateway,
+  type GatewayPlanState,
 } from "./tunnel-orchestration"
 
-interface TestDeployment extends TunnelPlanState {
+interface TestDeployment extends GatewayPlanState {
   revision: string
 }
 
-const applyTailscaleDeploymentPlan = <TDeployment extends TunnelPlanState>(
-  input: Parameters<typeof applyTunnelPlanEffect<TDeployment>>[0]
-) => Effect.runPromise(applyTunnelPlanEffect(input))
+const applyTailscaleDeploymentPlan = <TDeployment extends GatewayPlanState>(
+  input: Parameters<typeof applyGatewayPlanEffect<TDeployment>>[0]
+) => Effect.runPromise(applyGatewayPlanEffect(input))
 
-// Kiln's Tailscale Brick, which a new tunnel is made from.
+// Kiln's Tailscale Brick, which a new gateway is made from.
 const tailscaleBrick = {
   definition: {
     deploy: { image: "tailscale/tailscale:stable", type: "image" as const },
@@ -40,7 +40,7 @@ describe("Tailscale deployment orchestration", () => {
 
     await expect(
       applyTailscaleDeploymentPlan({
-        authKey: "test-auth-key",
+        authKeyForTarget: async () => "test-auth-key",
         brick: tailscaleBrick,
         current: [],
         desired: [target("relay-a")],
@@ -103,18 +103,18 @@ describe("Tailscale deployment orchestration", () => {
   })
 })
 
-function target(relayId: string): DesiredTunnel {
+function target(relayId: string): DesiredGateway {
   return {
     bindings: [{ enabled: true, memberId: `new-${relayId}` }],
     hostname: `network-${relayId}`,
-    id: tunnelId(relayId),
+    id: gatewayId(relayId),
     relayId,
     relayName: relayId,
   }
 }
 
-// Each Relay's tunnel has an ID of its own.
-function tunnelId(relayId: string): string {
+// Each Relay's gateway has an ID of its own.
+function gatewayId(relayId: string): string {
   return relayId.at(-1)!.repeat(12)
 }
 
@@ -133,7 +133,7 @@ function deployment(
     ],
     domains: ["test"],
     hostname: `network-${relayId}`,
-    id: tunnelId(relayId),
+    id: gatewayId(relayId),
     name: "Test network",
     relayId,
     relayName: relayId,

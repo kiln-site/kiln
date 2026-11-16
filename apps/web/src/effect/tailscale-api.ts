@@ -1,7 +1,7 @@
 import { Effect, Schedule, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
-import type { TailscaleOAuthCredential } from "@/effect/tailnets"
+import type { TailscaleOAuthCredential } from "@/effect/tunnels"
 
 const tailscaleApiBaseUrl = "https://api.tailscale.com/api/v2"
 const tailscaleOAuthTokenUrl = `${tailscaleApiBaseUrl}/oauth/token`
@@ -55,7 +55,7 @@ class TailscaleRoutePendingError extends Schema.TaggedError<TailscaleRoutePendin
   }
 ) {}
 
-interface TailscaleControlPlaneDeployment {
+interface TailscaleControlPlaneGateway {
   hostname: string
   status: {
     ipv4Address: string | null
@@ -64,7 +64,7 @@ interface TailscaleControlPlaneDeployment {
 }
 
 interface TailscaleControlPlaneNetwork {
-  deployments: ReadonlyArray<TailscaleControlPlaneDeployment>
+  gateways: ReadonlyArray<TailscaleControlPlaneGateway>
   /** Its TLDs, each answered by its tunnels. */
   domains: ReadonlyArray<string>
   id: string
@@ -98,7 +98,7 @@ export interface TailscaleControlPlaneInspection {
     approved: boolean
     hostname: string
     subnet: string
-    tailnetIp: string | null
+    tunnelIp: string | null
   }>
 }
 
@@ -122,7 +122,7 @@ export const createTailscaleNodeAuthKeyEffect = Effect.fn(
     credential.tags
   )
   const result = yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tailnet/-/keys`,
+    `${tailscaleApiBaseUrl}/tunnel/-/keys`,
     session.accessToken,
     TailscaleKeySchema,
     {
@@ -160,16 +160,16 @@ export const syncTailscaleControlPlaneEffect = Effect.fn(
   network: TailscaleControlPlaneNetwork
 ) {
   yield* Effect.annotateCurrentSpan({
-    "tailnet.id": network.id,
-    "tailnet.tunnels": network.deployments.length,
+    "tunnel.id": network.id,
+    "tunnel.gateways": network.gateways.length,
   })
   const session = yield* tailscaleSessionEffect(
     credential.clientId,
     credential.clientSecret,
     credential.tags
   )
-  for (const deployment of network.deployments) {
-    yield* approveDeploymentRouteEffect(session, deployment).pipe(
+  for (const gateway of network.gateways) {
+    yield* approveGatewayRouteEffect(session, gateway).pipe(
       Effect.retry({
         schedule: Schedule.spaced("2 seconds"),
         times: 15,
@@ -183,13 +183,13 @@ export const syncTailscaleControlPlaneEffect = Effect.fn(
 
   const resolvers = [
     ...new Set(
-      network.deployments.flatMap(({ status }) =>
+      network.gateways.flatMap(({ status }) =>
         status.ipv4Address ? [status.ipv4Address] : []
       )
     ),
   ].sort()
   yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tailnet/-/dns/split-dns`,
+    `${tailscaleApiBaseUrl}/tunnel/-/dns/split-dns`,
     session.accessToken,
     TailscaleSplitDnsSchema,
     {
@@ -224,25 +224,25 @@ export const inspectTailscaleControlPlaneEffect = Effect.fn(
   )
   const [splitDns, devicesResult] = yield* Effect.all([
     requestTailscaleJson(
-      `${tailscaleApiBaseUrl}/tailnet/-/dns/split-dns`,
+      `${tailscaleApiBaseUrl}/tunnel/-/dns/split-dns`,
       session.accessToken,
       TailscaleSplitDnsSchema
     ),
     requestTailscaleJson(
-      `${tailscaleApiBaseUrl}/tailnet/-/devices?fields=all`,
+      `${tailscaleApiBaseUrl}/tunnel/-/devices?fields=all`,
       session.accessToken,
       TailscaleDevicesSchema
     ),
   ])
   const routes = yield* Effect.forEach(
-    network.deployments,
-    (deployment) =>
-      inspectDeploymentRouteEffect(session, devicesResult.devices, deployment),
+    network.gateways,
+    (gateway) =>
+      inspectGatewayRouteEffect(session, devicesResult.devices, gateway),
     { concurrency: 4 }
   )
   const desiredResolvers = [
     ...new Set(
-      network.deployments.flatMap(({ status }) =>
+      network.gateways.flatMap(({ status }) =>
         status.ipv4Address ? [status.ipv4Address] : []
       )
     ),
@@ -266,7 +266,7 @@ export const removeTailscaleControlPlaneDeviceEffect = Effect.fn(
   "tailscale.controlPlane.removeDevice"
 )(function* (
   credential: TailscaleOAuthCredential,
-  deployment: TailscaleControlPlaneDeployment
+  gateway: TailscaleControlPlaneGateway
 ) {
   const session = yield* tailscaleSessionEffect(
     credential.clientId,
@@ -274,11 +274,11 @@ export const removeTailscaleControlPlaneDeviceEffect = Effect.fn(
     credential.tags
   )
   const result = yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tailnet/-/devices?fields=all`,
+    `${tailscaleApiBaseUrl}/tunnel/-/devices?fields=all`,
     session.accessToken,
     TailscaleDevicesSchema
   )
-  const device = findTailscaleDevice(result.devices, deployment)
+  const device = findTailscaleDevice(result.devices, gateway)
   if (!device) return
   yield* requestTailscaleVoid(
     `${tailscaleApiBaseUrl}/device/${encodeURIComponent(device.id)}`,
@@ -296,18 +296,18 @@ export function missingTailscaleOAuthScopes(
 
 export function findTailscaleDevice(
   devices: ReadonlyArray<typeof TailscaleDeviceSchema.Type>,
-  deployment: TailscaleControlPlaneDeployment
+  gateway: TailscaleControlPlaneGateway
 ) {
-  const address = deployment.status.ipv4Address
+  const address = gateway.status.ipv4Address
   const byAddress = address
     ? devices.find((device) => device.addresses?.includes(address))
     : undefined
   if (byAddress) return byAddress
   return devices.find(
     (device) =>
-      device.hostname === deployment.hostname ||
-      device.name === deployment.hostname ||
-      device.name?.startsWith(`${deployment.hostname}.`)
+      device.hostname === gateway.hostname ||
+      device.name === gateway.hostname ||
+      device.name?.startsWith(`${gateway.hostname}.`)
   )
 }
 
@@ -360,21 +360,21 @@ const tailscaleSessionEffect = Effect.fn("tailscale.oauth.session")(function* (
   } satisfies TailscaleSession
 })
 
-const inspectDeploymentRouteEffect = Effect.fn(
+const inspectGatewayRouteEffect = Effect.fn(
   "tailscale.controlPlane.inspectRoute"
 )(function* (
   session: TailscaleSession,
   devices: ReadonlyArray<typeof TailscaleDeviceSchema.Type>,
-  deployment: TailscaleControlPlaneDeployment
+  gateway: TailscaleControlPlaneGateway
 ) {
-  const device = findTailscaleDevice(devices, deployment)
+  const device = findTailscaleDevice(devices, gateway)
   if (!device) {
     return {
       advertised: false,
       approved: false,
-      hostname: deployment.hostname,
-      subnet: deployment.subnet,
-      tailnetIp: deployment.status.ipv4Address,
+      hostname: gateway.hostname,
+      subnet: gateway.subnet,
+      tunnelIp: gateway.status.ipv4Address,
     }
   }
   const routes = yield* requestTailscaleJson(
@@ -383,29 +383,26 @@ const inspectDeploymentRouteEffect = Effect.fn(
     TailscaleDeviceRoutesSchema
   )
   return {
-    advertised: routes.advertisedRoutes?.includes(deployment.subnet) ?? false,
-    approved: routes.enabledRoutes?.includes(deployment.subnet) ?? false,
-    hostname: deployment.hostname,
-    subnet: deployment.subnet,
-    tailnetIp: deployment.status.ipv4Address,
+    advertised: routes.advertisedRoutes?.includes(gateway.subnet) ?? false,
+    approved: routes.enabledRoutes?.includes(gateway.subnet) ?? false,
+    hostname: gateway.hostname,
+    subnet: gateway.subnet,
+    tunnelIp: gateway.status.ipv4Address,
   }
 })
 
-const approveDeploymentRouteEffect = Effect.fn(
+const approveGatewayRouteEffect = Effect.fn(
   "tailscale.controlPlane.approveRoute"
-)(function* (
-  session: TailscaleSession,
-  deployment: TailscaleControlPlaneDeployment
-) {
+)(function* (session: TailscaleSession, gateway: TailscaleControlPlaneGateway) {
   const result = yield* requestTailscaleJson(
-    `${tailscaleApiBaseUrl}/tailnet/-/devices?fields=all`,
+    `${tailscaleApiBaseUrl}/tunnel/-/devices?fields=all`,
     session.accessToken,
     TailscaleDevicesSchema
   )
-  const device = findTailscaleDevice(result.devices, deployment)
+  const device = findTailscaleDevice(result.devices, gateway)
   if (!device) {
     return yield* TailscaleRoutePendingError.make({
-      message: `Waiting for ${deployment.hostname} to appear in the Tailnet`,
+      message: `Waiting for ${gateway.hostname} to appear in the Tunnel`,
     })
   }
   const routes = yield* requestTailscaleJson(
@@ -413,9 +410,9 @@ const approveDeploymentRouteEffect = Effect.fn(
     session.accessToken,
     TailscaleDeviceRoutesSchema
   )
-  if (!routes.advertisedRoutes?.includes(deployment.subnet)) {
+  if (!routes.advertisedRoutes?.includes(gateway.subnet)) {
     return yield* TailscaleRoutePendingError.make({
-      message: `Waiting for ${deployment.hostname} to advertise ${deployment.subnet}`,
+      message: `Waiting for ${gateway.hostname} to advertise ${gateway.subnet}`,
     })
   }
   const otherDevices = result.devices.filter(
@@ -430,7 +427,7 @@ const approveDeploymentRouteEffect = Effect.fn(
         TailscaleDeviceRoutesSchema
       ).pipe(
         Effect.map((candidateRoutes) =>
-          candidateRoutes.advertisedRoutes?.includes(deployment.subnet)
+          candidateRoutes.advertisedRoutes?.includes(gateway.subnet)
             ? candidate
             : null
         )
@@ -440,10 +437,10 @@ const approveDeploymentRouteEffect = Effect.fn(
   const conflict = conflicts.find((candidate) => candidate !== null)
   if (conflict) {
     return yield* tailscaleFailure(
-      `${deployment.subnet} is already advertised by ${conflict.hostname ?? conflict.name ?? conflict.id}`
+      `${gateway.subnet} is already advertised by ${conflict.hostname ?? conflict.name ?? conflict.id}`
     )
   }
-  if (routes.enabledRoutes?.includes(deployment.subnet)) return
+  if (routes.enabledRoutes?.includes(gateway.subnet)) return
   yield* requestTailscaleJson(
     `${tailscaleApiBaseUrl}/device/${encodeURIComponent(device.id)}/routes`,
     session.accessToken,
@@ -452,9 +449,7 @@ const approveDeploymentRouteEffect = Effect.fn(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        routes: [
-          ...new Set([...(routes.enabledRoutes ?? []), deployment.subnet]),
-        ],
+        routes: [...new Set([...(routes.enabledRoutes ?? []), gateway.subnet])],
       }),
     }
   )
@@ -535,7 +530,7 @@ function tailscaleFailure(message: string) {
   })
 }
 
-// The TLDs a tailnet had that it no longer has.
+// The TLDs a tunnel had that it no longer has.
 function removedDomains(network: TailscaleControlPlaneNetwork): Array<string> {
   return (network.previousDomains ?? []).filter(
     (domain) => !network.domains.includes(domain)

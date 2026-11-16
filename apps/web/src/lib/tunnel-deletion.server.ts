@@ -2,26 +2,26 @@ import { Duration, Effect, Schema } from "effect"
 import { Activity, DurableClock } from "effect/workflow"
 
 import {
-  completeTunnelCleanupEffect,
-  deferTunnelCleanupEffect,
-  loadPendingTunnelCleanupsEffect,
-  nextTailnetCleanupAttemptEffect,
-  recordTailnetFinalizationFailureEffect,
-  tunnelCleanupRetryDelaySeconds,
-  tailnetsBeingDeletedEffect,
-  type PendingTunnelCleanup,
-} from "@/effect/tunnels"
+  completeGatewayCleanupEffect,
+  deferGatewayCleanupEffect,
+  loadPendingGatewayCleanupsEffect,
+  nextTunnelCleanupAttemptEffect,
+  recordTunnelFinalizationFailureEffect,
+  gatewayCleanupRetryDelaySeconds,
+  tunnelsBeingDeletedEffect,
+  type PendingGatewayCleanup,
+} from "@/effect/tunnel-gateways"
 import {
   removeTailscaleControlPlaneDeviceEffect,
   syncTailscaleControlPlaneEffect,
 } from "@/effect/tailscale-api"
 import {
-  loadTailnetCredentialEffect,
-  loadTailnetDefinitionsEffect,
-  removeTailnetDefinitionEffect,
-  type TailnetDefinition,
+  loadTunnelCredentialEffect,
+  loadTunnelDefinitionsEffect,
+  removeTunnelDefinitionEffect,
+  type TunnelDefinition,
   type TailscaleOAuthCredential,
-} from "@/effect/tailnets"
+} from "@/effect/tunnels"
 import { runAppEffect } from "@/effect/runtime"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
@@ -29,15 +29,15 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 
-// Deleting a tailnet, as one operation on it: each round removes
-// the network from the Relays it's due on, two-phase around the tailnet
+// Deleting a tunnel, as one operation on it: each round removes
+// the network from the Relays it's due on, two-phase around the tunnel
 // device, then, with no Relays left, the network itself. A failure is kept
 // on its row with when to try again, and the operation pauses until the
 // earliest of those. A network can be deleted only once, so its ID names
 // the operation.
-export const deleteTailnet = durableOperation({
+export const deleteTunnel = durableOperation({
   input: Schema.Struct({ networkId: Schema.String }),
-  kind: "tailnet.delete",
+  kind: "tunnel.delete",
   run: ({ networkId }) =>
     Effect.gen(function* () {
       for (let round = 1; ; round++) {
@@ -62,12 +62,12 @@ export const deleteTailnet = durableOperation({
 const UNREADABLE_RETRY_MS = 30_000
 
 /** Starts deleting a network whose deletion was just requested. */
-export const startTailnetDeletion = (
+export const startTunnelDeletion = (
   networkId: string,
   actorId: string | null
 ) =>
   startDurableOperation(
-    deleteTailnet,
+    deleteTunnel,
     { networkId },
     { actorId, idempotencyKey: networkId }
   )
@@ -77,16 +77,16 @@ export const startTailnetDeletion = (
  * upgrade from the cleanup worker. One already being deleted is the same
  * operation.
  */
-export const resumeTailnetDeletion = Effect.fn(
-  "TailscaleCleanup.resume"
-)(function* () {
-  const networks = yield* tailnetsBeingDeletedEffect()
-  yield* Effect.forEach(
-    networks,
-    (networkId) => startTailnetDeletion(networkId, null),
-    { discard: true }
-  )
-})
+export const resumeTunnelDeletion = Effect.fn("TailscaleCleanup.resume")(
+  function* () {
+    const networks = yield* tunnelsBeingDeletedEffect()
+    yield* Effect.forEach(
+      networks,
+      (networkId) => startTunnelDeletion(networkId, null),
+      { discard: true }
+    )
+  }
+)
 
 // One round for one network. Returns how long until its next attempt is
 // due, or null once it's gone.
@@ -94,7 +94,7 @@ async function cleanNetwork(networkId: string): Promise<number | null> {
   const [pendingBatch, definitions, relays] = await Promise.all([
     runAppEffect(
       "tailscale.cleanup.pending",
-      loadPendingTunnelCleanupsEffect(networkId)
+      loadPendingGatewayCleanupsEffect(networkId)
     ),
     loadDefinitions(),
     listPersistedRelays(),
@@ -149,14 +149,14 @@ async function cleanNetwork(networkId: string): Promise<number | null> {
   if (changed) publishChange()
   const next = await runAppEffect(
     "tailscale.cleanup.next",
-    nextTailnetCleanupAttemptEffect(networkId)
+    nextTunnelCleanupAttemptEffect(networkId)
   )
   return next === null ? null : Math.max(1_000, next - Date.now())
 }
 
 async function processDeploymentCleanup(
-  cleanup: PendingTunnelCleanup,
-  definitionById: ReadonlyMap<string, TailnetDefinition>,
+  cleanup: PendingGatewayCleanup,
+  definitionById: ReadonlyMap<string, TunnelDefinition>,
   relayById: ReadonlyMap<string, PersistedRelay>,
   credentials: Map<string, Promise<TailscaleOAuthCredential>>
 ): Promise<void> {
@@ -199,75 +199,67 @@ async function processDeploymentCleanup(
 }
 
 async function deferDeploymentCleanup(
-  cleanup: PendingTunnelCleanup,
+  cleanup: PendingGatewayCleanup,
   cause: unknown
 ): Promise<void> {
   const { deployment } = cleanup
   const attempts = cleanup.attempts + 1
   await runAppEffect(
     "tailscale.cleanup.defer",
-    deferTunnelCleanupEffect(
+    deferGatewayCleanupEffect(
       deployment.tailnetId,
       deployment.relayId,
       attempts,
-      tunnelCleanupRetryDelaySeconds(attempts),
+      gatewayCleanupRetryDelaySeconds(attempts),
       errorMessage(cause).slice(0, 512)
     )
   )
 }
 
 async function deferNetworkFinalization(
-  definition: TailnetDefinition,
+  definition: TunnelDefinition,
   cause: unknown
 ): Promise<void> {
   const attempts = (definition.cleanup?.attempts ?? 0) + 1
   await runAppEffect(
     "tailscale.cleanup.finalization.defer",
-    recordTailnetFinalizationFailureEffect(
+    recordTunnelFinalizationFailureEffect(
       definition.id,
-      tunnelCleanupRetryDelaySeconds(attempts),
+      gatewayCleanupRetryDelaySeconds(attempts),
       errorMessage(cause).slice(0, 512)
     )
   )
 }
 
-async function finalizeNetwork(
-  definition: TailnetDefinition
-): Promise<void> {
+async function finalizeNetwork(definition: TunnelDefinition): Promise<void> {
   if (definition.integration) {
     const credential = await loadCredential(definition.id)
     await runAppEffect(
       "tailscale.controlPlane.cleanup",
       syncTailscaleControlPlaneEffect(credential, {
         ...definition,
-        deployments: [],
+        gateways: [],
       })
     )
   }
   await runAppEffect(
-    "tailnet.remove",
-    removeTailnetDefinitionEffect(definition.id)
+    "tunnel.remove",
+    removeTunnelDefinitionEffect(definition.id)
   )
 }
 
 function loadDefinitions() {
-  return runAppEffect(
-    "tailnet.load",
-    loadTailnetDefinitionsEffect()
-  )
+  return runAppEffect("tunnel.load", loadTunnelDefinitionsEffect())
 }
 
 function loadCredential(id: string) {
-  return runAppEffect(
-    "tailnet.integration.load",
-    loadTailnetCredentialEffect(id)
-  )
+  return runAppEffect("tunnel.integration.load", loadTunnelCredentialEffect(id))
 }
 
 function completeDeployment(networkId: string, relayId: string) {
   return runAppEffect(
     "tailscale.cleanup.complete",
-    completeTunnelCleanupEffect(networkId, relayId)
+    completeGatewayCleanupEffect(networkId, relayId)
   )
 }
 
