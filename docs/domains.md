@@ -70,6 +70,25 @@ A hostname in no connected zone is left for its owner to point at the Relay
 by hand; the Domains page still lists it, as **Manual DNS**, from what each
 Relay's proxy serves.
 
+## Domains managed elsewhere
+
+A domain whose DNS someone keeps outside Kiln can be added on the Domains
+page, under **Managed elsewhere**: the person's own, or Kiln's for an
+administrator. A web route's hostname under one is held like any other name
+Kiln keeps, so no other game server or app takes it, and Kiln writes no
+record for it: its row says to point it at the Relay, and the certificate
+status shows whether it resolves yet. Who may put a name under one follows
+the rule for a connection's zones: its owner, the resource owner's domains
+only for that owner, and Kiln's for administrators. The most specific domain
+holding a hostname wins, a zone or one managed elsewhere. Cloudflare's proxy
+doesn't apply.
+
+Adding one takes in the hostnames Relays already route under it, each for the
+instance whose routes serve it. A name more than one instance routes, or one
+another already holds, stays as it was and is reported, for someone to keep
+on one instance. A domain managed elsewhere can be removed once no name is
+under it.
+
 Which connections a hostname may use is a security boundary:
 
 - the person's own connections, for any name in their zones;

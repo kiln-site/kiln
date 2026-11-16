@@ -26,8 +26,14 @@ import {
 } from "@/effect/addresses"
 
 import {
+  addManualDomainEffect,
+  removeManualDomainEffect,
+} from "@/effect/domains"
+
+import {
   adoptableWebHostnamesEffect,
   adoptExistingWebRecordEffect,
+  attachManualHostnamesEffect,
   reconcileResourceAddressesEffect,
   saveWebRouteHostnamesEffect,
 } from "./addresses.server"
@@ -495,6 +501,64 @@ describeMysql("web route hostnames", () => {
           assert.deepEqual(cloudflare.records(), [
             "TXT shop.owner.example v=spf1 -all",
           ])
+        })
+    )
+
+    // A domain managed elsewhere: Kiln holds each name under it for the
+    // instance whose routes use it, and writes no record of its own.
+    it.effect("holds a name managed elsewhere without writing DNS", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone, platformZone])
+        yield* addManualDomainEffect("mybiz.example", owner.id)
+
+        yield* save(owner, ["shop.mybiz.example"])
+
+        assert.deepEqual(cloudflare.dns(), {})
+        assert.deepEqual(yield* hostnameRows, {
+          "shop.mybiz.example": `active@${relayId}`,
+        })
+        assert.deepEqual(yield* claimedNames, ["shop.mybiz.example"])
+        // Someone the owner shares it with can't use the owner's domain,
+        // so their name stays outside Kiln as before.
+        yield* save(collaborator, ["blog.mybiz.example"], server)
+        assert.deepEqual(yield* claimedNames, ["shop.mybiz.example"])
+        // Another instance can't take a name the first holds.
+        const refused = yield* refusal(owner, ["shop.mybiz.example"])
+        assert.include(refused.message, "already in use")
+        // The domain stays while a name is under it.
+        const kept = yield* Effect.flip(
+          removeManualDomainEffect("mybiz.example")
+        )
+        assert.include(kept.message, "shop.mybiz.example")
+        yield* save(owner, [])
+        yield* reconcileResourceAddressesEffect(app)
+        yield* removeManualDomainEffect("mybiz.example")
+        assert.deepEqual(yield* claimedNames, [])
+      })
+    )
+
+    it.effect(
+      "takes in what Relays already route under a domain added later, but not a name two instances route",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          fakeCloudflare([ownerZone, platformZone])
+          yield* addManualDomainEffect("mybiz.example", owner.id)
+
+          const result = yield* attachManualHostnamesEffect("mybiz.example", [
+            { hostname: "shop.mybiz.example", resource: app },
+            { hostname: "both.mybiz.example", resource: app },
+            { hostname: "both.mybiz.example", resource: server },
+          ])
+
+          assert.deepEqual(result, {
+            attached: 1,
+            conflicts: ["both.mybiz.example"],
+          })
+          assert.deepEqual(yield* hostnameRows, {
+            "shop.mybiz.example": `active@${relayId}`,
+          })
         })
     )
 

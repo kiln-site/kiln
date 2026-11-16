@@ -52,6 +52,7 @@ import { HearthMark } from "@/components/hearth-mark"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { AdoptRecordButton } from "@/components/web-hostname-dns"
 import { InstanceCard } from "@/components/instance-card"
+import { ManualDomainsCard } from "@/components/manual-domains-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import {
   ServerScopePicker,
@@ -299,7 +300,15 @@ export const DomainsPage = React.memo(function DomainsPage({
 
   return (
     <WorkspacePage
-      rail={<DomainsRail settings={data} onOpenConnection={openConnection} />}
+      rail={
+        <>
+          <DomainsRail settings={data} onOpenConnection={openConnection} />
+          <ManualDomainsCard
+            canManagePlatform={data.canManagePlatform}
+            domains={data.manualDomains}
+          />
+        </>
+      }
       railClassName="xl:w-76 2xl:w-88"
       summary={
         <ServerScopePicker<"app" | "server">

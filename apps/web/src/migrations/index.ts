@@ -83,6 +83,7 @@ import { tunnelPrimaryNames } from "@/migrations/0082_tunnel_primary_names"
 import { tunnelBricks } from "@/migrations/0083_tunnel_bricks"
 import { tunnelGateways } from "@/migrations/0084_tunnel_gateways"
 import { domains } from "@/migrations/0085_domains"
+import { manualDomains } from "@/migrations/0086_manual_domains"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -169,4 +170,5 @@ export const migrations: ReadonlyArray<Migration> = [
   tunnelBricks,
   tunnelGateways,
   domains,
+  manualDomains,
 ]

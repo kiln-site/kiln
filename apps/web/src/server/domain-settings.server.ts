@@ -6,14 +6,18 @@ import {
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
+import { z } from "zod"
 
 import { listCloudflareZonesEffect } from "@/effect/cloudflare-api"
 import {
+  addManualDomainEffect,
   deleteDomainConnectionEffect,
   listDomainConnectionsEffect,
+  listManualDomainsEffect,
   listUsableVanityDomainsEffect,
   loadDomainConnectionCredentialEffect,
   loadDomainConnectionEffect,
+  removeManualDomainEffect,
   requireConnectionUnusedEffect,
   saveDomainConnectionEffect,
   type DomainConnection,
@@ -38,7 +42,11 @@ import {
   managedDomainConnectAddress,
 } from "@/lib/domain-address"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
-import { domainInZone, validateBlacklistPatterns } from "@/lib/domain-schemas"
+import {
+  domainInZone,
+  domainNameSchema,
+  validateBlacklistPatterns,
+} from "@/lib/domain-schemas"
 import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -55,14 +63,17 @@ import {
 } from "@/operations/operation"
 import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
+  attachManualHostnamesEffect,
   invalidateManagedDomainAddressesEffect,
   resyncAddressesEffect,
+  type RoutedHostname,
 } from "@/server/addresses.server"
 import { pendingWebCertificate } from "@/server/web-certificates.server"
 import type {
   DeleteDomainConnectionInput,
   DiscoverDomainsInput,
   ManagedDomainOverview,
+  ManualDomainOverview,
   SaveDomainConnectionInput,
   WebHostnameOverview,
 } from "@/server/domains"
@@ -181,12 +192,16 @@ export async function getDomainSettingsHandler() {
         // The listed connections are the person's to manage.
         canAdopt:
           canManage &&
+          row.connectionId !== null &&
           row.status === "external" &&
           row.existingRecord !== null &&
           connectionNames.has(row.connectionId),
         canManage,
         certificate: pendingWebCertificate(row, row.hostname),
-        connectionName: connectionNames.get(row.connectionId) ?? null,
+        connectionName:
+          row.connectionId === null
+            ? null
+            : (connectionNames.get(row.connectionId) ?? null),
         existingRecord: row.status === "external" ? row.existingRecord : null,
         generated: row.generated,
         hostname: row.hostname,
@@ -201,12 +216,20 @@ export async function getDomainSettingsHandler() {
           row.relayId,
           row.resourceId
         ),
-        status: row.status,
+        // Under a domain managed elsewhere: held by Kiln, pointed by hand.
+        status:
+          row.connectionId === null && row.status !== "removing"
+            ? "manual"
+            : row.status,
         target: row.target,
-        vanity: row.vanityDomain !== null,
+        vanity: row.vanityDomain !== null && row.connectionId !== null,
         zoneName:
-          zoneNameFor(row.hostname, connections, row.connectionId) ??
-          (row.vanityDomain ? (zoneNames.get(row.vanityDomain) ?? null) : null),
+          row.connectionId === null
+            ? null
+            : (zoneNameFor(row.hostname, connections, row.connectionId) ??
+              (row.vanityDomain
+                ? (zoneNames.get(row.vanityDomain) ?? null)
+                : null)),
       },
     ]
   })
@@ -215,11 +238,33 @@ export async function getDomainSettingsHandler() {
     .filter((domain) => domain.ownerId === null && domain.enabled)
     .map((domain) => ({ domain: domain.domain, isDefault: domain.isDefault }))
 
+  // Domains managed elsewhere: the person's, and Kiln's for administrators.
+  const manualNames = new Map<string, number>()
+  for (const row of hostnames) {
+    if (row.connectionId === null && row.vanityDomain) {
+      manualNames.set(
+        row.vanityDomain,
+        (manualNames.get(row.vanityDomain) ?? 0) + 1
+      )
+    }
+  }
+  const manualDomains = (
+    await runAppEffect(
+      "domains.manual.list",
+      listManualDomainsEffect(admin ? [null, user.id] : [user.id])
+    )
+  ).map((domain): ManualDomainOverview => ({
+    domain: domain.domain,
+    names: manualNames.get(domain.domain) ?? 0,
+    platform: domain.ownerId === null,
+  }))
+
   return {
     canManagePlatform: admin,
     connections: connections.map(publicConnection),
     hearthDomain: kilnRootDomain(),
     managedDomains,
+    manualDomains,
     platformDomains,
     userId: user.id,
     webHostnames,
@@ -245,31 +290,9 @@ export async function getManualWebHostnamesHandler(): Promise<
   ])
   const resources = resourceDirectory(relays, directory, apps)
   const kept = new Set(hostnames.map((row) => row.hostname))
-  const perRelay = await Promise.all(
-    relays
-      .filter((relay) =>
-        relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
-      )
-      .map((relay) =>
-        recoverPromise(
-          async () => {
-            const { routes } = relayProxyConfigurationSchema.parse(
-              await relayRpc(
-                await activeRelay(relay.id),
-                "relay.proxy.config.read",
-                {},
-                5_000
-              )
-            )
-            return routes.map((route) => ({ ...route, relayId: relay.id }))
-          },
-          // An unreachable Relay's rows wait for the next refresh.
-          () => []
-        )
-      )
-  )
+  const perRelay = await readRelayRoutes(relays)
   const seen = new Set<string>()
-  return perRelay.flat().flatMap((route): Array<WebHostnameOverview> => {
+  return perRelay.flatMap((route): Array<WebHostnameOverview> => {
     const hostname = route.hostname.toLowerCase()
     const { id, kind } = route.owner
     const key = `${route.relayId}:${kind}:${id}:${hostname}`
@@ -317,6 +340,42 @@ export async function getManualWebHostnamesHandler(): Promise<
       },
     ]
   })
+}
+
+/**
+ * The web routes each Relay's proxy serves, every path of every name. An
+ * unreachable Relay's are left out, to wait for the next read.
+ */
+async function readRelayRoutes(relays: ReadonlyArray<{ id: string }>): Promise<
+  Array<{
+    hostname: string
+    owner: { id: string; kind: string }
+    relayId: string
+  }>
+> {
+  const perRelay = await Promise.all(
+    relays
+      .filter((relay) =>
+        relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
+      )
+      .map((relay) =>
+        recoverPromise(
+          async () => {
+            const { routes } = relayProxyConfigurationSchema.parse(
+              await relayRpc(
+                await activeRelay(relay.id),
+                "relay.proxy.config.read",
+                {},
+                5_000
+              )
+            )
+            return routes.map((route) => ({ ...route, relayId: relay.id }))
+          },
+          () => []
+        )
+      )
+  )
+  return perRelay.flat()
 }
 
 type InstanceDirectoryRecord = Effect.Success<
@@ -690,4 +749,110 @@ async function savedApiToken(
 
 function serverKey(relayId: string, id: string): string {
   return `${relayId}:${id}`
+}
+
+// Domains managed elsewhere: Kiln holds the names under one and writes no
+// records. Each is its own lane, so adding and removing one never
+// interleave.
+const manualDomainKey = (domain: string) => `domain:${domain}`
+
+export const manualDomainInputSchema = z.strictObject({
+  domain: domainNameSchema,
+  // Kiln's, which administrators manage and anyone may use under their
+  // rules; otherwise the person's own.
+  platform: z.boolean().optional(),
+})
+
+type ManualDomainInput = z.infer<typeof manualDomainInputSchema>
+
+const addManualDomain = operation<ManualDomainInput>()({
+  name: "domain.manual.add",
+  doing: "Adding this domain",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        input.platform && !isPlatformAdmin(person)
+          ? Effect.fail(
+              new Error("Only an administrator can add one of Kiln's domains")
+            )
+          : Effect.succeed(input.platform ? null : person.id)
+      )
+    ),
+  locks: ({ input }) => [exclusive(manualDomainKey(input.domain))],
+  run: ({ context: ownerId, input }) =>
+    addManualDomainEffect(input.domain, ownerId).pipe(
+      Effect.andThen(
+        promiseEffect(async () => {
+          // What its Relays already route under it is now held for the
+          // instances that route it.
+          const routes = (await readRelayRoutes(await listPersistedRelays()))
+            .filter((route) =>
+              domainInZone(route.hostname.toLowerCase(), input.domain)
+            )
+            .flatMap((route): Array<RoutedHostname> =>
+              route.owner.kind === "app" || route.owner.kind === "instance"
+                ? [
+                    {
+                      hostname: route.hostname.toLowerCase(),
+                      resource: {
+                        relayId: route.relayId,
+                        resourceId: route.owner.id,
+                        resourceType: route.owner.kind,
+                      },
+                    },
+                  ]
+                : []
+            )
+          return runAppEffect(
+            "addresses.attachManual",
+            attachManualHostnamesEffect(input.domain, routes)
+          )
+        })
+      )
+    ),
+  audit: ({ input }) => ({ id: input.domain, kind: "domain" }),
+  publish: ({ exit }) => {
+    if (exit._tag === "Success") publishDomainChange()
+  },
+})
+
+export async function addManualDomainHandler(data: ManualDomainInput) {
+  const user = await requireEligibleResourceUser()
+  return runOperationPromise(addManualDomain, data, { user })
+}
+
+export const removeManualDomainInputSchema = z.strictObject({
+  domain: domainNameSchema,
+})
+
+const removeManualDomain = operation<{ domain: string }>()({
+  name: "domain.manual.remove",
+  doing: "Removing this domain",
+  authorize: ({ input, user }) =>
+    Effect.gen(function* () {
+      const person = yield* signedIn(user)
+      const [domain] = (yield* listManualDomainsEffect("all")).filter(
+        (candidate) => candidate.domain === input.domain
+      )
+      return (
+        domain !== undefined &&
+        (domain.ownerId === null
+          ? isPlatformAdmin(person)
+          : domain.ownerId === person.id || isPlatformAdmin(person))
+      )
+    }),
+  locks: ({ context: allowed, input }) =>
+    allowed ? [exclusive(manualDomainKey(input.domain))] : [],
+  run: ({ context: allowed, input }) =>
+    allowed ? removeManualDomainEffect(input.domain) : Effect.void,
+  audit: ({ context: allowed, input }) =>
+    allowed ? { id: input.domain, kind: "domain" } : null,
+  publish: ({ context: allowed, exit }) => {
+    if (allowed && exit._tag === "Success") publishDomainChange()
+  },
+})
+
+export async function removeManualDomainHandler(data: { domain: string }) {
+  const user = await requireEligibleResourceUser()
+  await runOperationPromise(removeManualDomain, data, { user })
 }

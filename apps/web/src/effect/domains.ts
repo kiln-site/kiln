@@ -683,3 +683,117 @@ function encryptApiToken(
       }),
   })
 }
+
+/**
+ * A domain its owner manages elsewhere: Kiln holds the names under it, so
+ * no other instance takes one, and writes no records; its owner points each
+ * at its Relay.
+ */
+export interface ManualDomain {
+  createdAt: number
+  domain: string
+  /** Null for the platform's, which administrators manage. */
+  ownerId: string | null
+}
+
+interface ManualDomainRow extends RowDataPacket {
+  created_at: number | string
+  domain: string
+  owner_id: string | null
+}
+
+/** The managed-elsewhere domains of these owners (`null`: the platform's). */
+export const listManualDomainsEffect = Effect.fn("domains.manual.list")(
+  function* (owners: ReadonlyArray<string | null> | "all") {
+    const database = yield* Database
+    const people = owners === "all" ? [] : owners.filter((id) => id !== null)
+    const platform = owners === "all" || owners.includes(null)
+    if (owners !== "all" && people.length === 0 && !platform) return []
+    const who =
+      owners === "all"
+        ? ""
+        : ` AND (${[
+            platform ? "owner_id IS NULL" : null,
+            people.length > 0
+              ? `owner_id IN (${people.map(() => "?").join(", ")})`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" OR ")})`
+    const rows = yield* database.queryRows<ManualDomainRow>(
+      "domains.manual.list",
+      `SELECT domain, owner_id, created_at
+         FROM ${databaseTable("domain")}
+        WHERE provider = 'manual'${who}
+        ORDER BY domain`,
+      people
+    )
+    return rows.map((row): ManualDomain => ({
+      createdAt: Number(row.created_at),
+      domain: row.domain,
+      ownerId: row.owner_id,
+    }))
+  }
+)
+
+/** Adds a managed-elsewhere domain. A domain is unique across Kiln. */
+export const addManualDomainEffect = Effect.fn("domains.manual.add")(function* (
+  domain: string,
+  ownerId: string | null
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const result = yield* database.execute(
+    "domains.manual.add",
+    `INSERT IGNORE INTO ${databaseTable("domain")}
+         (domain, provider, owner_id, is_default, enabled, created_at,
+          updated_at)
+       VALUES (?, 'manual', ?, 0, 1, ?, ?)`,
+    [domain, ownerId, now, now]
+  )
+  if (result.affectedRows === 0) {
+    return yield* DomainConfigurationError.make({
+      message: `${domain} is already a domain in Kiln`,
+    })
+  }
+})
+
+/**
+ * Removes a managed-elsewhere domain. Refused while names are under it:
+ * they stay their instances' until their routes let them go.
+ */
+export const removeManualDomainEffect = Effect.fn("domains.manual.remove")(
+  function* (domain: string) {
+    const database = yield* Database
+    yield* database.transaction("domains.manual.remove", (transaction) =>
+      Effect.gen(function* () {
+        const found = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT domain FROM ${databaseTable("domain")}
+            WHERE domain = ? AND provider = 'manual'
+            FOR UPDATE`,
+          [domain]
+        )
+        if (found.length === 0) return
+        const used = yield* transaction.queryRows<
+          RowDataPacket & { hostname: string }
+        >(
+          `SELECT hostname FROM ${databaseTable("instance_address")}
+            WHERE vanity_domain = ? AND integration_id IS NULL
+            LIMIT 1
+            LOCK IN SHARE MODE`,
+          [domain]
+        )
+        if (used[0]) {
+          return yield* DomainConfigurationError.make({
+            message: `${used[0].hostname} is still under ${domain}; take it off its web routes first`,
+          })
+        }
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("domain")}
+            WHERE domain = ? AND provider = 'manual'`,
+          [domain]
+        )
+      })
+    )
+  }
+)
