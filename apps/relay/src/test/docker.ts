@@ -239,6 +239,8 @@ export class FakeDocker {
    * stderr; they exit with code 1.
    */
   readonly programFailures = new Map<string, string>()
+  /** Whether the kernel has legacy iptables, or only nftables. */
+  legacyIptables = true
   /**
    * Programs whose exec stream Docker breaks with an error frame (as it does
    * for an error it hits after answering) instead of their output; for a
@@ -328,6 +330,7 @@ export class FakeDocker {
     this.#repoDigests.clear()
     this.unhealthyImages.clear()
     this.programFailures.clear()
+    this.legacyIptables = true
     this.streamErrors.clear()
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
@@ -1522,6 +1525,14 @@ export class FakeDocker {
       return ""
     }
     if (program === "iptables") {
+      if (!this.legacyIptables) {
+        throw new DockerFailure(
+          "iptables v1.8.11 (legacy): can't initialize iptables table `filter': Table does not exist (do you need to insmod?)"
+        )
+      }
+      return iptables(container.firewall, programArguments)
+    }
+    if (program === "iptables-nft") {
       return iptables(container.firewall, programArguments)
     }
     if (program === "tailscale") {

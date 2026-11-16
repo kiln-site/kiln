@@ -220,6 +220,21 @@ describe("Tailscale stack forwarding", () => {
     ])
   })
 
+  // Recent distributions' kernels have only nftables, which the Tailscale
+  // image's legacy iptables can't use.
+  it("installs the allowlist through iptables-nft on a kernel without legacy iptables", async () => {
+    const harness = await relayHarness()
+    const container = await runningStack(harness)
+    fakeDocker.legacyIptables = false
+
+    await harness.lifecycle.reconcileTunnelFirewalls()
+
+    expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
+    expect(container.firewall.get("FORWARD")).toEqual([
+      "-A FORWARD -i tailscale0 -j KILN-TAILSCALE",
+    ])
+  })
+
   it("restores the allowlist while the Relay is paused, after what holds the stack", async () => {
     const harness = await relayHarness()
     const container = await runningStack(harness)
