@@ -43,6 +43,7 @@ import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
 import { Route as ApiTerminalRouteImport } from './routes/api.terminal'
 import { Route as CliAuthorizeRouteImport } from './routes/cli.authorize'
 import { Route as DownloadsIdRouteImport } from './routes/downloads.$id'
+import { Route as MobileSignInRouteImport } from './routes/mobile.sign-in'
 import { Route as AppAppAppIdRouteImport } from './routes/_app/app/$appId'
 import { Route as AppAutomationsIndexRouteImport } from './routes/_app.automations.index'
 import { Route as AppAutomationsCalendarRouteImport } from './routes/_app.automations.calendar'
@@ -140,6 +141,7 @@ import { Route as ApiTelemetryV1SignalRouteImport } from './routes/api.telemetry
 import { Route as AppAppAppIdFilesSplatRouteImport } from './routes/_app/app/$appId.files.$'
 import { Route as AppRelayRelayIdFilesSplatRouteImport } from './routes/_app/relay/$relayId.files.$'
 import { Route as AppServerServerIdFilesSplatRouteImport } from './routes/_app/server/$serverId.files.$'
+import { Route as ApiCliAuthMobileTokenRouteImport } from './routes/api.cli.auth.mobile.token'
 import { Route as ApiRelaysRelayIdBrowserSplatRouteImport } from './routes/api.relays.$relayId.browser.$'
 import { Route as ApiRelaysRelayIdPeerSplatRouteImport } from './routes/api.relays.$relayId.peer.$'
 
@@ -310,6 +312,11 @@ const CliAuthorizeRoute = CliAuthorizeRouteImport.update({
 const DownloadsIdRoute = DownloadsIdRouteImport.update({
   id: '/downloads/$id',
   path: '/downloads/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MobileSignInRoute = MobileSignInRouteImport.update({
+  id: '/mobile/sign-in',
+  path: '/mobile/sign-in',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppAppAppIdRoute = AppAppAppIdRouteImport.update({
@@ -808,6 +815,11 @@ const AppServerServerIdFilesSplatRoute =
     path: '/$',
     getParentRoute: () => AppServerServerIdFilesRoute,
   } as any)
+const ApiCliAuthMobileTokenRoute = ApiCliAuthMobileTokenRouteImport.update({
+  id: '/api/cli/auth/mobile/token',
+  path: '/api/cli/auth/mobile/token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiRelaysRelayIdBrowserSplatRoute =
   ApiRelaysRelayIdBrowserSplatRouteImport.update({
     id: '/api/relays/$relayId/browser/$',
@@ -855,6 +867,7 @@ export interface FileRoutesByFullPath {
   '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/mobile/sign-in': typeof MobileSignInRoute
   '/app/$appId': typeof AppAppAppIdRouteWithChildren
   '/automations/calendar': typeof AppAutomationsCalendarRoute
   '/automations/history': typeof AppAutomationsHistoryRoute
@@ -952,6 +965,7 @@ export interface FileRoutesByFullPath {
   '/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
   '/relay/$relayId/files/$': typeof AppRelayRelayIdFilesSplatRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
+  '/api/cli/auth/mobile/token': typeof ApiCliAuthMobileTokenRoute
   '/api/relays/$relayId/browser/$': typeof ApiRelaysRelayIdBrowserSplatRoute
   '/api/relays/$relayId/peer/$': typeof ApiRelaysRelayIdPeerSplatRoute
 }
@@ -984,6 +998,7 @@ export interface FileRoutesByTo {
   '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/mobile/sign-in': typeof MobileSignInRoute
   '/automations/calendar': typeof AppAutomationsCalendarRoute
   '/automations/history': typeof AppAutomationsHistoryRoute
   '/automations/schedules': typeof AppAutomationsSchedulesRoute
@@ -1076,6 +1091,7 @@ export interface FileRoutesByTo {
   '/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
   '/relay/$relayId/files/$': typeof AppRelayRelayIdFilesSplatRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
+  '/api/cli/auth/mobile/token': typeof ApiCliAuthMobileTokenRoute
   '/api/relays/$relayId/browser/$': typeof ApiRelaysRelayIdBrowserSplatRoute
   '/api/relays/$relayId/peer/$': typeof ApiRelaysRelayIdPeerSplatRoute
 }
@@ -1115,6 +1131,7 @@ export interface FileRoutesById {
   '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/mobile/sign-in': typeof MobileSignInRoute
   '/_app/app/$appId': typeof AppAppAppIdRouteWithChildren
   '/_app/automations/calendar': typeof AppAutomationsCalendarRoute
   '/_app/automations/history': typeof AppAutomationsHistoryRoute
@@ -1212,6 +1229,7 @@ export interface FileRoutesById {
   '/_app/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
   '/_app/relay/$relayId/files/$': typeof AppRelayRelayIdFilesSplatRoute
   '/_app/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
+  '/api/cli/auth/mobile/token': typeof ApiCliAuthMobileTokenRoute
   '/api/relays/$relayId/browser/$': typeof ApiRelaysRelayIdBrowserSplatRoute
   '/api/relays/$relayId/peer/$': typeof ApiRelaysRelayIdPeerSplatRoute
 }
@@ -1251,6 +1269,7 @@ export interface FileRouteTypes {
     | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/mobile/sign-in'
     | '/app/$appId'
     | '/automations/calendar'
     | '/automations/history'
@@ -1348,6 +1367,7 @@ export interface FileRouteTypes {
     | '/app/$appId/files/$'
     | '/relay/$relayId/files/$'
     | '/server/$serverId/files/$'
+    | '/api/cli/auth/mobile/token'
     | '/api/relays/$relayId/browser/$'
     | '/api/relays/$relayId/peer/$'
   fileRoutesByTo: FileRoutesByTo
@@ -1380,6 +1400,7 @@ export interface FileRouteTypes {
     | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/mobile/sign-in'
     | '/automations/calendar'
     | '/automations/history'
     | '/automations/schedules'
@@ -1472,6 +1493,7 @@ export interface FileRouteTypes {
     | '/app/$appId/files/$'
     | '/relay/$relayId/files/$'
     | '/server/$serverId/files/$'
+    | '/api/cli/auth/mobile/token'
     | '/api/relays/$relayId/browser/$'
     | '/api/relays/$relayId/peer/$'
   id:
@@ -1510,6 +1532,7 @@ export interface FileRouteTypes {
     | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/mobile/sign-in'
     | '/_app/app/$appId'
     | '/_app/automations/calendar'
     | '/_app/automations/history'
@@ -1607,6 +1630,7 @@ export interface FileRouteTypes {
     | '/_app/app/$appId/files/$'
     | '/_app/relay/$relayId/files/$'
     | '/_app/server/$serverId/files/$'
+    | '/api/cli/auth/mobile/token'
     | '/api/relays/$relayId/browser/$'
     | '/api/relays/$relayId/peer/$'
   fileRoutesById: FileRoutesById
@@ -1635,6 +1659,7 @@ export interface RootRouteChildren {
   ApiTerminalRoute: typeof ApiTerminalRoute
   CliAuthorizeRoute: typeof CliAuthorizeRoute
   DownloadsIdRoute: typeof DownloadsIdRoute
+  MobileSignInRoute: typeof MobileSignInRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiConsoleInstanceIdRoute: typeof ApiConsoleInstanceIdRoute
   ApiGithubManifestRoute: typeof ApiGithubManifestRoute
@@ -1647,6 +1672,7 @@ export interface RootRouteChildren {
   ApiCliAuthTokenRoute: typeof ApiCliAuthTokenRoute
   ApiCliV1SplatRoute: typeof ApiCliV1SplatRoute
   ApiTelemetryV1SignalRoute: typeof ApiTelemetryV1SignalRoute
+  ApiCliAuthMobileTokenRoute: typeof ApiCliAuthMobileTokenRoute
   ApiRelaysRelayIdBrowserSplatRoute: typeof ApiRelaysRelayIdBrowserSplatRoute
   ApiRelaysRelayIdPeerSplatRoute: typeof ApiRelaysRelayIdPeerSplatRoute
 }
@@ -1889,6 +1915,13 @@ declare module '@tanstack/react-router' {
       path: '/downloads/$id'
       fullPath: '/downloads/$id'
       preLoaderRoute: typeof DownloadsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mobile/sign-in': {
+      id: '/mobile/sign-in'
+      path: '/mobile/sign-in'
+      fullPath: '/mobile/sign-in'
+      preLoaderRoute: typeof MobileSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/app/$appId': {
@@ -2570,6 +2603,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppServerServerIdFilesSplatRouteImport
       parentRoute: typeof AppServerServerIdFilesRoute
     }
+    '/api/cli/auth/mobile/token': {
+      id: '/api/cli/auth/mobile/token'
+      path: '/api/cli/auth/mobile/token'
+      fullPath: '/api/cli/auth/mobile/token'
+      preLoaderRoute: typeof ApiCliAuthMobileTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/relays/$relayId/browser/$': {
       id: '/api/relays/$relayId/browser/$'
       path: '/api/relays/$relayId/browser/$'
@@ -2938,6 +2978,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTerminalRoute: ApiTerminalRoute,
   CliAuthorizeRoute: CliAuthorizeRoute,
   DownloadsIdRoute: DownloadsIdRoute,
+  MobileSignInRoute: MobileSignInRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiConsoleInstanceIdRoute: ApiConsoleInstanceIdRoute,
   ApiGithubManifestRoute: ApiGithubManifestRoute,
@@ -2950,6 +2991,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCliAuthTokenRoute: ApiCliAuthTokenRoute,
   ApiCliV1SplatRoute: ApiCliV1SplatRoute,
   ApiTelemetryV1SignalRoute: ApiTelemetryV1SignalRoute,
+  ApiCliAuthMobileTokenRoute: ApiCliAuthMobileTokenRoute,
   ApiRelaysRelayIdBrowserSplatRoute: ApiRelaysRelayIdBrowserSplatRoute,
   ApiRelaysRelayIdPeerSplatRoute: ApiRelaysRelayIdPeerSplatRoute,
 }

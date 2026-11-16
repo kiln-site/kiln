@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto"
+
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
@@ -8,12 +10,14 @@ import {
   authenticateCliTokenEffect,
   issueCliDeviceCodeEffect,
   pollCliDeviceTokenEffect,
+  redeemMobileSignInEffect,
 } from "@/effect/cli-access"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTableName } from "@/lib/database-config"
 import { runOperation } from "@/operations/operation"
 import {
   approveCliAuthorizationOperation,
+  authorizeMobileSignInOperation,
   denyCliAuthorizationOperation,
   revokeCliCredentialOperation,
 } from "@/server/account-access.server"
@@ -62,6 +66,21 @@ const approve = (user: AuthenticatedUser, userCode: string) =>
     { duration: "1d", mode: "full_access", userCode },
     { user }
   )
+
+// What the Kiln app does: keep a verifier, sign in with its hash.
+const signInPhone = (user: AuthenticatedUser) =>
+  Effect.gen(function* () {
+    const verifier = randomBytes(32).toString("base64url")
+    const challenge = createHash("sha256").update(verifier).digest("hex")
+    const { code } = yield* runOperation(
+      authorizeMobileSignInOperation,
+      { challenge, name: "iPhone" },
+      { user }
+    )
+    return { code, verifier }
+  })
+
+const errorCode = (error: unknown) => (error as { code?: string }).code
 
 describeMysql("account access operations", () => {
   layer(TestDatabase)((it) => {
@@ -153,6 +172,78 @@ describeMysql("account access operations", () => {
           Effect.flip
         )
         assert.isDefined(revoked)
+      })
+    )
+
+    it.effect("a phone's sign-in code links nothing without its verifier", () =>
+      Effect.gen(function* () {
+        yield* seedPeople("alice")
+        const { code, verifier } = yield* signInPhone(person("alice"))
+
+        // Whoever saw the redirect has the code, but not the phone's verifier.
+        const stolen = yield* redeemMobileSignInEffect({
+          code,
+          verifier: randomBytes(32).toString("base64url"),
+        }).pipe(Effect.flip)
+        assert.strictEqual(errorCode(stolen), "invalid_grant")
+        // The attempt burns the code, so the phone signs in again.
+        const late = yield* redeemMobileSignInEffect({ code, verifier }).pipe(
+          Effect.flip
+        )
+        assert.strictEqual(errorCode(late), "invalid_grant")
+        assert.deepStrictEqual(yield* selectRows("cli_credential"), [])
+      })
+    )
+
+    it.effect(
+      "a phone redeems its sign-in once, for a working credential",
+      () =>
+        Effect.gen(function* () {
+          yield* seedPeople("alice")
+          const { code, verifier } = yield* signInPhone(person("alice"))
+
+          const { accessToken, credential } = yield* redeemMobileSignInEffect({
+            code,
+            verifier,
+          })
+          const principal = yield* authenticateCliTokenEffect(accessToken)
+          assert.strictEqual(principal.user.id, "alice")
+          assert.strictEqual(principal.credentialId, credential.id)
+
+          const again = yield* redeemMobileSignInEffect({
+            code,
+            verifier,
+          }).pipe(Effect.flip)
+          assert.strictEqual(errorCode(again), "invalid_grant")
+          assert.strictEqual((yield* selectRows("cli_credential")).length, 1)
+        })
+    )
+
+    it.effect("a phone's sign-in left waiting expires", () =>
+      Effect.gen(function* () {
+        yield* seedPeople("alice")
+        const { code, verifier } = yield* signInPhone(person("alice"))
+        yield* TestClock.adjust("3 minutes")
+
+        const expired = yield* redeemMobileSignInEffect({
+          code,
+          verifier,
+        }).pipe(Effect.flip)
+        assert.strictEqual(errorCode(expired), "invalid_grant")
+        assert.deepStrictEqual(yield* selectRows("cli_credential"), [])
+      })
+    )
+
+    it.effect("the development shortcut can't sign in the app", () =>
+      Effect.gen(function* () {
+        yield* seedPeople("alice")
+        const refused = yield* signInPhone({
+          ...person("alice"),
+          isDevelopmentBypass: true,
+        }).pipe(Effect.flip)
+
+        assert.strictEqual(errorCode(refused), "forbidden")
+        assert.deepStrictEqual(yield* selectRows("cli_device"), [])
       })
     )
   })

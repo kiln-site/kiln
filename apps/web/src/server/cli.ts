@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   cliAccessDurationSchema,
   cliAccessModeSchema,
+  cliDeviceCodeRequestSchema,
+  cliMobileChallengeSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
@@ -15,6 +17,7 @@ import { cliDefaultAccessDays } from "@/lib/environment"
 import { runOperationPromise } from "@/operations/operation"
 import {
   approveCliAuthorizationOperation,
+  authorizeMobileSignInOperation,
   denyCliAuthorizationOperation,
   revokeCliCredentialOperation,
 } from "@/server/account-access.server"
@@ -55,6 +58,17 @@ export const approveCliAuthorization = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) =>
     runOperationPromise(approveCliAuthorizationOperation, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+/** The Kiln app's sign-in: a one-time code for the app's redirect. */
+export const authorizeMobileSignIn = createServerFn({ method: "POST" })
+  .validator(
+    cliDeviceCodeRequestSchema.extend({ challenge: cliMobileChallengeSchema })
+  )
+  .handler(async ({ data }) =>
+    runOperationPromise(authorizeMobileSignInOperation, data, {
       user: await requireEligibleResourceUser(),
     })
   )

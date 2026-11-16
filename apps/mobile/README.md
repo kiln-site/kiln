@@ -4,12 +4,14 @@ An Expo (SDK 58, React Native 0.88) app for iOS and Android that watches and
 controls a Hearth from a phone: game servers, Relays, power, a live console,
 and activity.
 
-It talks to Hearth's CLI API (`/api/cli/v1/*`) with the CLI's own sign-in.
-The app asks Hearth for a device code, you approve it on Hearth's
-`/cli/authorize` page in the browser sheet, and the bearer token lands in the
-iOS Keychain or Android Keystore through `expo-secure-store`. Hearth needs no
-changes for this: the device appears in Hearth with the CLI credentials and is
-revoked the same way.
+It talks to Hearth's CLI API (`/api/cli/v1/*`) with a CLI credential. To get
+one, the app opens Hearth's `/mobile/sign-in` page in a private browser sheet,
+you sign in there as you would in the browser, and Hearth sends the sheet back
+to `kiln://auth` with a one-time code. The app trades that code, with a
+verifier it never sent anywhere (only its SHA-256 went out with the sign-in),
+at `/api/cli/auth/mobile/token`. The bearer token lands in the iOS Keychain or
+Android Keystore through `expo-secure-store`. The phone shows in Hearth with
+your linked CLIs and is unlinked the same way.
 
 ## Layout
 
@@ -18,9 +20,12 @@ revoked the same way.
 | `app.config.ts`              | App name, bundle ID, fonts, splash, ATS                   |
 | `metro.config.js`            | Monorepo watch, workspace sources, Uniwind                |
 | `global.css`                 | Hearth's palette as Uniwind (Tailwind 4) theme tokens     |
-| `src/App.tsx`                | Providers and the static native-stack navigator           |
+| `src/App.tsx`                | Providers, the native stack, and the header               |
+| `src/navigation.ts`          | Routes and Hearth's Infra, Manage and game server pages   |
+| `src/components/NavBar.tsx`  | The floating bar: section menus and the page menu         |
+| `modules/kiln-native/`       | The bar's UIKit view (liquid glass, native menus)         |
 | `src/api/hearth.ts`          | Effect-based fetch client and `HearthError`               |
-| `src/api/device-login.ts`    | Device-code sign-in                                       |
+| `src/api/sign-in.ts`         | Sign-in through Hearth's page in a browser sheet          |
 | `src/api/queries.ts`         | TanStack Query hooks; polling only while a screen is open |
 | `src/api/console.ts`         | Console history plus NDJSON follow stream (`expo/fetch`)  |
 | `src/session/`               | Session in secure storage, sign-in state                  |
