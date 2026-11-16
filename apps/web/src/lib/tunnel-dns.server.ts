@@ -20,7 +20,11 @@ import { wakePollingWorker } from "@/lib/polling-worker"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { tunnelSettingsKey } from "@/lib/tunnel-lanes"
-import { durableOperation, startDurableOperation } from "@/operations/durable"
+import {
+  durableOperation,
+  startDurableOperation,
+  whileMySqlIsAway,
+} from "@/operations/durable"
 import { exclusive } from "@/operations/lanes"
 
 /**
@@ -213,13 +217,20 @@ export const rewriteTailscaleDns = durableOperation({
       execute: Effect.gen(function* () {
         // The Relays each network is on, as Hearth recorded them when it
         // last saved it, read once its turn has come.
+        // A failure is recorded, so its gateways wait for a new attempt
+        // rather than this one; that write is tried until MySQL answers,
+        // as an operation's own writes are, or they'd wait for nothing.
+        const recordFailure = (id: string, message: string) =>
+          recordTunnelDnsEffect(id, { everyFailed: message }).pipe(
+            Effect.retry({ schedule: whileMySqlIsAway })
+          )
         const deployed = yield* tunnelRelaysEffect(networkIds).pipe(
           Effect.tapError((cause) =>
             Effect.forEach(
               networkIds,
-              (id) => recordTunnelDnsEffect(id, { everyFailed: cause.message }),
+              (id) => recordFailure(id, cause.message),
               { discard: true }
-            ).pipe(Effect.ignore)
+            )
           )
         )
         yield* Effect.tryPromise({
@@ -242,15 +253,9 @@ export const rewriteTailscaleDns = durableOperation({
               if (failed === null) continue
               failures.push(errorMessageOf(failed))
               if (!(failed instanceof RecordedTunnelDnsError)) {
-                await recoverPromise(
-                  () =>
-                    runAppEffect(
-                      "tunnelDns.record",
-                      recordTunnelDnsEffect(id, {
-                        everyFailed: errorMessageOf(failed),
-                      })
-                    ),
-                  () => undefined
+                await runAppEffect(
+                  "tunnelDns.record",
+                  recordFailure(id, errorMessageOf(failed))
                 )
                 wakePollingWorker("Domains.dns")
               }
