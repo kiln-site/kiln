@@ -387,5 +387,17 @@ change.
 6. One Domains list: an instance's Network page lists its public and tunnel
    names together, marked by where they live.
 
+Upgrading: migration 0087 moves each tunnel's TLDs into `domain` and stops
+if one is already a domain there, a vanity domain by the same name, rather
+than drop it. Before upgrading, this lists any (`kiln_` is the table prefix;
+on a Hearth that stopped at 0087, the second table is already `kiln_domain`):
+
+```sql
+SELECT t.domain FROM kiln_tunnel_domain t JOIN kiln_domain_zone d USING (domain);
+```
+
+Renaming the tunnel's TLD or removing the vanity domain, then starting Hearth
+again, finishes it; the migration picks up where it stopped.
+
 Not in this: HTTPS for tunnel names, Hearth owning web routes, DNS
 following a Relay's proxy mode, and tunnel domains shared per tailnet.
