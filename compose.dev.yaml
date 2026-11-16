@@ -330,9 +330,10 @@ services:
       KILN_DEV_SHARE_ORIGIN: ${KILN_DEV_SHARE_ORIGIN:-http://localhost}
       KILN_DEV_SHARE_UPSTREAM: http://hearth:3000
       KILN_URL: ${KILN_URL:-http://localhost:3000}
-    command: ["node", "/share/proxy.mjs"]
+    command: ["node", "/scripts/dev-share-proxy.mjs"]
     volumes:
-      - ./scripts/dev-share-proxy.mjs:/share/proxy.mjs:ro
+      # The folder, not the file, so an edit that replaces the file shows up.
+      - ./scripts:/scripts:ro
     ports:
       - "127.0.0.1:${KILN_DEV_SHARE_LOCAL_PORT:-0}:3000"
 

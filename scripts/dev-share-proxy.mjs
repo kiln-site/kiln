@@ -5,8 +5,8 @@
 //
 // A first dev load fetches about 1,300 uncompressed modules, and one failed
 // module keeps the page from hydrating. So responses are compressed, and each
-// request to Hearth gets its own connection: reusing one Vite has just closed
-// fails the request.
+// request to Hearth gets its own connection, so none can land on one Vite has
+// just closed.
 import http from "node:http"
 import net from "node:net"
 import zlib from "node:zlib"
@@ -16,6 +16,13 @@ const upstream = new URL(required("KILN_DEV_SHARE_UPSTREAM"))
 const hearthOrigin = new URL(required("KILN_URL")).origin
 const hearthHost = new URL(hearthOrigin).host
 const publicOrigin = new URL(required("KILN_DEV_SHARE_ORIGIN")).origin
+// Every stack shared from a box has the box's host name, and cookies ignore
+// ports, so the session cookies get this link's own name. Page scripts never
+// read those (they're HttpOnly); the preference cookies they do read stay
+// shared between stacks.
+const cookieTag = `share${new URL(publicOrigin).port || "443"}-`
+const anyCookieTag = /^share\d+-/u
+const cookiePrefix = /^(__Secure-|__Host-)?(.*)$/u
 
 const agent = new http.Agent({ keepAlive: false })
 const compressible =
@@ -51,8 +58,30 @@ function withoutHopHeaders(headers) {
   return out
 }
 
+// Hearth sees its own cookie names, and none of another link's.
+function cookiesToHearth(header) {
+  const cookies = []
+  for (const cookie of header.split(/;\s*/u)) {
+    const [, prefix = "", rest] = cookiePrefix.exec(cookie)
+    if (rest.startsWith(cookieTag))
+      cookies.push(prefix + rest.slice(cookieTag.length))
+    else if (!anyCookieTag.test(rest)) cookies.push(cookie)
+  }
+  return cookies.join("; ")
+}
+
+function cookiesToVisitor(setCookie) {
+  const [, prefix = "", rest] = cookiePrefix.exec(setCookie)
+  const tagged = prefix + cookieTag + rest
+  if (/;\s*httponly\s*(;|$)/iu.test(setCookie)) return [tagged]
+  // A deletion needn't repeat HttpOnly, so it clears both names.
+  if (/;\s*max-age=0\s*(;|$)/iu.test(setCookie)) return [setCookie, tagged]
+  return [setCookie]
+}
+
 function toHearth(headers) {
   const out = { ...headers, host: hearthHost }
+  if (typeof out.cookie === "string") out.cookie = cookiesToHearth(out.cookie)
   if (out.origin === publicOrigin) out.origin = hearthOrigin
   if (typeof out.referer === "string" && out.referer.startsWith(publicOrigin))
     out.referer = hearthOrigin + out.referer.slice(publicOrigin.length)
@@ -64,6 +93,8 @@ function toVisitor(headers) {
   const out = withoutHopHeaders(headers)
   if (typeof out.location === "string" && out.location.startsWith(hearthOrigin))
     out.location = publicOrigin + out.location.slice(hearthOrigin.length)
+  if (out["set-cookie"])
+    out["set-cookie"] = out["set-cookie"].flatMap(cookiesToVisitor)
   return out
 }
 
@@ -113,6 +144,8 @@ const server = http.createServer((request, response) => {
     }
   )
   forwarded.on("error", (error) => {
+    // Ended because the visitor left; there's no one to answer.
+    if (response.destroyed) return
     if (response.headersSent) {
       response.destroy()
       return

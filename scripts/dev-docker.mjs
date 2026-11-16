@@ -993,9 +993,9 @@ function s3(action) {
 
 // Hearth on the tailnet for phones and other devices. Tailscale Serve only
 // terminates TLS and passes each connection to the stack's share service,
-// rather than proxying HTTP itself: its proxy reuses connections the dev
-// server has closed, and the failed module requests keep pages from
-// hydrating. See scripts/dev-share-proxy.mjs.
+// rather than proxying HTTP itself: through its proxy, cold loads had module
+// requests answered 502, which keeps pages from hydrating. See
+// docs/development.md.
 async function share(action) {
   switch (action) {
     case "up": {
@@ -1013,7 +1013,8 @@ async function share(action) {
       writeFileSync(shareFile, `${ports.public} ${ports.local}\n`)
       Object.assign(composeEnvironment, shareEnvironment(ports, self.host))
       compose(
-        ["up", "--detach", "--no-deps", "--wait", "share"],
+        // Recreated, so it always runs this checkout's proxy.
+        ["up", "--detach", "--no-deps", "--force-recreate", "--wait", "share"],
         composeEnvironment
       )
       run(

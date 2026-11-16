@@ -81,13 +81,19 @@ takes it down, and the next `share` brings it back at the same address.
 
 A stack only accepts its own `KILN_URL`, so the stack's `share` service
 (`scripts/dev-share-proxy.mjs`) forwards to Hearth as that host and points
-redirects back at the link. Tailscale Serve terminates TLS and passes it each
-connection (`--tls-terminated-tcp`) rather than proxying HTTP itself. A first
-dev load fetches about 1,300 modules, and one failed module keeps the page
-from hydrating, so buttons stay disabled. Tailscale's HTTP proxy reuses
-connections the dev server has already closed and answers those requests with
-502s. The proxy also compresses responses, which cuts that first load from
-about 80 MB to about a quarter of that.
+redirects back at the link. A first dev load fetches about 1,300 modules, and
+one failed module keeps the page from hydrating, so buttons stay disabled.
+Through Tailscale Serve's HTTP proxy, a cold first load had over a hundred of
+those requests answered 502, most likely from Serve reusing connections the
+backend had already closed. So Serve only terminates TLS and passes each
+connection on (`--tls-terminated-tcp`), and the proxy opens a new connection
+to Hearth for every request. It also compresses responses, which cuts that
+first load from about 80 MB to about a quarter of that.
+
+Every stack shared from a box has the box's host name, and cookies ignore
+ports, so the proxy gives each link its own session cookie names. Signing in
+on one stack leaves the others signed in. UI preferences, such as the sidebar
+state, are still shared between them.
 
 With OrbStack, the browser reaches the Relay at its own `.orb.local` address,
 which other devices can't resolve, so Relay-backed views such as the console

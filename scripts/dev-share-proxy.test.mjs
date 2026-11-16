@@ -16,6 +16,27 @@ afterEach(() => {
 // Stands in for the dev server Hearth runs.
 async function hearth() {
   const server = http.createServer((request, response) => {
+    if (request.url === "/sign-in") {
+      response.writeHead(200, {
+        "set-cookie": [
+          "__Secure-kiln.session_token=signed-in; Path=/; HttpOnly; Secure",
+          "sidebar_state=true; Path=/",
+        ],
+      })
+      response.end()
+      return
+    }
+    if (request.url === "/sign-out") {
+      response.writeHead(200, {
+        "set-cookie": ["__Secure-kiln.session_token=; Max-Age=0; Path=/"],
+      })
+      response.end()
+      return
+    }
+    if (request.url === "/whoami") {
+      response.end(request.headers.cookie ?? "")
+      return
+    }
     if (request.url.startsWith("/stream")) {
       response.writeHead(200, { "content-type": "text/event-stream" })
       response.write("data: hello\n\n")
@@ -55,13 +76,13 @@ async function freePort() {
   return port
 }
 
-async function share(upstreamPort) {
+async function share(upstreamPort, publicPort = 8600) {
   const port = await freePort()
   const child = spawn(process.execPath, [script], {
     env: {
       ...process.env,
       KILN_DEV_SHARE_LISTEN_PORT: String(port),
-      KILN_DEV_SHARE_ORIGIN: "https://box.example.ts.net:8600",
+      KILN_DEV_SHARE_ORIGIN: `https://box.example.ts.net:${publicPort}`,
       KILN_DEV_SHARE_UPSTREAM: `http://127.0.0.1:${upstreamPort}`,
       KILN_URL: "https://kiln-test.orb.local",
     },
@@ -113,6 +134,38 @@ describe("dev share proxy", () => {
     const next = await get(port, "/next.js", gzip, agent)
     expect(next.response.statusCode).toBe(200)
     expect(gunzipSync(next.body).toString()).toBe(module)
+  })
+
+  it("keeps each shared stack's session to itself", async () => {
+    const upstream = await hearth()
+    const first = await share(upstream, 8600)
+    const second = await share(upstream, 8601)
+
+    // The browser keeps one cookie jar for the box's host name.
+    const signedIn = await get(first.port, "/sign-in", {})
+    const jar = signedIn.response.headers["set-cookie"].map(
+      (cookie) => cookie.split(";")[0]
+    )
+    expect(jar).toContain("sidebar_state=true")
+
+    const cookie = { cookie: jar.join("; ") }
+    const asFirst = await get(first.port, "/whoami", cookie)
+    expect(asFirst.body.toString()).toContain(
+      "__Secure-kiln.session_token=signed-in"
+    )
+    const asSecond = await get(second.port, "/whoami", cookie)
+    expect(asSecond.body.toString()).not.toContain("session_token")
+    expect(asSecond.body.toString()).toContain("sidebar_state=true")
+
+    // Signing out clears the name the browser actually holds.
+    const signedOut = await get(first.port, "/sign-out", cookie)
+    const cleared = signedOut.response.headers["set-cookie"].map(
+      (header) => header.split("=")[0]
+    )
+    const session = jar
+      .map((entry) => entry.split("=")[0])
+      .find((name) => name.includes("session_token"))
+    expect(cleared).toContain(session)
   })
 
   it("keeps serving after a stream ends early at either end", async () => {
