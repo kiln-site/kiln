@@ -985,7 +985,7 @@ describeMysql("an App's address", () => {
 
 describeMysql("a game server whose primary address is a tunnel name", () => {
   layer(TestDatabase)((it) => {
-    const tailnetId = "e".repeat(12)
+    const tunnelId = "e".repeat(12)
     const nameId = "00000000-0000-4000-8000-000000000001"
     const craft = gameServer(serverId, { brickPrimaryPort: 25_565 })
 
@@ -1026,16 +1026,10 @@ describeMysql("a game server whose primary address is a tunnel name", () => {
           fakeCloudflare()
           yield* runs(relayOne, craft)
           yield* addAddress(relayOne, serverId, "arena")
-          yield* insertRows("instance_group", {
-            created_at: 0,
-            created_by: user.id,
-            id: tailnetId,
+          yield* insertRows("tunnel", {
             name: "Home",
-            updated_at: 0,
-          })
-          yield* insertRows("tailnet", {
             created_at: 0,
-            id: tailnetId,
+            id: tunnelId,
             owner_id: user.id,
             updated_at: 0,
           })
@@ -1046,7 +1040,7 @@ describeMysql("a game server whose primary address is a tunnel name", () => {
             id: nameId,
             label: "paper",
             member_id: `instance:${serverId}`,
-            tailnet_id: tailnetId,
+            tunnel_id: tunnelId,
           })
           yield* Effect.promise(() =>
             runAppEffect(
@@ -1058,7 +1052,7 @@ describeMysql("a game server whose primary address is a tunnel name", () => {
             )
           )
 
-          // Its tailnet reaches its container, at the port it listens on.
+          // Its tunnel reaches its container, at the port it listens on.
           assert.strictEqual(yield* shown, "paper.kiln:25565")
 
           // Its Relay reports it somewhere else, and its address follows.
@@ -1083,12 +1077,12 @@ describeMysql("a game server whose primary address is a tunnel name", () => {
           assert.strictEqual(yield* primaryKind, "tunnel")
           assert.strictEqual(yield* shown, "paper.kiln:25565")
 
-          // Disconnected from the tailnet, its name is gone, and its
+          // Disconnected from the tunnel, its name is gone, and its
           // domain stands in.
           yield* Effect.promise(() =>
             runAppEffect(
               "test.disconnect",
-              keepTunnelNamesOfEffect(tailnetId, [], ["kiln"])
+              keepTunnelNamesOfEffect(tunnelId, [], ["kiln"])
             )
           )
           assert.strictEqual(yield* shown, "colosseum.kiln.test")

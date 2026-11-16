@@ -57,8 +57,8 @@ import { TailnetCard, tailnetMeta } from "@/components/tunnel/tailnet-card"
 import {
   tunnelStatus,
   useTailnets,
-  type TailnetOverview,
   type TunnelOverview,
+  type GatewayOverview,
 } from "@/components/tunnel/tailnet-data"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
@@ -74,7 +74,7 @@ import type { DataTableSource } from "@/lib/data-table-source"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { accessCapabilitiesQueryOptions, queryKeys } from "@/lib/query-options"
 import { heldPowerActions } from "@/lib/use-instance-power"
-import { performTunnelAction } from "@/server/tunnel-instances"
+import { performGatewayAction } from "@/server/tunnel-instances"
 
 // Infrastructure → Tunnels: every tunnel the viewer sees, one row each, as
 // the other kinds' tables are, with the tailnet it joins. Each tailnet's own
@@ -93,24 +93,22 @@ interface TunnelRow {
   /** Its tailnet is being deleted, and it with it. */
   removing: boolean
   running: boolean
-  tailnet: Pick<TailnetOverview, "domains" | "id" | "name"> & {
+  tailnet: Pick<TunnelOverview, "domains" | "id" | "name"> & {
     meta: string
   }
 }
 
-function tunnelRows(
-  tailnets: ReadonlyArray<TailnetOverview>
-): Array<TunnelRow> {
+function tunnelRows(tailnets: ReadonlyArray<TunnelOverview>): Array<TunnelRow> {
   return tailnets.flatMap((tailnet) => {
     const meta = tailnetMeta(tailnet)
-    return tailnet.deployments.map((tunnel: TunnelOverview): TunnelRow => ({
+    return tailnet.gateways.map((tunnel: GatewayOverview): TunnelRow => ({
       connected: tailnet.bindings.filter(
         (binding) => binding.relayId === tunnel.relayId
       ).length,
       id: tunnel.id,
       ipv4: tunnel.status.ipv4Address,
       name: tunnel.name,
-      permissions: tailnet.access.tunnels[tunnel.id] ?? [],
+      permissions: tailnet.access.gateways[tunnel.id] ?? [],
       relayId: tunnel.relayId,
       relayName: tunnel.relayName,
       removing: tailnet.cleanup !== null,
@@ -155,7 +153,7 @@ export const TunnelsPage = React.memo(function TunnelsPage({
     createAddInstanceDialogStore("tunnel")
   )
   const { data, error, isPending, refetch } = useTailnets()
-  const rows = React.useMemo(() => tunnelRows(data.stacks), [data.stacks])
+  const rows = React.useMemo(() => tunnelRows(data.tunnels), [data.tunnels])
   const source = React.useMemo(
     (): DataTableSource<TunnelRow> => ({
       body: error
@@ -189,7 +187,7 @@ export const TunnelsPage = React.memo(function TunnelsPage({
           <TunnelToolbar
             canCreate={canCreate}
             searchStore={searchStore}
-            tailnets={data.stacks}
+            tailnets={data.tunnels}
             onCreate={addStore.open}
           />
         }
@@ -215,7 +213,7 @@ const TunnelToolbar = React.memo(function TunnelToolbar({
   canCreate: boolean
   onCreate: () => void
   searchStore: DataTableSearchStore
-  tailnets: ReadonlyArray<TailnetOverview>
+  tailnets: ReadonlyArray<TunnelOverview>
 }) {
   return (
     <DataTableToolbar
@@ -244,7 +242,7 @@ const TunnelToolbar = React.memo(function TunnelToolbar({
 const TailnetsMenu = React.memo(function TailnetsMenu({
   tailnets,
 }: {
-  tailnets: ReadonlyArray<TailnetOverview>
+  tailnets: ReadonlyArray<TunnelOverview>
 }) {
   if (tailnets.length === 0) return null
   return (
@@ -278,7 +276,7 @@ const TailnetsMenu = React.memo(function TailnetsMenu({
 const TunnelSyncButton = React.memo(function TunnelSyncButton() {
   const queryClient = useQueryClient()
   const sync = React.useCallback(
-    () => queryClient.invalidateQueries({ queryKey: queryKeys.tailnets }),
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.tunnels }),
     [queryClient]
   )
   return <InfraSyncButton label="Sync tunnels" sync={sync} />
@@ -461,9 +459,9 @@ const TunnelActions = React.memo(function TunnelActions({
   const queryClient = useQueryClient()
   const action = useMutation({
     mutationFn: (next: ServerAction) =>
-      performTunnelAction({ data: { action: next, tunnelId: tunnel.id } }),
+      performGatewayAction({ data: { action: next, gatewayId: tunnel.id } }),
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.tailnets }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.tunnels }),
     onError: (cause) =>
       showToast({
         description: cause.message,

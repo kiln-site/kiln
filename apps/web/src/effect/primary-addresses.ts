@@ -7,7 +7,7 @@ import { databaseTable } from "@/lib/database-config"
 // Each instance's one primary address: what Kiln shows for it (lists, its
 // header, the infra map, the copy button) and, for a game server, the
 // address it advertises. A game server's join address, an App's web route,
-// or either's name in a tailnet. One row per instance names it, so an instance
+// or either's name in a tunnel. One row per instance names it, so an instance
 // can't have two. It changes nothing about routing: every address works,
 // primary or not. A row naming an address that's gone is ignored, and the
 // instance's first address that serves stands in until another is chosen.
@@ -151,7 +151,7 @@ export const primaryIsTunnelNameEffect = Effect.fn(
 export interface PrimaryTunnelName {
   instanceId: string
   instanceType: PrimaryAddressInstanceType
-  /** The name whole, as its tailnet resolves it. */
+  /** The name whole, as its tunnel resolves it. */
   name: string
   nameId: string
 }

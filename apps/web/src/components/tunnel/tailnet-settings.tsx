@@ -21,7 +21,7 @@ import {
   normalizeTld,
   useSetTailnets,
   useTailnetSave,
-  type TailnetOverview,
+  type TunnelOverview,
 } from "@/components/tunnel/tailnet-data"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { configureTailscaleIntegration } from "@/server/tunnels"
@@ -38,7 +38,7 @@ export interface TailscaleLoginValues {
 }
 
 export function initialLogin(
-  tailnet?: Pick<TailnetOverview, "integration">
+  tailnet?: Pick<TunnelOverview, "integration">
 ): TailscaleLoginValues {
   return {
     clientId: tailnet?.integration?.clientId ?? "",
@@ -186,7 +186,7 @@ export function TailscaleLoginHelp({ tag }: { tag: string }) {
 export const TailnetLoginCard = React.memo(function TailnetLoginCard({
   tailnet,
 }: {
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   const [values, setValues] = React.useState(() => initialLogin(tailnet))
   const setTailnets = useSetTailnets()
@@ -203,7 +203,7 @@ export const TailnetLoginCard = React.memo(function TailnetLoginCard({
         },
       }),
     onSuccess: (configured) => {
-      setTailnets(configured.stacks)
+      setTailnets(configured.result)
       setValues((current) => ({ ...current, clientSecret: "" }))
       showToast({
         message: `${tailnet.name}'s Tailscale login is checked and saved`,
@@ -277,7 +277,7 @@ export const TailnetSettingsCard = React.memo(function TailnetSettingsCard({
   tailnet,
 }: {
   canWrite: boolean
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   const [name, setName] = React.useState(tailnet.name)
   const [domains, setDomains] = React.useState(tailnet.domains)

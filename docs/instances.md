@@ -17,13 +17,12 @@ work. Update it as each step lands.
 | Game server | A Brick       | Called `instance` in permissions and the protocol.  |
 | Database    | A Brick       | One of Kiln's own, of an engine Kiln knows.         |
 | App         | A Brick       | One of Kiln's own, for what it deploys.             |
-| Tunnel      | Its type      | Today a built-in Brick that runs as a game server.  |
+| Tunnel      | Its type      | Its Brick's gateways, one per Relay it reaches      |
 
-A tunnel connects instances on one Relay to a private network outside it.
-Its type says which: Tailscale is the only one, and others (NetBird,
-WireGuard, Cloudflare Tunnel) may follow. The tunnels of one Tailscale
-account on several Relays are a tailnet, an [instance group](#instance-groups).
-See [Tunnels](#tunnels).
+A tunnel connects instances on any Relay to a private network outside them,
+through a gateway on each Relay something it connects is on. Its type says
+which network: Tailscale is the only one, and others (NetBird, WireGuard,
+Cloudflare Tunnel) may follow. See [Tunnels](#tunnels).
 
 ## The foundation
 
@@ -125,9 +124,8 @@ kind on any Relay. It is its own record, not a feature of one kind:
 
 - A Brick can create one, for an App that comes with a database of its own.
 - A person can make one.
-- Kiln makes one for a tailnet, whose members are its tunnels, and for its
-  own services (a Relay, Hearth, its cache
-  and its database), which people can't edit.
+- Kiln makes one for its own services (a Relay, Hearth, its cache and its
+  database), which people can't edit.
 
 The record is built (`apps/web/src/effect/instance-groups.ts`): a group has
 an ID of its own in the instance directory, an instance is in one group at
@@ -158,42 +156,44 @@ the App takes a revision of its Brick; it doesn't follow a password rotated
 in between.
 
 Still to come: a group's page, a group someone makes by hand, an icon,
-members on more than one Relay, and the groups Kiln makes itself, for a
-tailnet and for its own services.
+members on more than one Relay, and the group Kiln makes itself for its own
+services.
 
 ## Tunnels
 
-The plan for step 11, and where it stands. A Tailscale network became
-tunnels in a tailnet: each tunnel is an instance of its own, with its own
-ID, kept in `tunnel` and listed by its Relay with its tailnet's ID, and the
-tailnet is a group Kiln keeps whole (`tailnet` beside it). Its containers
-carry a tunnel's labels, and nothing treats it as a game server. Built so
-far: that, the migration from networks, and the requests' new names; and
-what every instance has: power, deploying again (recorded and logged as
-every kind's), its terminal and its logs' sources, each authorized as a
-tunnel is; DNS reloading in place; names; the pages; and tunnel names as
-primary addresses. Its permissions of its own follow.
+The plan for step 11, and where it stands. A tunnel is one instance, of
+kind `tunnel`, made from a tunnel Brick: today's only type is Tailscale,
+shown as "Tunnel · Tailscale". It reaches Relays through its gateways, one
+on each Relay something it connects is on. You never pick a Relay for it:
+you connect a game server, an App's service or a database to it, and Kiln
+makes the gateway on that Relay if there is none, or takes it away when
+the last thing there leaves. A Tailscale network of before is a tunnel
+now, each of its Relays' nodes a gateway. Built: that, the migration,
+connecting, power and deploying across its gateways, DNS reloading in
+place, names, and tunnel names as primary addresses. Its pages and its
+permissions of its own follow.
 
 ### What runs
 
-- **A tunnel** is an instance of kind `tunnel` on one Relay, of type
-  `tailscale`, shown as "Tunnel · Tailscale", made from a tunnel Brick as a
-  database is from a database Brick (see [Bricks](#bricks)). It runs two
-  containers from the images its Brick pins: Tailscale (`kiln-ts-<key>`, a
-  subnet router) and CoreDNS
-  (`kiln-ts-<key>-dns`, in the Tailscale container's network namespace, so
-  only its tailnet reaches it). Its connected instances join its Docker
-  network (`kiln-ts-<key>-network`), each at an address of its own; nobody
-  sees that network.
-- It has what every instance has: power acts on both containers, redeploying
-  pulls both images again and recreates them, its Logs page shows both
-  containers and its deployments, and its terminal opens in the Tailscale
-  container. Creating it, redeploying it and changing its TLDs are
-  deployments with a log, kept with every kind's (`tunnel-deployments`).
-- It is never a game server again: no `tailscale` Brick, no game server
-  labels, no `isTailscaleNode`, no hidden `/server/<id>` pages, no refusals
-  special-cased for it. A Relay lists its tunnels as it lists its Apps and
-  databases.
+- **A gateway** is a tunnel's part on one Relay: two containers from the
+  images its tunnel's Brick pins, Tailscale (`kiln-ts-<key>`, a subnet
+  router) and CoreDNS (`kiln-ts-<key>-dns`, in the Tailscale container's
+  network namespace, so only its tailnet reaches it). What the tunnel
+  connects on that Relay joins the gateway's Docker network
+  (`kiln-ts-<key>-network`), each at an address of its own; nobody sees
+  that network.
+- A gateway is no instance: nobody opens, lists or picks it, and it has no
+  page. It has its own ID, reserved in the directory so it is never handed
+  out again, and on its Relay its containers, lanes and saved state. A
+  Relay still calls it a tunnel, in its requests (`tunnel.*`, and
+  `kind: "tunnel"` in the shared ones), labels, folders and state; Hearth
+  calls it a gateway (`kiln_tunnel_gateway`).
+- A tunnel has what every instance has, across its gateways: power and
+  deploying again act on every gateway it may (one failing doesn't stop
+  the rest, and each says how it went), or on one; its Logs show each
+  gateway's two containers and their deployments, kept with every kind's;
+  its terminal opens in one gateway's Tailscale container, since CoreDNS's
+  image has no shell.
 - Its DNS reloads in place. Its records are a hosts file that CoreDNS reads
   again by itself, and its Corefile is one CoreDNS watches and reloads
   gracefully, keeping the old one if the new one fails; a change to either
@@ -202,51 +202,52 @@ primary addresses. Its permissions of its own follow.
   making its Tailscale container again, as redeploying or renaming its node
   does, recreates CoreDNS, which lives in its network. Built.
 
-### The tailnet
+### The tunnel
 
-- The tunnels of one Tailscale account are a tailnet: an instance group,
-  made with its first tunnel. Beside the group, `kiln_tailnet` keeps what
-  they share: the type, the Tailscale login (OAuth client and secret), and
-  its TLDs.
-- Kiln makes the group and keeps it whole. Its members are tunnels and
-  nothing else, a tunnel is never moved into another group, and the
-  generic group actions (deleting a group while keeping its members) don't
-  apply to it: deleting a tailnet deletes its tunnels.
-- Deleting its last tunnel deletes the tailnet once that tunnel is torn
-  down, which needs its login to log the node out; then Hearth clears its
-  split DNS and forgets the login. A network that has no Relays today
-  becomes a tailnet with no tunnels, kept until it is deleted or given
-  one.
-- Hearth registers every TLD in the tailnet's split DNS, pointing at all of
-  its tunnels, so names still resolve while one Relay is down. Every tunnel
-  serves the whole tailnet's records.
-- A TLD is unique across Kiln, as a network's domain is today. Two tailnets
-  of different Tailscale accounts could share one; allowing that needs
-  Hearth to know which account a tailnet is, and comes later.
+- Hearth keeps it in `kiln_tunnel`: its name, its owner, the Brick its
+  gateways run, its Tailscale login (an OAuth client and secret, which it
+  needs: Kiln makes each new gateway's key with it), and its TLDs in order
+  (`kiln_tunnel_domain`). It is no instance group.
+- Creating it takes its name, its first TLD, its Tailscale login and its
+  Brick, and makes no gateway. A tunnel from before that has no login (one
+  made with a one-time key) keeps running, but connecting something on a
+  Relay it has no gateway on asks for a login first.
+- Deleting it tears down every gateway, which needs its login to log each
+  out; then Hearth clears its split DNS and forgets the login.
+- Hearth registers every TLD in its split DNS, pointing at all of its
+  gateways, so names still resolve while one Relay is down. Every gateway
+  serves the whole tunnel's records.
+- A TLD is unique across Kiln. Two tunnels of different Tailscale accounts
+  could share one; allowing that needs Hearth to know which account a
+  tunnel is, and comes later.
 
 ### Connected instances
 
 - A game server, a database or an App's service connects to any number of
-  tailnets, through each one's tunnel on its own Relay. A tailnet with no
-  tunnel there offers to add one. Connected instances are a list on the
-  tunnel, not members of the group.
-- In each tailnet a connected instance has one name, generated once from its
+  tunnels, each through its gateway on the instance's own Relay
+  (`connectToTunnel`). Connecting to a tunnel with no gateway there makes
+  one in the same operation: a key from the tunnel's login, the gateway
+  from its Brick, the member on its network, its generated name, and every
+  gateway's DNS and Tailscale's split DNS rewritten. If making the gateway
+  fails, the connect fails with why and the gateway is taken away again.
+  Disconnecting the last thing on a Relay takes its gateway away, and logs
+  its device out of Tailscale. A gateway that has connected nothing yet,
+  as a network's node of before may not have, stays.
+- In each tunnel a connected instance has one name, generated once from its
   name (lowercase; spaces become hyphens; anything but letters, digits and
   hyphens dropped; repeated hyphens collapsed and trimmed; at most 63
   characters; `-2`, `-3` when taken; the kind and the ID's first characters
-  when nothing is left) under the tailnet's first TLD. It can be renamed,
+  when nothing is left) under the tunnel's first TLD. It can be renamed,
   never removed. It can have aliases besides, at any depth, under any of the
-  tailnet's TLDs (`paper26.3.kiln`, `paper.26.3.test`). A name is unique in
-  its tailnet.
-- Hearth keeps every name (`tunnel_name`) and a tailnet's TLDs in order
-  (`tailnet_domain`); a tunnel knows only its TLDs and its members'
-  addresses, and serves the whole names Hearth sends it. A save of the
-  tailnet applies its tunnels first, then its members' names, then rewrites
-  its DNS, so a save that fails leaves both as they were. Built, with
-  aliases added and removed through Hearth.
+  tunnel's TLDs (`paper26.3.kiln`, `paper.26.3.test`). A name is unique in
+  its tunnel.
+- Hearth keeps every name (`tunnel_name`); a gateway knows only its
+  tunnel's TLDs and its members' addresses, and serves the whole names
+  Hearth sends it. A save of the tunnel applies its gateways first, then its
+  members' names, then rewrites its DNS, so a save that fails leaves both as
+  they were. Built, with aliases added and removed through Hearth.
 - An instance's Network tab has a Tunnels section shaped like its Domains
-  table: each tailnet it is in, with its names, and connecting to another
-  with a tunnel on its Relay, or adding one there. Built.
+  table: each tunnel it is in, with its names, and connecting to another.
 
 ### One primary address
 
@@ -255,10 +256,10 @@ primary addresses. Its permissions of its own follow.
   its header, the infra map, the copy button and the CLI) and, for a game
   server, the address it advertises. It changes nothing about routing: every
   name works, starred or not.
-- Any of a game server's or an App's names in a tailnet can be its primary,
+- Any of a game server's or an App's names in a tunnel can be its primary,
   in place of its join address or domain, from the names on its Network
-  tab or its tailnet's page. A game server's is the name at the port it
-  listens on in its container (`paper.kiln:25565`), since its tailnet
+  tab or its tunnel's page. A game server's is the name at the port it
+  listens on in its container (`paper.kiln:25565`), since its gateway
   reaches the container itself. An App's header and the Apps list show it
   with the Tailscale mark, since only its tailnet reaches it; a game
   server's address doesn't carry the mark yet. A database has no primary
@@ -279,61 +280,51 @@ primary addresses. Its permissions of its own follow.
 
 ### Who may do what
 
-- A tunnel has an owner, who sees it, as with any instance. Its own
-  permissions follow an App's: `tunnel.read`, `tunnel.create` (on a Relay),
-  `tunnel.manage` and `tunnel.delete`. Power, redeploying, its terminal and
-  its logs take the `instance.*` permissions every kind does.
-- Changing what a tailnet shares (its login, its TLDs) takes
-  `tunnel.manage` on every tunnel in it, as deleting a group takes deleting
-  every member. Adding a tunnel to a tailnet takes `tunnel.create` on the
-  Relay and `tunnel.manage` on the tailnet.
-- Connecting an instance takes `instance.network.write` on it and
-  `tunnel.manage` on the tunnel. Sharing a tunnel with others who connect
-  their own instances comes with the permission model (step 14).
-- This opens tunnels beyond platform administrators on purpose: a grant on
-  a Relay reaches its tunnels as it reaches everything else there. A
-  tunnel forwards only to the addresses of what is connected through it.
-- In Hearth a tunnel's changes hold `tunnel:<id>`, whole to create or
-  delete it and `#settings` to connect, rename or rewrite its DNS. A
-  tailnet's login and TLDs hold `tailnet:<id>#settings`, which a tunnel's
-  changes hold shared, since they read them. On the Relay a tunnel holds
-  its own instance lane, and the lifecycle lanes of the members it connects
-  or disconnects, as networks do now.
+- A tunnel has an owner, as any instance does. Its owner and platform
+  administrators change it (its name, TLDs and login), delete it, and
+  connect to it (`requireTunnelManager`). Its own permissions
+  (`tunnel.read`, `tunnel.create`, `tunnel.manage`, `tunnel.delete`) come
+  with the permission model (step 14), with sharing a tunnel with others
+  who connect their own instances.
+- Connecting an instance takes changing its network
+  (`instance.network.write`, an App's `app.manage`, a database's
+  `database.network.write`) and managing the tunnel. Kiln makes the
+  gateway for it: there's no right of its own to put one on a Relay.
+- What every kind of instance has (power, deploying, logs, terminal) a
+  gateway takes as its tunnel's owner may, or as a grant on its Relay
+  reaches everything there (`requireGatewayPermission`). Acting on a whole
+  tunnel acts on each gateway the viewer may. Anyone who reads instances on
+  a Relay sees the tunnels with a gateway there, with that gateway and what
+  it connects on that Relay (`getTunnels`).
+- In Hearth a tunnel holds `tunnel:<id>`, whole to create or delete it, and
+  `#settings` to connect, rename, change its TLDs or login, or rewrite its
+  DNS; acting on all its gateways holds `#gateways`, and one gateway
+  `gateway:<id>`. On the Relay a gateway holds its own instance lane, and
+  the lifecycle lanes of the members it connects or disconnects.
 
 ### Pages
 
-- **Infrastructure → Tunnels** (`/infra/tunnels`) lists every tunnel, one
-  row each on the table every kind's list uses, with the tailnet it joins as
-  a column; the Tailnets menu opens each tailnet's page, one with no tunnels
-  among them. It replaces `/infra/tailscale`. Anyone who reads instances on
-  a Relay sees its tunnels there, each in its tailnet with what it
-  connects on that Relay, and what they may do with each
-  (`getTailnets`); only a platform administrator changes a tailnet.
-- **A tailnet's page** (`/tailnet/$id`): its tunnels, everything connected
-  with its names, its TLDs, its Tailscale login, and deleting it.
-- **A tunnel's page** (`/tunnel/$id`): Info, Connected, Logs and Terminal,
-  from the components every instance's pages share.
-- The one Add dialog has Tunnel, which browses the catalogs' tunnel Bricks as
-  every kind browses its own; Kiln's `tailscale` Brick is the only one. Beside
-  it, a Relay from the instance picker, as every kind's Add pane picks one,
-  and a tailnet from a picker that lists the ones with no tunnel on that
-  Relay and offers to create the one typed, asking then for its first TLD
-  and Tailscale login. Tailscale logs in before the tunnel is ready, which a
-  toast follows; a request dropped on the way back is checked against what
-  Hearth has before it reads as a failure. A field that picks with the
-  instance picker, and offers to create what's typed, is one shared piece
-  (`InstancePickerField`, `pickerCreateItem`), as volumes and an App's
-  database pick too.
-- A tailnet keeps the Relays it has tunnels on, so a tunnel can be added
-  before anything connects through it, and deleted from its page, which
-  disconnects what it connected. Built: the pages, the Add dialog, the
-  sidebar's tabs for a tunnel, and `tunnel` as a kind every instance list
-  and picker shows. A tunnel can't be a favorite or have an icon yet.
+To build, on the components every instance's pages share:
+
+- **Infrastructure → Tunnels** (`/infra/tunnels`) lists tunnels, one row
+  each on the table every kind's list uses.
+- **A tunnel's page** (`/tunnel/$id`): Info (its name, TLDs, Tailscale login
+  and deleting it, until Info pages are one), Gateways (one row per Relay:
+  its state, Tailscale IP, what connects through it, power and deploying
+  again), Connected (everything it connects, with its names), Logs (each
+  gateway's two containers, and their deployments) and Terminal (a
+  gateway's Tailscale). No page for a gateway, and no `/tailnet` route.
+- The one Add dialog has Tunnel, which browses the tunnel Bricks; beside the
+  Brick, its name, first TLD and Tailscale login, and no Relay.
+- Today's pages still show the model before: a tailnet's page, and a page
+  for each gateway as a tunnel's. They work against the new model until the
+  pages land; adding a gateway by hand and the one-time key are gone.
 
 ### Moving off today's networks
 
-- A network's ID becomes its tailnet's group ID. Each of its Relay
-  deployments becomes a tunnel whose ID Hearth and the Relay each derive,
+- A network's ID became its tailnet's group ID, and then its tunnel's.
+  Each of its Relay
+  deployments became a gateway whose ID Hearth and the Relay each derive,
   as the old IDs were migrated (`migratedInstanceId` over the kind and
   `<network>:<relay>`); Hearth reserves each in its directory and refuses
   to migrate on a collision. The tunnel's physical key stays the
@@ -343,9 +334,11 @@ primary addresses. Its permissions of its own follow.
   interrupted between any two steps finishes when the Relay next starts,
   with the identity, subnet, members and state intact. The network's owner
   owns each tunnel.
-- `kiln_tailscale_network` becomes `kiln_tailnet`, and its deployments
-  `kiln_tunnel`. Each member's hostname becomes its generated name, and the
-  network's domain its first TLD. "Network" leaves the copy and the code
+- `kiln_tailscale_network` became `kiln_tailnet` and then `kiln_tunnel`,
+  and its deployments `kiln_tunnel`, then `kiln_tunnel_gateway`
+  (migration 84, which also dropped each tailnet's instance group). Each
+  member's hostname became its generated name, and the network's domain
+  its first TLD. "Network" leaves the copy and the code
   for this: it means a Docker network.
 - `relay.tailscale.stack.*` become `tunnel.*` requests, and the shared
   ones (`instance.action`, `instance.deploy`, `terminal.*`,
@@ -373,13 +366,15 @@ One stack, each part working on its own:
 
 1. Delete what came before networks, and private networking.
 2. One primary address per instance, kept by Hearth.
-3. Tunnels as their own kind, tailnets as groups, and DNS reloading in
-   place. Today's page and each instance's Tailscale section keep working
-   on the new model until the pages land.
+3. Tunnels as their own kind, and DNS reloading in place.
 4. Names: several TLDs, generated names and aliases, and any number of
-   tailnets per instance.
-5. The pages.
-6. Tunnel names as primary addresses. Built.
+   tunnels per instance.
+5. The first pages.
+6. Tunnel names as primary addresses.
+7. Tunnels from Bricks, and adding one from the Add dialog.
+8. A tunnel is one instance and its Relays its gateways, made and taken
+   away as things connect. Built.
+9. The pages for it.
 
 ## Bricks
 
@@ -429,7 +424,7 @@ about its container or data changes.
 A tunnel is made from a tunnel Brick whose `type` is one Kiln runs
 (`tailscale`). The Brick pins its two images: `deploy` runs the Tailscale
 container, and its `tunnel` section names the CoreDNS image that answers the
-tailnet's names. It says nothing else: the login, routes, firewall and DNS
+tunnel's names, on each of its gateways. It says nothing else: the login, routes, firewall and DNS
 are Kiln's, made for those images, so only the tunnel Bricks of Kiln's own
 catalog are offered and accepted, and the Relay refuses one of another type
 or images. A tunnel records the Brick it was made from, with the images it
@@ -575,9 +570,9 @@ from a tag or an image name today.
 9. Domains for every kind. Done for game servers and Apps; a database's
    address is still to come.
 10. One instance page, with each kind's own tabs.
-11. Tunnels as their own kind, a tailnet as an instance group, and one
-    primary address per instance. Done but for tunnel names as primary
-    addresses; see [Tunnels](#tunnels).
+11. Tunnels as their own kind, each one instance reaching Relays through
+    its gateways, and one primary address per instance. Done but for its
+    pages; see [Tunnels](#tunnels).
 12. One terminal path. Done: every shell, an instance's, the Relay's host's
     or one of Kiln's own containers', is one session the Relay keeps, opened
     with the six `terminal.*` requests that name their target, and shown by

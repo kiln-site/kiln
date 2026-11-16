@@ -74,7 +74,9 @@ const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 // What an old ID found in two places is: a tailnet's container
 // carries a game server's label, so the network's folder decides.
 const KIND_PRIORITY: Record<InstanceIdKind, number> = {
-  // Tunnels had new IDs from the start; no old one names one.
+  // Tunnels and their gateways had new IDs from the start; no old one
+  // names one.
+  gateway: 6,
   tunnel: 5,
   tailscale: 4,
   database: 3,

@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 
-import type { TunnelApply } from "@workspace/contracts"
+import type { TunnelApply as GatewayApply } from "@workspace/contracts"
 
 import { TailscaleOrchestrationError } from "@/effect/errors"
 
@@ -10,7 +10,7 @@ interface TailscaleBindingState {
   memberId: string
 }
 
-export interface TunnelPlanState {
+export interface GatewayPlanState {
   bindings: Array<TailscaleBindingState>
   domains: Array<string>
   hostname: string
@@ -22,13 +22,13 @@ export interface TunnelPlanState {
   tailnetId: string
 }
 
-export interface DesiredTunnel {
+export interface DesiredGateway {
   bindings: Array<{
     enabled: boolean
     memberId: string
   }>
   hostname: string
-  /** The tunnel's ID: the one the tailnet has on the Relay, or a new one. */
+  /** The tunnel's ID: the one the tunnel has on the Relay, or a new one. */
   id: string
   relayId: string
   relayName: string
@@ -36,25 +36,19 @@ export interface DesiredTunnel {
 
 export type TailscaleRemovalMode = "commit" | "prepare" | "rollback"
 
-export interface TunnelOperations<
-  TDeployment extends TunnelPlanState,
-> {
-  apply: (
-    target: DesiredTunnel,
-    input: TunnelApply
-  ) => Promise<TDeployment>
+export interface GatewayOperations<TDeployment extends GatewayPlanState> {
+  apply: (target: DesiredGateway, input: GatewayApply) => Promise<TDeployment>
   remove: (deployment: TDeployment, mode: TailscaleRemovalMode) => Promise<void>
   /**
    * Rewrites the network's DNS on every node of it from what the Relays
-   * hold now (`writeTailnetDns`), never from what a step returned.
+   * hold now (`writeTunnelDns`), never from what a step returned.
    */
   rewriteDns: () => Promise<void>
 }
 
-export const applyTunnelPlanEffect = Effect.fn(
+export const applyGatewayPlanEffect = Effect.fn(
   "tailscale.deployment.applyPlan"
-)(function* <TDeployment extends TunnelPlanState>({
-  authKey,
+)(function* <TDeployment extends GatewayPlanState>({
   authKeyForTarget,
   brick,
   current,
@@ -66,18 +60,16 @@ export const applyTunnelPlanEffect = Effect.fn(
   beforeFinalize,
   reservedSubnets = new Set(),
 }: {
-  authKey?: string
-  authKeyForTarget?: (
-    target: DesiredTunnel
-  ) => Promise<string | undefined>
-  /** The Brick each tunnel it adds is made from. */
-  brick?: TunnelApply["brick"]
+  /** A key a new gateway logs in with, made with its tunnel's login. */
+  authKeyForTarget?: (target: DesiredGateway) => Promise<string | undefined>
+  /** The Brick each gateway it adds is made from. */
+  brick?: GatewayApply["brick"]
   current: ReadonlyArray<TDeployment>
-  desired: ReadonlyArray<DesiredTunnel>
+  desired: ReadonlyArray<DesiredGateway>
   domains: Array<string>
   id: string
   name: string
-  operations: TunnelOperations<TDeployment>
+  operations: GatewayOperations<TDeployment>
   beforeFinalize?: (deployments: ReadonlyArray<TDeployment>) => Promise<void>
   reservedSubnets?: ReadonlySet<string>
 }) {
@@ -94,13 +86,13 @@ export const applyTunnelPlanEffect = Effect.fn(
   if (newTargetCount > 0 && !brick) {
     return yield* orchestrationFailure(
       "validation",
-      "Choose the Brick a new tunnel runs"
+      "Choose the Brick a new gateway runs"
     )
   }
-  if (newTargetCount > 1 && !authKeyForTarget) {
+  if (newTargetCount > 0 && !authKeyForTarget) {
     return yield* orchestrationFailure(
       "validation",
-      "A manual auth key can add one new Relay at a time. Generate a separate key for each Relay."
+      "A new gateway needs its tunnel's Tailscale login"
     )
   }
 
@@ -112,15 +104,14 @@ export const applyTunnelPlanEffect = Effect.fn(
       (target) =>
         Effect.gen(function* () {
           const previous = previousByRelay.get(target.relayId)
-          const targetAuthKey = previous
-            ? undefined
-            : authKeyForTarget
-              ? yield* promiseOperation("apply", () => authKeyForTarget(target))
-              : authKey
+          const targetAuthKey =
+            previous || !authKeyForTarget
+              ? undefined
+              : yield* promiseOperation("apply", () => authKeyForTarget(target))
           const deployment = yield* promiseOperation("apply", () =>
             operations.apply(target, {
               ...(targetAuthKey ? { authKey: targetAuthKey } : {}),
-              // A tunnel keeps the Brick it was made from.
+              // A gateway keeps the Brick it was made from.
               ...(previous ? {} : { brick }),
               bindings: target.bindings,
               domains,
@@ -166,7 +157,7 @@ export const applyTunnelPlanEffect = Effect.fn(
     return applied
   }).pipe(
     Effect.catch((cause) =>
-      rollbackTunnelPlanEffect(
+      rollbackGatewayPlanEffect(
         current,
         applied,
         preparedRemovals,
@@ -175,7 +166,7 @@ export const applyTunnelPlanEffect = Effect.fn(
         Effect.flatMap((rollbackFailures) =>
           orchestrationFailure(
             "apply",
-            `Could not update the tailnet: ${errorMessage(cause)}.${
+            `Could not update the tunnel: ${errorMessage(cause)}.${
               rollbackFailures.length
                 ? ` Rollback also failed: ${rollbackFailures.join("; ")}`
                 : ""
@@ -204,19 +195,19 @@ export const applyTunnelPlanEffect = Effect.fn(
   if (cleanupFailures.length > 0) {
     return yield* orchestrationFailure(
       "cleanup",
-      `The tailnet was updated, but Relay cleanup failed after 3 attempts: ${cleanupFailures.join("; ")}. Retry the change to finish cleanup.`
+      `The tunnel was updated, but Relay cleanup failed after 3 attempts: ${cleanupFailures.join("; ")}. Retry the change to finish cleanup.`
     )
   }
   return synchronized
 })
 
-const rollbackTunnelPlanEffect = Effect.fn(
+const rollbackGatewayPlanEffect = Effect.fn(
   "tailscale.deployment.rollbackPlan"
-)(function* <TDeployment extends TunnelPlanState>(
+)(function* <TDeployment extends GatewayPlanState>(
   current: ReadonlyArray<TDeployment>,
   applied: ReadonlyArray<TDeployment>,
   preparedRemovals: ReadonlyArray<TDeployment>,
-  operations: TunnelOperations<TDeployment>
+  operations: GatewayOperations<TDeployment>
 ) {
   const previousByRelay = new Map(
     current.map((deployment) => [deployment.relayId, deployment])
@@ -242,12 +233,10 @@ const rollbackTunnelPlanEffect = Effect.fn(
       const rollback = previous
         ? promiseOperation("rollback", () =>
             operations.apply(deploymentTarget(previous), {
-              bindings: previous.bindings.map(
-                ({ enabled, memberId }) => ({
-                  enabled,
-                  memberId,
-                })
-              ),
+              bindings: previous.bindings.map(({ enabled, memberId }) => ({
+                enabled,
+                memberId,
+              })),
               domains: previous.domains,
               hostname: previous.hostname,
               id: previous.id,
@@ -309,9 +298,7 @@ function orchestrationFailure(
   )
 }
 
-function deploymentTarget(
-  deployment: TunnelPlanState
-): DesiredTunnel {
+function deploymentTarget(deployment: GatewayPlanState): DesiredGateway {
   return {
     bindings: deployment.bindings.map(({ enabled, memberId }) => ({
       enabled,

@@ -125,22 +125,22 @@ export async function asDatabaseDeployment<T>(
 }
 
 /** Runs a tunnel's redeploy as a deployment, as a database's is. */
-export async function asTunnelDeployment<T>(
-  input: { relayId: string; tunnelId: string; userId: string | null },
+export async function asGatewayDeployment<T>(
+  input: { relayId: string; gatewayId: string; userId: string | null },
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
   return following(
     {
-      instanceId: input.tunnelId,
-      kind: "tunnel",
+      instanceId: input.gatewayId,
+      kind: "gateway",
       relayId: input.relayId,
       userId: input.userId,
     },
     await insertRunning({
       brickId: null,
       brickName: null,
-      instanceId: input.tunnelId,
-      kind: "tunnel",
+      instanceId: input.gatewayId,
+      kind: "gateway",
       relayId: input.relayId,
       trigger: "redeploy",
       userId: input.userId,
@@ -154,7 +154,7 @@ export async function asTunnelDeployment<T>(
 function following<T>(
   of: {
     instanceId: string
-    kind: "database" | "server" | "tunnel"
+    kind: "database" | "server" | "gateway"
     relayId: string
     userId: string | null
   },
@@ -162,7 +162,7 @@ function following<T>(
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
   const { relayId } = of
-  const checked = of.kind === "tunnel" ? null : of.kind
+  const checked = of.kind === "gateway" ? null : of.kind
   return Effect.runPromise(
     promiseEffect(() => run(id)).pipe(
       Effect.tap(() =>
@@ -241,8 +241,11 @@ async function insertRunning(
   input: ServerDeploymentStart &
     (
       | { kind: "database"; trigger: "redeploy" | "update" }
-      | { kind: "server"; trigger: "brick" | "install" | "reinstall" | "update" }
-      | { kind: "tunnel"; trigger: "redeploy" }
+      | {
+          kind: "server"
+          trigger: "brick" | "install" | "reinstall" | "update"
+        }
+      | { kind: "gateway"; trigger: "redeploy" }
     )
 ): Promise<string> {
   const id = crypto.randomUUID()

@@ -1,13 +1,12 @@
 import * as React from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { useMutation } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import {
   ArrowLeft,
   CircleAlert,
   KeyRound,
   LoaderCircle,
   Network,
-  Plus,
   Settings2,
   Trash2,
 } from "lucide-react"
@@ -22,14 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { InfoCard, InfoCardHeader } from "@/components/info-card"
@@ -39,9 +30,7 @@ import {
   tunnelStatus,
   useSetTailnets,
   useTailnet,
-  useTailnetSave,
-  useTailscaleTunnelBrick,
-  type TailnetOverview,
+  type TunnelOverview,
 } from "@/components/tunnel/tailnet-data"
 import {
   TailnetLoginCard,
@@ -51,9 +40,7 @@ import {
   TunnelConnectPicker,
   TunnelConnectedList,
 } from "@/components/tunnel/tunnel-connected-list"
-import { notALoginField } from "@/lib/not-a-login-field"
-import { relaysQueryOptions } from "@/lib/query-options"
-import { removeTailnet } from "@/server/tunnels"
+import { removeTunnel } from "@/server/tunnels"
 
 // A tailnet: the tunnels of one Tailscale account, everything they connect
 // with its names, its TLDs, its Tailscale login, and deleting it.
@@ -90,7 +77,7 @@ export function TailnetPage({ tailnetId }: { tailnetId: string }) {
 const TailnetContent = React.memo(function TailnetContent({
   tailnet,
 }: {
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   const [deleting, setDeleting] = React.useState(false)
   const canManage = tailnet.access.manage
@@ -135,7 +122,7 @@ const TailnetContent = React.memo(function TailnetContent({
             <InfoCardHeader
               icon={<TunnelKindIcon />}
               title="Tunnels"
-              action={canManage ? <AddTunnelButton tailnet={tailnet} /> : null}
+              action={null}
             />
             <TailnetTunnels tailnet={tailnet} />
           </InfoCard>
@@ -183,18 +170,18 @@ const TailnetContent = React.memo(function TailnetContent({
 const TailnetTunnels = React.memo(function TailnetTunnels({
   tailnet,
 }: {
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
-  if (tailnet.deployments.length === 0) {
+  if (tailnet.gateways.length === 0) {
     return (
       <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-        No tunnels yet. Add one on a Relay to connect what runs there.
+        No gateways yet. Connect something to it and Kiln adds one on its Relay.
       </p>
     )
   }
   return (
     <ul className="divide-y divide-border/65">
-      {tailnet.deployments.map((tunnel) => {
+      {tailnet.gateways.map((tunnel) => {
         const connected = tailnet.bindings.filter(
           (binding) => binding.relayId === tunnel.relayId
         ).length
@@ -232,181 +219,16 @@ const TailnetTunnels = React.memo(function TailnetTunnels({
   )
 })
 
-/** Adds a tunnel to a tailnet on a Relay it has none on. */
-export function AddTunnelButton({ tailnet }: { tailnet: TailnetOverview }) {
-  const [open, setOpen] = React.useState(false)
-  return (
-    <>
-      <Button type="button" size="sm" onClick={() => setOpen(true)}>
-        <Plus />
-        Add tunnel
-      </Button>
-      {open ? (
-        <AddTunnelDialog tailnet={tailnet} onClose={() => setOpen(false)} />
-      ) : null}
-    </>
-  )
-}
-
-function AddTunnelDialog({
-  tailnet,
-  onClose,
-}: {
-  tailnet: TailnetOverview
-  onClose: () => void
-}) {
-  const navigate = useNavigate()
-  const { data: relays = [] } = useQuery({
-    ...relaysQueryOptions(),
-    select: (all) => all.filter((relay) => relay.enabled),
-  })
-  const available = React.useMemo(
-    () =>
-      relays.filter(
-        (relay) =>
-          !tailnet.deployments.some(({ relayId }) => relayId === relay.id)
-      ),
-    [relays, tailnet.deployments]
-  )
-  const [chosen, setChosen] = React.useState<string | null>(null)
-  const relayId = chosen ?? available[0]?.id ?? ""
-  const [authKey, setAuthKey] = React.useState("")
-  // Without a Tailscale login, one tunnel at a time logs in with a key.
-  const needsKey = tailnet.integration === null
-  const save = useTailnetSave()
-  // The Brick a tunnel is made from: Kiln's Tailscale one.
-  const brick = useTailscaleTunnelBrick()
-  const relayName = available.find(({ id }) => id === relayId)?.name ?? ""
-  return (
-    <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-md">
-        <form
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!relayId) return
-            save.mutate(
-              {
-                change: {
-                  ...(needsKey ? { authKey: authKey.trim() } : {}),
-                  brick,
-                  relayIds: [
-                    ...tailnet.deployments.map(
-                      (deployment) => deployment.relayId
-                    ),
-                    relayId,
-                  ],
-                },
-                doing: `Adding a tunnel on ${relayName}`,
-                done: `${tailnet.name} has a tunnel on ${relayName}`,
-                tailnet,
-              },
-              {
-                onSuccess: (next) => {
-                  onClose()
-                  const tunnel = next.stacks
-                    .find(({ id }) => id === tailnet.id)
-                    ?.deployments.find(
-                      (deployment) => deployment.relayId === relayId
-                    )
-                  if (tunnel) {
-                    void navigate({
-                      params: { tunnelId: tunnel.id },
-                      to: "/tunnel/$tunnelId/info",
-                    })
-                  }
-                },
-              }
-            )
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Add a tunnel to {tailnet.name}</DialogTitle>
-            <DialogDescription>
-              Tailscale and CoreDNS run on the Relay, and what runs there can
-              connect to {tailnet.name} through it.
-            </DialogDescription>
-          </DialogHeader>
-          {available.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {tailnet.name} has a tunnel on every Relay.
-            </p>
-          ) : (
-            <label className="grid gap-2">
-              <span className="text-xs font-medium">Relay</span>
-              <Select value={relayId} onValueChange={setChosen}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {available.map((relay) => (
-                    <SelectItem key={relay.id} value={relay.id}>
-                      {relay.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          )}
-          {needsKey ? (
-            <label className="grid gap-2">
-              <span className="text-xs font-medium">Tailscale auth key</span>
-              <Input
-                {...notALoginField}
-                type="password"
-                value={authKey}
-                placeholder="tskey-auth-…"
-                className="font-mono"
-                onChange={(event) => setAuthKey(event.target.value)}
-              />
-              <span className="type-meta text-muted-foreground">
-                {tailnet.name} has no Tailscale login, so this tunnel logs in
-                with a key.
-              </span>
-            </label>
-          ) : null}
-          {save.error ? (
-            <p className="text-xs text-destructive" role="alert">
-              {save.error.message}
-            </p>
-          ) : null}
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={
-                !relayId ||
-                !brick ||
-                save.isPending ||
-                (needsKey && !authKey.trim())
-              }
-            >
-              {save.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Plus />
-              )}
-              Add tunnel
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function DeleteTailnetDialog({
   tailnet,
   onClose,
 }: {
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
   onClose: () => void
 }) {
   const setTailnets = useSetTailnets()
   const remove = useMutation({
-    mutationFn: () => removeTailnet({ data: { id: tailnet.id } }),
+    mutationFn: () => removeTunnel({ data: { id: tailnet.id } }),
     onSuccess: (next) => {
       setTailnets(next)
       showToast({
@@ -416,7 +238,7 @@ function DeleteTailnetDialog({
       onClose()
     },
   })
-  const count = tailnet.deployments.length
+  const count = tailnet.gateways.length
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="sm:max-w-md">
@@ -465,7 +287,7 @@ const retryFormatter = new Intl.DateTimeFormat(undefined, {
 export function TailnetCleanupState({
   tailnet,
 }: {
-  tailnet: Pick<TailnetOverview, "cleanup" | "name">
+  tailnet: Pick<TunnelOverview, "cleanup" | "name">
 }) {
   const cleanup = tailnet.cleanup
   if (!cleanup) return null

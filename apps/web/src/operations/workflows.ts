@@ -8,7 +8,7 @@ import {
   rollBackLegacyServerMigration,
   serverMigration,
 } from "@/lib/server-migrations.server"
-import { deleteTailnet } from "@/lib/tailnet-deletion.server"
+import { deleteTunnel } from "@/lib/tunnel-deletion.server"
 import { rewriteTailscaleDns } from "@/lib/tunnel-dns.server"
 
 /**
@@ -24,6 +24,6 @@ export const HearthWorkflows = Layer.mergeAll(
   keepResource.layer,
   serverMigration.layer,
   rollBackLegacyServerMigration.layer,
-  deleteTailnet.layer,
+  deleteTunnel.layer,
   rewriteTailscaleDns.layer
 )

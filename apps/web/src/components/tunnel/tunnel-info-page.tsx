@@ -184,9 +184,6 @@ function DeleteTunnel({ view }: { view: TunnelView }) {
                       bindings: tailnet.bindings.filter(
                         (binding) => binding.relayId !== tunnel.relayId
                       ),
-                      relayIds: tailnet.deployments
-                        .map((deployment) => deployment.relayId)
-                        .filter((relayId) => relayId !== tunnel.relayId),
                     },
                     doing: `Deleting its tunnel on ${tunnel.relayName}`,
                     done: `Its tunnel on ${tunnel.relayName} is deleted`,

@@ -97,7 +97,7 @@ Relay changes sent at most once (`relayCommand`).
   or resumes their workflows, retrying until MySQL answers. Meanwhile a
   person is told after 15 seconds that Hearth is still starting.
 - Most durable operations take no locks. One that only does its own work,
-  such as sending an invitation's email or deleting a tailnet,
+  such as sending an invitation's email or deleting a tunnel,
   is kept to one run by its idempotency key, and holding a lock while it
   waits days between retries would only get in the way. Deleting a
   resource holds it whole, so nothing else changes it until the deletion
@@ -161,8 +161,9 @@ don't keep queues, markers or timestamps of their own.
 Whole keys that aren't resources follow the same rule: a backup takes
 `#name` to rename it and `#task` to cancel it, a GitHub sync `#settings` to
 change it and `#files` to write them, a schedule `#settings` to save it,
-which running it now takes shared, a tailnet `#settings` to save
-its members, connect it to Tailscale, sync it or rewrite its DNS, a GitHub connection `#installation`
+which running it now takes shared, a tunnel `#settings` to save
+its members, connect to it, connect it to Tailscale, sync it or rewrite its
+DNS and `#gateways` to act on every gateway, a GitHub connection `#installation`
 for what GitHub reports, a Cloudflare connection `#settings` to save it.
 A backup destination's save takes `#settings`, which reserving a backup to
 it takes shared, so each waits for the other. An edit to Hearth's own database holds
@@ -203,7 +204,8 @@ request is answered once.
 | `github-sync:<id>`                  | A GitHub sync: changing it, or writing a file for it   |
 | `github-connection:<id>`            | A GitHub connection; what reads through it, shared     |
 | `schedule:<id>`                     | A schedule: deleting it; `#settings` saving or running |
-| `tailnet:<id>`                      | A tailnet; `#settings` its tunnels, members and DNS    |
+| `tunnel:<id>`                       | A tunnel; `#settings` its members and DNS              |
+| `gateway:<id>`                      | A tunnel's gateway: its power, or deploying it again   |
 | `instance-group:<id>`               | A group of instances: who is in it, and its name       |
 | `brick-catalog:<id>`                | A Brick catalog: deleting it; `#visibility` publishing |
 | `brick-library:<user>#contents`     | A person's catalogs and custom Bricks: adding them     |

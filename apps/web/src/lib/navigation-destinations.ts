@@ -393,7 +393,7 @@ export const tunnelDestinations = [
 
 /**
  * A tunnel's pages the viewer may open, from what they may do with it,
- * which its tailnet's listing says (`getTailnets`).
+ * which its tailnet's listing says (`getTunnels`).
  */
 export function accessibleDestinationsForTunnel(
   permissions: ReadonlyArray<AccessPermission>

@@ -132,7 +132,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.domains.settings),
     exact(queryKeys.schedules.all),
     exact(queryKeys.schedules.options),
-    exact(queryKeys.tailnets),
+    exact(queryKeys.tunnels),
     prefix(["activity"]),
     prefix(["relays", "proxy"]),
     exact(queryKeys.relayProxyModes),
@@ -140,7 +140,7 @@ const hearthRealtimeQueryScopes = {
   "resource-deletions": [prefix(["resource-deletion"])],
   schedules: [exact(queryKeys.schedules.all)],
   security: [prefix(["security"])],
-  tailscale: [exact(queryKeys.tailnets)],
+  tailscale: [exact(queryKeys.tunnels)],
   // What web route hostnames' certificates wait for, read with their DNS.
   "web-certificates": [prefix(["domains"])],
 } satisfies Record<HearthRealtimeTopic, ReadonlyArray<HearthRealtimeQueryScope>>

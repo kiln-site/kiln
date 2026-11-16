@@ -2176,7 +2176,9 @@ describeMysql("database migrations", () => {
             updated_at: 0,
           })
 
-          yield* applyMigrations(migrations)
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 81)
+          )
 
           expect(
             yield* sql<Record<string, unknown>>`
@@ -2269,7 +2271,9 @@ describeMysql("database migrations", () => {
             })
           }
 
-          yield* applyMigrations(migrations)
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 83)
+          )
 
           const rows = yield* sql<{ id: string; state: unknown }>`
             SELECT id, state FROM ${sql(databaseTableName("tunnel"))}
@@ -2294,6 +2298,124 @@ describeMysql("database migrations", () => {
             },
             named,
           ])
+        }),
+      schemaBuildTimeout
+    )
+
+    // A tailnet becomes a tunnel, one instance, and its Relays its gateways:
+    // each table is renamed for what it keeps, the tunnel takes its name
+    // from its group, which goes, and the directory and deployments name
+    // each as what it is now.
+    it.effect(
+      "makes each tailnet a tunnel and each of its tunnels a gateway",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 83)
+          )
+          const tailnetId = "a".repeat(12)
+          const gatewayId = "b".repeat(12)
+          const relayId = "1".repeat(12)
+          const source = "https://bricks.example/bricks/tailscale.yml"
+          yield* insertRows("instance_id", [
+            { created_at: 1, id: tailnetId, kind: "group" },
+            { created_at: 1, id: gatewayId, kind: "tunnel", relay_id: relayId },
+          ])
+          yield* insertRows("instance_group", {
+            created_at: 1,
+            created_by: "owner",
+            id: tailnetId,
+            name: "Home",
+            updated_at: 1,
+          })
+          yield* insertRows("tailnet", {
+            created_at: 1,
+            id: tailnetId,
+            owner_id: "owner",
+            updated_at: 1,
+          })
+          yield* insertRows("tailnet_domain", {
+            domain: "kiln",
+            position: 0,
+            tailnet_id: tailnetId,
+          })
+          yield* insertRows("tunnel", {
+            cleanup_next_attempt_at: 0,
+            id: gatewayId,
+            observed_at: 0,
+            owner_id: "owner",
+            relay_id: relayId,
+            state: JSON.stringify({
+              bindings: [],
+              brick: { id: "tailscale", revision: 1, source },
+              domains: ["kiln"],
+              id: gatewayId,
+              tailnetId,
+            }),
+            tailnet_id: tailnetId,
+            updated_at: 0,
+          })
+          yield* insertRows("instance_group_member", {
+            created_at: 1,
+            group_id: tailnetId,
+            instance_id: gatewayId,
+            instance_kind: "tunnel",
+            relay_id: relayId,
+          })
+
+          yield* applyMigrations(migrations)
+
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT id, name, owner_id, brick_source
+                FROM ${sql(databaseTableName("tunnel"))}
+            `
+          ).toEqual([
+            {
+              brick_source: source,
+              id: tailnetId,
+              name: "Home",
+              owner_id: "owner",
+            },
+          ])
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT id, tunnel_id, relay_id
+                FROM ${sql(databaseTableName("tunnel_gateway"))}
+            `
+          ).toEqual([
+            { id: gatewayId, relay_id: relayId, tunnel_id: tailnetId },
+          ])
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT tunnel_id, domain
+                FROM ${sql(databaseTableName("tunnel_domain"))}
+            `
+          ).toEqual([{ domain: "kiln", tunnel_id: tailnetId }])
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT id, kind FROM ${sql(databaseTableName("instance_id"))}
+               ORDER BY id
+            `
+          ).toEqual([
+            { id: tailnetId, kind: "tunnel" },
+            { id: gatewayId, kind: "gateway" },
+          ])
+          expect(
+            yield* sql`SELECT id FROM ${sql(databaseTableName("instance_group"))}`
+          ).toEqual([])
+          expect(
+            yield* sql`SELECT instance_id FROM ${sql(databaseTableName("instance_group_member"))}`
+          ).toEqual([])
+          const old = yield* sql<{ name: string }>`
+            SELECT table_name AS name FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name IN (${databaseTableName("tailnet")},
+                                  ${databaseTableName("tailnet_domain")})
+          `
+          expect(old).toEqual([])
         }),
       schemaBuildTimeout
     )

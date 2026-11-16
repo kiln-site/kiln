@@ -96,10 +96,7 @@ import {
   getRelayHostFiles,
   getRelays,
 } from "@/server/relays"
-import {
-  getTailnets,
-  getTunnelBricks,
-} from "@/server/tunnels"
+import { getTunnels, getTunnelBricks } from "@/server/tunnels"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
 import type { UpdateEligibility } from "@/server/updates"
@@ -323,7 +320,7 @@ export const queryKeys = {
   relayWebRoutes: (relayId: string) => ["web-routes", relayId] as const,
   relayHostFiles: (relayId: string) =>
     ["relays", "host-files", relayId] as const,
-  tailnets: ["tailscale", "stacks"] as const,
+  tunnels: ["tailscale", "tunnels"] as const,
   kilnPlatform: {
     all: ["kiln-platform"] as const,
   },
@@ -1016,10 +1013,10 @@ export function kilnPlatformQueryOptions() {
   })
 }
 
-export function tailnetsQueryOptions() {
+export function tunnelsQueryOptions() {
   return queryOptions({
-    queryKey: queryKeys.tailnets,
-    queryFn: () => getTailnets(),
+    queryKey: queryKeys.tunnels,
+    queryFn: () => getTunnels(),
     retry: false,
     staleTime: 10_000,
   })
@@ -1282,7 +1279,7 @@ export function appGitHubSourceFileQueryOptions(
 /** An instance whose deployments are listed or read. */
 export interface DeploymentInstance {
   id: string
-  kind: "app" | "database" | "server" | "tunnel"
+  kind: "app" | "database" | "server" | "gateway"
 }
 
 /** Any kind of instance's deployment log, from its Relay. */

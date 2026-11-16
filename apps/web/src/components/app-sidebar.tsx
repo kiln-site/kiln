@@ -1,4 +1,4 @@
-import type { TailnetsResult } from "@/server/tunnels"
+import type { TunnelsResult } from "@/server/tunnels"
 import * as React from "react"
 import {
   useQuery,
@@ -90,7 +90,7 @@ import {
   appDirectoryQueryOptions,
   kilnPlatformQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  tailnetsQueryOptions,
+  tunnelsQueryOptions,
   relaysQueryOptions,
   serverDirectoryQueryOptions,
 } from "@/lib/query-options"
@@ -418,7 +418,7 @@ const TunnelCount = React.memo(function TunnelCount({
   relayConfigured: boolean
 }) {
   const { data: count = 0 } = useQuery({
-    ...tailnetsQueryOptions(),
+    ...tunnelsQueryOptions(),
     enabled: relayConfigured,
     select: selectTunnelCount,
   })
@@ -426,9 +426,9 @@ const TunnelCount = React.memo(function TunnelCount({
   return count
 })
 
-function selectTunnelCount(result: TailnetsResult) {
-  return result.stacks.reduce(
-    (count, tailnet) => count + tailnet.deployments.length,
+function selectTunnelCount(result: TunnelsResult) {
+  return result.tunnels.reduce(
+    (count, tailnet) => count + tailnet.gateways.length,
     0
   )
 }
@@ -1529,7 +1529,7 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     select: selectSidebarAppPickerItems,
   })
   const { data: tunnelItems = emptyPickerItems } = useQuery({
-    ...tailnetsQueryOptions(),
+    ...tunnelsQueryOptions(),
     enabled: showTunnels,
     select: selectSidebarTunnelPickerItems,
   })
@@ -1679,10 +1679,10 @@ function selectSidebarAppPickerItems(
 }
 
 function selectSidebarTunnelPickerItems(
-  result: TailnetsResult
+  result: TunnelsResult
 ): Array<InstancePickerItem> {
-  return result.stacks.flatMap((tailnet) =>
-    tailnet.deployments.map((tunnel) => ({
+  return result.tunnels.flatMap((tailnet) =>
+    tailnet.gateways.map((tunnel) => ({
       identity: { id: tunnel.id, kind: "tunnel", relayId: tunnel.relayId },
       key: sidebarPickerKey("tunnel", tunnel.relayId, tunnel.id),
       meta: `Tailscale · ${tunnel.id}`,

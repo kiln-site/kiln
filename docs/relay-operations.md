@@ -107,22 +107,23 @@ members the tunnel has when the change is admitted, and the change refuses
 to run if they've changed by its turn. Taking a deleted resource's members
 off its tunnels rereads each tunnel's configuration inside the tunnel's
 own exclusive lane, so deletions at the same time can't overwrite each
-other's bindings. A tunnel never moves to another tailnet: an apply naming
-another one is refused.
+other's bindings. A Relay's tunnel is what Hearth calls a gateway: one
+tunnel's part on this Relay, its `tailnetId` naming that tunnel. It never
+moves to another: an apply naming another one is refused.
 
-Hearth alone writes a tailnet's DNS records (`tunnel.dns`), each time from
-what its tunnels hold then (`tunnel.state`, which says each tunnel's
-tailnet). It asks only the Relays they're on: the ones a save is applying
+Hearth alone writes a tunnel's DNS records (`tunnel.dns`), each time from
+what its gateways hold then (`tunnel.state`, which says each one's
+tunnel). It asks only the Relays they're on: the ones a save is applying
 it to, or, for a deletion, the ones Hearth recorded when it last saved it.
 Records are each name Hearth keeps for the enabled members of tunnels not
 being removed, whole, at the address the member has on its own Relay's
-tunnel, leaving out members whose resource is frozen for its deletion. Each tunnel keeps the
+gateway, leaving out members whose resource is frozen for its deletion. Each gateway keeps the
 records Hearth last sent and serves them again whenever it recreates its
 DNS container; it never makes up records of its own. In Hearth, saving a
-tailnet, connecting it to Tailscale, syncing it and rewriting its DNS all
-take its `tailnet:<id>#settings`, so they go one after the other and the
-last one read the latest state; creating or removing it takes it whole. A
-resource's deletion rewrites its tailnets' DNS as its own durable operation
+tunnel, connecting something to it, connecting it to Tailscale, syncing it
+and rewriting its DNS all take its `tunnel:<id>#settings`, so they go one
+after the other and the last one read the latest state; creating or
+removing it takes it whole. A resource's deletion rewrites its tunnels' DNS as its own durable operation
 (`tailscale.network.dns`) right after freezing it, and waits for that to
 succeed before backing it up or asking its Relay to delete it; keeping it
 rewrites them again once it's let go. A member's DNS is gone from the

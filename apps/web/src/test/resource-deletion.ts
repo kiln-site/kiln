@@ -105,30 +105,32 @@ const deletionOf = (resourceId: string) =>
     Effect.map((rows) => rows.find((row) => row.resource_id === resourceId))
   )
 
-/** A tailnet's tunnel on a Relay: an ID of its own. */
-export const tunnelOf = (tailnetId: string, relay = relayId) =>
-  `${relay.slice(0, 6)}${tailnetId.slice(0, 6)}`
+/** A tunnel's gateway on a Relay: an ID of its own. */
+export const tunnelOf = (tunnelId: string, relay = relayId) =>
+  `${relay.slice(0, 6)}${tunnelId.slice(0, 6)}`
 
 /**
- * A tailnet with a tunnel on the seeded Relay with these members, as Hearth
+ * A tunnel with a gateway on the seeded Relay with these members, as Hearth
  * records it and the Relay holds it.
  */
 export const seedNetwork = (
   id: string,
   members: ReadonlyArray<string>,
-  // Other Relays Hearth recorded a tunnel of it on.
+  // Other Relays Hearth recorded a gateway of it on.
   alsoOn: ReadonlyArray<string> = []
 ) =>
   Effect.gen(function* () {
-    yield* insertRows("instance_group", {
+    yield* insertRows("tunnel", {
       created_at: at,
-      created_by: owner.id,
       id,
       name: "Test network",
       updated_at: at,
     })
-    yield* insertRows("tailnet", { created_at: at, id, updated_at: at })
-    yield* insertRows("tailnet_domain", { domain: "test", position: 0, tailnet_id: id })
+    yield* insertRows("tunnel_domain", {
+      domain: "test",
+      position: 0,
+      tunnel_id: id,
+    })
     // Each member's generated name, as it connected.
     if (members.length > 0) {
       yield* insertRows(
@@ -140,12 +142,12 @@ export const seedNetwork = (
           id: randomUUID(),
           label: memberId.replaceAll(":", "-"),
           member_id: memberId,
-          tailnet_id: id,
+          tunnel_id: id,
         }))
       )
     }
     yield* insertRows(
-      "tunnel",
+      "tunnel_gateway",
       [relayId, ...alsoOn].map((relay) => ({
         cleanup_next_attempt_at: at,
         id: tunnelOf(id, relay),
@@ -156,7 +158,7 @@ export const seedNetwork = (
           relayId: relay,
           tailnetId: id,
         }),
-        tailnet_id: id,
+        tunnel_id: id,
         updated_at: at,
       }))
     )
@@ -214,7 +216,7 @@ export const deletionRelay = {
   frozen: new Map<string, string>(),
   journal: new Map<string, unknown>(),
   servers: new Set<string>(),
-  // tailnets by ID, with their members' IDs, as
+  // tunnels by ID, with their members' IDs, as
   // `tunnel.state` reports them; and the hostnames Hearth
   // last wrote to each network's DNS.
   stacks: new Map<string, Array<string>>(),
@@ -304,10 +306,10 @@ export const deletionRelayConnection = {
     if (operation === "relay.volumes.read") return listedVolumes()
     if (operation === "tunnel.state") return stackStates()
     if (operation === "tunnel.dns") {
-      const tunnelId = String(payload.id)
+      const gatewayId = String(payload.id)
       state.stackDns.set(
-        [...state.stacks.keys()].find((id) => tunnelOf(id) === tunnelId) ??
-          tunnelId,
+        [...state.stacks.keys()].find((id) => tunnelOf(id) === gatewayId) ??
+          gatewayId,
         (payload.records as Array<{ name: string }>).map(({ name }) =>
           name.replace(/\.test$/u, "")
         )

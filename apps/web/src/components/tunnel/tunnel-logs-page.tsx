@@ -13,7 +13,7 @@ import {
 import { DEPLOYMENT_STREAM } from "@/components/console/log-sources"
 import { ResourceLogsSession } from "@/components/console/resource-logs"
 import { useTunnelWorkspace } from "@/components/tunnel/tunnel-workspace-context"
-import { getTunnelDeployments } from "@/server/tunnel-instances"
+import { getGatewayDeployments } from "@/server/tunnel-instances"
 
 // A tunnel's output in one place: each of its two containers, followed
 // live, and the log of each deployment the Relay kept.
@@ -28,7 +28,7 @@ export function TunnelLogsPage() {
   })
   const { data: records = [], isPending } = useQuery({
     queryKey: ["tunnels", tunnel.id, "deployments"],
-    queryFn: () => getTunnelDeployments({ data: { tunnelId: tunnel.id } }),
+    queryFn: () => getGatewayDeployments({ data: { gatewayId: tunnel.id } }),
     select: (page) => page.items.slice(0, LISTED_DEPLOYMENTS),
     // A deployment that runs is followed until it ends.
     refetchInterval: (query) =>
@@ -93,7 +93,7 @@ export function TunnelLogsPage() {
       renderDeployment={(id, header) => (
         <RequestDeploymentLog
           header={header}
-          instance={{ id: tunnel.id, kind: "tunnel", name: tunnel.name }}
+          instance={{ id: tunnel.id, kind: "gateway", name: tunnel.name }}
           pending={isPending}
           record={
             id === null

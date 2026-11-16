@@ -2,23 +2,23 @@ import {
   appTailscaleMember,
   databaseTailscaleMember,
   instanceTailscaleMember,
-  tunnelStatesSchema,
-  type TunnelState,
+  tunnelStatesSchema as gatewayStatesSchema,
+  type TunnelState as GatewayState,
 } from "@workspace/contracts"
 import { Effect, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
-import { tailnetRelaysEffect } from "@/effect/tailnets"
+import { tunnelRelaysEffect } from "@/effect/tunnels"
 import { runAppEffect } from "@/effect/runtime"
 import { listTunnelNamesEffect, tunnelNameOf } from "@/effect/tunnel-names"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
-import { tailnetSettingsKey } from "@/lib/tunnel-lanes"
+import { tunnelSettingsKey } from "@/lib/tunnel-lanes"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 import { exclusive } from "@/operations/lanes"
 
 /**
- * tailnets' DNS (docs/relay-operations.md). Hearth writes every
+ * tunnels' DNS (docs/relay-operations.md). Hearth writes every
  * node's records, each time from what the Relays hold now: the enabled
  * members of the nodes not being removed, leaving out those frozen for
  * their deletion. What writes them holds each network's `#settings`, so a
@@ -39,7 +39,7 @@ export class TailscaleDnsError extends Schema.TaggedError<TailscaleDnsError>()(
  * Run it holding the network's `#settings`; it returns only once every
  * write it sent has ended, so none outlives the lane.
  */
-export async function writeTailnetDns(
+export async function writeTunnelDns(
   network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   subject?: string
 ): Promise<void> {
@@ -52,10 +52,8 @@ export async function writeTailnetDns(
   const nodes = (
     await Promise.all(
       relays.map(async (relay) =>
-        tunnelStatesSchema
-          .parse(
-            await relayRpc(relay, "tunnel.state", {}, 15_000)
-          )
+        gatewayStatesSchema
+          .parse(await relayRpc(relay, "tunnel.state", {}, 15_000))
           .filter(
             (stack) => stack.tailnetId === network.id && !stack.removalPending
           )
@@ -63,7 +61,7 @@ export async function writeTailnetDns(
       )
     )
   ).flat()
-  // Each name a member has in the tailnet, at the address it has on its
+  // Each name a member has in the tunnel, at the address it has on its
   // own Relay's tunnel.
   const names = await runAppEffect(
     "tunnelNames.list",
@@ -83,13 +81,7 @@ export async function writeTailnetDns(
   )
   const written = await Promise.allSettled(
     nodes.map(({ relay, stack }) =>
-      relayRpc(
-        relay,
-        "tunnel.dns",
-        { id: stack.id, records },
-        60_000,
-        subject
-      )
+      relayRpc(relay, "tunnel.dns", { id: stack.id, records }, 60_000, subject)
     )
   )
   const failures = written.flatMap((result, index) =>
@@ -107,13 +99,13 @@ export async function writeTailnetDns(
 }
 
 /** The networks a resource is a member of, as its Relay holds them. */
-export async function tailnetsOf(resource: {
+export async function tunnelsOf(resource: {
   readonly id: string
   readonly kind: "app" | "database" | "instance" | "volume"
   readonly relayId: string
 }): Promise<Array<string>> {
   if (resource.kind === "volume") return []
-  const stacks = tunnelStatesSchema.parse(
+  const stacks = gatewayStatesSchema.parse(
     await relayRpc(
       await activeRelay(resource.relayId),
       "tunnel.state",
@@ -131,7 +123,7 @@ export async function tailnetsOf(resource: {
 
 function isMemberOf(
   resource: { readonly id: string; readonly kind: string },
-  memberId: TunnelState["bindings"][number]["memberId"]
+  memberId: GatewayState["bindings"][number]["memberId"]
 ): boolean {
   switch (resource.kind) {
     case "app":
@@ -160,9 +152,9 @@ export const rewriteTailscaleDns = durableOperation({
     // such as the one a deleted resource's member is on.
     alsoOn: Schema.Array(Schema.String),
   }),
-  kind: "tailnet.dns",
+  kind: "tunnel.dns",
   locks: ({ networkIds }) =>
-    networkIds.map((id) => exclusive(tailnetSettingsKey(id))),
+    networkIds.map((id) => exclusive(tunnelSettingsKey(id))),
   run: ({ alsoOn, networkIds }) =>
     Activity.make({
       name: "rewrite",
@@ -170,11 +162,11 @@ export const rewriteTailscaleDns = durableOperation({
       execute: Effect.gen(function* () {
         // The Relays each network is on, as Hearth recorded them when it
         // last saved it, read once its turn has come.
-        const deployed = yield* tailnetRelaysEffect(networkIds)
+        const deployed = yield* tunnelRelaysEffect(networkIds)
         yield* Effect.tryPromise({
           try: async () => {
             for (const id of networkIds) {
-              await writeTailnetDns({
+              await writeTunnelDns({
                 id,
                 relayIds: [...(deployed.get(id) ?? []), ...alsoOn],
               })
@@ -201,7 +193,7 @@ export const rewriteTailscaleDns = durableOperation({
  * journal under `name`, so a run that resumes waits on the same one.
  */
 export const rewriteTailscaleDnsOf = (
-  resource: Parameters<typeof tailnetsOf>[0],
+  resource: Parameters<typeof tunnelsOf>[0],
   options: { readonly idempotencyKey: string; readonly name: string }
 ) =>
   Effect.gen(function* () {
@@ -210,7 +202,7 @@ export const rewriteTailscaleDnsOf = (
       success: Schema.Array(Schema.String),
       error: TailscaleDnsError,
       execute: Effect.tryPromise({
-        try: () => tailnetsOf(resource),
+        try: () => tunnelsOf(resource),
         catch: (cause) =>
           new TailscaleDnsError({
             message: cause instanceof Error ? cause.message : String(cause),

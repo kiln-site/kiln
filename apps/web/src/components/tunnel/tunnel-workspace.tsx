@@ -17,7 +17,7 @@ import {
 } from "@/components/resource-workspace"
 import {
   selectTunnel,
-  type TailnetsResult,
+  type TunnelsResult,
   type TunnelView,
 } from "@/components/tunnel/tailnet-data"
 import { TunnelWorkspaceContext } from "@/components/tunnel/tunnel-workspace-context"
@@ -31,10 +31,13 @@ import {
 } from "@/components/workspace-header"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
 import { tunnelDestinations } from "@/lib/navigation-destinations"
-import { queryKeys, tailnetsQueryOptions } from "@/lib/query-options"
+import { queryKeys, tunnelsQueryOptions } from "@/lib/query-options"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { heldPowerActions } from "@/lib/use-instance-power"
-import { performTunnelAction, redeployTunnel } from "@/server/tunnel-instances"
+import {
+  performGatewayAction,
+  redeployGateway,
+} from "@/server/tunnel-instances"
 
 // A tunnel's pages: Info, Connected, Logs and Terminal, in the frame every
 // instance's pages share, with its power and deploying it again.
@@ -65,10 +68,10 @@ function useTunnelWorkspaceQuery(
   tunnelId: string | undefined
 ): ResourceWorkspaceQuery<TunnelView> {
   const select = React.useCallback(
-    (result: TailnetsResult) => selectTunnel(result, tunnelId),
+    (result: TunnelsResult) => selectTunnel(result, tunnelId),
     [tunnelId]
   )
-  const query = useQuery({ ...tailnetsQueryOptions(), select })
+  const query = useQuery({ ...tunnelsQueryOptions(), select })
   return useResourceWorkspaceQuery({
     data: query.data,
     isError: query.isError,
@@ -157,10 +160,10 @@ function TunnelPowerControls({
     [available, permissions]
   )
   const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: queryKeys.tailnets })
+    queryClient.invalidateQueries({ queryKey: queryKeys.tunnels })
   const power = useMutation({
     mutationFn: (action: ServerAction) =>
-      performTunnelAction({ data: { action, tunnelId: tunnel.id } }),
+      performGatewayAction({ data: { action, gatewayId: tunnel.id } }),
     onMutate: () => onError(null),
     onSettled: refresh,
     onError: (cause) => {
@@ -175,7 +178,7 @@ function TunnelPowerControls({
   const canDeploy = available && permissions.includes("instance.deploy")
   const [redeployOpen, setRedeployOpen] = React.useState(false)
   const redeploy = useMutation({
-    mutationFn: () => redeployTunnel({ data: { tunnelId: tunnel.id } }),
+    mutationFn: () => redeployGateway({ data: { gatewayId: tunnel.id } }),
     onMutate: () => {
       setRedeployOpen(false)
       // Follow the deployment as it happens, as every kind's is.

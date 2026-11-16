@@ -74,7 +74,7 @@ export const readInfraRelayOptions = Effect.fn("Infra.directory.relays")(
           resourceType: "relay",
           resourceId: relay.id,
         })
-        // Tunnels are a platform administrator's until they have
+        // Gateways are a platform administrator's until they have
         // permissions of their own.
         if (kind === "tunnel") {
           return isPlatformAdmin(user)

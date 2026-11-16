@@ -35,7 +35,7 @@ import {
   startAppDeploymentPolling,
   stopAppDeploymentPolling,
 } from "./lib/app-deployments.server"
-import { resumeTailnetDeletion } from "./lib/tailnet-deletion.server"
+import { resumeTunnelDeletion } from "./lib/tunnel-deletion.server"
 import { reconcileResourceDeletions } from "./lib/resource-deletion.server"
 import {
   startInstanceUpdateChecks,
@@ -165,7 +165,7 @@ forkAppWorker(
 )
 forkAppEffect(
   "TailscaleCleanup.resume",
-  resumeTailnetDeletion().pipe(
+  resumeTunnelDeletion().pipe(
     Effect.retry(Schedule.spaced("30 seconds")),
     Effect.ignore
   )

@@ -222,11 +222,6 @@ export const addInstanceGroupMemberEffect = Effect.fn(
   )
 })
 
-// A tailnet is a group Kiln makes of its tunnels and keeps whole: it is
-// none of the groups people see, change or delete here (see tunnels.ts).
-const notTailnet = (column: string) =>
-  `${column} NOT IN (SELECT id FROM ${databaseTable("tailnet")})`
-
 // Members with the names Hearth keeps for them, of one group or of all.
 const memberRows = (where: string) =>
   `SELECT member.instance_id, member.group_id, member.instance_kind,
@@ -238,7 +233,7 @@ const memberRows = (where: string) =>
      LEFT JOIN ${databaseTable("database")} managed
        ON member.instance_kind = 'database'
       AND managed.database_id = member.instance_id
-    WHERE ${notTailnet("member.group_id")} ${where ? `AND ${where}` : ""}
+    ${where}
     ORDER BY member.instance_kind ASC, member.instance_id ASC`
 
 const named = (row: MemberRow): NamedInstanceGroupMember => ({
@@ -255,7 +250,7 @@ const membersOf = Effect.fn("instanceGroups.members")(function* (
   const database = yield* Database
   const rows = yield* database.queryRows<MemberRow>(
     "instance_group_members",
-    memberRows("member.group_id = ?"),
+    memberRows("WHERE member.group_id = ?"),
     [groupId]
   )
   return rows.map(named)
@@ -269,7 +264,6 @@ export const listInstanceGroupsEffect = Effect.fn("instanceGroups.list")(
       database.queryRows<GroupRow>(
         "instance_group_list",
         `SELECT id, name FROM ${databaseTable("instance_group")}
-          WHERE ${notTailnet("id")}
           ORDER BY name ASC, id ASC`
       ),
       database.queryRows<MemberRow>(
@@ -277,15 +271,13 @@ export const listInstanceGroupsEffect = Effect.fn("instanceGroups.list")(
         memberRows("")
       ),
     ])
-    return groups.map(
-      (group): InstanceGroup => ({
-        id: group.id,
-        members: members
-          .filter((member) => member.group_id === group.id)
-          .map(named),
-        name: group.name,
-      })
-    )
+    return groups.map((group): InstanceGroup => ({
+      id: group.id,
+      members: members
+        .filter((member) => member.group_id === group.id)
+        .map(named),
+      name: group.name,
+    }))
   }
 )
 
@@ -294,8 +286,7 @@ export const loadInstanceGroupEffect = Effect.fn("instanceGroups.load")(
     const database = yield* Database
     const rows = yield* database.queryRows<GroupRow>(
       "instance_group",
-      `SELECT id, name FROM ${databaseTable("instance_group")}
-        WHERE id = ? AND ${notTailnet("id")}`,
+      `SELECT id, name FROM ${databaseTable("instance_group")} WHERE id = ?`,
       [groupId]
     )
     const group = rows.at(0)
@@ -324,12 +315,11 @@ export const instanceGroupOfEffect = Effect.fn("instanceGroups.of")(function* (
 })
 
 // A group is its members: without any, nothing keeps it. Only a group that
-// just lost a member is looked at: one being installed has none yet. A
-// tailnet goes only when it is deleted, which first tears down its tunnels.
+// just lost a member is looked at: one being installed has none yet.
 const dropIfEmpty = (transaction: DatabaseTransaction, groupId: string) =>
   transaction.execute(
     `DELETE FROM ${databaseTable("instance_group")}
-      WHERE id = ? AND ${notTailnet("id")}
+      WHERE id = ?
         AND NOT EXISTS (
           SELECT 1 FROM ${databaseTable("instance_group_member")}
            WHERE group_id = ?

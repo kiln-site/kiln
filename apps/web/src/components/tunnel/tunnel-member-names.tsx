@@ -30,8 +30,8 @@ import {
   useTailnetAliases,
   useTailnetSave,
   wholeName,
-  type TailnetName,
-  type TailnetOverview,
+  type TunnelMemberName,
+  type TunnelOverview,
 } from "@/components/tunnel/tailnet-data"
 import { useCopyFeedback } from "@/components/workspace-header"
 import { notALoginField } from "@/lib/not-a-login-field"
@@ -50,7 +50,7 @@ export const TunnelMemberNames = React.memo(function TunnelMemberNames({
   memberId: string
   /** What the member is called, for the dialogs' titles. */
   memberName: string
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
 }) {
   // A database has no primary address; a game server's or an App's can be
   // any of its names.
@@ -166,7 +166,7 @@ const NameChip = React.memo(function NameChip({
   star,
 }: {
   action: React.ReactNode
-  name: TailnetName
+  name: TunnelMemberName
   star: React.ReactNode
 }) {
   const whole = wholeName(name)
@@ -244,9 +244,9 @@ function RenameDialog({
   tailnet,
   onClose,
 }: {
-  generated: TailnetName
+  generated: TunnelMemberName
   memberName: string
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
   onClose: () => void
 }) {
   const [label, setLabel] = React.useState(generated.label)
@@ -314,7 +314,7 @@ function AddAliasDialog({
 }: {
   memberId: string
   memberName: string
-  tailnet: TailnetOverview
+  tailnet: TunnelOverview
   onClose: () => void
 }) {
   const [label, setLabel] = React.useState("")
@@ -331,7 +331,7 @@ function AddAliasDialog({
             event.preventDefault()
             if (!canSave) return
             add.mutate(
-              { domain, label: next, memberId, tailnetId: tailnet.id },
+              { domain, label: next, memberId, tunnelId: tailnet.id },
               { onSuccess: onClose }
             )
           }}

@@ -19,11 +19,10 @@ import { recoverPromise } from "@/effect/promise"
 import {
   errorMessage,
   normalizeTld,
-  tailnetSaveInput,
   useSetTailnets,
   useTailnets,
-  type TailnetOverview,
-  type TailnetsResult,
+  type TunnelOverview,
+  type TunnelsResult,
 } from "@/components/tunnel/tailnet-data"
 import {
   TailnetField,
@@ -38,10 +37,10 @@ import {
 import { infraRelayOptionsQueryOptions } from "@/lib/infra-directory"
 import { notALoginField } from "@/lib/not-a-login-field"
 import {
-  tailnetsQueryOptions,
+  tunnelsQueryOptions,
   tunnelBricksQueryOptions,
 } from "@/lib/query-options"
-import { createTailnet, saveTailnet } from "@/server/tunnels"
+import { createTunnel } from "@/server/tunnels"
 
 // A tunnel in the Add dialog: the catalogs' tunnel Bricks, and what a new
 // one is asked beside the Brick chosen. It runs on a Relay and joins a
@@ -93,7 +92,6 @@ const creatableRelays = ({
 }): ReadonlyArray<BrickRelayOption> => relays.filter((relay) => relay.canCreate)
 
 interface AddTunnelInput {
-  authKey: string
   brick: string
   choice: TailnetChoice
   login: ReturnType<typeof initialLogin>
@@ -125,15 +123,13 @@ function NewTunnelForm({
   // and with no tunnel on this Relay yet.
   const joinable = React.useMemo(
     () =>
-      tailnets.stacks.filter(
+      tailnets.tunnels.filter(
         (tailnet) =>
           tailnet.access.manage &&
           !tailnet.cleanup &&
-          !tailnet.deployments.some(
-            (deployment) => deployment.relayId === relayId
-          )
+          !tailnet.gateways.some((deployment) => deployment.relayId === relayId)
       ),
-    [relayId, tailnets.stacks]
+    [relayId, tailnets.tunnels]
   )
   const [picked, setPicked] = React.useState<TailnetChoice | null>(null)
   // The one picked while it can still be joined here, else the first.
@@ -144,22 +140,15 @@ function NewTunnelForm({
       : joinable[0]
         ? { kind: "existing", id: joinable[0].id }
         : null
-  const existing =
-    choice?.kind === "existing"
-      ? joinable.find(({ id }) => id === choice.id)
-      : undefined
   const creating = choice?.kind === "new"
-  // A tailnet with no Tailscale login of its own takes a one-time key.
-  const needsAuthKey = existing !== undefined && existing.integration === null
 
   // A TLD is unique across Kiln, so `kiln` only while no tailnet has it.
   const [tld, setTld] = React.useState(() =>
-    tailnets.stacks.some((tailnet) => tailnet.domains.includes("kiln"))
+    tailnets.tunnels.some((tailnet) => tailnet.domains.includes("kiln"))
       ? ""
       : "kiln"
   )
   const [login, setLogin] = React.useState(() => initialLogin())
-  const [authKey, setAuthKey] = React.useState("")
 
   const add = useAddTunnel({ onClose, onPendingChange })
   const ready =
@@ -168,9 +157,7 @@ function NewTunnelForm({
     compatible &&
     connected &&
     choice !== null &&
-    (!creating ||
-      (normalizeTld(tld).length > 0 && loginComplete(login, true))) &&
-    (!needsAuthKey || authKey.trim().length > 0)
+    (!creating || (normalizeTld(tld).length > 0 && loginComplete(login, true)))
 
   return (
     <form
@@ -180,7 +167,6 @@ function NewTunnelForm({
         event.stopPropagation()
         if (!ready || !brick || !choice || add.isPending) return
         add.mutate({
-          authKey: authKey.trim(),
           brick: brick.source,
           choice,
           login,
@@ -214,24 +200,6 @@ function NewTunnelForm({
           onLoginChange={setLogin}
           onTldChange={setTld}
         />
-      ) : null}
-      {needsAuthKey ? (
-        <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
-          <span>Auth key</span>
-          <Input
-            {...notALoginField}
-            type="password"
-            className="font-mono"
-            disabled={add.isPending}
-            placeholder="tskey-auth-…"
-            value={authKey}
-            onChange={(event) => setAuthKey(event.currentTarget.value)}
-          />
-          <span className="block font-normal">
-            {existing?.name} has no Tailscale login, so this tunnel joins with a
-            one-time key from its Tailscale admin console.
-          </span>
-        </label>
       ) : null}
       {add.isPending ? (
         <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
@@ -329,26 +297,26 @@ function useAddTunnel({
 
   // The tunnel on the Relay, in the tailnet just made or picked, if any.
   const tunnelIn = (
-    result: TailnetsResult,
+    result: TunnelsResult,
     input: AddTunnelInput
-  ): { tailnet: TailnetOverview; tunnelId: string | null } | null => {
+  ): { tailnet: TunnelOverview; tunnelId: string | null } | null => {
     const tld = normalizeTld(input.tld)
-    const tailnet = result.stacks.find((stack) =>
+    const tailnet = result.tunnels.find((stack) =>
       input.choice.kind === "existing"
         ? stack.id === input.choice.id
         : stack.domains.includes(tld)
     )
     if (!tailnet) return null
-    const tunnel = tailnet.deployments.find(
+    const tunnel = tailnet.gateways.find(
       (deployment) => deployment.relayId === input.relayId
     )
     return { tailnet, tunnelId: tunnel?.id ?? null }
   }
 
   const finish = async (
-    result: TailnetsResult,
+    result: TunnelsResult,
     input: AddTunnelInput,
-    found: { tailnet: TailnetOverview; tunnelId: string | null }
+    found: { tailnet: TunnelOverview; tunnelId: string | null }
   ) => {
     setTailnets(result)
     showToast({
@@ -368,15 +336,16 @@ function useAddTunnel({
 
   return useMutation({
     mutationFn: async (input: AddTunnelInput) => {
-      let result = await queryClient.ensureQueryData(tailnetsQueryOptions())
+      let result = await queryClient.ensureQueryData(tunnelsQueryOptions())
       let tailnet = tunnelIn(result, input)?.tailnet
       // A new tailnet, unless a try that failed after making it made it.
       if (!tailnet && input.choice.kind === "new") {
-        result = await createTailnet({
+        result = await createTunnel({
           data: {
             clientId: input.login.clientId.trim(),
             clientSecret: input.login.clientSecret.trim(),
             domains: [normalizeTld(input.tld)],
+            brick: input.brick,
             name: input.choice.name,
             tag: input.login.tag.trim(),
           },
@@ -385,17 +354,8 @@ function useAddTunnel({
         tailnet = tunnelIn(result, input)?.tailnet
       }
       if (!tailnet) throw new Error("The tailnet is gone")
-      const next = await saveTailnet({
-        data: tailnetSaveInput(tailnet, {
-          ...(input.authKey ? { authKey: input.authKey } : {}),
-          brick: input.brick,
-          relayIds: [
-            ...tailnet.deployments.map((deployment) => deployment.relayId),
-            input.relayId,
-          ],
-        }),
-      })
-      return next
+      // Its gateways follow what connects to it, on their Relays.
+      return result
     },
     onMutate: (input) => {
       onPendingChange(true)
@@ -415,7 +375,7 @@ function useAddTunnel({
       // The save may have gone through though its answer never arrived.
       const fresh = await recoverPromise(
         () =>
-          queryClient.fetchQuery({ ...tailnetsQueryOptions(), staleTime: 0 }),
+          queryClient.fetchQuery({ ...tunnelsQueryOptions(), staleTime: 0 }),
         () => null
       )
       const found = fresh ? tunnelIn(fresh, input) : null

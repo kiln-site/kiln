@@ -51,5 +51,8 @@ export const INSTANCE_KINDS = [
   // its own and the network became a tailnet, an instance group.
   "tailscale",
   "tunnel",
+  // A tunnel's part on one Relay. Not an instance anyone opens, but its ID
+  // is reserved so it is never handed out again.
+  "gateway",
 ] as const
 export type InstanceIdKind = (typeof INSTANCE_KINDS)[number]

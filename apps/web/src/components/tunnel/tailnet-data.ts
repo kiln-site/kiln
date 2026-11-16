@@ -7,62 +7,62 @@ import type { IdentityStatusPresentation } from "@/components/identity-name"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   queryKeys,
-  tailnetsQueryOptions,
+  tunnelsQueryOptions,
   tunnelBricksQueryOptions,
 } from "@/lib/query-options"
 import {
   addTunnelAlias,
   removeTunnelAlias,
-  saveTailnet,
+  saveTunnel,
   setPrimaryTunnelName,
-  type TailnetName,
-  type TailnetOverview,
-  type TailnetsResult,
+  type TunnelMemberName,
   type TunnelOverview,
+  type TunnelsResult,
+  type GatewayOverview,
 } from "@/server/tunnels"
 
 // What every tunnel and tailnet page reads and changes: the tailnets the
-// viewer sees (`getTailnets`), one tailnet or tunnel picked out of them, and
+// viewer sees (`getTunnels`), one tailnet or tunnel picked out of them, and
 // a tailnet saved whole, each save sending everything it connects.
 
-export type { TailnetName, TailnetOverview, TailnetsResult, TunnelOverview }
+export type { TunnelMemberName, TunnelOverview, TunnelsResult, GatewayOverview }
 
-export type TailnetBinding = TailnetOverview["bindings"][number]
-type SaveTailnetInput = Parameters<typeof saveTailnet>[0]["data"]
+export type TailnetBinding = TunnelOverview["bindings"][number]
+type SaveTailnetInput = Parameters<typeof saveTunnel>[0]["data"]
 
-const noTailnets: TailnetsResult = { stacks: [], unavailableRelays: [] }
+const noTailnets: TunnelsResult = { tunnels: [], unavailableRelays: [] }
 const noPermissions: ReadonlyArray<AccessPermission> = []
 
 export function useTailnets() {
-  const query = useQuery(tailnetsQueryOptions())
+  const query = useQuery(tunnelsQueryOptions())
   return { ...query, data: query.data ?? noTailnets }
 }
 
 export function useTailnet(tailnetId: string | undefined) {
   const select = React.useCallback(
-    (result: TailnetsResult) =>
-      result.stacks.find((stack) => stack.id === tailnetId) ?? null,
+    (result: TunnelsResult) =>
+      result.tunnels.find((stack) => stack.id === tailnetId) ?? null,
     [tailnetId]
   )
-  return useQuery({ ...tailnetsQueryOptions(), select })
+  return useQuery({ ...tunnelsQueryOptions(), select })
 }
 
 /** A tunnel, its tailnet, and what the viewer may do with it. */
 export interface TunnelView {
   permissions: ReadonlyArray<AccessPermission>
-  tailnet: TailnetOverview
-  tunnel: TunnelOverview
+  tailnet: TunnelOverview
+  tunnel: GatewayOverview
 }
 
 export function selectTunnel(
-  result: TailnetsResult,
+  result: TunnelsResult,
   tunnelId: string | undefined
 ): TunnelView | null {
-  for (const tailnet of result.stacks) {
-    const tunnel = tailnet.deployments.find(({ id }) => id === tunnelId)
+  for (const tailnet of result.tunnels) {
+    const tunnel = tailnet.gateways.find(({ id }) => id === tunnelId)
     if (tunnel) {
       return {
-        permissions: tailnet.access.tunnels[tunnel.id] ?? noPermissions,
+        permissions: tailnet.access.gateways[tunnel.id] ?? noPermissions,
         tailnet,
         tunnel,
       }
@@ -73,15 +73,15 @@ export function selectTunnel(
 
 export function useTunnel(tunnelId: string | undefined) {
   const select = React.useCallback(
-    (result: TailnetsResult) => selectTunnel(result, tunnelId),
+    (result: TunnelsResult) => selectTunnel(result, tunnelId),
     [tunnelId]
   )
-  return useQuery({ ...tailnetsQueryOptions(), select })
+  return useQuery({ ...tunnelsQueryOptions(), select })
 }
 
 /** A tunnel's state as its pages show it, from both its containers. */
 export function tunnelStatus(
-  tunnel: Pick<TunnelOverview, "components" | "observedState" | "status">
+  tunnel: Pick<GatewayOverview, "components" | "observedState" | "status">
 ): IdentityStatusPresentation {
   switch (tunnel.observedState) {
     case "stopped":
@@ -119,39 +119,33 @@ export function tunnelStatus(
 
 /** What a member's generated name and aliases are, whole. */
 export function namesOf(
-  tailnet: Pick<TailnetOverview, "names">,
+  tailnet: Pick<TunnelOverview, "names">,
   memberId: string
-): ReadonlyArray<TailnetName> {
+): ReadonlyArray<TunnelMemberName> {
   return tailnet.names.filter((name) => name.memberId === memberId)
 }
 
-export function wholeName(name: Pick<TailnetName, "domain" | "label">) {
+export function wholeName(name: Pick<TunnelMemberName, "domain" | "label">) {
   return `${name.label}.${name.domain}`
 }
 
 /** A change to a tailnet, sent with everything it keeps. */
 export interface TailnetChange {
-  authKey?: string
-  /** The Brick a tunnel it adds is made from. */
-  brick?: string
   /** What it connects; each keeps its name. */
   bindings?: ReadonlyArray<
     Pick<TailnetBinding, "enabled" | "memberId" | "relayId">
   >
   domains?: ReadonlyArray<string>
   name?: string
-  relayIds?: ReadonlyArray<string>
   /** A member's generated name, renamed. */
   rename?: { label: string; memberId: string }
 }
 
 export function tailnetSaveInput(
-  tailnet: TailnetOverview,
+  tailnet: TunnelOverview,
   change: TailnetChange = {}
 ): SaveTailnetInput {
   return {
-    ...(change.authKey ? { authKey: change.authKey } : {}),
-    ...(change.brick ? { brick: change.brick } : {}),
     bindings: (change.bindings ?? tailnet.bindings).map(
       ({ enabled, memberId, relayId }) => ({
         enabled,
@@ -165,9 +159,6 @@ export function tailnetSaveInput(
     domains: [...(change.domains ?? tailnet.domains)],
     id: tailnet.id,
     name: change.name ?? tailnet.name,
-    relayIds: [
-      ...(change.relayIds ?? tailnet.deployments.map(({ relayId }) => relayId)),
-    ],
   }
 }
 
@@ -191,8 +182,8 @@ function selectTailscaleBrick(
 export function useSetTailnets() {
   const queryClient = useQueryClient()
   return React.useCallback(
-    (next: TailnetsResult) => {
-      queryClient.setQueryData(queryKeys.tailnets, next)
+    (next: TunnelsResult) => {
+      queryClient.setQueryData(queryKeys.tunnels, next)
       void queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot })
     },
     [queryClient]
@@ -216,8 +207,8 @@ export function useTailnetSave() {
       /** What the toast says is happening, then what happened. */
       doing: string
       done: string
-      tailnet: TailnetOverview
-    }) => saveTailnet({ data: tailnetSaveInput(tailnet, change) }),
+      tailnet: TunnelOverview
+    }) => saveTunnel({ data: tailnetSaveInput(tailnet, change) }),
     onMutate: ({ doing, tailnet }) => {
       showToast({
         description: doing,
@@ -245,7 +236,7 @@ export function useTailnetSave() {
         message: `${tailnet.name} wasn't changed`,
         type: "error",
       })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.tailnets })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tunnels })
     },
   })
 }
@@ -264,7 +255,7 @@ export function useTailnetAliases() {
       domain: string
       label: string
       memberId: string
-      tailnetId: string
+      tunnelId: string
     }) => addTunnelAlias({ data: input }),
     onSuccess: (next, input) => {
       setTailnets(next)
@@ -276,7 +267,7 @@ export function useTailnetAliases() {
     onError,
   })
   const remove = useMutation({
-    mutationFn: (name: TailnetName) =>
+    mutationFn: (name: TunnelMemberName) =>
       removeTunnelAlias({ data: { id: name.id } }),
     onSuccess: (next, name) => {
       setTailnets(next)
@@ -295,7 +286,7 @@ export function useMakeTunnelNamePrimary() {
   const setTailnets = useSetTailnets()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: TailnetName) =>
+    mutationFn: (name: TunnelMemberName) =>
       setPrimaryTunnelName({ data: { id: name.id } }),
     onSuccess: (next, name) => {
       setTailnets(next)

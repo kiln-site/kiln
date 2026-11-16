@@ -53,7 +53,7 @@ import { CredentialError } from "@/effect/errors"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect, traceAppPromise } from "@/effect/runtime"
 import type { AccessPermission } from "@/lib/permissions"
-import { requireTunnelPermission } from "@/server/tunnel-access.server"
+import { requireGatewayPermission } from "@/server/tunnel-access.server"
 
 type BrowserPublicKey = {
   crv: "P-256"
@@ -503,14 +503,14 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
         new Error("Only platform administrators can read Kiln's logs")
       )
     }
-    // A tunnel is its owner's, or anyone's who may on its Relay.
+    // A gateway is its owner's, or anyone's who may on its Relay.
     if (input.resource.kind === "tunnel") {
-      const tunnelId = input.resource.id
+      const gatewayId = input.resource.id
       for (const permission of input.permissions) {
-        const tunnel = yield* Effect.tryPromise(() =>
-          requireTunnelPermission(snapshot.user, tunnelId, permission)
+        const gateway = yield* Effect.tryPromise(() =>
+          requireGatewayPermission(snapshot.user, gatewayId, permission)
         )
-        if (tunnel.relayId !== input.relayId) {
+        if (gateway.relayId !== input.relayId) {
           return yield* Effect.fail(new Error("Tunnel not found"))
         }
       }

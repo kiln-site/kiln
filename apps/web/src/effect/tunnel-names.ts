@@ -7,11 +7,11 @@ import { Database } from "@/effect/database"
 import { primaryAddressTable } from "@/effect/primary-addresses"
 import { databaseTable } from "@/lib/database-config"
 
-// The names each member has in a tailnet: one generated as it connected,
-// under the tailnet's first TLD, which can be renamed but not removed, and
+// The names each member has in a tunnel: one generated as it connected,
+// under the tunnel's first TLD, which can be renamed but not removed, and
 // any aliases, at any depth, under any of its TLDs. A name is unique in its
-// tailnet. Its tunnels' CoreDNS answers each with the address the member has
-// on the tunnel on its own Relay (`tunnel-dns.server.ts`).
+// tunnel. Its tunnels' CoreDNS answers each with the address the member has
+// on the gateway on its own Relay (`tunnel-dns.server.ts`).
 
 const nameTable = databaseTable("tunnel_name")
 
@@ -25,7 +25,7 @@ export interface TunnelName {
   memberId: string
   /** Whether it is its instance's primary address. */
   primary: boolean
-  tailnetId: string
+  tunnelId: string
 }
 
 interface NameRow extends RowDataPacket {
@@ -35,7 +35,7 @@ interface NameRow extends RowDataPacket {
   label: string
   member_id: string
   primary_ref?: string | null
-  tailnet_id: string
+  tunnel_id: string
 }
 
 /** A name whole: its label or labels, then its TLD. */
@@ -43,23 +43,23 @@ export function tunnelNameOf(name: Pick<TunnelName, "domain" | "label">) {
   return `${name.label}.${name.domain}`
 }
 
-/** Every name in these tailnets, the generated one first for each member. */
+/** Every name in these tunnels, the generated one first for each member. */
 export const listTunnelNamesEffect = Effect.fn("tunnelNames.list")(function* (
-  tailnetIds: ReadonlyArray<string>
+  tunnelIds: ReadonlyArray<string>
 ) {
-  if (tailnetIds.length === 0) return []
+  if (tunnelIds.length === 0) return []
   const database = yield* Database
   const rows = yield* database.queryRows<NameRow>(
     "tunnelNames.list",
-    `SELECT name.id, name.tailnet_id, name.member_id, name.label, name.domain,
+    `SELECT name.id, name.tunnel_id, name.member_id, name.label, name.domain,
             name.generated_for, chosen.address_ref AS primary_ref
        FROM ${nameTable} name
        LEFT JOIN ${primaryAddressTable} chosen
          ON chosen.address_kind = 'tunnel' AND chosen.address_ref = name.id
-      WHERE name.tailnet_id IN (${tailnetIds.map(() => "?").join(", ")})
-      ORDER BY name.tailnet_id, name.member_id, name.generated_for IS NULL,
+      WHERE name.tunnel_id IN (${tunnelIds.map(() => "?").join(", ")})
+      ORDER BY name.tunnel_id, name.member_id, name.generated_for IS NULL,
                name.label, name.domain`,
-    [...tailnetIds]
+    [...tunnelIds]
   )
   return rows.map(tunnelName)
 })
@@ -79,16 +79,16 @@ export interface UnnamedTunnelMember {
 }
 
 /**
- * Names each member once, as it connects to a tailnet, from what it's called:
+ * Names each member once, as it connects to a tunnel, from what it's called:
  * lowercase, spaces become hyphens, anything but letters, digits and hyphens
  * dropped, repeated hyphens collapsed and trimmed, at most 63 characters, its
  * fallback when nothing is left, and `-2`, `-3` while another name under
- * `domain` in the tailnet, or one in `reserved`, has it. Saves nothing: the
+ * `domain` in the tunnel, or one in `reserved`, has it. Saves nothing: the
  * save that connects them does (`setGeneratedTunnelNamesEffect`).
  */
 export const generateTunnelNamesEffect = Effect.fn("tunnelNames.generate")(
   function* (
-    tailnetId: string,
+    tunnelId: string,
     domain: string,
     members: ReadonlyArray<UnnamedTunnelMember>,
     reserved: ReadonlyArray<string> = []
@@ -96,7 +96,7 @@ export const generateTunnelNamesEffect = Effect.fn("tunnelNames.generate")(
     const generated = new Map<string, string>()
     if (members.length === 0) return generated
     const taken = new Set(reserved)
-    for (const name of yield* listTunnelNamesEffect([tailnetId])) {
+    for (const name of yield* listTunnelNamesEffect([tunnelId])) {
       if (name.domain === domain) taken.add(name.label)
     }
     for (const member of members) {
@@ -126,12 +126,12 @@ function tunnelLabelOf(name: string): string {
 
 /**
  * Gives each member its generated name, or renames the one it has. A name
- * another member of the tailnet has fails it, as each is unique.
+ * another member of the tunnel has fails it, as each is unique.
  */
 export const setGeneratedTunnelNamesEffect = Effect.fn(
   "tunnelNames.setGenerated"
 )(function* (
-  tailnetId: string,
+  tunnelId: string,
   names: ReadonlyArray<{ domain: string; label: string; memberId: string }>
 ) {
   if (names.length === 0) return
@@ -143,14 +143,14 @@ export const setGeneratedTunnelNamesEffect = Effect.fn(
       (name) =>
         transaction.execute(
           `INSERT INTO ${nameTable}
-             (id, tailnet_id, member_id, label, domain, generated_for,
+             (id, tunnel_id, member_id, label, domain, generated_for,
               created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE label = VALUES(label),
              domain = VALUES(domain)`,
           [
             randomUUID(),
-            tailnetId,
+            tunnelId,
             name.memberId,
             name.label,
             name.domain,
@@ -164,11 +164,11 @@ export const setGeneratedTunnelNamesEffect = Effect.fn(
 })
 
 /**
- * Forgets the names of a tailnet's members that aren't in `kept`, and its
+ * Forgets the names of a tunnel's members that aren't in `kept`, and its
  * aliases under TLDs it no longer has.
  */
 export const keepTunnelNamesOfEffect = Effect.fn("tunnelNames.keep")(function* (
-  tailnetId: string,
+  tunnelId: string,
   kept: ReadonlyArray<string>,
   domains: ReadonlyArray<string>
 ) {
@@ -178,20 +178,20 @@ export const keepTunnelNamesOfEffect = Effect.fn("tunnelNames.keep")(function* (
   yield* database.execute(
     "tunnelNames.keep",
     `DELETE FROM ${nameTable}
-      WHERE tailnet_id = ?
+      WHERE tunnel_id = ?
         AND (${kept.length > 0 ? `member_id NOT IN (${members})` : "TRUE"}
              OR domain NOT IN (${tlds}))`,
-    [tailnetId, ...kept, ...domains]
+    [tunnelId, ...kept, ...domains]
   )
 })
 
-/** Gives a member another name in its tailnet. */
+/** Gives a member another name in its tunnel. */
 export const addTunnelAliasEffect = Effect.fn("tunnelNames.addAlias")(
   function* (name: {
     domain: string
     label: string
     memberId: string
-    tailnetId: string
+    tunnelId: string
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
@@ -199,9 +199,9 @@ export const addTunnelAliasEffect = Effect.fn("tunnelNames.addAlias")(
     yield* database.execute(
       "tunnelNames.addAlias",
       `INSERT INTO ${nameTable}
-       (id, tailnet_id, member_id, label, domain, generated_for, created_at)
+       (id, tunnel_id, member_id, label, domain, generated_for, created_at)
      VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-      [id, name.tailnetId, name.memberId, name.label, name.domain, now]
+      [id, name.tunnelId, name.memberId, name.label, name.domain, now]
     )
     return id
   }
@@ -227,7 +227,7 @@ export const loadTunnelNameEffect = Effect.fn("tunnelNames.load")(function* (
   const database = yield* Database
   const [row] = yield* database.queryRows<NameRow>(
     "tunnelNames.load",
-    `SELECT id, tailnet_id, member_id, label, domain, generated_for
+    `SELECT id, tunnel_id, member_id, label, domain, generated_for
        FROM ${nameTable} WHERE id = ?`,
     [id]
   )
@@ -242,6 +242,6 @@ function tunnelName(row: NameRow): TunnelName {
     label: row.label,
     memberId: row.member_id,
     primary: Boolean(row.primary_ref),
-    tailnetId: row.tailnet_id,
+    tunnelId: row.tunnel_id,
   }
 }

@@ -4,163 +4,324 @@ import {
   instancePowerPermission,
   relayControlDeadlineMs,
   relayPowerActionSchema,
+  tunnelIdSchema,
   tunnelSchema,
+  type RelayPowerAction,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { asTunnelDeployment } from "@/lib/server-deployments.server"
+import { asGatewayDeployment } from "@/lib/server-deployments.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { exclusive } from "@/operations/lanes"
+import { tunnelKey } from "@/lib/tunnel-lanes"
+import { exclusive, partKey } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
-import { getTunnelDeploymentsHandler } from "@/server/app-deployments.server"
-import { requireEligibleResourceUser } from "@/server/auth"
 import {
-  databaseRpc,
-  requiredRelay,
-} from "@/server/managed-database-access"
-import { requireTunnelPermission } from "@/server/tunnel-access.server"
+  getGatewayDeploymentsHandler,
+  getTunnelDeploymentsHandler,
+} from "@/server/app-deployments.server"
+import { requireEligibleResourceUser } from "@/server/auth"
+import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
+import {
+  requireGatewayPermission,
+  requireTunnelGateways,
+  type GatewayRecord,
+} from "@/server/tunnel-access.server"
 
-// What every kind of instance has, for a tunnel: power over both its
-// containers, deploying it again, and its deployments. Its terminal and its
-// logs go through the paths every kind shares, each authorized as a tunnel
-// is (`requireTunnelPermission`).
+// What every kind of instance has, for a tunnel: power over its gateways'
+// containers, deploying them again, and their deployments, each for one
+// gateway or for every gateway of the tunnel at once. Its terminal and its
+// logs go through the paths every kind shares, one gateway at a time, each
+// authorized as a gateway is (`requireGatewayPermission`). On its Relay a
+// gateway is still called a tunnel, which is what these requests name.
 
-/** A tunnel: power, deploying it again, and anything else that changes it. */
-const tunnelKey = (id: string) => `tunnel:${id}`
+/** A gateway: power, deploying it again, and anything else that changes it. */
+const gatewayKey = (id: string) => `gateway:${id}`
 
-const powerInputSchema = z.strictObject({
+/** Every gateway of a tunnel at once. */
+const tunnelGatewaysKey = (id: string) => partKey(tunnelKey(id), "gateways")
+
+const gatewayPowerSchema = z.strictObject({
   action: relayPowerActionSchema,
-  tunnelId: instanceIdSchema,
+  gatewayId: instanceIdSchema,
 })
+const tunnelPowerSchema = z.strictObject({
+  action: relayPowerActionSchema,
+  tunnelId: tunnelIdSchema,
+})
+const gatewayInputSchema = z.strictObject({ gatewayId: instanceIdSchema })
+const tunnelInputSchema = z.strictObject({ tunnelId: tunnelIdSchema })
+const beforeSchema = z
+  .strictObject({ id: z.uuid(), startedAt: z.iso.datetime() })
+  .optional()
 
-const tunnelInputSchema = z.strictObject({ tunnelId: instanceIdSchema })
+/** What a change to every gateway did on each, in the tunnel's order. */
+export interface GatewayOutcome {
+  error: string | null
+  gatewayId: string
+  relayId: string
+}
 
-const tunnelPower = operation<z.infer<typeof powerInputSchema>>()({
-  name: "tunnels.power",
-  doing: "Changing this tunnel's power",
+const gatewayPower = operation<z.infer<typeof gatewayPowerSchema>>()({
+  name: "gateways.power",
+  doing: "Changing this gateway's power",
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.tap((person) =>
         promiseEffect(() =>
-          requireTunnelPermission(
+          requireGatewayPermission(
             person,
-            input.tunnelId,
+            input.gatewayId,
             instancePowerPermission(input.action)
           )
         )
       )
     ),
-  locks: ({ input }) => [exclusive(tunnelKey(input.tunnelId))],
+  locks: ({ input }) => [exclusive(gatewayKey(input.gatewayId))],
   run: ({ context: user, input }) =>
-    promiseEffect(() => tunnelPowerHandler(user, input)),
+    promiseEffect(async () => {
+      const gateway = await requireGatewayPermission(
+        user,
+        input.gatewayId,
+        instancePowerPermission(input.action)
+      )
+      const result = await powerGateway(user, gateway, input.action)
+      publishTunnelChange()
+      return result
+    }),
+  audit: ({ input }) => ({ id: input.gatewayId, kind: "gateway" }),
+})
+
+/** Starts, stops, restarts or kills one gateway's containers. */
+export const performGatewayAction = createServerFn({ method: "POST" })
+  .validator(gatewayPowerSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(gatewayPower, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+// A change to every gateway names the gateways it found, so it holds each
+// one's lane as well as the tunnel's and can't overlap a change to one.
+type AcrossGateways<Input> = Input & { gatewayIds: ReadonlyArray<string> }
+
+const acrossGatewaysLocks = ({
+  input,
+}: {
+  input: AcrossGateways<{ tunnelId: string }>
+}) => [
+  exclusive(tunnelGatewaysKey(input.tunnelId)),
+  ...input.gatewayIds.map((id) => exclusive(gatewayKey(id))),
+]
+
+// The gateways it found that the viewer still may change, once it holds
+// their lanes; one made since waits for the next change.
+async function lockedGateways(
+  user: AuthenticatedUser,
+  input: AcrossGateways<{ tunnelId: string }>,
+  permission: Parameters<typeof requireTunnelGateways>[2]
+) {
+  const held = new Set(input.gatewayIds)
+  return (await requireTunnelGateways(user, input.tunnelId, permission)).filter(
+    ({ id }) => held.has(id)
+  )
+}
+
+async function gatewayIdsOf(
+  user: AuthenticatedUser,
+  tunnelId: string,
+  permission: Parameters<typeof requireTunnelGateways>[2]
+) {
+  return (await requireTunnelGateways(user, tunnelId, permission)).map(
+    ({ id }) => id
+  )
+}
+
+const tunnelPower = operation<
+  AcrossGateways<z.infer<typeof tunnelPowerSchema>>
+>()({
+  name: "tunnels.power",
+  doing: "Changing this tunnel's power",
+  authorize: ({ user }) => signedIn(user),
+  locks: acrossGatewaysLocks,
+  run: ({ context: user, input }) =>
+    promiseEffect(async () => {
+      const gateways = await lockedGateways(
+        user,
+        input,
+        instancePowerPermission(input.action)
+      )
+      const outcomes = await eachGateway(gateways, (gateway) =>
+        powerGateway(user, gateway, input.action)
+      )
+      publishTunnelChange()
+      return outcomes
+    }),
   audit: ({ input }) => ({ id: input.tunnelId, kind: "tunnel" }),
 })
 
-async function tunnelPowerHandler(
-  user: AuthenticatedUser,
-  input: z.infer<typeof powerInputSchema>
-) {
-  const tunnel = await requireTunnelPermission(
-    user,
-    input.tunnelId,
-    instancePowerPermission(input.action)
-  )
-  const relay = await requiredRelay(tunnel.relayId)
-  const result = tunnelSchema.parse(
-    await databaseRpc(
-      relay,
-      "instance.action",
-      { action: input.action, id: tunnel.id, kind: "tunnel" },
-      relayControlDeadlineMs("instance.action"),
-      user.id
-    )
-  )
-  publishTunnelChange()
-  return result
-}
-
+/**
+ * Starts, stops, restarts or kills every gateway of a tunnel the viewer may.
+ * One failing doesn't stop the rest; each says how it went.
+ */
 export const performTunnelAction = createServerFn({ method: "POST" })
-  .validator(powerInputSchema)
+  .validator(tunnelPowerSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const gatewayIds = await gatewayIdsOf(
+      user,
+      data.tunnelId,
+      instancePowerPermission(data.action)
+    )
+    return runOperationPromise(tunnelPower, { ...data, gatewayIds }, { user })
+  })
+
+const redeployGatewayOperation = operation<
+  z.infer<typeof gatewayInputSchema>
+>()({
+  name: "gateways.deploy",
+  doing: "Deploying this gateway again",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireGatewayPermission(person, input.gatewayId, "instance.deploy")
+        )
+      )
+    ),
+  locks: ({ input }) => [exclusive(gatewayKey(input.gatewayId))],
+  run: ({ context: user, input }) =>
+    promiseEffect(async () => {
+      const gateway = await requireGatewayPermission(
+        user,
+        input.gatewayId,
+        "instance.deploy"
+      )
+      const result = await redeployOne(user, gateway)
+      publishTunnelChange()
+      return result
+    }),
+  audit: ({ input }) => ({ id: input.gatewayId, kind: "gateway" }),
+})
+
+/** Deploys a gateway again: both its images pulled anew. */
+export const redeployGateway = createServerFn({ method: "POST" })
+  .validator(gatewayInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(tunnelPower, data, {
+    runOperationPromise(redeployGatewayOperation, data, {
       user: await requireEligibleResourceUser(),
     })
   )
 
 const redeployTunnelOperation = operation<
-  z.infer<typeof tunnelInputSchema>
+  AcrossGateways<z.infer<typeof tunnelInputSchema>>
 >()({
   name: "tunnels.deploy",
-  doing: "Deploying this tunnel again",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.tap((person) =>
-        promiseEffect(() =>
-          requireTunnelPermission(person, input.tunnelId, "instance.deploy")
-        )
-      )
-    ),
-  locks: ({ input }) => [exclusive(tunnelKey(input.tunnelId))],
+  doing: "Deploying this tunnel's gateways again",
+  authorize: ({ user }) => signedIn(user),
+  locks: acrossGatewaysLocks,
   run: ({ context: user, input }) =>
-    promiseEffect(() => redeployTunnelHandler(user, input)),
+    promiseEffect(async () => {
+      const gateways = await lockedGateways(user, input, "instance.deploy")
+      const outcomes = await eachGateway(gateways, (gateway) =>
+        redeployOne(user, gateway)
+      )
+      publishTunnelChange()
+      return outcomes
+    }),
   audit: ({ input }) => ({ id: input.tunnelId, kind: "tunnel" }),
 })
 
-async function redeployTunnelHandler(
+/**
+ * Deploys every gateway of a tunnel the viewer may again, one after another,
+ * so its names keep answering through the rest. Each says how it went.
+ */
+export const redeployTunnel = createServerFn({ method: "POST" })
+  .validator(tunnelInputSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const gatewayIds = await gatewayIdsOf(
+      user,
+      data.tunnelId,
+      "instance.deploy"
+    )
+    return runOperationPromise(
+      redeployTunnelOperation,
+      { ...data, gatewayIds },
+      { user }
+    )
+  })
+
+/** One gateway's deployments, for whoever may read its logs. */
+export const getGatewayDeployments = createServerFn({ method: "GET" })
+  .validator(gatewayInputSchema.extend({ before: beforeSchema }))
+  .handler(({ data }) => getGatewayDeploymentsHandler(data))
+
+/** Every deployment of a tunnel's gateways the viewer may read the logs of. */
+export const getTunnelDeployments = createServerFn({ method: "GET" })
+  .validator(tunnelInputSchema.extend({ before: beforeSchema }))
+  .handler(({ data }) => getTunnelDeploymentsHandler(data))
+
+async function powerGateway(
   user: AuthenticatedUser,
-  input: z.infer<typeof tunnelInputSchema>
+  gateway: GatewayRecord,
+  action: RelayPowerAction
 ) {
-  const tunnel = await requireTunnelPermission(
-    user,
-    input.tunnelId,
-    "instance.deploy"
+  const relay = await requiredRelay(gateway.relayId)
+  return tunnelSchema.parse(
+    await databaseRpc(
+      relay,
+      "instance.action",
+      { action, id: gateway.id, kind: "tunnel" },
+      relayControlDeadlineMs("instance.action"),
+      user.id
+    )
   )
-  const relay = await requiredRelay(tunnel.relayId)
-  const result = tunnelSchema.parse(
-    await asTunnelDeployment(
-      { relayId: relay.id, tunnelId: tunnel.id, userId: user.id },
+}
+
+async function redeployOne(user: AuthenticatedUser, gateway: GatewayRecord) {
+  const relay = await requiredRelay(gateway.relayId)
+  return tunnelSchema.parse(
+    await asGatewayDeployment(
+      { gatewayId: gateway.id, relayId: relay.id, userId: user.id },
       (deploymentId) =>
         databaseRpc(
           relay,
           "instance.deploy",
-          { deploymentId, id: tunnel.id, kind: "tunnel" },
+          { deploymentId, id: gateway.id, kind: "tunnel" },
           relayControlDeadlineMs("instance.deploy"),
           user.id
         )
     )
   )
-  publishTunnelChange()
-  return result
 }
 
-/** Deploys a tunnel again: both its images pulled anew. */
-export const redeployTunnel = createServerFn({ method: "POST" })
-  .validator(tunnelInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(redeployTunnelOperation, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+// One gateway after another; a failure is reported and the rest go on.
+async function eachGateway(
+  gateways: ReadonlyArray<GatewayRecord>,
+  run: (gateway: GatewayRecord) => Promise<unknown>
+): Promise<Array<GatewayOutcome>> {
+  const outcomes: Array<GatewayOutcome> = []
+  for (const gateway of gateways) {
+    const error = await recoverPromise(
+      async () => {
+        await run(gateway)
+        return null
+      },
+      (cause) => (cause instanceof Error ? cause.message : String(cause))
+    )
+    outcomes.push({ error, gatewayId: gateway.id, relayId: gateway.relayId })
+  }
+  return outcomes
+}
 
-/** A tunnel's deployments, for whoever may read its logs. */
-export const getTunnelDeployments = createServerFn({ method: "GET" })
-  .validator(
-    tunnelInputSchema.extend({
-      before: z
-        .strictObject({ id: z.uuid(), startedAt: z.iso.datetime() })
-        .optional(),
-    })
-  )
-  .handler(({ data }) => getTunnelDeploymentsHandler(data))
-
-// Tunnels show on the Tailscale page, which reads them all at once.
+// Tunnels show on the Tunnels page, which reads them all at once.
 function publishTunnelChange(): void {
   publishRealtimeChange({
     audience: { kind: "platform-admins" },
