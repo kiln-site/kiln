@@ -86,8 +86,14 @@ doesn't apply.
 Adding one takes in the hostnames Relays already route under it, each for the
 instance whose routes serve it. A name more than one instance routes, or one
 another already holds, stays as it was and is reported, for someone to keep
-on one instance. A domain managed elsewhere can be removed once no name is
-under it.
+on one instance. A Relay that couldn't be read then is named, and takes in
+its names as it next connects. A domain managed elsewhere can be removed once
+no name is under it.
+
+Any eligible person may add one, with nothing proving the domain is theirs,
+and a domain is one Kiln has once: on a shared install, someone could hold a
+domain they don't own. Whether to verify ownership or leave adding them to
+administrators is #964.
 
 Which connections a hostname may use is a security boundary:
 

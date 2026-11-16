@@ -50,7 +50,11 @@ import {
 import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
-import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
+import {
+  activeRelay,
+  listPersistedRelays,
+  type PersistedRelay,
+} from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
@@ -291,7 +295,7 @@ export async function getManualWebHostnamesHandler(): Promise<
   ])
   const resources = resourceDirectory(relays, directory, apps)
   const kept = new Set(hostnames.map((row) => row.hostname))
-  const perRelay = await readRelayRoutes(relays)
+  const perRelay = (await readRelayRoutes(relays)).routes
   const seen = new Set<string>()
   return perRelay.flatMap((route): Array<WebHostnameOverview> => {
     const hostname = route.hostname.toLowerCase()
@@ -347,13 +351,15 @@ export async function getManualWebHostnamesHandler(): Promise<
  * The web routes each Relay's proxy serves, every path of every name. An
  * unreachable Relay's are left out, to wait for the next read.
  */
-async function readRelayRoutes(relays: ReadonlyArray<{ id: string }>): Promise<
-  Array<{
+async function readRelayRoutes(relays: ReadonlyArray<PersistedRelay>): Promise<{
+  routes: Array<{
     hostname: string
     owner: { id: string; kind: "app" | "server" }
     relayId: string
   }>
-> {
+  /** The Relays whose routes couldn't be read, by name. */
+  unread: Array<string>
+}> {
   const perRelay = await Promise.all(
     relays
       .filter((relay) =>
@@ -370,13 +376,32 @@ async function readRelayRoutes(relays: ReadonlyArray<{ id: string }>): Promise<
                 5_000
               )
             )
-            return routes.map((route) => ({ ...route, relayId: relay.id }))
+            return {
+              routes: routes.map((route) => ({ ...route, relayId: relay.id })),
+              unread: null,
+            }
           },
-          () => []
+          () => ({ routes: [], unread: relay.name })
         )
       )
   )
-  return perRelay.flat()
+  const read = new Set(
+    relays
+      .filter((relay) =>
+        relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
+      )
+      .map((relay) => relay.id)
+  )
+  return {
+    routes: perRelay.flatMap(({ routes }) => routes),
+    unread: [
+      ...perRelay.flatMap(({ unread }) => (unread === null ? [] : [unread])),
+      // One that isn't connected now has nothing to read.
+      ...relays
+        .filter((relay) => relay.enabled && !read.has(relay.id))
+        .map((relay) => relay.name),
+    ],
+  }
 }
 
 type InstanceDirectoryRecord = Effect.Success<
@@ -788,7 +813,8 @@ const addManualDomain = operation<ManualDomainInput>()({
       Effect.andThen(
         promiseEffect(() =>
           outsideOperation(async () => {
-            const routes = (await readRelayRoutes(await listPersistedRelays()))
+            const read = await readRelayRoutes(await listPersistedRelays())
+            const routes = read.routes
               .filter((route) =>
                 domainInZone(route.hostname.toLowerCase(), input.domain)
               )
@@ -801,10 +827,12 @@ const addManualDomain = operation<ManualDomainInput>()({
                   resourceType: route.owner.kind === "app" ? "app" : "instance",
                 },
               }))
-            return runAppEffect(
+            const attached = await runAppEffect(
               "addresses.attachManual",
               attachManualHostnamesEffect(input.domain, routes)
             )
+            // A Relay away now has its names taken in as it reconnects.
+            return { ...attached, unreadRelays: read.unread }
           })
         )
       )
@@ -854,4 +882,54 @@ const removeManualDomain = operation<{ domain: string }>()({
 export async function removeManualDomainHandler(data: { domain: string }) {
   const user = await requireEligibleResourceUser()
   await runOperationPromise(removeManualDomain, data, { user })
+}
+
+/**
+ * Takes in the hostnames a Relay routes under domains managed elsewhere, as
+ * it connects: one that was away when such a domain was added routes names
+ * no instance holds yet. A name another instance holds is left for someone
+ * to settle, as when the domain was added.
+ */
+export async function attachManualRoutesOfRelay(relayId: string) {
+  const relay = (await listPersistedRelays()).find(
+    (candidate) => candidate.enabled && candidate.id === relayId
+  )
+  if (!relay) return
+  const domains = await runAppEffect(
+    "domains.manual.list",
+    listManualDomainsEffect("all")
+  )
+  if (domains.length === 0) return
+  const { routes } = await readRelayRoutes([relay])
+  const byDomain = new Map<string, Array<RoutedHostname>>()
+  for (const route of routes) {
+    const hostname = route.hostname.toLowerCase()
+    let domain: string | null = null
+    for (const candidate of domains) {
+      if (
+        domainInZone(hostname, candidate.domain) &&
+        candidate.domain.length > (domain?.length ?? 0)
+      ) {
+        domain = candidate.domain
+      }
+    }
+    if (domain === null) continue
+    const names = byDomain.get(domain) ?? []
+    names.push({
+      hostname,
+      resource: {
+        relayId: route.relayId,
+        resourceId: route.owner.id,
+        resourceType: route.owner.kind === "app" ? "app" : "instance",
+      },
+    })
+    byDomain.set(domain, names)
+  }
+  for (const [domain, names] of byDomain) {
+    await runAppEffect(
+      "addresses.attachManual",
+      attachManualHostnamesEffect(domain, names)
+    )
+  }
+  if (byDomain.size > 0) publishDomainChange()
 }

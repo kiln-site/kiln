@@ -2463,6 +2463,24 @@ class RelayConnection {
         )
       )
       forkAppEffect(
+        "addresses.attachManualOnConnect",
+        Effect.tryPromise({
+          try: async () => {
+            const { attachManualRoutesOfRelay } =
+              await import("@/server/domain-settings.server")
+            await attachManualRoutesOfRelay(this.#relay.id)
+          },
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "Taking in the Relay's names under domains managed elsewhere failed",
+              { cause, relayId: this.#relay.id }
+            )
+          )
+        )
+      )
+      forkAppEffect(
         "primaryAddresses.adoptOnConnect",
         Effect.tryPromise({
           try: async () => {

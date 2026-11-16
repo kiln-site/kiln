@@ -2052,8 +2052,10 @@ export const attachManualHostnamesEffect = Effect.fn("addresses.attachManual")(
           names,
           ({ hostname }) =>
             Effect.gen(function* () {
-              if (yield* loadHostnameHolderEffect(hostname)) {
-                conflicts.add(hostname)
+              const holder = yield* loadHostnameHolderEffect(hostname)
+              // One it holds already is taken in; another's is a conflict.
+              if (holder) {
+                if (!sameOwner(holder, resource)) conflicts.add(hostname)
                 return
               }
               yield* insertWebHostnameEffect({

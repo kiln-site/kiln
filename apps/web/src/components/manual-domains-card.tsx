@@ -167,7 +167,7 @@ function AddManualDomainDialog({
       addManualDomain({
         data: { domain: domain.trim(), platform: platform || undefined },
       }),
-    onSuccess: ({ attached, conflicts }) => {
+    onSuccess: ({ attached, conflicts, unreadRelays }) => {
       void queryClient.invalidateQueries({ queryKey: ["domains"] })
       showToast({
         description:
@@ -177,6 +177,14 @@ function AddManualDomainDialog({
         message: `Added ${domain.trim()}`,
         type: "success",
       })
+      if (unreadRelays.length > 0) {
+        showToast({
+          description: `Kiln couldn't read ${unreadRelays.join(", ")}. Names they route under it are taken in when they reconnect.`,
+          duration: 12_000,
+          message: "Some Relays weren't read",
+          type: "warning",
+        })
+      }
       if (conflicts.length > 0) {
         showToast({
           description: `More than one instance routes ${conflicts.join(", ")}. Keep it on one, and save the other's web routes again.`,
