@@ -252,7 +252,9 @@ permissions of its own follow.
   away, shows **DNS pending**, and Hearth's DNS worker writes it again, after
   30 seconds then twice as long each time up to an hour. A write goes out
   only when Hearth has read every gateway's members, so no file leaves an
-  away gateway's out. Built, with aliases added and removed through Hearth.
+  away gateway's out; the cost is that one gateway away holds back a change
+  for the whole tunnel, a removed alias included, until it's back. Keeping
+  each gateway's last members in Hearth would lift that, if it matters. Built, with aliases added and removed through Hearth.
 - An instance's Network tab has a Tunnels section shaped like its Domains
   table: each tunnel it is in, with its names, and connecting to another.
 
