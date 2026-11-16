@@ -10,16 +10,20 @@ import {
   type InstanceLogsLinks,
   type LogSource,
 } from "@/components/console/instance-logs-page"
-import { DEPLOYMENT_STREAM } from "@/components/console/log-sources"
+import { DEPLOYMENT_STREAM, LogMessage } from "@/components/console/log-sources"
 import { ResourceLogsSession } from "@/components/console/resource-logs"
+import { gatewayStream } from "@/components/tunnel/tunnel-data"
 import { useTunnelWorkspace } from "@/components/tunnel/tunnel-workspace-context"
-import { getGatewayDeployments } from "@/server/tunnel-instances"
+import { getTunnelDeployments } from "@/server/tunnel-instances"
 
-// A tunnel's output in one place: each of its two containers, followed
-// live, and the log of each deployment the Relay kept.
+// A tunnel's output in one place: each gateway's Tailscale and CoreDNS,
+// followed live and labelled by the Relay it's on, and the log of each
+// deployment of any of them the Relays kept.
 
-const TAILSCALE = "tailscale"
-const COREDNS = "coredns"
+const CONTAINERS = [
+  { id: "tailscale", title: "Tailscale" },
+  { id: "coredns", title: "CoreDNS" },
+] as const
 
 export function TunnelLogsPage() {
   const { tunnel } = useTunnelWorkspace()
@@ -28,7 +32,7 @@ export function TunnelLogsPage() {
   })
   const { data: records = [], isPending } = useQuery({
     queryKey: ["tunnels", tunnel.id, "deployments"],
-    queryFn: () => getGatewayDeployments({ data: { gatewayId: tunnel.id } }),
+    queryFn: () => getTunnelDeployments({ data: { tunnelId: tunnel.id } }),
     select: (page) => page.items.slice(0, LISTED_DEPLOYMENTS),
     // A deployment that runs is followed until it ends.
     refetchInterval: (query) =>
@@ -37,7 +41,10 @@ export function TunnelLogsPage() {
         : false,
   })
   const deployments = React.useMemo(
-    () => records.map((record) => requestDeploymentEntry(record, "Redeploy")),
+    () =>
+      records.map((record) =>
+        requestDeploymentEntry(record, `Redeploy on ${record.relayName}`)
+      ),
     [records]
   )
   const links = React.useMemo((): InstanceLogsLinks => {
@@ -46,85 +53,99 @@ export function TunnelLogsPage() {
       to: "/tunnel/$tunnelId/logs",
     } as const
     return {
-      all: linkOptions({
-        search: { relayId: tunnel.relayId },
-        to: "/infra/deployments",
-      }),
+      all: linkOptions({ to: "/infra/deployments" }),
       deployment: (id) => linkOptions({ ...here, search: { deployment: id } }),
       latest: linkOptions({ ...here, search: { stream: DEPLOYMENT_STREAM } }),
-      source: (id) =>
-        linkOptions({
-          ...here,
-          search: id === TAILSCALE ? {} : { stream: id },
-        }),
+      source: (id) => linkOptions({ ...here, search: { stream: id } }),
     }
-  }, [tunnel.id, tunnel.relayId])
+  }, [tunnel.id])
   const sources = React.useMemo(
-    (): Array<LogSource> => [
-      {
-        heading: { title: "Tailscale" },
-        id: TAILSCALE,
-        meta: "Tailscale",
-        status: {
-          label: tunnel.components.tailscaleRunning ? "Running" : "Stopped",
-          tone: tunnel.components.tailscaleRunning ? "success" : "neutral",
-        },
-        title: "Tailscale",
-      },
-      {
-        heading: { title: "CoreDNS" },
-        id: COREDNS,
-        meta: "CoreDNS",
-        status: {
-          label: tunnel.components.coreDnsRunning ? "Running" : "Stopped",
-          tone: tunnel.components.coreDnsRunning ? "success" : "neutral",
-        },
-        title: "CoreDNS",
-      },
-    ],
-    [tunnel.components.coreDnsRunning, tunnel.components.tailscaleRunning]
+    (): Array<LogSource> =>
+      tunnel.gateways.flatMap((gateway) =>
+        CONTAINERS.map((container) => {
+          const running =
+            container.id === "tailscale"
+              ? gateway.components.tailscaleRunning
+              : gateway.components.coreDnsRunning
+          return {
+            heading: {
+              meta: `on ${gateway.relayName}`,
+              title: container.title,
+            },
+            id: gatewayStream(gateway.id, container.id),
+            meta: gateway.relayName,
+            status: {
+              label: running ? "Running" : "Stopped",
+              tone: running ? "success" : "neutral",
+            },
+            title: container.title,
+          }
+        })
+      ),
+    [tunnel.gateways]
   )
   const latest = records[0]
+  const shownSource =
+    sources.find((source) => source.id === stream)?.id ?? sources[0]?.id
   return (
     <InstanceLogsPage
       deployments={deployments}
       latestId={latest?.id}
       links={links}
-      renderDeployment={(id, header) => (
-        <RequestDeploymentLog
-          header={header}
-          instance={{ id: tunnel.id, kind: "gateway", name: tunnel.name }}
-          pending={isPending}
-          record={
-            id === null
-              ? latest
-              : (records.find((record) => record.id === id) ?? {
-                  error: null,
-                  id,
-                  status: "unknown",
-                })
-          }
-          shareLink={links.deployment}
-        />
-      )}
-      renderSource={(id, header) => (
-        <ResourceLogsSession
-          key={`${tunnel.relayId}:${tunnel.id}:${id}`}
-          header={header}
-          id={tunnel.id}
-          kind="tunnel"
-          logName={`${tunnel.name}-${id}`}
-          relayAvailable
-          relayId={tunnel.relayId}
-          stream={id}
-        />
-      )}
+      renderDeployment={(id, header) => {
+        const record =
+          id === null
+            ? latest
+            : records.find((candidate) => candidate.id === id)
+        return (
+          <RequestDeploymentLog
+            header={header}
+            instance={{
+              id: record?.gatewayId ?? "",
+              kind: "gateway",
+              name: `${tunnel.name} on ${record?.relayName ?? "its Relay"}`,
+            }}
+            pending={isPending}
+            record={
+              record ??
+              (id === null ? undefined : { error: null, id, status: "unknown" })
+            }
+            shareLink={links.deployment}
+          />
+        )
+      }}
+      renderSource={(id, header) => {
+        const [gatewayId, container] = id.split(":")
+        const gateway = tunnel.gateways.find(
+          (candidate) => candidate.id === gatewayId
+        )
+        if (!gateway || !container) {
+          return (
+            <LogMessage
+              header={header}
+              message="This gateway is gone. Pick another source."
+            />
+          )
+        }
+        return (
+          <ResourceLogsSession
+            key={`${gateway.relayId}:${gateway.id}:${container}`}
+            header={header}
+            id={gateway.id}
+            kind="tunnel"
+            logName={`${tunnel.name}-${gateway.relayName}-${container}`}
+            relayAvailable
+            relayId={gateway.relayId}
+            stream={container}
+          />
+        )
+      }}
       showing={
         requested !== undefined
           ? { id: requested, kind: "deployment" }
-          : stream === DEPLOYMENT_STREAM
+          : stream === DEPLOYMENT_STREAM || shownSource === undefined
             ? { id: null, kind: "deployment" }
-            : { id: stream === COREDNS ? COREDNS : TAILSCALE, kind: "source" }
+            : { id: shownSource, kind: "source" }
       }
       sources={sources}
     />

@@ -82,7 +82,6 @@ import { Route as AppSettingsBillingRouteImport } from './routes/_app.settings.b
 import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.files'
 import { Route as AppSettingsNotificationsRouteImport } from './routes/_app.settings.notifications'
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
-import { Route as AppTailnetTailnetIdRouteImport } from './routes/_app.tailnet.$tailnetId'
 import { Route as AppTunnelTunnelIdRouteImport } from './routes/_app/tunnel/$tunnelId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConsoleInstanceIdRouteImport } from './routes/api.console.$instanceId'
@@ -131,6 +130,7 @@ import { Route as AppServerServerIdTerminalRouteImport } from './routes/_app/ser
 import { Route as AppTunnelTunnelIdIndexRouteImport } from './routes/_app/tunnel/$tunnelId.index'
 import { Route as AppTunnelTunnelIdSplatRouteImport } from './routes/_app/tunnel/$tunnelId.$'
 import { Route as AppTunnelTunnelIdConnectedRouteImport } from './routes/_app/tunnel/$tunnelId.connected'
+import { Route as AppTunnelTunnelIdGatewaysRouteImport } from './routes/_app/tunnel/$tunnelId.gateways'
 import { Route as AppTunnelTunnelIdInfoRouteImport } from './routes/_app/tunnel/$tunnelId.info'
 import { Route as AppTunnelTunnelIdLogsRouteImport } from './routes/_app/tunnel/$tunnelId.logs'
 import { Route as AppTunnelTunnelIdTerminalRouteImport } from './routes/_app/tunnel/$tunnelId.terminal'
@@ -510,11 +510,6 @@ const AppSettingsRelaysRoute = AppSettingsRelaysRouteImport.update({
   path: '/relays',
   getParentRoute: () => AppSettingsRoute,
 } as any)
-const AppTailnetTailnetIdRoute = AppTailnetTailnetIdRouteImport.update({
-  id: '/tailnet/$tailnetId',
-  path: '/tailnet/$tailnetId',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppTunnelTunnelIdRoute = AppTunnelTunnelIdRouteImport.update({
   id: '/tunnel/$tunnelId',
   path: '/tunnel/$tunnelId',
@@ -761,6 +756,12 @@ const AppTunnelTunnelIdConnectedRoute =
     path: '/connected',
     getParentRoute: () => AppTunnelTunnelIdRoute,
   } as any)
+const AppTunnelTunnelIdGatewaysRoute =
+  AppTunnelTunnelIdGatewaysRouteImport.update({
+    id: '/gateways',
+    path: '/gateways',
+    getParentRoute: () => AppTunnelTunnelIdRoute,
+  } as any)
 const AppTunnelTunnelIdInfoRoute = AppTunnelTunnelIdInfoRouteImport.update({
   id: '/info',
   path: '/info',
@@ -895,7 +896,6 @@ export interface FileRoutesByFullPath {
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
-  '/tailnet/$tailnetId': typeof AppTailnetTailnetIdRoute
   '/tunnel/$tunnelId': typeof AppTunnelTunnelIdRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
@@ -943,6 +943,7 @@ export interface FileRoutesByFullPath {
   '/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/tunnel/$tunnelId/$': typeof AppTunnelTunnelIdSplatRoute
   '/tunnel/$tunnelId/connected': typeof AppTunnelTunnelIdConnectedRoute
+  '/tunnel/$tunnelId/gateways': typeof AppTunnelTunnelIdGatewaysRoute
   '/tunnel/$tunnelId/info': typeof AppTunnelTunnelIdInfoRoute
   '/tunnel/$tunnelId/logs': typeof AppTunnelTunnelIdLogsRoute
   '/tunnel/$tunnelId/terminal': typeof AppTunnelTunnelIdTerminalRoute
@@ -1021,7 +1022,6 @@ export interface FileRoutesByTo {
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
-  '/tailnet/$tailnetId': typeof AppTailnetTailnetIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/api/github/manifest': typeof ApiGithubManifestRoute
@@ -1068,6 +1068,7 @@ export interface FileRoutesByTo {
   '/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/tunnel/$tunnelId/$': typeof AppTunnelTunnelIdSplatRoute
   '/tunnel/$tunnelId/connected': typeof AppTunnelTunnelIdConnectedRoute
+  '/tunnel/$tunnelId/gateways': typeof AppTunnelTunnelIdGatewaysRoute
   '/tunnel/$tunnelId/info': typeof AppTunnelTunnelIdInfoRoute
   '/tunnel/$tunnelId/logs': typeof AppTunnelTunnelIdLogsRoute
   '/tunnel/$tunnelId/terminal': typeof AppTunnelTunnelIdTerminalRoute
@@ -1157,7 +1158,6 @@ export interface FileRoutesById {
   '/_app/settings/files': typeof AppSettingsFilesRoute
   '/_app/settings/notifications': typeof AppSettingsNotificationsRoute
   '/_app/settings/relays': typeof AppSettingsRelaysRoute
-  '/_app/tailnet/$tailnetId': typeof AppTailnetTailnetIdRoute
   '/_app/tunnel/$tunnelId': typeof AppTunnelTunnelIdRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
@@ -1205,6 +1205,7 @@ export interface FileRoutesById {
   '/_app/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/_app/tunnel/$tunnelId/$': typeof AppTunnelTunnelIdSplatRoute
   '/_app/tunnel/$tunnelId/connected': typeof AppTunnelTunnelIdConnectedRoute
+  '/_app/tunnel/$tunnelId/gateways': typeof AppTunnelTunnelIdGatewaysRoute
   '/_app/tunnel/$tunnelId/info': typeof AppTunnelTunnelIdInfoRoute
   '/_app/tunnel/$tunnelId/logs': typeof AppTunnelTunnelIdLogsRoute
   '/_app/tunnel/$tunnelId/terminal': typeof AppTunnelTunnelIdTerminalRoute
@@ -1294,7 +1295,6 @@ export interface FileRouteTypes {
     | '/settings/files'
     | '/settings/notifications'
     | '/settings/relays'
-    | '/tailnet/$tailnetId'
     | '/tunnel/$tunnelId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
@@ -1342,6 +1342,7 @@ export interface FileRouteTypes {
     | '/server/$serverId/terminal'
     | '/tunnel/$tunnelId/$'
     | '/tunnel/$tunnelId/connected'
+    | '/tunnel/$tunnelId/gateways'
     | '/tunnel/$tunnelId/info'
     | '/tunnel/$tunnelId/logs'
     | '/tunnel/$tunnelId/terminal'
@@ -1420,7 +1421,6 @@ export interface FileRouteTypes {
     | '/settings/files'
     | '/settings/notifications'
     | '/settings/relays'
-    | '/tailnet/$tailnetId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/api/github/manifest'
@@ -1467,6 +1467,7 @@ export interface FileRouteTypes {
     | '/server/$serverId/terminal'
     | '/tunnel/$tunnelId/$'
     | '/tunnel/$tunnelId/connected'
+    | '/tunnel/$tunnelId/gateways'
     | '/tunnel/$tunnelId/info'
     | '/tunnel/$tunnelId/logs'
     | '/tunnel/$tunnelId/terminal'
@@ -1555,7 +1556,6 @@ export interface FileRouteTypes {
     | '/_app/settings/files'
     | '/_app/settings/notifications'
     | '/_app/settings/relays'
-    | '/_app/tailnet/$tailnetId'
     | '/_app/tunnel/$tunnelId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
@@ -1603,6 +1603,7 @@ export interface FileRouteTypes {
     | '/_app/server/$serverId/terminal'
     | '/_app/tunnel/$tunnelId/$'
     | '/_app/tunnel/$tunnelId/connected'
+    | '/_app/tunnel/$tunnelId/gateways'
     | '/_app/tunnel/$tunnelId/info'
     | '/_app/tunnel/$tunnelId/logs'
     | '/_app/tunnel/$tunnelId/terminal'
@@ -2176,13 +2177,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRelaysRouteImport
       parentRoute: typeof AppSettingsRoute
     }
-    '/_app/tailnet/$tailnetId': {
-      id: '/_app/tailnet/$tailnetId'
-      path: '/tailnet/$tailnetId'
-      fullPath: '/tailnet/$tailnetId'
-      preLoaderRoute: typeof AppTailnetTailnetIdRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/tunnel/$tunnelId': {
       id: '/_app/tunnel/$tunnelId'
       path: '/tunnel/$tunnelId'
@@ -2517,6 +2511,13 @@ declare module '@tanstack/react-router' {
       path: '/connected'
       fullPath: '/tunnel/$tunnelId/connected'
       preLoaderRoute: typeof AppTunnelTunnelIdConnectedRouteImport
+      parentRoute: typeof AppTunnelTunnelIdRoute
+    }
+    '/_app/tunnel/$tunnelId/gateways': {
+      id: '/_app/tunnel/$tunnelId/gateways'
+      path: '/gateways'
+      fullPath: '/tunnel/$tunnelId/gateways'
+      preLoaderRoute: typeof AppTunnelTunnelIdGatewaysRouteImport
       parentRoute: typeof AppTunnelTunnelIdRoute
     }
     '/_app/tunnel/$tunnelId/info': {
@@ -2873,6 +2874,7 @@ const AppServerServerIdRouteWithChildren =
 interface AppTunnelTunnelIdRouteChildren {
   AppTunnelTunnelIdSplatRoute: typeof AppTunnelTunnelIdSplatRoute
   AppTunnelTunnelIdConnectedRoute: typeof AppTunnelTunnelIdConnectedRoute
+  AppTunnelTunnelIdGatewaysRoute: typeof AppTunnelTunnelIdGatewaysRoute
   AppTunnelTunnelIdInfoRoute: typeof AppTunnelTunnelIdInfoRoute
   AppTunnelTunnelIdLogsRoute: typeof AppTunnelTunnelIdLogsRoute
   AppTunnelTunnelIdTerminalRoute: typeof AppTunnelTunnelIdTerminalRoute
@@ -2882,6 +2884,7 @@ interface AppTunnelTunnelIdRouteChildren {
 const AppTunnelTunnelIdRouteChildren: AppTunnelTunnelIdRouteChildren = {
   AppTunnelTunnelIdSplatRoute: AppTunnelTunnelIdSplatRoute,
   AppTunnelTunnelIdConnectedRoute: AppTunnelTunnelIdConnectedRoute,
+  AppTunnelTunnelIdGatewaysRoute: AppTunnelTunnelIdGatewaysRoute,
   AppTunnelTunnelIdInfoRoute: AppTunnelTunnelIdInfoRoute,
   AppTunnelTunnelIdLogsRoute: AppTunnelTunnelIdLogsRoute,
   AppTunnelTunnelIdTerminalRoute: AppTunnelTunnelIdTerminalRoute,
@@ -2908,7 +2911,6 @@ interface AppRouteChildren {
   AppNotificationsNotificationIdRoute: typeof AppNotificationsNotificationIdRoute
   AppRelayRelayIdRoute: typeof AppRelayRelayIdRouteWithChildren
   AppServerServerIdRoute: typeof AppServerServerIdRouteWithChildren
-  AppTailnetTailnetIdRoute: typeof AppTailnetTailnetIdRoute
   AppTunnelTunnelIdRoute: typeof AppTunnelTunnelIdRouteWithChildren
 }
 
@@ -2929,7 +2931,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppNotificationsNotificationIdRoute: AppNotificationsNotificationIdRoute,
   AppRelayRelayIdRoute: AppRelayRelayIdRouteWithChildren,
   AppServerServerIdRoute: AppServerServerIdRouteWithChildren,
-  AppTailnetTailnetIdRoute: AppTailnetTailnetIdRoute,
   AppTunnelTunnelIdRoute: AppTunnelTunnelIdRouteWithChildren,
 }
 

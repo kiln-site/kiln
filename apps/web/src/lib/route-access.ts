@@ -163,7 +163,7 @@ async function requireResourceDestination<D extends { id: string }>(
 }
 
 /**
- * Opens a tunnel's page the viewer may, from what its tailnet's listing says
+ * Opens a tunnel's page the viewer may, from what the tunnels' listing says
  * they may do with it, or the first one they may, or the tunnels list.
  */
 export function requireTunnelDestinationAccess(

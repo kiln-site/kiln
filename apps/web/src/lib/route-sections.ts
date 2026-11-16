@@ -12,8 +12,6 @@ export function globalSectionFromRouteId(
   routeId: string | undefined
 ): GlobalSection {
   if (routeId?.startsWith("/_app/infra")) return "infra"
-  // A tailnet's page sits among Infrastructure's, beside its tunnels.
-  if (routeId?.startsWith("/_app/tailnet")) return "infra"
   if (routeId?.startsWith("/_app/backups")) return "backups"
   if (routeId?.startsWith("/_app/automations")) return "automations"
   if (routeId === "/_app/activity") return "activity"

@@ -56,7 +56,7 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
 )
 
 export const readInfraRelayOptions = Effect.fn("Infra.directory.relays")(
-  function* (user: AuthenticatedUser, kind: "app" | "database" | "tunnel") {
+  function* (user: AuthenticatedUser, kind: "app" | "database") {
     const { relays, grants } = yield* Effect.all(
       {
         relays: listPersistedRelaysEffect(),
@@ -74,13 +74,6 @@ export const readInfraRelayOptions = Effect.fn("Infra.directory.relays")(
           resourceType: "relay",
           resourceId: relay.id,
         })
-        // Gateways are a platform administrator's until they have
-        // permissions of their own.
-        if (kind === "tunnel") {
-          return isPlatformAdmin(user)
-            ? [{ id: relay.id, name: relay.name, canCreate: true }]
-            : []
-        }
         const canCreate =
           isPlatformAdmin(user) || permissions.has(`${kind}.create`)
         const canRead =

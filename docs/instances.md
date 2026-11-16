@@ -170,7 +170,7 @@ makes the gateway on that Relay if there is none, or takes it away when
 the last thing there leaves. A Tailscale network of before is a tunnel
 now, each of its Relays' nodes a gateway. Built: that, the migration,
 connecting, power and deploying across its gateways, DNS reloading in
-place, names, and tunnel names as primary addresses. Its pages and its
+place, names, tunnel names as primary addresses, and its pages. Its
 permissions of its own follow.
 
 ### What runs
@@ -304,21 +304,34 @@ permissions of its own follow.
 
 ### Pages
 
-To build, on the components every instance's pages share:
+On the components every instance's pages share. Built.
 
 - **Infrastructure → Tunnels** (`/infra/tunnels`) lists tunnels, one row
-  each on the table every kind's list uses.
-- **A tunnel's page** (`/tunnel/$id`): Info (its name, TLDs, Tailscale login
-  and deleting it, until Info pages are one), Gateways (one row per Relay:
-  its state, Tailscale IP, what connects through it, power and deploying
-  again), Connected (everything it connects, with its names), Logs (each
-  gateway's two containers, and their deployments) and Terminal (a
-  gateway's Tailscale). No page for a gateway, and no `/tailnet` route.
+  each on the table every kind's list uses: its state across its gateways,
+  its TLDs, how many gateways (and on which Relays) and how many things it
+  connects. The sidebar counts tunnels, and its instance picker lists them.
+- **A tunnel's page** (`/tunnel/$id`):
+  - **Info:** its ID, Brick, gateways and TLDs, then its name and TLDs, its
+    Tailscale login and deleting it, until Info pages are one.
+  - **Gateways:** one row per Relay, with its state, Tailscale IP, what
+    connects through it, and power, deploying again and its logs. None is
+    added here: gateways follow what's connected.
+  - **Connected:** everything it connects, with its names. Connecting picks
+    from every Relay; one with no gateway yet says it adds one, and the
+    toast follows Tailscale logging it in.
+  - **Logs:** each gateway's Tailscale and CoreDNS, labelled by Relay, and
+    every gateway's deployments.
+  - **Terminal:** a gateway's Tailscale container, picked when there are
+    several. CoreDNS's image has no shell.
+
+  Its header's power and redeploy act on every gateway and say which
+  failed. No page for a gateway, and no `/tailnet` route.
+
 - The one Add dialog has Tunnel, which browses the tunnel Bricks; beside the
   Brick, its name, first TLD and Tailscale login, and no Relay.
-- Today's pages still show the model before: a tailnet's page, and a page
-  for each gateway as a tunnel's. They work against the new model until the
-  pages land; adding a gateway by hand and the one-time key are gone.
+- An instance's Network tab lists the tunnels it's in, with its names, and
+  connects it to any other: through the gateway on its Relay, or adding one,
+  which needs the tunnel's Tailscale login.
 
 ### Moving off today's networks
 
@@ -374,7 +387,7 @@ One stack, each part working on its own:
 7. Tunnels from Bricks, and adding one from the Add dialog.
 8. A tunnel is one instance and its Relays its gateways, made and taken
    away as things connect. Built.
-9. The pages for it.
+9. The pages for it. Built.
 
 ## Bricks
 

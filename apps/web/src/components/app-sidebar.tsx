@@ -117,10 +117,11 @@ import {
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { instanceSelection } from "@/lib/instance-selection"
 import {
+  tunnelPermissionsOf,
   tunnelStatus,
   useTunnel,
-  type TunnelView,
-} from "@/components/tunnel/tailnet-data"
+} from "@/components/tunnel/tunnel-data"
+import type { TunnelWorkspaceValue as TunnelView } from "@/components/tunnel/tunnel-workspace-context"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
@@ -427,10 +428,7 @@ const TunnelCount = React.memo(function TunnelCount({
 })
 
 function selectTunnelCount(result: TunnelsResult) {
-  return result.tunnels.reduce(
-    (count, tailnet) => count + tailnet.gateways.length,
-    0
-  )
+  return result.tunnels.length
 }
 
 function AppsNavigationItem({ relayConfigured }: { relayConfigured: boolean }) {
@@ -651,7 +649,12 @@ function SidebarTunnelNavigation({
   tunnelId: string
 }) {
   const query = useTunnel(tunnelId)
-  const view = query.data
+  const tunnel = query.data
+  const view = React.useMemo(
+    (): TunnelView | null =>
+      tunnel ? { permissions: tunnelPermissionsOf(tunnel), tunnel } : null,
+    [tunnel]
+  )
   if (!view) return query.isPending ? null : fallback
   return (
     <SidebarResourceGroup
@@ -1221,13 +1224,15 @@ const InstanceSelector = React.memo(function InstanceSelector({
         void navigate(
           tab === "connected"
             ? { to: "/tunnel/$tunnelId/connected", params: { tunnelId } }
-            : tab === "logs"
-              ? { to: "/tunnel/$tunnelId/logs", params: { tunnelId } }
-              : tab === "terminal"
-                ? { to: "/tunnel/$tunnelId/terminal", params: { tunnelId } }
-                : tab === "info"
-                  ? { to: "/tunnel/$tunnelId/info", params: { tunnelId } }
-                  : { to: "/tunnel/$tunnelId", params: { tunnelId } }
+            : tab === "gateways"
+              ? { to: "/tunnel/$tunnelId/gateways", params: { tunnelId } }
+              : tab === "logs"
+                ? { to: "/tunnel/$tunnelId/logs", params: { tunnelId } }
+                : tab === "terminal"
+                  ? { to: "/tunnel/$tunnelId/terminal", params: { tunnelId } }
+                  : tab === "info"
+                    ? { to: "/tunnel/$tunnelId/info", params: { tunnelId } }
+                    : { to: "/tunnel/$tunnelId", params: { tunnelId } }
         )
         return
       }
@@ -1274,11 +1279,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
             : selection.kind === "kiln"
               ? kilnPickerKey
               : selection.kind === "tunnel"
-                ? sidebarPickerKey(
-                    "tunnel",
-                    selection.view.tunnel.relayId,
-                    selection.view.tunnel.id
-                  )
+                ? sidebarPickerKey("tunnel", "", selection.view.tunnel.id)
                 : null
   const selectedKeys = React.useMemo(
     () => new Set(selectedKey ? [selectedKey] : []),
@@ -1352,10 +1353,12 @@ const InstanceSelector = React.memo(function InstanceSelector({
                 instance={{
                   id: selection.view.tunnel.id,
                   kind: "tunnel",
-                  relayId: selection.view.tunnel.relayId,
+                  relayId: "",
                 }}
                 label="Switch instance."
-                meta={`Tunnel · ${selection.view.tunnel.relayName}`}
+                meta={`Tunnel · ${selection.view.tunnel.domains
+                  .map((domain) => `.${domain}`)
+                  .join(" ")}`}
                 name={selection.view.tunnel.name}
                 status={tunnelStatus(selection.view.tunnel)}
               />
@@ -1681,19 +1684,15 @@ function selectSidebarAppPickerItems(
 function selectSidebarTunnelPickerItems(
   result: TunnelsResult
 ): Array<InstancePickerItem> {
-  return result.tunnels.flatMap((tailnet) =>
-    tailnet.gateways.map((tunnel) => ({
-      identity: { id: tunnel.id, kind: "tunnel", relayId: tunnel.relayId },
-      key: sidebarPickerKey("tunnel", tunnel.relayId, tunnel.id),
-      meta: `Tailscale · ${tunnel.id}`,
-      name: tunnel.name,
-      searchText: `${tunnel.id} ${tailnet.name} ${tunnel.relayName}`,
-      // The Relay's inventory doesn't list tunnels; their tailnet says.
-      status: tailnet.cleanup
-        ? { label: "Deleting", pulse: true, tone: "warning" as const }
-        : tunnelStatus(tunnel),
-    }))
-  )
+  return result.tunnels.map((tunnel) => ({
+    identity: { id: tunnel.id, kind: "tunnel", relayId: "" },
+    key: sidebarPickerKey("tunnel", "", tunnel.id),
+    meta: `Tailscale · ${tunnel.id}`,
+    name: tunnel.name,
+    searchText: `${tunnel.id} ${tunnel.domains.join(" ")}`,
+    // The Relays' inventories don't list tunnels; their gateways say.
+    status: tunnelStatus(tunnel),
+  }))
 }
 
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
@@ -2152,7 +2151,7 @@ function appTabFromPathname(pathname: string): AppDestinationId | null {
 
 function tunnelTabFromPathname(pathname: string) {
   return (
-    /^\/tunnel\/[^/]+\/(connected|info|logs|terminal)\/?$/.exec(
+    /^\/tunnel\/[^/]+\/(connected|gateways|info|logs|terminal)\/?$/.exec(
       pathname
     )?.[1] ?? null
   )

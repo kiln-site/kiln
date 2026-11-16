@@ -5,9 +5,7 @@ import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { queryKeys } from "@/lib/query-options"
 import { getInfraRelayOptions } from "@/server/infra-directory"
 
-export function infraRelayOptionsQueryOptions(
-  kind: "app" | "database" | "tunnel"
-) {
+export function infraRelayOptionsQueryOptions(kind: "app" | "database") {
   return queryOptions({
     queryKey: ["infra-directory", "relays", kind],
     queryFn: ({ signal }) => getInfraRelayOptions({ data: kind, signal }),

@@ -19,18 +19,18 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import {
   normalizeTld,
-  useSetTailnets,
-  useTailnetSave,
+  useSetTunnels,
+  useTunnelSave,
   type TunnelOverview,
-} from "@/components/tunnel/tailnet-data"
+} from "@/components/tunnel/tunnel-data"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { configureTailscaleIntegration } from "@/server/tunnels"
 
-// What a tailnet shares: its name and TLDs, and its Tailscale login.
+// What a tunnel shares: its name and TLDs, and its Tailscale login.
 
 const MAXIMUM_TLDS = 16
 
-/** The Tailscale login's fields, for a new tailnet or one that has one. */
+/** The Tailscale login's fields, for a new tunnel or one that has one. */
 export interface TailscaleLoginValues {
   clientId: string
   clientSecret: string
@@ -38,12 +38,12 @@ export interface TailscaleLoginValues {
 }
 
 export function initialLogin(
-  tailnet?: Pick<TunnelOverview, "integration">
+  tunnel?: Pick<TunnelOverview, "integration">
 ): TailscaleLoginValues {
   return {
-    clientId: tailnet?.integration?.clientId ?? "",
+    clientId: tunnel?.integration?.clientId ?? "",
     clientSecret: "",
-    tag: tailnet?.integration?.tags[0] ?? "tag:kiln",
+    tag: tunnel?.integration?.tags[0] ?? "tag:kiln",
   }
 }
 
@@ -182,39 +182,39 @@ export function TailscaleLoginHelp({ tag }: { tag: string }) {
   )
 }
 
-/** A tailnet's Tailscale login, checked with Tailscale as it's saved. */
-export const TailnetLoginCard = React.memo(function TailnetLoginCard({
-  tailnet,
+/** A tunnel's Tailscale login, checked with Tailscale as it's saved. */
+export const TunnelLoginCard = React.memo(function TunnelLoginCard({
+  tunnel,
 }: {
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
 }) {
-  const [values, setValues] = React.useState(() => initialLogin(tailnet))
-  const setTailnets = useSetTailnets()
+  const [values, setValues] = React.useState(() => initialLogin(tunnel))
+  const setTunnels = useSetTunnels()
   const save = useMutation({
     mutationFn: () =>
       configureTailscaleIntegration({
         data: {
           clientId: values.clientId.trim(),
           clientSecret: values.clientSecret.trim() || undefined,
-          domains: tailnet.domains,
-          id: tailnet.id,
-          previousDomains: tailnet.domains,
+          domains: tunnel.domains,
+          id: tunnel.id,
+          previousDomains: tunnel.domains,
           tag: values.tag.trim(),
         },
       }),
     onSuccess: (configured) => {
-      setTailnets(configured.result)
+      setTunnels(configured.result)
       setValues((current) => ({ ...current, clientSecret: "" }))
       showToast({
-        message: `${tailnet.name}'s Tailscale login is checked and saved`,
+        message: `${tunnel.name}'s Tailscale login is checked and saved`,
         type: "success",
       })
     },
   })
-  const hasSecret = tailnet.integration !== null
+  const hasSecret = tunnel.integration !== null
   const changed =
-    values.clientId.trim() !== (tailnet.integration?.clientId ?? "") ||
-    values.tag.trim() !== (tailnet.integration?.tags[0] ?? "") ||
+    values.clientId.trim() !== (tunnel.integration?.clientId ?? "") ||
+    values.tag.trim() !== (tunnel.integration?.tags[0] ?? "") ||
     values.clientSecret.trim().length > 0
   return (
     <form
@@ -225,12 +225,12 @@ export const TailnetLoginCard = React.memo(function TailnetLoginCard({
       }}
     >
       <div className="min-w-0">
-        {tailnet.integration?.lastError ? (
+        {tunnel.integration?.lastError ? (
           <p
             className="mb-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive light:bg-destructive/10"
             role="alert"
           >
-            {tailnet.integration.lastError}
+            {tunnel.integration.lastError}
           </p>
         ) : null}
         <TailscaleLoginFields
@@ -269,24 +269,24 @@ export const TailnetLoginCard = React.memo(function TailnetLoginCard({
 })
 
 /**
- * A tailnet's name and its TLDs, in order. Generated names are under the
- * first; Tailscale's split DNS sends every one to its tunnels.
+ * A tunnel's name and its TLDs, in order. Generated names are under the
+ * first; Tailscale's split DNS sends every one to its gateways.
  */
-export const TailnetSettingsCard = React.memo(function TailnetSettingsCard({
+export const TunnelSettingsCard = React.memo(function TunnelSettingsCard({
   canWrite,
-  tailnet,
+  tunnel,
 }: {
   canWrite: boolean
-  tailnet: TunnelOverview
+  tunnel: TunnelOverview
 }) {
-  const [name, setName] = React.useState(tailnet.name)
-  const [domains, setDomains] = React.useState(tailnet.domains)
+  const [name, setName] = React.useState(tunnel.name)
+  const [domains, setDomains] = React.useState(tunnel.domains)
   const [adding, setAdding] = React.useState("")
-  const save = useTailnetSave()
+  const save = useTunnelSave()
   const nextTld = normalizeTld(adding)
   const changed =
-    name.trim() !== tailnet.name ||
-    domains.join(" ") !== tailnet.domains.join(" ")
+    name.trim() !== tunnel.name ||
+    domains.join(" ") !== tunnel.domains.join(" ")
   const disabled = !canWrite || save.isPending
   const move = (index: number, by: number) =>
     setDomains((current) => {
@@ -308,9 +308,9 @@ export const TailnetSettingsCard = React.memo(function TailnetSettingsCard({
         if (!changed || name.trim().length === 0) return
         save.mutate({
           change: { domains, name: name.trim() },
-          doing: "Saving its name and TLDs on every tunnel",
+          doing: "Saving its name and TLDs on every gateway",
           done: "Its name and TLDs are saved",
-          tailnet,
+          tunnel,
         })
       }}
     >
@@ -420,8 +420,8 @@ export const TailnetSettingsCard = React.memo(function TailnetSettingsCard({
             variant="ghost"
             disabled={!changed || save.isPending}
             onClick={() => {
-              setName(tailnet.name)
-              setDomains(tailnet.domains)
+              setName(tunnel.name)
+              setDomains(tunnel.domains)
             }}
           >
             Undo

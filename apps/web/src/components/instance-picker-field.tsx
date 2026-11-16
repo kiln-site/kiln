@@ -17,7 +17,7 @@ import type {
 // One field of a form that picks with the instance picker: a trigger showing
 // what's chosen, as a card, over the searchable list. Typing can offer to
 // create what isn't there yet (`pickerCreateItem`), as a volume, a database
-// or a tailnet does.
+// or a tunnel does.
 
 export function InstancePickerField({
   children,

@@ -23,6 +23,7 @@ import {
   SquareChevronRight,
   Table2,
   TerminalSquare,
+  Waypoints,
   Workflow,
 } from "lucide-react"
 import {
@@ -349,7 +350,12 @@ export function canAccessInstancePermission(
   )
 }
 
-export type TunnelDestinationId = "connected" | "info" | "logs" | "terminal"
+export type TunnelDestinationId =
+  | "connected"
+  | "gateways"
+  | "info"
+  | "logs"
+  | "terminal"
 
 export interface TunnelDestination extends NavigationDestination {
   id: TunnelDestinationId
@@ -360,10 +366,18 @@ export const tunnelDestinations = [
   {
     icon: SlidersHorizontal,
     id: "info",
-    keywords: ["details", "tailscale", "status"],
+    keywords: ["details", "settings", "tlds", "login", "tailscale"],
     label: "Info",
     permission: "instance.read",
     to: "/tunnel/$tunnelId/info",
+  },
+  {
+    icon: Waypoints,
+    id: "gateways",
+    keywords: ["relays", "tailscale", "coredns", "power"],
+    label: "Gateways",
+    permission: "instance.read",
+    to: "/tunnel/$tunnelId/gateways",
   },
   {
     icon: Network,
@@ -392,8 +406,8 @@ export const tunnelDestinations = [
 ] as const satisfies ReadonlyArray<TunnelDestination>
 
 /**
- * A tunnel's pages the viewer may open, from what they may do with it,
- * which its tailnet's listing says (`getTunnels`).
+ * A tunnel's pages the viewer may open, from what they may do with it
+ * (`tunnelPermissionsOf`).
  */
 export function accessibleDestinationsForTunnel(
   permissions: ReadonlyArray<AccessPermission>
