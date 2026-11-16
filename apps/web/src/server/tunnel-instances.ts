@@ -107,16 +107,54 @@ export const performGatewayAction = createServerFn({ method: "POST" })
     })
   )
 
-const tunnelPower = operation<z.infer<typeof tunnelPowerSchema>>()({
+// A change to every gateway names the gateways it found, so it holds each
+// one's lane as well as the tunnel's and can't overlap a change to one.
+type AcrossGateways<Input> = Input & { gatewayIds: ReadonlyArray<string> }
+
+const acrossGatewaysLocks = ({
+  input,
+}: {
+  input: AcrossGateways<{ tunnelId: string }>
+}) => [
+  exclusive(tunnelGatewaysKey(input.tunnelId)),
+  ...input.gatewayIds.map((id) => exclusive(gatewayKey(id))),
+]
+
+// The gateways it found that the viewer still may change, once it holds
+// their lanes; one made since waits for the next change.
+async function lockedGateways(
+  user: AuthenticatedUser,
+  input: AcrossGateways<{ tunnelId: string }>,
+  permission: Parameters<typeof requireTunnelGateways>[2]
+) {
+  const held = new Set(input.gatewayIds)
+  return (await requireTunnelGateways(user, input.tunnelId, permission)).filter(
+    ({ id }) => held.has(id)
+  )
+}
+
+async function gatewayIdsOf(
+  user: AuthenticatedUser,
+  tunnelId: string,
+  permission: Parameters<typeof requireTunnelGateways>[2]
+) {
+  return (await requireTunnelGateways(user, tunnelId, permission)).map(
+    ({ id }) => id
+  )
+}
+
+const tunnelPower = operation<
+  AcrossGateways<z.infer<typeof tunnelPowerSchema>>
+>()({
   name: "tunnels.power",
   doing: "Changing this tunnel's power",
   authorize: ({ user }) => signedIn(user),
-  locks: ({ input }) => [exclusive(tunnelGatewaysKey(input.tunnelId))],
+  locks: acrossGatewaysLocks,
   run: ({ context: user, input }) =>
     promiseEffect(async () => {
-      const gateways = await requireTunnelGateways(
+      const gateways = await lockedGateways(
         user,
-        input.tunnelId,
+        input,
         instancePowerPermission(input.action)
       )
       const outcomes = await eachGateway(gateways, (gateway) =>
@@ -134,11 +172,15 @@ const tunnelPower = operation<z.infer<typeof tunnelPowerSchema>>()({
  */
 export const performTunnelAction = createServerFn({ method: "POST" })
   .validator(tunnelPowerSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(tunnelPower, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const gatewayIds = await gatewayIdsOf(
+      user,
+      data.tunnelId,
+      instancePowerPermission(data.action)
+    )
+    return runOperationPromise(tunnelPower, { ...data, gatewayIds }, { user })
+  })
 
 const redeployGatewayOperation = operation<
   z.infer<typeof gatewayInputSchema>
@@ -177,18 +219,16 @@ export const redeployGateway = createServerFn({ method: "POST" })
     })
   )
 
-const redeployTunnelOperation = operation<z.infer<typeof tunnelInputSchema>>()({
+const redeployTunnelOperation = operation<
+  AcrossGateways<z.infer<typeof tunnelInputSchema>>
+>()({
   name: "tunnels.deploy",
   doing: "Deploying this tunnel's gateways again",
   authorize: ({ user }) => signedIn(user),
-  locks: ({ input }) => [exclusive(tunnelGatewaysKey(input.tunnelId))],
+  locks: acrossGatewaysLocks,
   run: ({ context: user, input }) =>
     promiseEffect(async () => {
-      const gateways = await requireTunnelGateways(
-        user,
-        input.tunnelId,
-        "instance.deploy"
-      )
+      const gateways = await lockedGateways(user, input, "instance.deploy")
       const outcomes = await eachGateway(gateways, (gateway) =>
         redeployOne(user, gateway)
       )
@@ -204,11 +244,19 @@ const redeployTunnelOperation = operation<z.infer<typeof tunnelInputSchema>>()({
  */
 export const redeployTunnel = createServerFn({ method: "POST" })
   .validator(tunnelInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(redeployTunnelOperation, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const gatewayIds = await gatewayIdsOf(
+      user,
+      data.tunnelId,
+      "instance.deploy"
+    )
+    return runOperationPromise(
+      redeployTunnelOperation,
+      { ...data, gatewayIds },
+      { user }
+    )
+  })
 
 /** One gateway's deployments, for whoever may read its logs. */
 export const getGatewayDeployments = createServerFn({ method: "GET" })
