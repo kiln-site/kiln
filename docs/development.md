@@ -90,6 +90,11 @@ connection on (`--tls-terminated-tcp`), and the proxy opens a new connection
 to Hearth for every request. It also compresses responses, which cuts that
 first load from about 80 MB to about a quarter of that.
 
+Sign-in sends the page's own origin as its callback, so the first `share` of
+a link restarts Hearth with the link in `BETTER_AUTH_TRUSTED_ORIGINS`.
+Password sign-in and dev sign-in work through the link. Passkeys are tied to
+`KILN_URL`'s host and don't.
+
 Every stack shared from a box has the box's host name, and cookies ignore
 ports, so the proxy gives each link its own session cookie names. Signing in
 on one stack leaves the others signed in. UI preferences, such as the sidebar
