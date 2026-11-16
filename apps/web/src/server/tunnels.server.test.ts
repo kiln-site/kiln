@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
 import { disposeAppRuntime } from "@/effect/runtime"
+import { addManualDomainEffect } from "@/effect/domains"
 import { createTunnelDefinitionEffect } from "@/effect/tunnels"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { runOperationPromise } from "@/operations/operation"
@@ -589,6 +590,21 @@ describeMysql("a tunnel's gateways", () => {
             ["survival-cc", "survival-dd"]
           )
         })
+    )
+
+    // On its tailnet a tunnel's domain answers for every name beneath it, so
+    // it can't take over a public one.
+    it.effect("refuses a TLD that overlaps a public domain", () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* addManualDomainEffect("shop.test", null)
+
+        const refused = yield* saveDomains(["kiln", "test"])
+
+        assert.include(refused ?? "", "shop.test")
+        const manual = yield* Effect.flip(addManualDomainEffect("a.kiln", null))
+        assert.include(manual.message, ".kiln")
+      })
     )
 
     // An alias its gateways couldn't all serve isn't kept, so asking again

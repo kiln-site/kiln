@@ -45,6 +45,7 @@ import {
   type TailscaleOAuthCredential,
 } from "@/effect/tunnels"
 import { reserveInstanceId } from "@/effect/instance-ids"
+import { tunnelDomainConflictEffect } from "@/effect/domains"
 import { recoverPromise } from "@/effect/promise"
 import {
   addTunnelAliasEffect,
@@ -76,6 +77,7 @@ import { tailscaleMemberProblem } from "@/lib/tailscale-members"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { domainCatalogKey } from "@/lib/dns-operations"
 import { tunnelKey, tunnelSettingsKey } from "@/lib/tunnel-lanes"
 import { exclusive } from "@/operations/lanes"
 import { invalidateManagedDomainAddressesEffect } from "@/server/addresses.server"
@@ -234,7 +236,11 @@ export const createTunnelOperation = operation<
   name: "tunnel.create",
   doing: "Creating this tunnel",
   authorize: ({ user }) => tailscaleAdministrator(user),
-  locks: ({ input }) => [exclusive(tunnelKey(input.id))],
+  locks: ({ input }) => [
+    exclusive(tunnelKey(input.id)),
+    // It may add domains, checked against every other domain.
+    exclusive(domainCatalogKey),
+  ],
   run: ({ context: user, input }) =>
     promiseEffect(() => createTunnelHandler(user, input)),
   audit: ({ input }) => ({ id: input.id, kind: "tunnel" }),
@@ -245,7 +251,7 @@ async function createTunnelHandler(
   data: z.infer<typeof createTunnelSchema> & { id: string }
 ) {
   const definitions = await loadTunnelDefinitions()
-  requireUnusedDomains(definitions, data.id, data.domains)
+  await requireUnusedDomains(definitions, data.id, data.domains)
   // Checked now, so a tunnel never names a Brick it can't run.
   await requiredTunnelBrick(data.brick)
   const verified = await runAppEffect(
@@ -278,7 +284,11 @@ export const configureTailscaleIntegrationOperation = operation<
   name: "tunnel.connect",
   doing: "Connecting this network to Tailscale",
   authorize: ({ user }) => tailscaleAdministrator(user),
-  locks: ({ input }) => [exclusive(tunnelSettingsKey(input.id))],
+  locks: ({ input }) => [
+    exclusive(tunnelSettingsKey(input.id)),
+    // It may add domains, checked against every other domain.
+    exclusive(domainCatalogKey),
+  ],
   run: ({ input }) =>
     promiseEffect(() => configureTailscaleIntegrationHandler(input)),
   audit: ({ input }) => ({ id: input.id, kind: "tunnel" }),
@@ -378,7 +388,11 @@ export const saveTunnelOperation = operation<
   name: "tunnel.save",
   doing: "Saving this tunnel",
   authorize: ({ user }) => tailscaleAdministrator(user),
-  locks: ({ input }) => [exclusive(tunnelSettingsKey(input.id))],
+  locks: ({ input }) => [
+    exclusive(tunnelSettingsKey(input.id)),
+    // It may add domains, checked against every other domain.
+    exclusive(domainCatalogKey),
+  ],
   run: ({ context: user, input }) =>
     promiseEffect(() => saveTunnelHandler(user.id, input)),
   audit: ({ input }) => ({ id: input.id, kind: "tunnel" }),
@@ -518,7 +532,7 @@ async function saveTunnelHandler(
     throw new Error("This tunnel is being removed")
   }
   const currentRelayIds = new Set(currentForStack.map(({ relayId }) => relayId))
-  requireUnusedDomains(definitions, id, data.domains)
+  await requireUnusedDomains(definitions, id, data.domains)
   requireCompleteGatewayList(currentResult.unavailableRelays)
   const [appRecords, databaseRecords] = await Promise.all([
     data.bindings.some((binding) => appTailscaleMember(binding.memberId))
@@ -1495,11 +1509,11 @@ function replaceTunnelDefinition(
   ]
 }
 
-function requireUnusedDomains(
+async function requireUnusedDomains(
   definitions: ReadonlyArray<TunnelDefinition>,
   id: string,
   domains: ReadonlyArray<string>
-): void {
+): Promise<void> {
   for (const definition of definitions) {
     if (definition.id === id) continue
     const taken = domains.find((domain) => definition.domains.includes(domain))
@@ -1507,6 +1521,13 @@ function requireUnusedDomains(
       throw new Error(`.${taken} is already a TLD of ${definition.name}`)
     }
   }
+  // Nor may it overlap a public domain, which it would answer for on its
+  // tailnet.
+  const conflict = await runAppEffect(
+    "domains.tunnelConflict",
+    tunnelDomainConflictEffect(domains, id)
+  )
+  if (conflict) throw new Error(conflict)
 }
 
 export function requireCompleteGatewayList(

@@ -73,6 +73,7 @@ import {
   anyDomainConnectionEffect,
   listDomainConnectionsEffect,
   listManualDomainsEffect,
+  tunnelDomainOverEffect,
   listUsableVanityDomainsEffect,
   loadDomainConnectionCredentialEffect,
   loadDomainConnectionEffect,
@@ -1585,6 +1586,12 @@ const resolveHostnameZoneEffect = Effect.fn("addresses.resolve")(function* (
   ownerId: string | null,
   actor: DomainActor
 ) {
+  const tunnel = yield* tunnelDomainOverEffect(hostname)
+  if (tunnel) {
+    return yield* DomainConfigurationError.make({
+      message: `${hostname} is under .${tunnel}, a tunnel's domain, which answers for it on its tailnet`,
+    })
+  }
   const dot = hostname.indexOf(".")
   const label = hostname.slice(0, dot)
   const vanity =

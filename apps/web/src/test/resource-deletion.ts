@@ -126,10 +126,15 @@ export const seedNetwork = (
       name: "Test network",
       updated_at: at,
     })
-    yield* insertRows("tunnel_domain", {
+    yield* insertRows("domain", {
+      created_at: at,
       domain: "test",
+      enabled: 1,
+      is_default: 1,
       position: 0,
+      provider: "tunnel",
       tunnel_id: id,
+      updated_at: at,
     })
     // Each member's generated name, as it connected.
     if (members.length > 0) {

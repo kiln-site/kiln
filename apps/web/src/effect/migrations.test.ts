@@ -2365,7 +2365,9 @@ describeMysql("database migrations", () => {
             relay_id: relayId,
           })
 
-          yield* applyMigrations(migrations)
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 84)
+          )
 
           expect(
             yield* sql<Record<string, unknown>>`
@@ -2476,6 +2478,59 @@ describeMysql("database migrations", () => {
             provider: "tunnel",
             updated_at: 1,
           })
+        }),
+      schemaBuildTimeout
+    )
+    it.effect(
+      "keeps each tunnel's TLDs, in order, as domains the tunnel writes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 86)
+          )
+          const tunnelId = "a".repeat(12)
+          yield* insertRows("tunnel", {
+            created_at: 1,
+            id: tunnelId,
+            name: "Home",
+            updated_at: 1,
+          })
+          yield* insertRows("tunnel_domain", [
+            { domain: "test", position: 1, tunnel_id: tunnelId },
+            { domain: "kiln", position: 0, tunnel_id: tunnelId },
+          ])
+
+          yield* applyMigrations(migrations)
+
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT domain, provider, tunnel_id, position, is_default
+                FROM ${sql(databaseTableName("domain"))}
+               ORDER BY position
+            `
+          ).toEqual([
+            {
+              domain: "kiln",
+              is_default: 1,
+              position: 0,
+              provider: "tunnel",
+              tunnel_id: tunnelId,
+            },
+            {
+              domain: "test",
+              is_default: 0,
+              position: 1,
+              provider: "tunnel",
+              tunnel_id: tunnelId,
+            },
+          ])
+          // Deleting the tunnel takes its domains.
+          yield* sql`DELETE FROM ${sql(databaseTableName("tunnel"))}`
+          expect(
+            yield* sql`SELECT domain FROM ${sql(databaseTableName("domain"))}`
+          ).toEqual([])
         }),
       schemaBuildTimeout
     )

@@ -122,8 +122,9 @@ export const loadTunnelDefinitionsEffect = Effect.fn("tunnels.load")(
       RowDataPacket & { domain: string; tunnel_id: string }
     >(
       "tunnels.domains",
-      `SELECT tunnel_id, domain FROM ${databaseTable("tunnel_domain")}
-      ORDER BY tunnel_id, position, domain`
+      `SELECT tunnel_id, domain FROM ${databaseTable("domain")}
+        WHERE provider = 'tunnel'
+        ORDER BY tunnel_id, position, domain`
     )
     const domainsOf = (id: string) =>
       domains
@@ -371,16 +372,19 @@ function replaceTunnelDomains(
   definition: Pick<TunnelDefinition, "domains" | "id">
 ) {
   return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
     yield* transaction.execute(
-      `DELETE FROM ${databaseTable("tunnel_domain")} WHERE tunnel_id = ?`,
+      `DELETE FROM ${databaseTable("domain")}
+        WHERE provider = 'tunnel' AND tunnel_id = ?`,
       [definition.id]
     )
     for (const [position, domain] of definition.domains.entries()) {
       yield* transaction.execute(
-        `INSERT INTO ${databaseTable("tunnel_domain")}
-           (tunnel_id, domain, position)
-         VALUES (?, ?, ?)`,
-        [definition.id, domain, position]
+        `INSERT INTO ${databaseTable("domain")}
+           (domain, provider, tunnel_id, position, is_default, enabled,
+            created_at, updated_at)
+         VALUES (?, 'tunnel', ?, ?, ?, 1, ?, ?)`,
+        [domain, definition.id, position, position === 0, now, now]
       )
     }
   })
