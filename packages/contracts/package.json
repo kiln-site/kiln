@@ -23,6 +23,11 @@
       "development": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "development": "./src/cli.ts",
+      "default": "./dist/cli.js"
+    },
     "./schedules": {
       "types": "./dist/schedules.d.ts",
       "development": "./src/schedules.ts",
