@@ -350,7 +350,7 @@ export async function getManualWebHostnamesHandler(): Promise<
 async function readRelayRoutes(relays: ReadonlyArray<{ id: string }>): Promise<
   Array<{
     hostname: string
-    owner: { id: string; kind: string }
+    owner: { id: string; kind: "app" | "server" }
     relayId: string
   }>
 > {
@@ -782,33 +782,31 @@ const addManualDomain = operation<ManualDomainInput>()({
   locks: ({ input }) => [exclusive(manualDomainKey(input.domain))],
   run: ({ context: ownerId, input }) =>
     addManualDomainEffect(input.domain, ownerId).pipe(
+      // What its Relays already route under it is now held for the
+      // instances that route it, each in its own DNS lane, as a save of its
+      // routes would: this operation holds only the domain.
       Effect.andThen(
-        promiseEffect(async () => {
-          // What its Relays already route under it is now held for the
-          // instances that route it.
-          const routes = (await readRelayRoutes(await listPersistedRelays()))
-            .filter((route) =>
-              domainInZone(route.hostname.toLowerCase(), input.domain)
+        promiseEffect(() =>
+          outsideOperation(async () => {
+            const routes = (await readRelayRoutes(await listPersistedRelays()))
+              .filter((route) =>
+                domainInZone(route.hostname.toLowerCase(), input.domain)
+              )
+              .map((route): RoutedHostname => ({
+                hostname: route.hostname.toLowerCase(),
+                resource: {
+                  relayId: route.relayId,
+                  resourceId: route.owner.id,
+                  // The Relay calls a game server's routes a server's.
+                  resourceType: route.owner.kind === "app" ? "app" : "instance",
+                },
+              }))
+            return runAppEffect(
+              "addresses.attachManual",
+              attachManualHostnamesEffect(input.domain, routes)
             )
-            .flatMap((route): Array<RoutedHostname> =>
-              route.owner.kind === "app" || route.owner.kind === "instance"
-                ? [
-                    {
-                      hostname: route.hostname.toLowerCase(),
-                      resource: {
-                        relayId: route.relayId,
-                        resourceId: route.owner.id,
-                        resourceType: route.owner.kind,
-                      },
-                    },
-                  ]
-                : []
-            )
-          return runAppEffect(
-            "addresses.attachManual",
-            attachManualHostnamesEffect(input.domain, routes)
-          )
-        })
+          })
+        )
       )
     ),
   audit: ({ input }) => ({ id: input.domain, kind: "domain" }),
