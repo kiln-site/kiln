@@ -30,7 +30,7 @@ import {
   githubSourceDraftReady,
   type GitHubSourceDraft,
 } from "@/components/app/app-github-source-fields"
-import type { PickableBrickKind } from "@/components/brick-kinds"
+import type { AddableKind } from "@/components/brick-kinds"
 import {
   BrickRelayField,
   useBrickRelayReady,
@@ -86,9 +86,9 @@ export const AddAppPane = React.memo(function AddAppPane({
   onClose,
   onKindChange,
 }: {
-  kinds: ReadonlyArray<PickableBrickKind>
+  kinds: ReadonlyArray<AddableKind>
   onClose: () => void
-  onKindChange: (kind: PickableBrickKind) => void
+  onKindChange: (kind: AddableKind) => void
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()

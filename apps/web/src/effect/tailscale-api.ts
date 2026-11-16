@@ -160,8 +160,8 @@ export const syncTailscaleControlPlaneEffect = Effect.fn(
   network: TailscaleControlPlaneNetwork
 ) {
   yield* Effect.annotateCurrentSpan({
-    "tailscale.network.id": network.id,
-    "tailscale.network.nodes": network.deployments.length,
+    "tailnet.id": network.id,
+    "tailnet.tunnels": network.deployments.length,
   })
   const session = yield* tailscaleSessionEffect(
     credential.clientId,

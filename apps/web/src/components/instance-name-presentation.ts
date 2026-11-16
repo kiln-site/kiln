@@ -47,6 +47,7 @@ export type InstanceNameInstance =
     } & RelayStatusSource)
   | (InventoryIdentity & { kind: "database" })
   | (InventoryIdentity & { kind: "app" })
+  | (InventoryIdentity & { kind: "tunnel" })
 
 // Databases and apps: what their Relay's inventory last reported.
 interface InventoryIdentity extends InstanceIdentity {

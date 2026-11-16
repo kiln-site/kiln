@@ -214,7 +214,7 @@ export const deletionRelay = {
   frozen: new Map<string, string>(),
   journal: new Map<string, unknown>(),
   servers: new Set<string>(),
-  // Tailscale networks by ID, with their members' IDs, as
+  // tailnets by ID, with their members' IDs, as
   // `tunnel.state` reports them; and the hostnames Hearth
   // last wrote to each network's DNS.
   stacks: new Map<string, Array<string>>(),

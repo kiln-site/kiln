@@ -147,7 +147,7 @@ const until = <A, E, R>(
     Effect.timeout("20 seconds")
   )
 
-describeMysql("Tailscale network deletion", () => {
+describeMysql("tailnet deletion", () => {
   // Live clock: retries wait real time, and the engine keeps it.
   layer(Cleanup, { excludeTestServices: true })((it) => {
     it.effect(

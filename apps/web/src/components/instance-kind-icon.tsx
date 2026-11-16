@@ -6,14 +6,15 @@ import {
   HardDrive,
   RadioTower,
   Server,
+  Waypoints,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-export type InstanceKind = "app" | "database" | "relay" | "server"
+export type InstanceKind = "app" | "database" | "relay" | "server" | "tunnel"
 
-// Every Relay, game server, app, and database icon takes its kind's colour
+// Every Relay, game server, app, database, and tunnel icon takes its kind's colour
 // from here. Fixed colours, so a custom accent can't change them or make two
 // kinds match. Light mode takes darker shades so the icons keep their contrast,
 // except Relays, which keep Kiln's default accent orange in both modes.
@@ -22,6 +23,7 @@ export const instanceKindTones = {
   server: "text-emerald-700 dark:text-emerald-300",
   app: "text-red-600 dark:text-red-400",
   database: "text-blue-600 dark:text-blue-300",
+  tunnel: "text-cyan-700 dark:text-cyan-300",
 } as const satisfies Record<InstanceKind, string>
 
 // The kind's colour wins over any colour in `className`, so every use matches.
@@ -70,9 +72,16 @@ export function DatabaseKindIcon({ className, ...props }: LucideProps) {
   )
 }
 
+export function TunnelKindIcon({ className, ...props }: LucideProps) {
+  return (
+    <Waypoints className={cn(className, instanceKindTones.tunnel)} {...props} />
+  )
+}
+
 export const instanceKindIcons = {
   relay: RelayKindIcon,
   server: ServerKindIcon,
   app: AppKindIcon,
   database: DatabaseKindIcon,
+  tunnel: TunnelKindIcon,
 } as const satisfies Record<InstanceKind, ComponentType<LucideProps>>

@@ -17,7 +17,7 @@ const relayId = "7".repeat(12)
 const networkId = "b".repeat(12)
 const owner = { "kiln.relay.owner": TEST_NAMESPACE }
 
-// A Tailscale network's stack as a Relay saved it while the stack ran as a
+// A tailnet's stack as a Relay saved it while the stack ran as a
 // game server: its folder and every file named by the network's ID, and a
 // removal's snapshot of it reading as a game server.
 async function networkStack(root: string, folder = networkId) {
@@ -69,7 +69,7 @@ const read = async (directory: string, file: string) =>
     unknown
   >
 
-describe("Tailscale network stacks becoming tunnels", () => {
+describe("tailnet stacks becoming tunnels", () => {
   it("gives a stack its tunnel's ID and keeps its folder, members and records", async () => {
     const harness = await relayHarness()
     const directory = await networkStack(harness.config.rootDirectory)

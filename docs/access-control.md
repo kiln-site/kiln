@@ -224,7 +224,9 @@ Relay's host, so those still take permissions on the Relay: `app.manage`,
 A tunnel's owner is the owner of the network it came from, or whoever made
 it: they may do everything to it. Anyone else needs the `instance.*`
 permission on the tunnel's Relay, as for an App: a tunnel can't be shared on
-its own yet (`requireTunnelPermission`).
+its own yet (`requireTunnelPermission`). Reading it takes `instance.read`
+there, which lists it on Infrastructure → Tunnels with what else they may
+do with it; changing its tailnet stays a platform administrator's.
 
 Only the owner or a platform administrator can transfer ownership, to an
 enabled, verified account that already has access there: an active grant on

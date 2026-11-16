@@ -51,9 +51,10 @@ import { BrickIcon } from "@/components/brick-icon"
 import {
   brickKindPresentations,
   type BrickKindPresentation,
+  type AddableKind,
   type PickableBrickKind,
 } from "@/components/brick-kinds"
-import { instanceKindIcons } from "@/components/instance-kind-icon"
+import { AddKindNavigation } from "@/components/add-kind-navigation"
 import { isVerifiedBrick } from "@/components/brick-trust"
 import { normalizeArchitecture } from "@/lib/architecture"
 import {
@@ -259,9 +260,9 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
   disabled: boolean
   kind: PickableBrickKind
   /** The kinds to choose between, when there's more than this one. */
-  kinds: ReadonlyArray<PickableBrickKind>
+  kinds: ReadonlyArray<AddableKind>
   tab: BrickTabId
-  onKindChange: ((kind: PickableBrickKind) => void) | undefined
+  onKindChange: ((kind: AddableKind) => void) | undefined
   onTabChange: (tab: BrickTabId) => void
 }) {
   const items = React.useMemo(
@@ -270,44 +271,12 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
   )
   return (
     <aside className="flex min-h-0 flex-col border-b border-border/60 max-md:min-h-max md:border-r md:border-b-0">
-      {kinds.length > 1 && onKindChange ? (
-        <>
-          <p className="type-technical-label px-3 pt-3 pb-2 text-muted-foreground">
-            Kind
-          </p>
-          <nav
-            aria-label="Kind of instance"
-            className="flex gap-1 overflow-x-auto border-b border-border/60 px-2 pb-2 md:flex-col"
-          >
-            {kinds.map((item) => {
-              const presentation = brickKindPresentations[item]
-              const Icon = instanceKindIcons[presentation.instanceKind]
-              const active = item === kind
-              return (
-                <button
-                  key={item}
-                  type="button"
-                  aria-pressed={active}
-                  disabled={disabled}
-                  onClick={() => {
-                    if (!active) onKindChange(item)
-                  }}
-                  className={cn(
-                    "flex shrink-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors duration-150",
-                    active
-                      ? "bg-primary/12 font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-accent/55 hover:text-foreground",
-                    disabled && "pointer-events-none opacity-50"
-                  )}
-                >
-                  <Icon className="size-3.5 shrink-0" />
-                  {presentation.name}
-                </button>
-              )
-            })}
-          </nav>
-        </>
-      ) : null}
+      <AddKindNavigation
+        disabled={disabled}
+        kind={kind}
+        kinds={kinds}
+        onKindChange={onKindChange}
+      />
       <p className="type-technical-label px-3 pt-3 pb-2 text-muted-foreground">
         Categories
       </p>
@@ -437,8 +406,8 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   unavailable,
 }: {
   kind: PickableBrickKind
-  kinds?: ReadonlyArray<PickableBrickKind>
-  onKindChange?: (kind: PickableBrickKind) => void
+  kinds?: ReadonlyArray<AddableKind>
+  onKindChange?: (kind: AddableKind) => void
   /** Stands in for the Bricks while they load, or when they can't. */
   unavailable?: React.ReactNode
   relayId: string
@@ -1587,8 +1556,8 @@ export function BrickCatalogUnavailable({
 }: {
   error: string | undefined
   kind: PickableBrickKind
-  kinds?: ReadonlyArray<PickableBrickKind>
-  onKindChange?: (kind: PickableBrickKind) => void
+  kinds?: ReadonlyArray<AddableKind>
+  onKindChange?: (kind: AddableKind) => void
   pending: boolean
 }) {
   return (

@@ -205,7 +205,7 @@ that installed Kiln itself, fixes the ID.
 
 Several Hearths can manage the same Relay, but this isn't recommended: each
 Hearth orders only its own changes, so two changing the same thing at once,
-such as a Tailscale network both reach, can leave it wrong until the next
+such as a tailnet both reach, can leave it wrong until the next
 change.
 
 ### The CLI

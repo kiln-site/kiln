@@ -278,7 +278,7 @@ export interface AppRoutePlan {
 }
 
 // What deploys join each service to besides its own network: its Traefik
-// routes, and the Tailscale networks its services are members of.
+// routes, and the tailnets its services are members of.
 /** Where an app's limits are kept and counted with every instance's. */
 export interface AppLimitStores {
   readonly allocations: ResourceAllocations

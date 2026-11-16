@@ -366,7 +366,7 @@ describeMysql("database migrations", () => {
       )
     })
 
-    describe("a Tailscale network whose old ID is also a game server's", () => {
+    describe("a tailnet whose old ID is also a game server's", () => {
       const fingerprint = "r".repeat(43)
       const legacyNetwork = "5c".repeat(20)
       const ids = Effect.promise(async () => ({
@@ -2005,7 +2005,7 @@ describeMysql("database migrations", () => {
       schemaBuildTimeout
     )
 
-    // Each Tailscale network's node on a Relay becomes a tunnel with an ID
+    // Each tailnet's node on a Relay becomes a tunnel with an ID
     // of its own, which the Relay works out the same way, and the network a
     // tailnet: the group of its tunnels, with what they share beside it.
     it.effect(

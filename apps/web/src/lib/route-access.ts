@@ -6,6 +6,7 @@ import {
   accessibleDestinationsForDatabase,
   accessibleDestinationsForRelay,
   accessibleDestinationsForServer,
+  accessibleDestinationsForTunnel,
   accessibleInfrastructureDestinations,
   canAccessActivity,
   canAccessAutomations,
@@ -22,7 +23,9 @@ import {
   type NavigationAccessCapabilities,
   type RelayDestinationId,
   type ServerDestinationId,
+  type TunnelDestinationId,
 } from "@/lib/navigation-destinations"
+import type { AccessPermission } from "@/lib/permissions"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 type GlobalProtectedDestination =
@@ -156,6 +159,27 @@ async function requireResourceDestination<D extends { id: string }>(
   throw redirect({
     href: fallback ? href(fallback) : firstAccessibleAppHref(capabilities),
     replace: true,
+  })
+}
+
+/**
+ * Opens a tunnel's page the viewer may, from what its tailnet's listing says
+ * they may do with it, or the first one they may, or the tunnels list.
+ */
+export function requireTunnelDestinationAccess(
+  tunnel: { id: string; permissions: ReadonlyArray<AccessPermission> },
+  destinationId?: TunnelDestinationId
+): void {
+  const accessible = accessibleDestinationsForTunnel(tunnel.permissions)
+  if (accessible.some((destination) => destination.id === destinationId)) {
+    return
+  }
+  const fallback = accessible[0]
+  if (!fallback) throw redirect({ replace: true, to: "/infra/tunnels" })
+  throw redirect({
+    params: { tunnelId: tunnel.id },
+    replace: true,
+    to: fallback.to,
   })
 }
 

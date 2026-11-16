@@ -16,7 +16,7 @@ import {
   BrickRelayField,
   useBrickRelayReady,
 } from "@/components/brick-relay-field"
-import type { PickableBrickKind } from "@/components/brick-kinds"
+import type { AddableKind } from "@/components/brick-kinds"
 import {
   BrickCatalogBrowser,
   BrickCatalogUnavailable,
@@ -40,9 +40,9 @@ export const AddServerPane = React.memo(function AddServerPane({
   onClose,
   onKindChange,
 }: {
-  kinds: ReadonlyArray<PickableBrickKind>
+  kinds: ReadonlyArray<AddableKind>
   onClose: () => void
-  onKindChange: (kind: PickableBrickKind) => void
+  onKindChange: (kind: AddableKind) => void
 }) {
   const catalogQuery = useQuery(brickCatalogQueryOptions())
   if (!catalogQuery.data) {
@@ -81,10 +81,10 @@ const AddServerForm = React.memo(function AddServerForm({
   bricks: Array<Brick>
   canAddCustomBrick: boolean
   customBricks: Array<Brick>
-  kinds: ReadonlyArray<PickableBrickKind>
+  kinds: ReadonlyArray<AddableKind>
   relays: Array<PersistedRelay>
   onClose: () => void
-  onKindChange: (kind: PickableBrickKind) => void
+  onKindChange: (kind: AddableKind) => void
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()

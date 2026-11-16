@@ -18,6 +18,7 @@ const directoryKeys = {
   database: queryKeys.databases.directory,
   server: queryKeys.servers.directory,
   relay: queryKeys.relays,
+  tunnel: queryKeys.tailnets,
 } satisfies Record<InstanceKind, ReadonlyArray<string>>
 
 /** Refetches a table's rows and the observations its mounted cells read. */

@@ -16,16 +16,12 @@ import {
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import {
-  selectTailscaleServers,
-  tailscaleSupportedRelayIds,
-} from "@/lib/tailscale-selectors"
 
 /**
- * Something that joins a Tailscale network, as every membership view shows
- * it: a game server, an App's service, or a database.
+ * Something a tunnel connects, as every page shows it: a game server, an
+ * App's service, or a database.
  */
-export interface TailscaleMemberListing {
+export interface TunnelMemberListing {
   /** Its instance ID. */
   readonly id: string
   readonly identity: InstanceNameInstance
@@ -39,33 +35,38 @@ export interface TailscaleMemberListing {
   readonly relayName: string
   /** Whether its page is known here, so it can link to it. */
   readonly linked: boolean
-  /** Whether its Relay can change its Tailscale memberships. */
-  readonly tailscaleSupported: boolean
 }
 
-export const tailscaleMemberKey = (relayId: string, memberId: string) =>
+export const tunnelMemberKey = (relayId: string, memberId: string) =>
   `${relayId}:${memberId}`
 
-const emptyListings: ReadonlyMap<string, TailscaleMemberListing> = new Map()
+const emptyListings: ReadonlyMap<string, TunnelMemberListing> = new Map()
 
-function selectTailscaleFleet(snapshot: RelayFleetSnapshot) {
-  return {
-    servers: selectTailscaleServers(snapshot),
-    supportedRelayIds: tailscaleSupportedRelayIds(snapshot),
-  }
+function selectServers(snapshot: RelayFleetSnapshot) {
+  return snapshot.instances
+    .map((instance) => ({
+      brickId: instance.brickId,
+      id: instance.id,
+      implementation: instance.implementation,
+      name: instance.name,
+      relayId: instance.relayId,
+      relayName: instance.relayName,
+      version: instance.version,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
 }
 
 /**
- * Every game server and database that can join a network, by member key,
- * and a listing for any binding, App services' and unknown members'
- * included. App services are listed from their bindings: which services an
- * App runs is known on its own page, where they join.
+ * Every game server and database a tunnel can connect, by member key, and a
+ * listing for any binding, App services' and unknown members' included. App
+ * services are listed from their bindings: which services an App runs is
+ * known on its own page, where they connect.
  */
-export function useTailscaleMemberDirectory() {
+export function useTunnelMemberDirectory() {
   const fleet = useQuery({
     ...relaySnapshotQueryOptions(),
     notifyOnChangeProps: ["data", "isPending"],
-    select: selectTailscaleFleet,
+    select: selectServers,
   })
   const apps = useQuery(appDirectoryQueryOptions())
   const databases = useQuery(managedDatabaseDirectoryQueryOptions())
@@ -73,11 +74,10 @@ export function useTailscaleMemberDirectory() {
   const appData = apps.data
   const databaseData = databases.data
   return React.useMemo(() => {
-    const supported = new Set(fleetData?.supportedRelayIds ?? [])
-    const joinable = new Map<string, TailscaleMemberListing>()
-    for (const server of fleetData?.servers ?? []) {
+    const joinable = new Map<string, TunnelMemberListing>()
+    for (const server of fleetData ?? []) {
       const memberId = instanceTailscaleMemberId(server.id)
-      joinable.set(tailscaleMemberKey(server.relayId, memberId), {
+      joinable.set(tunnelMemberKey(server.relayId, memberId), {
         id: server.id,
         identity: {
           brickId: server.brickId,
@@ -95,12 +95,11 @@ export function useTailscaleMemberDirectory() {
         relayId: server.relayId,
         relayName: server.relayName,
         linked: true,
-        tailscaleSupported: server.tailscaleSupported,
       })
     }
     for (const database of databaseData ?? []) {
       const memberId = databaseTailscaleMemberId(database.id)
-      joinable.set(tailscaleMemberKey(database.relayId, memberId), {
+      joinable.set(tunnelMemberKey(database.relayId, memberId), {
         id: database.id,
         identity: {
           id: database.id,
@@ -114,7 +113,6 @@ export function useTailscaleMemberDirectory() {
         relayId: database.relayId,
         relayName: database.relayName,
         linked: true,
-        tailscaleSupported: supported.has(database.relayId),
       })
     }
     const appsById = new Map((appData ?? []).map((app) => [app.id, app]))
@@ -123,15 +121,14 @@ export function useTailscaleMemberDirectory() {
       memberId: string
       relayId: string
       relayName: string
-    }): TailscaleMemberListing => {
+    }): TunnelMemberListing => {
       const known = joinable.get(
-        tailscaleMemberKey(binding.relayId, binding.memberId)
+        tunnelMemberKey(binding.relayId, binding.memberId)
       )
       if (known) return known
       const common = {
         relayId: binding.relayId,
         relayName: binding.relayName,
-        tailscaleSupported: supported.has(binding.relayId),
       }
       const service = appTailscaleMember(binding.memberId)
       if (service) {
@@ -146,7 +143,10 @@ export function useTailscaleMemberDirectory() {
           },
           kind: "app",
           memberId: binding.memberId,
-          meta: `App service ${service.service}`,
+          meta:
+            service.service === "app"
+              ? "App"
+              : `App service ${service.service}`,
           name: app?.name ?? `App ${service.appId}`,
           linked: app !== undefined,
         }

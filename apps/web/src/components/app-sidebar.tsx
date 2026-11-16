@@ -112,6 +112,12 @@ import {
   type RelayDirectoryEntry,
 } from "@/lib/relay-route"
 import type { SidebarInstance } from "@/lib/relay-selectors"
+import { instanceSelection } from "@/lib/instance-selection"
+import {
+  tunnelStatus,
+  useTunnel,
+  type TunnelView,
+} from "@/components/tunnel/tailnet-data"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
@@ -119,6 +125,7 @@ import {
   accessibleDestinationsForDatabase,
   accessibleDestinationsForRelay,
   accessibleDestinationsForServer,
+  accessibleDestinationsForTunnel,
   accessibleInfrastructureDestinations,
   canAccessActivity,
   canAccessAutomations,
@@ -470,9 +477,11 @@ function SidebarInstanceNavigation({
             databaseId?: string
             relayId?: string
             serverId?: string
+            tunnelId?: string
           }
         | undefined
       if (params?.databaseId) return databaseSelectionValue(params.databaseId)
+      if (params?.tunnelId) return tunnelSelection.toSelection(params.tunnelId)
       if (params?.appId) return appSelectionValue(params.appId)
       if (params?.relayId) return relaySelectionValue(params.relayId)
       return params?.serverId ? "server" : null
@@ -485,6 +494,7 @@ function SidebarInstanceNavigation({
   const databaseId = databaseIdFromSelection(selection)
   const appId = appIdFromSelection(selection)
   const relayId = relayIdFromSelection(selection)
+  const tunnelId = tunnelSelection.fromSelection(selection)
   const destinations = accessibleInfrastructureDestinations(capabilities)
   const showDatabases =
     relayConfigured &&
@@ -555,10 +565,65 @@ function SidebarInstanceNavigation({
       fallback={serverNavigation}
       relayId={relayId}
     />
+  ) : tunnelId ? (
+    <SidebarTunnelNavigation
+      capabilities={capabilities}
+      fallback={serverNavigation}
+      tunnelId={tunnelId}
+    />
   ) : (
     serverNavigation
   )
 }
+
+const tunnelSelection = instanceSelection("tunnel")
+
+// A tunnel's pages, while one is open or was last.
+function SidebarTunnelNavigation({
+  capabilities,
+  fallback,
+  tunnelId,
+}: {
+  capabilities: NavigationAccessCapabilities
+  fallback: React.ReactNode
+  tunnelId: string
+}) {
+  const query = useTunnel(tunnelId)
+  const view = query.data
+  if (!view) return query.isPending ? null : fallback
+  return (
+    <SidebarResourceGroup
+      capabilities={capabilities}
+      selection={{ kind: "tunnel", view }}
+      selectionValue={tunnelSelection.toSelection(view.tunnel.id)}
+    >
+      <TunnelTabNavigation view={view} />
+    </SidebarResourceGroup>
+  )
+}
+
+const TunnelTabNavigation = React.memo(function TunnelTabNavigation({
+  view,
+}: {
+  view: TunnelView
+}) {
+  return accessibleDestinationsForTunnel(view.permissions).map((item) => (
+    <SidebarMenuItem key={item.id}>
+      <SidebarMenuButton asChild tooltip={item.label}>
+        <Link
+          to={item.to}
+          params={{ tunnelId: view.tunnel.id }}
+          activeOptions={{ exact: true, includeSearch: false }}
+          activeProps={{ "data-active": true }}
+          preload="intent"
+        >
+          <item.icon />
+          <span>{item.label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  ))
+})
 
 // Kiln itself: Hearth and the services beside it, while one of its pages
 // is open, or when an administrator has nothing else to open.
@@ -990,6 +1055,7 @@ type InstanceSelection =
   | { kind: "database"; database: ManagedDatabaseDirectoryEntry }
   | { kind: "app"; app: AppDirectoryEntry }
   | { kind: "relay"; relay: RelayDirectoryEntry }
+  | { kind: "tunnel"; view: TunnelView }
   | {
       kind: "kiln"
       host: ReturnType<typeof selectKilnHost>
@@ -1129,7 +1195,13 @@ const InstanceSelector = React.memo(function InstanceSelector({
             ? sidebarPickerKey("relay", selection.relay.id, selection.relay.id)
             : selection.kind === "kiln"
               ? kilnPickerKey
-              : null
+              : selection.kind === "tunnel"
+                ? sidebarPickerKey(
+                    "tunnel",
+                    selection.view.tunnel.relayId,
+                    selection.view.tunnel.id
+                  )
+                : null
   const selectedKeys = React.useMemo(
     () => new Set(selectedKey ? [selectedKey] : []),
     [selectedKey]
@@ -1149,7 +1221,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   ? "Switch app"
                   : selection.kind === "relay"
                     ? "Switch Relay"
-                    : selection.kind === "kiln"
+                    : selection.kind === "kiln" || selection.kind === "tunnel"
                       ? "Switch instance"
                       : "Switch game server"
             }
@@ -1197,6 +1269,18 @@ const InstanceSelector = React.memo(function InstanceSelector({
               />
             ) : selection.kind === "relay" ? (
               <SelectorRelayName relay={selection.relay} />
+            ) : selection.kind === "tunnel" ? (
+              <SelectorInstanceName
+                instance={{
+                  id: selection.view.tunnel.id,
+                  kind: "tunnel",
+                  relayId: selection.view.tunnel.relayId,
+                }}
+                label="Switch instance."
+                meta={`Tunnel · ${selection.view.tunnel.relayName}`}
+                name={selection.view.tunnel.name}
+                status={tunnelStatus(selection.view.tunnel)}
+              />
             ) : selection.kind === "kiln" ? (
               <SelectorKilnName host={selection.host} />
             ) : (
@@ -1247,12 +1331,15 @@ function SelectorInstanceName({
   label,
   meta,
   name,
+  status,
 }: {
   instance: React.ComponentProps<typeof InstanceCard>["instance"]
   // Read before the name by screen readers, for example "Switch app."
   label: string
   meta: string
   name: string
+  /** A status of its own, for a kind without live instance state. */
+  status?: React.ComponentProps<typeof InstanceCard>["status"]
 }) {
   return (
     <>
@@ -1267,6 +1354,7 @@ function SelectorInstanceName({
         name={name}
         nameClassName="type-control-sm text-sidebar-foreground"
         showFavorite={false}
+        status={status}
         statusClassName="ring-popover"
         textClassName="group-data-[collapsible=icon]:sr-only"
       />

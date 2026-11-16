@@ -1,7 +1,7 @@
 import * as React from "react"
 import type { Brick } from "@workspace/contracts"
 
-import type { PickableBrickKind } from "@/components/brick-kinds"
+import type { AddableKind, PickableBrickKind } from "@/components/brick-kinds"
 import {
   BrickCatalogBrowser,
   BrickCatalogUnavailable,
@@ -41,8 +41,8 @@ export function OfferedBrickBrowser({
   /** The Brick to open on. Without one, the first. */
   initial?: (bricks: ReadonlyArray<Brick>) => Brick | undefined
   kind: PickableBrickKind
-  kinds?: ReadonlyArray<PickableBrickKind> | undefined
-  onKindChange?: ((kind: PickableBrickKind) => void) | undefined
+  kinds?: ReadonlyArray<AddableKind> | undefined
+  onKindChange?: ((kind: AddableKind) => void) | undefined
   pending: boolean
 }) {
   if (!bricks) {
@@ -93,8 +93,8 @@ function LoadedBrickBrowser({
   emptyMessage: string
   initial: ((bricks: ReadonlyArray<Brick>) => Brick | undefined) | undefined
   kind: PickableBrickKind
-  kinds: ReadonlyArray<PickableBrickKind> | undefined
-  onKindChange: ((kind: PickableBrickKind) => void) | undefined
+  kinds: ReadonlyArray<AddableKind> | undefined
+  onKindChange: ((kind: AddableKind) => void) | undefined
 }) {
   const [selection, setSelection] = React.useState<BrickSelection | null>(
     () => {

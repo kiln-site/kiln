@@ -734,7 +734,7 @@ const resourceOnRelay = (input: DeletionInput) =>
   )
 
 // Whether the Relay has anything of the resource left to delete: the
-// resource, or its place on a Tailscale network, which its Relay takes off
+// resource, or its place on a tailnet, which its Relay takes off
 // once it has deleted the resource.
 const leftOnRelay = (input: DeletionInput) =>
   resourceOnRelay(input).pipe(

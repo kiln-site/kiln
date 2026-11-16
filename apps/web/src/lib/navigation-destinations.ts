@@ -56,8 +56,8 @@ export type InfrastructureDestinationAccess =
   | "domains"
   | "instance-read"
   | "manage-relays"
-  | "platform-admin"
   | "sources"
+  | "tunnels"
 
 export interface NavigationAccessCapabilities {
   canManageAccess: boolean
@@ -122,12 +122,12 @@ export const infrastructureDestinations = [
     to: "/infra/apps",
   },
   {
-    access: "platform-admin",
+    access: "tunnels",
     group: "network",
     icon: Waypoints,
-    keywords: ["infrastructure", "network"],
-    label: "Tailscale",
-    to: "/infra/tailscale",
+    keywords: ["infrastructure", "tailscale", "tailnet", "vpn", "private"],
+    label: "Tunnels",
+    to: "/infra/tunnels",
   },
   {
     access: "domains",
@@ -346,6 +346,61 @@ export function canAccessInstancePermission(
       ((grant.resourceType === "relay" &&
         grant.resourceId === instance.relayId) ||
         (grant.resourceType === "instance" && grant.resourceId === instance.id))
+  )
+}
+
+export type TunnelDestinationId = "connected" | "info" | "logs" | "terminal"
+
+export interface TunnelDestination extends NavigationDestination {
+  id: TunnelDestinationId
+  permission: AccessPermission
+}
+
+export const tunnelDestinations = [
+  {
+    icon: SlidersHorizontal,
+    id: "info",
+    keywords: ["details", "tailscale", "status"],
+    label: "Info",
+    permission: "instance.read",
+    to: "/tunnel/$tunnelId/info",
+  },
+  {
+    icon: Network,
+    id: "connected",
+    keywords: ["members", "names", "dns"],
+    label: "Connected",
+    permission: "instance.read",
+    to: "/tunnel/$tunnelId/connected",
+  },
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["output", "coredns", "tailscale", "deployments"],
+    label: "Logs",
+    permission: "instance.logs.read",
+    to: "/tunnel/$tunnelId/logs",
+  },
+  {
+    icon: SquareChevronRight,
+    id: "terminal",
+    keywords: ["shell", "exec"],
+    label: "Terminal",
+    permission: "instance.terminal",
+    to: "/tunnel/$tunnelId/terminal",
+  },
+] as const satisfies ReadonlyArray<TunnelDestination>
+
+/**
+ * A tunnel's pages the viewer may open, from what they may do with it,
+ * which its tailnet's listing says (`getTailnets`).
+ */
+export function accessibleDestinationsForTunnel(
+  permissions: ReadonlyArray<AccessPermission>
+): ReadonlyArray<TunnelDestination> {
+  const destinations: ReadonlyArray<TunnelDestination> = tunnelDestinations
+  return destinations.filter((destination) =>
+    permissions.includes(destination.permission)
   )
 }
 
@@ -770,8 +825,12 @@ export function canAccessInfrastructureDestination(
         ) === true)
     )
   }
-  if (destination.access === "platform-admin") {
-    return capabilities.isPlatformAdmin
+  if (destination.access === "tunnels") {
+    // A grant on a Relay reaches its tunnels, as it reaches all else there.
+    return (
+      capabilities.isPlatformAdmin ||
+      hasScopedPermission(capabilities, "instance.read", ["relay"])
+    )
   }
   if (destination.access === "sources") {
     // Sources feed syncs. Each person's sources are their own.

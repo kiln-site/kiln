@@ -171,8 +171,8 @@ carry a tunnel's labels, and nothing treats it as a game server. Built so
 far: that, the migration from networks, and the requests' new names; and
 what every instance has: power, deploying again (recorded and logged as
 every kind's), its terminal and its logs' sources, each authorized as a
-tunnel is. DNS reloading in place, names and the pages follow in this
-stack.
+tunnel is; DNS reloading in place; names; and the pages. Tunnel names as
+primary addresses, and the permissions of their own, follow.
 
 ### What runs
 
@@ -241,15 +241,16 @@ stack.
   addresses, and serves the whole names Hearth sends it. A save of the
   tailnet applies its tunnels first, then its members' names, then rewrites
   its DNS, so a save that fails leaves both as they were. Built, with
-  aliases added and removed through Hearth; the pages to do so come with
-  the pages.
+  aliases added and removed through Hearth.
 - An instance's Network tab has a Tunnels section shaped like its Domains
-  table: each tailnet it is in, with its names.
+  table: each tailnet it is in, with its names, and connecting to another
+  with a tunnel on its Relay, or adding one there. Built.
 
 ### One primary address
 
 - An instance has one primary address (★), whichever it is: a join address,
-  a domain or a tunnel name. It is what Kiln shows for the instance (lists,
+  a domain or a tunnel name. A tunnel name can't be chosen yet; that is
+  step 6 below. It is what Kiln shows for the instance (lists,
   its header, the infra map, the copy button and the CLI) and, for a game
   server, the address it advertises. It changes nothing about routing: every
   name works, starred or not. A tunnel name shown as primary carries the
@@ -292,7 +293,10 @@ stack.
 ### Pages
 
 - **Infrastructure → Tunnels** (`/infra/tunnels`) lists tailnets and their
-  tunnels, and replaces `/infra/tailscale`.
+  tunnels, and replaces `/infra/tailscale`. Anyone who reads instances on
+  a Relay sees its tunnels there, each in its tailnet with what it
+  connects on that Relay, and what they may do with each
+  (`getTailnets`); only a platform administrator changes a tailnet.
 - **A tailnet's page** (`/tailnet/$id`): its tunnels, everything connected
   with its names, its TLDs, its Tailscale login, and deleting it.
 - **A tunnel's page** (`/tunnel/$id`): Info, Connected, Logs and Terminal,
@@ -300,6 +304,11 @@ stack.
 - The one Add dialog has Tunnel, whose only type is Tailscale: pick a Relay,
   then a new tailnet (its name, first TLD and Tailscale login) or one that
   has no tunnel there yet. Tunnels aren't Bricks.
+- A tailnet keeps the Relays it has tunnels on, so a tunnel can be added
+  before anything connects through it, and deleted from its page, which
+  disconnects what it connected. Built: the pages, the Add dialog, the
+  sidebar's tabs for a tunnel, and `tunnel` as a kind every instance list
+  and picker shows. A tunnel can't be a favorite or have an icon yet.
 
 ### Moving off today's networks
 
@@ -347,9 +356,10 @@ One stack, each part working on its own:
 3. Tunnels as their own kind, tailnets as groups, and DNS reloading in
    place. Today's page and each instance's Tailscale section keep working
    on the new model until the pages land.
-4. Names: several TLDs, generated names and aliases, any number of tailnets
-   per instance, and tunnel names as primary.
+4. Names: several TLDs, generated names and aliases, and any number of
+   tailnets per instance.
 5. The pages.
+6. Tunnel names as primary addresses.
 
 ## Bricks
 
@@ -534,7 +544,8 @@ from a tag or an image name today.
    address is still to come.
 10. One instance page, with each kind's own tabs.
 11. Tunnels as their own kind, a tailnet as an instance group, and one
-    primary address per instance. Planned in [Tunnels](#tunnels).
+    primary address per instance. Done but for tunnel names as primary
+    addresses; see [Tunnels](#tunnels).
 12. One terminal path. Done: every shell, an instance's, the Relay's host's
     or one of Kiln's own containers', is one session the Relay keeps, opened
     with the six `terminal.*` requests that name their target, and shown by

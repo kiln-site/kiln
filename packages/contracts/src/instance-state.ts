@@ -3,7 +3,7 @@ import { Schema } from "effect"
 import { InstanceId } from "./instance-id.js"
 
 export const InstanceReferenceSchema = Schema.Struct({
-  kind: Schema.Literals(["server", "database", "app", "relay"]),
+  kind: Schema.Literals(["server", "database", "app", "relay", "tunnel"]),
   relayId: InstanceId,
   id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
 })

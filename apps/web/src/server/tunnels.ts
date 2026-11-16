@@ -4,7 +4,9 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   appTailscaleMember,
   databaseTailscaleMember,
+  instanceTailscaleMember,
   MAXIMUM_TUNNEL_BINDINGS,
+  permissionRelayReach,
   relayIdSchema,
   relayInstanceNameSchema,
   relaySnapshotSchema,
@@ -46,6 +48,7 @@ import {
 import { reserveInstanceId } from "@/effect/instance-ids"
 import {
   addTunnelAliasEffect,
+  generateTunnelNamesEffect,
   keepTunnelNamesOfEffect,
   listTunnelNamesEffect,
   loadTunnelNameEffect,
@@ -56,7 +59,10 @@ import {
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
-import { isPlatformAdmin } from "@/lib/access-control"
+import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import { accessPermissions, type AccessPermission } from "@/lib/permissions"
+import { effectiveScopePermissions } from "@/lib/resource-permissions"
+import { listTunnelRecordsEffect } from "@/server/tunnel-access.server"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -66,10 +72,7 @@ import { tailscaleMemberProblem } from "@/lib/tailscale-members"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import {
-  tailnetKey,
-  tailnetSettingsKey,
-} from "@/lib/tunnel-lanes"
+import { tailnetKey, tailnetSettingsKey } from "@/lib/tunnel-lanes"
 import { exclusive } from "@/operations/lanes"
 import {
   operation,
@@ -86,7 +89,9 @@ import type { RelaySnapshot, Tunnel } from "@workspace/contracts"
 
 const stackBindingInputSchema = z.strictObject({
   enabled: z.boolean().default(true),
-  hostname: relayTailscaleSubdomainSchema,
+  // Renames its generated name. One connecting without it is named from
+  // what it's called (`generateTunnelNamesEffect`); one connected keeps its.
+  label: relayTailscaleSubdomainSchema.optional(),
   // A game server or an App's service (see `tailscaleMemberIdSchema`).
   memberId: tailscaleMemberIdSchema,
   relayId: relayIdSchema,
@@ -96,19 +101,33 @@ const tailscaleClientSecretSchema = z.string().trim().min(20).max(512)
 
 const saveTailnetSchema = z.strictObject({
   authKey: relayTailscaleAuthKeySchema.optional(),
-  bindings: z
-    .array(stackBindingInputSchema)
-    .max(MAXIMUM_TUNNEL_BINDINGS),
+  bindings: z.array(stackBindingInputSchema).max(MAXIMUM_TUNNEL_BINDINGS),
   // Its TLDs, in order: the first is the one generated names are under.
-  domains: z.array(relayTailscaleDomainSchema).min(1).max(16).refine((domains) => new Set(domains).size === domains.length, "List each TLD once"),
+  domains: z
+    .array(relayTailscaleDomainSchema)
+    .min(1)
+    .max(16)
+    .refine(
+      (domains) => new Set(domains).size === domains.length,
+      "List each TLD once"
+    ),
   id: tunnelIdSchema,
   name: relayInstanceNameSchema,
+  // The Relays it has a tunnel on. A Relay a member connects on gets one.
+  relayIds: z.array(relayIdSchema).max(64),
 })
 
 const createTailnetSchema = z.strictObject({
   clientId: z.string().trim().min(1).max(120),
   clientSecret: tailscaleClientSecretSchema,
-  domains: z.array(relayTailscaleDomainSchema).min(1).max(16).refine((domains) => new Set(domains).size === domains.length, "List each TLD once"),
+  domains: z
+    .array(relayTailscaleDomainSchema)
+    .min(1)
+    .max(16)
+    .refine(
+      (domains) => new Set(domains).size === domains.length,
+      "List each TLD once"
+    ),
   name: relayInstanceNameSchema,
   tag: z
     .string()
@@ -124,7 +143,14 @@ const removeTailnetSchema = z.strictObject({
 const configureTailscaleIntegrationSchema = z.strictObject({
   clientId: z.string().trim().min(1).max(120),
   clientSecret: tailscaleClientSecretSchema.optional(),
-  domains: z.array(relayTailscaleDomainSchema).min(1).max(16).refine((domains) => new Set(domains).size === domains.length, "List each TLD once"),
+  domains: z
+    .array(relayTailscaleDomainSchema)
+    .min(1)
+    .max(16)
+    .refine(
+      (domains) => new Set(domains).size === domains.length,
+      "List each TLD once"
+    ),
   id: tunnelIdSchema,
   // The TLDs it had, which stop pointing at it.
   previousDomains: z.array(relayTailscaleDomainSchema).max(16),
@@ -148,12 +174,21 @@ export interface TunnelOverview extends Tunnel {
   relayName: string
 }
 
+/** One of a connected member's names in its tailnet. */
+export type TailnetName = Omit<TunnelName, "tailnetId">
+
 export interface TailnetOverview {
+  /** What the viewer may do: change the tailnet, and each tunnel's own. */
+  access: {
+    manage: boolean
+    /** By tunnel ID, what every kind of instance has that it may do. */
+    tunnels: Record<string, ReadonlyArray<AccessPermission>>
+  }
   bindings: Array<{
     address: string
     enabled: boolean
     /** Its generated name's label, under the tailnet's first TLD. */
-    hostname: string
+    label: string
     memberId: string
     relayId: string
     relayName: string
@@ -164,6 +199,8 @@ export interface TailnetOverview {
   id: string
   integration: TailscaleIntegration | null
   name: string
+  /** Every name of everything it connects, generated ones first. */
+  names: Array<TailnetName>
 }
 
 export interface TailnetsResult {
@@ -175,18 +212,95 @@ export interface TailnetsResult {
   }>
 }
 
+/**
+ * The tailnets the viewer sees, and what they may do with each. A platform
+ * administrator sees and changes them all. Anyone else sees the tunnels
+ * they own or reach through a grant on its Relay, as `requireTunnelPermission`
+ * allows, each in its tailnet with what it connects there.
+ */
 export const getTailnets = createServerFn({ method: "GET" }).handler(
   async () => {
-    await requireTailscaleAdministrator()
-    return loadTailnets()
+    const user = await requireEligibleResourceUser()
+    const result = await loadTailnets()
+    if (isPlatformAdmin(user)) return result
+    const [records, grants] = await Promise.all([
+      runAppEffect("tunnels.list", listTunnelRecordsEffect()),
+      listUserGrants(user.id),
+    ])
+    const owners = new Map(records.map(({ id, ownerId }) => [id, ownerId]))
+    const permissionsOf = (tunnel: TunnelOverview) => {
+      if (owners.get(tunnel.id) === user.id) return tunnelPermissions
+      const held = effectiveScopePermissions(grants, {
+        relayId: tunnel.relayId,
+        resourceId: tunnel.relayId,
+        resourceType: "relay",
+      })
+      return held.has("instance.read")
+        ? tunnelPermissions.filter((permission) => held.has(permission))
+        : null
+    }
+    const stacks = result.stacks.flatMap((stack): Array<TailnetOverview> => {
+      const tunnels: Record<string, ReadonlyArray<AccessPermission>> = {}
+      for (const deployment of stack.deployments) {
+        const permissions = permissionsOf(deployment)
+        if (permissions) tunnels[deployment.id] = permissions
+      }
+      const deployments = stack.deployments.filter(
+        ({ id }) => tunnels[id] !== undefined
+      )
+      if (deployments.length === 0) return []
+      const relays = new Set(deployments.map(({ relayId }) => relayId))
+      const bindings = stack.bindings.filter(({ relayId }) =>
+        relays.has(relayId)
+      )
+      const members = new Set(bindings.map(({ memberId }) => memberId))
+      return [
+        {
+          ...stack,
+          access: { manage: false, tunnels },
+          bindings,
+          deployments,
+          // Its Tailscale login is for those who change the tailnet.
+          integration: null,
+          names: stack.names.filter(({ memberId }) => members.has(memberId)),
+        },
+      ]
+    })
+    // Only the Relays of tunnels the viewer sees, listed or not.
+    const relays = new Set(
+      records.flatMap(({ ownerId, relayId }) =>
+        ownerId === user.id ||
+        effectiveScopePermissions(grants, {
+          relayId,
+          resourceId: relayId,
+          resourceType: "relay",
+        }).has("instance.read")
+          ? [relayId]
+          : []
+      )
+    )
+    return {
+      stacks,
+      unavailableRelays: result.unavailableRelays.filter(({ id }) =>
+        relays.has(id)
+      ),
+    }
   }
 )
+
+// Reading it, and what every kind of instance has, as its pages check them.
+const tunnelPermissions: ReadonlyArray<AccessPermission> = [
+  "instance.read",
+  ...accessPermissions.filter(
+    (permission) => permissionRelayReach(permission).length > 0
+  ),
+]
 
 const createTailnetOperation = operation<
   z.infer<typeof createTailnetSchema> & { id: string }
 >()({
-  name: "tailscale.network.create",
-  doing: "Creating this Tailscale network",
+  name: "tailnet.create",
+  doing: "Creating this tailnet",
   authorize: ({ user }) => tailscaleAdministrator(user),
   locks: ({ input }) => [exclusive(tailnetKey(input.id))],
   run: ({ context: user, input }) =>
@@ -218,7 +332,7 @@ async function createTailnetHandler(
     ])
   )
   await runAppEffect(
-    "tailscale.networks.create",
+    "tailnet.create",
     createTailnetDefinitionEffect(
       {
         domains: data.domains,
@@ -237,7 +351,7 @@ async function createTailnetHandler(
 const configureTailscaleIntegrationOperation = operation<
   z.infer<typeof configureTailscaleIntegrationSchema>
 >()({
-  name: "tailscale.network.connect",
+  name: "tailnet.connect",
   doing: "Connecting this network to Tailscale",
   authorize: ({ user }) => tailscaleAdministrator(user),
   locks: ({ input }) => [exclusive(tailnetSettingsKey(input.id))],
@@ -259,14 +373,13 @@ async function configureTailscaleIntegrationHandler(
 ) {
   const definitions = await loadTailnetDefinitions()
   const definition = definitions.find(({ id }) => id === data.id)
-  if (!definition) throw new Error("Tailscale network not found")
+  if (!definition) throw new Error("Tailnet not found")
   // Its removal still needs the credentials it was set up with.
   if (definition.cleanup) {
-    throw new Error("This Tailscale network is being removed")
+    throw new Error("This tailnet is being removed")
   }
   const clientSecret =
-    data.clientSecret ??
-    (await loadTailnetCredential(data.id)).clientSecret
+    data.clientSecret ?? (await loadTailnetCredential(data.id)).clientSecret
   const verified = await runAppEffect(
     "tailscale.oauth.verify",
     verifyTailscaleOAuthCredentialEffect(data.clientId, clientSecret, [
@@ -274,7 +387,7 @@ async function configureTailscaleIntegrationHandler(
     ])
   )
   await runAppEffect(
-    "tailscale.networks.integration.save",
+    "tailnet.integration.save",
     saveTailnetIntegrationEffect(data.id, verified, clientSecret)
   )
   const credential = {
@@ -286,7 +399,7 @@ async function configureTailscaleIntegrationHandler(
       const result = await loadTailnets()
       requireCompleteTunnelList(result.unavailableRelays)
       const stack = result.stacks.find(({ id }) => id === data.id)
-      if (!stack) throw new Error("Tailscale network not found")
+      if (!stack) throw new Error("Tailnet not found")
       if (stack.domains.join(" ") !== data.domains.join(" ")) {
         throw new Error("The tailnet's TLDs changed before setup completed")
       }
@@ -316,7 +429,7 @@ export const previewTailscaleIntegration = createServerFn({ method: "POST" })
     const result = await loadTailnets()
     requireCompleteTunnelList(result.unavailableRelays)
     const stack = result.stacks.find(({ id }) => id === data.id)
-    if (!stack) throw new Error("Tailscale network not found")
+    if (!stack) throw new Error("Tailnet not found")
     const verified = await runAppEffect(
       "tailscale.oauth.verify",
       verifyTailscaleOAuthCredentialEffect(data.clientId, data.clientSecret, [
@@ -347,7 +460,7 @@ export const getTailscaleIntegrationStatus = createServerFn({ method: "GET" })
     ])
     requireCompleteTunnelList(result.unavailableRelays)
     const stack = result.stacks.find(({ id }) => id === data.id)
-    if (!stack) throw new Error("Tailscale network not found")
+    if (!stack) throw new Error("Tailnet not found")
     return {
       inspection: await inspectTailscaleControlPlane(credential, stack),
       stacks: result,
@@ -357,7 +470,7 @@ export const getTailscaleIntegrationStatus = createServerFn({ method: "GET" })
 const syncTailscaleIntegrationOperation = operation<
   z.infer<typeof syncTailscaleIntegrationSchema>
 >()({
-  name: "tailscale.network.sync",
+  name: "tailnet.sync",
   doing: "Syncing this network with Tailscale",
   authorize: ({ user }) => tailscaleAdministrator(user),
   locks: ({ input }) => [exclusive(tailnetSettingsKey(input.id))],
@@ -383,9 +496,9 @@ async function syncTailscaleIntegrationHandler(
   ])
   requireCompleteTunnelList(result.unavailableRelays)
   const stack = result.stacks.find(({ id }) => id === data.id)
-  if (!stack) throw new Error("Tailscale network not found")
+  if (!stack) throw new Error("Tailnet not found")
   // Its removal takes its nodes away; a sync would point DNS back at them.
-  if (stack.cleanup) throw new Error("This Tailscale network is being removed")
+  if (stack.cleanup) throw new Error("This tailnet is being removed")
   const synchronized = await Effect.runPromise(
     promiseEffect(async () => {
       await synchronizeTailscaleControlPlane(credential, stack)
@@ -396,11 +509,9 @@ async function syncTailscaleIntegrationHandler(
   return synchronized
 }
 
-const saveTailnetOperation = operation<
-  z.infer<typeof saveTailnetSchema>
->()({
-  name: "tailscale.network.save",
-  doing: "Saving this Tailscale network",
+const saveTailnetOperation = operation<z.infer<typeof saveTailnetSchema>>()({
+  name: "tailnet.save",
+  doing: "Saving this tailnet",
   authorize: ({ user }) => tailscaleAdministrator(user),
   locks: ({ input }) => [exclusive(tailnetSettingsKey(input.id))],
   run: ({ context: user, input }) =>
@@ -423,16 +534,26 @@ async function saveTailnetHandler(
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const id = data.id
-  const duplicateHostname = data.bindings.find(
+  const firstDomain = data.domains[0]!
+  const duplicateLabel = data.bindings.find(
+    (binding, index, bindings) =>
+      binding.label !== undefined &&
+      bindings.findIndex((candidate) => candidate.label === binding.label) !==
+        index
+  )
+  if (duplicateLabel) {
+    throw new Error(
+      `${duplicateLabel.label}.${firstDomain} is chosen more than once`
+    )
+  }
+  const duplicateMember = data.bindings.find(
     (binding, index, bindings) =>
       bindings.findIndex(
-        (candidate) => candidate.hostname === binding.hostname
+        (candidate) => candidate.memberId === binding.memberId
       ) !== index
   )
-  if (duplicateHostname) {
-    throw new Error(
-      `${duplicateHostname.hostname}.${data.domains[0]} is chosen more than once`
-    )
+  if (duplicateMember) {
+    throw new Error("Something connects to a tailnet through one tunnel")
   }
   // A name is unique in its tailnet: another member's, alias or not, stays.
   const names = await runAppEffect(
@@ -440,26 +561,34 @@ async function saveTailnetHandler(
     listTunnelNamesEffect([id])
   )
   for (const binding of data.bindings) {
+    if (binding.label === undefined) continue
     const taken = names.find(
       (name) =>
         name.memberId !== binding.memberId &&
-        name.label === binding.hostname &&
-        name.domain === data.domains[0]
+        name.label === binding.label &&
+        name.domain === firstDomain
     )
     if (taken) {
       throw new Error(
-        `${binding.hostname}.${data.domains[0]} is already another member's name`
+        `${binding.label}.${firstDomain} is already another member's name`
       )
     }
   }
 
-  const grouped = new Map<string, typeof data.bindings>()
+  const grouped = new Map<string, typeof data.bindings>(
+    data.relayIds.map((relayId) => [relayId, []])
+  )
   for (const binding of data.bindings) {
-    const relay = relayById.get(binding.relayId)
-    if (!relay) throw new Error("A selected server's node is unavailable")
     const relayBindings = grouped.get(binding.relayId) ?? []
     relayBindings.push(binding)
     grouped.set(binding.relayId, relayBindings)
+  }
+  for (const relayId of grouped.keys()) {
+    if (!relayById.has(relayId)) {
+      throw new Error(
+        "A Relay this tailnet would have a tunnel on is unavailable"
+      )
+    }
   }
 
   const [currentResult, definitions] = await Promise.all([
@@ -471,17 +600,17 @@ async function saveTailnetHandler(
     (deployment) => deployment.tailnetId === id
   )
   const definition = definitions.find((candidate) => candidate.id === id)
-  if (!definition) throw new Error("Tailscale network not found")
+  if (!definition) throw new Error("Tailnet not found")
   if (
     !definition.integration &&
-    !sameTailscaleBindings(data.bindings, currentForStack)
+    !sameTailscaleBindings(data.bindings, currentForStack, grouped.keys())
   ) {
     throw new Error(
       "Connect this network to Tailscale before assigning servers"
     )
   }
   if (definition.cleanup) {
-    throw new Error("This Tailscale network is being removed")
+    throw new Error("This tailnet is being removed")
   }
   const currentRelayIds = new Set(currentForStack.map(({ relayId }) => relayId))
   requireUnusedDomains(definitions, id, data.domains)
@@ -500,7 +629,9 @@ async function saveTailnetHandler(
   for (const binding of data.bindings) {
     const snapshot = currentResult.snapshots.get(binding.relayId)
     if (!snapshot) {
-      throw new Error("A selected server's node is unavailable")
+      throw new Error(
+        "A Relay this tailnet would have a tunnel on is unavailable"
+      )
     }
     const problem = tailscaleMemberProblem(binding, {
       apps: appRecords,
@@ -509,6 +640,68 @@ async function saveTailnetHandler(
     })
     if (problem) throw new Error(problem)
   }
+  // Each member's generated name: as renamed, as it was, or, connecting,
+  // made from what it's called.
+  const kept = new Map(
+    names
+      .filter((name) => name.generated)
+      .map((name) => [name.memberId, name.label])
+  )
+  const appNames = new Map(appRecords.map((app) => [app.appId, app.name]))
+  const databaseNames = new Map(
+    databaseRecords.map((database) => [database.databaseId, database.name])
+  )
+  const unnamed = data.bindings.flatMap((binding) => {
+    if (binding.label !== undefined || kept.has(binding.memberId)) return []
+    const app = appTailscaleMember(binding.memberId)
+    if (app) {
+      return [
+        {
+          fallback: `app-${app.appId.slice(0, 6)}`,
+          memberId: binding.memberId,
+          // An image or Dockerfile App's one service is `app`; a Compose
+          // App's are named, and each is called after it.
+          name: [
+            appNames.get(app.appId) ?? "",
+            app.service === "app" ? "" : app.service,
+          ].join(" "),
+        },
+      ]
+    }
+    const databaseId = databaseTailscaleMember(binding.memberId)
+    if (databaseId) {
+      return [
+        {
+          fallback: `database-${databaseId.slice(0, 6)}`,
+          memberId: binding.memberId,
+          name: databaseNames.get(databaseId) ?? "",
+        },
+      ]
+    }
+    const instanceId = instanceTailscaleMember(binding.memberId) ?? ""
+    return [
+      {
+        fallback: `game-server-${instanceId.slice(0, 6)}`,
+        memberId: binding.memberId,
+        name:
+          currentResult.snapshots
+            .get(binding.relayId)
+            ?.instances.find((instance) => instance.id === instanceId)?.name ??
+          "",
+      },
+    ]
+  })
+  const generated = await runAppEffect(
+    "tunnelNames.generate",
+    generateTunnelNamesEffect(
+      id,
+      firstDomain,
+      unnamed,
+      data.bindings.flatMap(({ label }) => (label === undefined ? [] : [label]))
+    )
+  )
+  const labelOf = (memberId: string, label: string | undefined) =>
+    label ?? kept.get(memberId) ?? generated.get(memberId)!
 
   const nextDefinition = {
     cleanup: definition.cleanup,
@@ -527,7 +720,11 @@ async function saveTailnetHandler(
       .sort(([left], [right]) => left.localeCompare(right))
       .map(async ([relayId, bindings]): Promise<DesiredTunnel> => {
         const relay = relayById.get(relayId)
-        if (!relay) throw new Error("A selected server's node is unavailable")
+        if (!relay) {
+          throw new Error(
+            "A Relay this tailnet would have a tunnel on is unavailable"
+          )
+        }
         return {
           bindings: bindings.map(({ enabled, memberId }) => ({
             enabled,
@@ -704,9 +901,9 @@ async function saveTailnetHandler(
     Effect.gen(function* () {
       yield* setGeneratedTunnelNamesEffect(
         id,
-        data.bindings.map(({ hostname, memberId }) => ({
-          domain: data.domains[0]!,
-          label: hostname,
+        data.bindings.map(({ label, memberId }) => ({
+          domain: firstDomain,
+          label: labelOf(memberId, label),
           memberId,
         }))
       )
@@ -739,17 +936,15 @@ const tunnelAliasSchema = z.strictObject({
   tailnetId: tunnelIdSchema,
 })
 
-const addTunnelAliasOperation = operation<z.infer<typeof tunnelAliasSchema>>()(
-  {
-    name: "tailscale.network.alias.add",
-    doing: "Giving this member another name",
-    authorize: ({ user }) => tailscaleAdministrator(user),
-    locks: ({ input }) => [exclusive(tailnetSettingsKey(input.tailnetId))],
-    run: ({ context: user, input }) =>
-      promiseEffect(() => addTunnelAliasHandler(user, input)),
-    audit: ({ input }) => ({ id: input.tailnetId, kind: "tailnet" }),
-  }
-)
+const addTunnelAliasOperation = operation<z.infer<typeof tunnelAliasSchema>>()({
+  name: "tailnet.alias.add",
+  doing: "Giving this member another name",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailnetSettingsKey(input.tailnetId))],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => addTunnelAliasHandler(user, input)),
+  audit: ({ input }) => ({ id: input.tailnetId, kind: "tailnet" }),
+})
 
 /** Gives a connected member another name in its tailnet. */
 export const addTunnelAlias = createServerFn({ method: "POST" })
@@ -775,7 +970,9 @@ async function addTunnelAliasHandler(
     "tunnelNames.list",
     listTunnelNamesEffect([input.tailnetId])
   )
-  if (!names.some((name) => name.generated && name.memberId === input.memberId)) {
+  if (
+    !names.some((name) => name.generated && name.memberId === input.memberId)
+  ) {
     throw new Error("Connect it to this tailnet before giving it a name")
   }
   if (
@@ -795,7 +992,7 @@ const removeTunnelAliasSchema = z.strictObject({ id: z.uuid() })
 const removeTunnelAliasOperation = operation<
   z.infer<typeof removeTunnelAliasSchema> & { tailnetId: string }
 >()({
-  name: "tailscale.network.alias.remove",
+  name: "tailnet.alias.remove",
   doing: "Taking away this name",
   authorize: ({ user }) => tailscaleAdministrator(user),
   locks: ({ input }) => [exclusive(tailnetSettingsKey(input.tailnetId))],
@@ -805,7 +1002,8 @@ const removeTunnelAliasOperation = operation<
         "tunnelNames.removeAlias",
         removeTunnelAliasEffect(input.id)
       )
-      if (!removed) throw new Error("A generated name can be renamed, not removed")
+      if (!removed)
+        throw new Error("A generated name can be renamed, not removed")
       await rewriteTailnetNames(input.tailnetId, user.id)
       return loadTailnets()
     }),
@@ -842,17 +1040,17 @@ async function rewriteTailnetNames(tailnetId: string, subject: string) {
   publishTailscaleChange()
 }
 
-const removeTailnetOperation = operation<
-  z.infer<typeof removeTailnetSchema>
->()({
-  name: "tailscale.network.remove",
-  doing: "Removing this Tailscale network",
-  authorize: ({ user }) => tailscaleAdministrator(user),
-  locks: ({ input }) => [exclusive(tailnetKey(input.id))],
-  run: ({ context: user, input }) =>
-    promiseEffect(() => removeTailnetHandler(user, input)),
-  audit: ({ input }) => ({ id: input.id, kind: "tailnet" }),
-})
+const removeTailnetOperation = operation<z.infer<typeof removeTailnetSchema>>()(
+  {
+    name: "tailnet.remove",
+    doing: "Removing this tailnet",
+    authorize: ({ user }) => tailscaleAdministrator(user),
+    locks: ({ input }) => [exclusive(tailnetKey(input.id))],
+    run: ({ context: user, input }) =>
+      promiseEffect(() => removeTailnetHandler(user, input)),
+    audit: ({ input }) => ({ id: input.id, kind: "tailnet" }),
+  }
+)
 
 export const removeTailnet = createServerFn({ method: "POST" })
   .validator(removeTailnetSchema)
@@ -875,7 +1073,7 @@ async function removeTailnetHandler(
     (deployment) => deployment.tailnetId === data.id
   )
   const definition = definitions.find(({ id }) => id === data.id)
-  if (!definition) throw new Error("Tailscale network not found")
+  if (!definition) throw new Error("Tailnet not found")
   await runAppEffect(
     "tailscale.cleanup.request",
     requestTailnetCleanupEffect(data.id, user.id, deployments).pipe(
@@ -966,15 +1164,22 @@ function groupTunnels(
       .map((name) => [`${name.tailnetId}:${name.memberId}`, name.label])
   )
   const grouped = new Map<string, TailnetOverview>()
+  const namesOf = (tailnetId: string) =>
+    names.flatMap(({ tailnetId: of, ...name }) =>
+      of === tailnetId ? [name] : []
+    )
   for (const definition of definitions) {
     grouped.set(definition.id, {
       ...definition,
+      access: { manage: true, tunnels: {} },
       bindings: [],
       deployments: [],
+      names: namesOf(definition.id),
     })
   }
   for (const deployment of deployments) {
     const stack = grouped.get(deployment.tailnetId) ?? {
+      access: { manage: true, tunnels: {} },
       bindings: [],
       cleanup: null,
       deployments: [],
@@ -982,12 +1187,14 @@ function groupTunnels(
       id: deployment.tailnetId,
       integration: null,
       name: deployment.name,
+      names: namesOf(deployment.tailnetId),
     }
     stack.deployments.push(deployment)
+    stack.access.tunnels[deployment.id] = tunnelPermissions
     stack.bindings.push(
       ...deployment.bindings.map((binding) => ({
         ...binding,
-        hostname:
+        label:
           generated.get(`${deployment.tailnetId}:${binding.memberId}`) ?? "",
         relayId: deployment.relayId,
         relayName: deployment.relayName,
@@ -1000,9 +1207,7 @@ function groupTunnels(
   )
 }
 
-async function loadTunnels(
-  relays: ReadonlyArray<PersistedRelay>
-): Promise<{
+async function loadTunnels(relays: ReadonlyArray<PersistedRelay>): Promise<{
   deployments: Array<TunnelOverview>
   snapshots: Map<string, RelaySnapshot>
   unavailableRelays: TailnetsResult["unavailableRelays"]
@@ -1074,13 +1279,7 @@ function tunnelOperations(
       const relay = relayById.get(target.relayId)
       if (!relay) throw new Error("The network's node is unavailable")
       const stack = tunnelSchema.parse(
-        await relayRpc(
-          relay,
-          "tunnel.apply",
-          input,
-          240_000,
-          subject
-        )
+        await relayRpc(relay, "tunnel.apply", input, 240_000, subject)
       )
       return {
         ...stack,
@@ -1152,25 +1351,19 @@ function deploymentHostname(
 }
 
 function loadTailnetDefinitions() {
-  return runAppEffect(
-    "tailscale.networks.load",
-    loadTailnetDefinitionsEffect()
-  )
+  return runAppEffect("tailnet.load", loadTailnetDefinitionsEffect())
 }
 
-function saveTailnetDefinition(
-  definition: TailnetDefinition,
-  ownerId: string
-) {
+function saveTailnetDefinition(definition: TailnetDefinition, ownerId: string) {
   return runAppEffect(
-    "tailscale.networks.save",
+    "tailnet.save",
     saveTailnetDefinitionEffect(definition, ownerId)
   )
 }
 
 function loadTailnetCredential(id: string) {
   return runAppEffect(
-    "tailscale.networks.integration.load",
+    "tailnet.integration.load",
     loadTailnetCredentialEffect(id)
   )
 }
@@ -1223,7 +1416,7 @@ function inspectTailscaleControlPlane(
 
 function recordTailscaleSync(id: string, error: string | null) {
   return runAppEffect(
-    "tailscale.networks.integration.recordSync",
+    "tailnet.integration.recordSync",
     recordTailnetSyncEffect(id, error)
   )
 }
@@ -1240,8 +1433,16 @@ function replaceTailnetDefinition(
 
 function sameTailscaleBindings(
   bindings: ReadonlyArray<z.infer<typeof stackBindingInputSchema>>,
-  deployments: ReadonlyArray<TunnelOverview>
+  deployments: ReadonlyArray<TunnelOverview>,
+  relayIds: Iterable<string>
 ): boolean {
+  const relays = new Set(relayIds)
+  if (
+    relays.size !== deployments.length ||
+    deployments.some(({ relayId }) => !relays.has(relayId))
+  ) {
+    return false
+  }
   const current = new Set(
     deployments.flatMap((deployment) =>
       deployment.bindings.map(
@@ -1253,9 +1454,7 @@ function sameTailscaleBindings(
   return (
     current.size === bindings.length &&
     bindings.every((binding) =>
-      current.has(
-        `${binding.relayId}:${binding.memberId}:${binding.enabled}`
-      )
+      current.has(`${binding.relayId}:${binding.memberId}:${binding.enabled}`)
     )
   )
 }
@@ -1281,7 +1480,7 @@ function requireCompleteTunnelList(
   if (unavailableRelays.length === 0) return
   const names = unavailableRelays.map(({ name }) => name).join(", ")
   throw new Error(
-    `Tailscale networks cannot be changed while these Relays are unavailable: ${names}`
+    `tailnets cannot be changed while these Relays are unavailable: ${names}`
   )
 }
 
@@ -1293,10 +1492,12 @@ function tailscaleOverviewForDeployments(
   // Tailscale is told its routes and TLDs, never its members' names.
   return {
     ...definition,
+    access: { manage: true, tunnels: {} },
+    names: [],
     bindings: deployments.flatMap(({ bindings, relayId, relayName }) =>
       bindings.map((binding) => ({
         ...binding,
-        hostname: "",
+        label: "",
         relayId,
         relayName,
       }))

@@ -5,7 +5,7 @@ import type { Brick } from "@workspace/contracts"
 
 import { showToast } from "@workspace/ui/components/sonner"
 
-import type { PickableBrickKind } from "@/components/brick-kinds"
+import type { AddableKind } from "@/components/brick-kinds"
 import {
   BrickRelayField,
   useBrickRelayReady,
@@ -32,9 +32,9 @@ export const AddDatabasePane = React.memo(function AddDatabasePane({
   onClose,
   onKindChange,
 }: {
-  kinds: ReadonlyArray<PickableBrickKind>
+  kinds: ReadonlyArray<AddableKind>
   onClose: () => void
-  onKindChange: (kind: PickableBrickKind) => void
+  onKindChange: (kind: AddableKind) => void
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()

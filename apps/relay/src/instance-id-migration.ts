@@ -2,7 +2,7 @@
  * The one-time move to 12-character instance IDs, run as the Relay starts,
  * before anything reads Docker or admits work.
  *
- * Every game server, App, database, and Tailscale network the Relay has
+ * Every game server, App, database, and tailnet the Relay has
  * from before had a 40-character hex ID, and the Relay itself was known by
  * its key's fingerprint. Each takes the new ID `migratedInstanceId` gives
  * it, which Hearth computes the same way on its own. Nothing physical is
@@ -15,7 +15,7 @@
  * 1. Finds every old ID: in Docker's labels, Compose project names and
  *    the Relay's folders, and in its SQLite records, each with what kind of
  *    instance it is, and saves the old ID of each new one.
- * 2. Rewrites the state files that name instances (Tailscale networks'
+ * 2. Rewrites the state files that name instances (tailnets'
  *    configurations, restore journals, transfers, stopped Apps,
  *    deployments), leaving paths and Docker names, which are physical.
  * 3. Gives each container on a database's network the name its new ID
@@ -71,7 +71,7 @@ const ALIAS_REPAIRS_KEY = "instance_ids_alias_repairs"
 const DATABASE_CONNECTION_LABEL_PREFIX = "kiln.instance.databases."
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 
-// What an old ID found in two places is: a Tailscale network's container
+// What an old ID found in two places is: a tailnet's container
 // carries a game server's label, so the network's folder decides.
 const KIND_PRIORITY: Record<InstanceIdKind, number> = {
   // Tunnels had new IDs from the start; no old one names one.
@@ -265,7 +265,7 @@ async function folderReferences(
   ownFingerprint: string
 ): Promise<Array<LegacyInstanceReference>> {
   const references: Array<LegacyInstanceReference> = []
-  // Game servers' folders and Tailscale networks' share a directory; a
+  // Game servers' folders and tailnets' share a directory; a
   // network's holds its configuration.
   for (const name of await directoryNames(config.rootDirectory)) {
     if (!isLegacyResourceId(name)) continue
@@ -415,7 +415,7 @@ async function rewriteStateFiles(
       if (entry.isFile() && entry.name.endsWith(".json"))
         files.push(join(directory, entry.name))
   }
-  // Tailscale networks' configurations, in their folders among game
+  // tailnets' configurations, in their folders among game
   // servers', whose files are their own and never touched.
   for (const name of await directoryNames(config.rootDirectory)) {
     const directory = join(config.rootDirectory, name)

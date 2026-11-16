@@ -685,12 +685,12 @@ await lifecycle.removeRetiredInfrastructure()
 lifecycle.useDatabaseContainers((databaseId) =>
   databases.containerOf(databaseId)
 )
-// A game server's container takes its addresses on its Tailscale networks
+// A game server's container takes its addresses on its tailnets
 // whenever it starts, its recovery starts included.
 runtimeRecovery.useTailscaleAddresses((instanceId) =>
   lifecycle.reattachTailscaleMember(instanceTailscaleMemberId(instanceId))
 )
-// A database's container takes its addresses on its Tailscale networks once
+// A database's container takes its addresses on its tailnets once
 // a replacement's old one has let them go, and whenever it starts.
 databases.useTailscaleAddresses((databaseId) =>
   lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
@@ -762,7 +762,7 @@ lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
   return (await apps.serviceContainer(appId, service))?.name ?? null
 })
-// Every member whose container lost an address on its Tailscale networks
+// Every member whose container lost an address on its tailnets
 // takes it again: a container the Relay replaced but stopped before
 // reattaching, or one Docker disconnected while the Relay was down.
 await lifecycle.reattachTailscaleMembers(() => true)
