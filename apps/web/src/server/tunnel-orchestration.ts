@@ -40,6 +40,12 @@ export interface GatewayOperations<TDeployment extends GatewayPlanState> {
   apply: (target: DesiredGateway, input: GatewayApply) => Promise<TDeployment>
   remove: (deployment: TDeployment, mode: TailscaleRemovalMode) => Promise<void>
   /**
+   * Takes away what a new gateway left that failed before it finished: its
+   * Tailscale device, logged in before the Relay gave up and removed the
+   * rest.
+   */
+  discard?: (target: DesiredGateway) => Promise<void>
+  /**
    * Rewrites the network's DNS on every node of it from what the Relays
    * hold now (`writeTunnelDns`), never from what a step returned.
    */
@@ -96,6 +102,8 @@ export const applyGatewayPlanEffect = Effect.fn(
     )
   }
 
+  // The new gateway being applied, until it is.
+  let unfinished: DesiredGateway | null = null
   const synchronized = yield* Effect.gen(function* () {
     // A later node may reject a one-time key or fail during installation.
     // Applying one node at a time lets us compensate every completed peer.
@@ -104,6 +112,7 @@ export const applyGatewayPlanEffect = Effect.fn(
       (target) =>
         Effect.gen(function* () {
           const previous = previousByRelay.get(target.relayId)
+          unfinished = previous ? null : target
           const targetAuthKey =
             previous || !authKeyForTarget
               ? undefined
@@ -121,6 +130,7 @@ export const applyGatewayPlanEffect = Effect.fn(
               tailnetId: id,
             })
           )
+          unfinished = null
           const peer = applied.find(
             (candidate) => candidate.subnet === deployment.subnet
           )
@@ -161,7 +171,8 @@ export const applyGatewayPlanEffect = Effect.fn(
         current,
         applied,
         preparedRemovals,
-        operations
+        operations,
+        unfinished
       ).pipe(
         Effect.flatMap((rollbackFailures) =>
           orchestrationFailure(
@@ -207,8 +218,20 @@ const rollbackGatewayPlanEffect = Effect.fn(
   current: ReadonlyArray<TDeployment>,
   applied: ReadonlyArray<TDeployment>,
   preparedRemovals: ReadonlyArray<TDeployment>,
-  operations: GatewayOperations<TDeployment>
+  operations: GatewayOperations<TDeployment>,
+  unfinished: DesiredGateway | null
 ) {
+  const discardFailures: Array<string> = []
+  if (unfinished && operations.discard) {
+    const target = unfinished
+    yield* promiseOperation("rollback", () => operations.discard!(target)).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          discardFailures.push(rollbackFailure(target.relayName, error))
+        })
+      )
+    )
+  }
   const previousByRelay = new Map(
     current.map((deployment) => [deployment.relayId, deployment])
   )
@@ -266,7 +289,12 @@ const rollbackGatewayPlanEffect = Effect.fn(
     Effect.as([] as Array<string>),
     Effect.catch((error) => Effect.succeed([`DNS: ${errorMessage(error)}`]))
   )
-  return [...removalFailures, ...deploymentFailures, ...dnsFailure]
+  return [
+    ...discardFailures,
+    ...removalFailures,
+    ...deploymentFailures,
+    ...dnsFailure,
+  ]
 })
 
 function promiseOperation<TResult>(

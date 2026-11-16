@@ -1230,7 +1230,11 @@ function gatewayOperations(
   network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   relayById: ReadonlyMap<string, PersistedRelay>,
   subject: string,
-  removeFromControlPlane?: (gateway: GatewayOverview) => Promise<void>
+  removeFromControlPlane?: (
+    gateway: Pick<GatewayOverview, "hostname" | "subnet"> & {
+      status: Pick<GatewayOverview["status"], "ipv4Address">
+    }
+  ) => Promise<void>
 ): GatewayOperations<GatewayOverview> {
   return {
     apply: async (target, input) => {
@@ -1259,6 +1263,17 @@ function gatewayOperations(
         controlPlaneDeviceRemoved
       )
     },
+    // Found by its hostname, as it never reported an address.
+    ...(removeFromControlPlane
+      ? {
+          discard: (target: DesiredGateway) =>
+            removeFromControlPlane({
+              hostname: target.hostname,
+              status: { ipv4Address: null },
+              subnet: "",
+            }),
+        }
+      : {}),
     // The save holds the network's `#settings`, as every DNS rewrite does.
     rewriteDns: () => writeTunnelDns(network, subject),
   }
@@ -1335,7 +1350,9 @@ function createTailscaleNodeAuthKey(
 
 function removeTailscaleControlPlaneDevice(
   credential: TailscaleOAuthCredential,
-  gateway: GatewayOverview
+  gateway: Pick<GatewayOverview, "hostname" | "subnet"> & {
+    status: Pick<GatewayOverview["status"], "ipv4Address">
+  }
 ) {
   return runAppEffect(
     "tailscale.controlPlane.removeDevice",

@@ -19,6 +19,8 @@ const fake = vi.hoisted(() => ({
   applies: [] as Array<{ authKey: boolean; id: string; relayId: string }>,
   devices: new Set<string>(),
   failDns: false,
+  // A new gateway logs in, then its Relay gives up and removes the rest.
+  failNewApply: false,
   gateways: new Map<string, Map<string, Record<string, unknown>>>(),
   instances: new Map<string, Array<string>>(),
   nextSubnet: 10,
@@ -98,6 +100,12 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         })
         if (!existing && !payload.authKey) {
           throw new Error("An auth key is required to install Tailscale")
+        }
+        if (!existing && fake.failNewApply) {
+          fake.devices.add(payload.hostname as string)
+          throw new Error(
+            "iptables v1.8.11 (legacy): can't initialize iptables table `filter'"
+          )
         }
         const subnet =
           (existing?.subnet as string | undefined) ??
@@ -239,6 +247,7 @@ const seed = Effect.gen(function* () {
   fake.applies = []
   fake.devices.clear()
   fake.failDns = false
+  fake.failNewApply = false
   fake.gateways.clear()
   fake.instances = new Map([
     [relayOne, [survival, creative]],
@@ -347,6 +356,48 @@ describeMysql("a tunnel's gateways", () => {
           assert.isFalse(fake.devices.has(gateway?.hostname as string))
           assert.deepEqual(yield* gatewayRows, [])
           assert.deepEqual(yield* nameRows, [])
+        })
+    )
+
+    // Its Relay removes what it made, but the device it logged in stays in
+    // the tailnet unless Hearth takes it away.
+    it.effect(
+      "takes away the Tailscale device of a gateway that failed as it was made",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          fake.failNewApply = true
+
+          const refused = yield* connect(survival)
+
+          assert.include(refused ?? "", "iptables")
+          assert.strictEqual(gatewaysOn(relayOne).size, 0)
+          assert.strictEqual(fake.devices.size, 0)
+          assert.deepEqual(yield* gatewayRows, [])
+        })
+    )
+
+    // A tunnel has one gateway on a Relay: the one the Relay reports there
+    // is the one Hearth keeps, not one it kept from before, such as one a
+    // failed connect left.
+    it.effect(
+      "keeps the gateway its Relay reports, in place of one it no longer has",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          assert.isNull(yield* connect(survival))
+          const [lost] = [...gatewaysOn(relayOne).values()]
+          gatewaysOn(relayOne).clear()
+          fake.devices.clear()
+
+          assert.isNull(yield* connect(creative))
+
+          const [made] = [...gatewaysOn(relayOne).values()]
+          assert.notStrictEqual(made?.id, lost?.id)
+          assert.deepEqual(
+            (yield* gatewayRows).map(({ id, relay_id }) => [id, relay_id]),
+            [[made?.id, relayOne]]
+          )
         })
     )
 
