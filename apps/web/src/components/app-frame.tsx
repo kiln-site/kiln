@@ -16,7 +16,7 @@ import { NotificationsProvider } from "@/components/notifications"
 import { PanelFooter } from "@/components/panel-footer"
 import { PushNotificationsPrompt } from "@/components/push-notifications-prompt"
 import { RealtimeSync } from "@/components/realtime-sync"
-import { RecoveryKitBanner } from "@/components/recovery-kit/recovery-kit-banner"
+import { RecoveryKitToast } from "@/components/recovery-kit/recovery-kit-toast"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
 import { ServerMigrationToasts } from "@/components/server/server-migration-toasts"
 import { applyAppearance, saveAppearanceCache } from "@/lib/appearance"
@@ -61,7 +61,7 @@ export const AppFrame = React.memo(function AppFrame({
               data-slot="app-content"
               className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
             >
-              <RecoveryKitBanner />
+              <RecoveryKitToast />
               <AppRouteContent>{children}</AppRouteContent>
             </div>
             <PanelFooter />

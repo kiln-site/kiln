@@ -415,7 +415,7 @@ Anyone with the kit can read Kiln's database and sign Hearth sessions.
 
 Right after the first administrator account is created, Hearth asks for the
 recovery kit to be saved before opening the app, and until a platform
-administrator says it's saved, a banner keeps asking. Any platform
+administrator says it's saved, a notification stays on every page. Any platform
 administrator can save it again from **Kiln → Security** (or `/setup/recovery`
 while nobody has). Hearth reads it from the Relay hosting Kiln each time and
 never stores it; it offers three ways to keep it:
