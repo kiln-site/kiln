@@ -9,7 +9,6 @@ import {
   relayVolumeNameSchema,
   relayVolumeSchema,
   relayVolumesSchema,
-  relayVolumesV1Feature,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -57,21 +56,16 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
   .validator(targetSchema)
   .handler(async ({ data }) => {
     const { relay } = await authorizedRelay(data.relayId, "relay.read")
-    if (!(await relayHasVolumes(relay.id))) {
-      return {
-        filesAvailable: false,
-        measuring: false,
-        missing: [],
-        protection: { ready: true, reason: null, retrying: false },
-        supported: false,
-        uncovered: [],
-        volumes: [],
-      }
-    }
-    const { filesAvailable, measuring, missing, protection, uncovered, volumes } =
-      relayVolumesSchema.parse(
-        await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
-      )
+    const {
+      filesAvailable,
+      measuring,
+      missing,
+      protection,
+      uncovered,
+      volumes,
+    } = relayVolumesSchema.parse(
+      await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
+    )
     // This Hearth's own import failed and is being sent again.
     const { relayVolumeReferencesState } =
       await import("@/lib/relay-connection")
@@ -83,7 +77,6 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
       // Volumes Apps name that the Relay doesn't have.
       missing,
       protection: { ...protection, retrying },
-      supported: true,
       uncovered,
       volumes,
     }
@@ -98,15 +91,6 @@ export const getAppVolumes = createServerFn({ method: "GET" })
   .validator(appVolumesInputSchema)
   .handler(async ({ data }) => {
     const { relay } = await authorizedApp(data, "app.read")
-    if (!(await relayHasVolumes(relay.id))) {
-      return {
-        filesAvailable: false,
-        measuring: false,
-        referencesKnown: true,
-        unkept: [],
-        volumes: [],
-      }
-    }
     const { filesAvailable, measuring, protection, uncovered, volumes } =
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
@@ -163,7 +147,6 @@ const createVolume = operation<z.infer<typeof createVolumeSchema>>()({
   run: ({ context: { id, user }, input: data }) =>
     promiseEffect(async () => {
       const relay = await requiredRelay(data.relayId)
-      await requireRelayVolumes(relay.id)
       const volume = relayVolumeSchema.parse(
         await databaseRpc(
           relay,
@@ -227,7 +210,6 @@ async function renameVolumeHandler(
   data: z.infer<typeof renameVolumeSchema>
 ) {
   const relay = await requiredRelay(data.relayId)
-  await requireRelayVolumes(relay.id)
   await databaseRpc(
     relay,
     "relay.volumes.rename",
@@ -251,7 +233,6 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
       data.relayId,
       "relay.configure"
     )
-    await requireRelayVolumes(relay.id)
     const volume = await deletableVolume(relay, data.volumeId)
     await requireDeleteConfirmation({
       confirmation: data.confirmation,
@@ -331,20 +312,6 @@ async function importVolumeReferences(relayId: string): Promise<void> {
     "relay.volumes.references.import",
     importRelayAppVolumeReferencesEffect(relayId)
   )
-}
-
-// An offline Relay has no features yet; asking it says why it can't answer.
-async function relayHasVolumes(relayId: string): Promise<boolean> {
-  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-  const features = relayConnectionFeatures(relayId)
-  return features.size === 0 || features.has(relayVolumesV1Feature)
-}
-
-// An older Relay doesn't know the operation, and wouldn't answer it.
-async function requireRelayVolumes(relayId: string): Promise<void> {
-  if (!(await relayHasVolumes(relayId))) {
-    throw new Error("Update this Relay to manage its volumes.")
-  }
 }
 
 function publishRelayVolumesChange(relayId: string): void {

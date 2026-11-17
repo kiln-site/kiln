@@ -8,17 +8,6 @@
  */
 import { Schema } from "effect"
 
-// The Relay packs, serves, and pulls transfers through `transfer.*`.
-export const relayPeerTransfersV1Feature = "peer-transfers-v1"
-
-// The Relay restores and deletes a linked backup's archive by the identity
-// its restore and delete tasks name in `archive`.
-export const relayLinkedBackupsV1Feature = "linked-backups-v1"
-
-// The Relay reports through `transfer.space` how much a root holds and how
-// much room it has for transfers and new roots.
-export const relayTransferSpaceV1Feature = "transfer-space-v1"
-
 /** The HTTP route a source Relay serves an artifact on. */
 export function relayPeerTransferPath(transferId: string): string {
   return `/v1/peer/transfers/${encodeURIComponent(transferId)}`

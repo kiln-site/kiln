@@ -17,7 +17,7 @@ afterAll(() => disposeAppRuntime())
 // The Relay control channel is the only external boundary here.
 const relay = vi.hoisted(() => ({ rpc: vi.fn() }))
 vi.mock("@/lib/relay-connection", () => ({
-  relayConnectionFeatures: () => new Set(["connected"]),
+  relayConnected: () => true,
   relayRpc: relay.rpc,
 }))
 vi.mock("@/lib/realtime-source.server", () => ({
@@ -101,7 +101,9 @@ const snapshot = relaySnapshotSchema.parse({
 })
 
 const deploysAsked = () =>
-  relay.rpc.mock.calls.filter(([, operation]) => operation === "instance.deploy")
+  relay.rpc.mock.calls.filter(
+    ([, operation]) => operation === "instance.deploy"
+  )
 
 describeMysql("redeploying a game server", () => {
   afterEach(() => relay.rpc.mockReset())

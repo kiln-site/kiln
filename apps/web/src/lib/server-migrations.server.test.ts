@@ -1,9 +1,6 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import {
-  relayPeerTransfersV1Feature,
-} from "@workspace/contracts"
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Scope } from "effect"
 import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
@@ -49,7 +46,6 @@ import { testBrick, testBrickSource } from "@/test/bricks"
 // one Hearth after another for a restart.
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayConnectionFeatures: () => new Set([relayPeerTransfersV1Feature]),
   relayConnectionState: () => ({ status: "authenticated" }),
   relayJournal: async () => ({
     clientId: "hearth-one",
@@ -237,6 +233,14 @@ function answer(
     case "tunnel.state":
     case "backup.task.list":
       return []
+    // Both keep everything on the one disk their snapshots report.
+    case "transfer.space":
+      return {
+        rootBytes: null,
+        rootsFreeBytes: 1024 ** 4,
+        sharedFilesystem: true,
+        transferFreeBytes: 1024 ** 4,
+      }
     case "backup.task.enqueue":
       // Followed by Hearth's own records here.
       throw new Error("The Relay's backup queue is busy")

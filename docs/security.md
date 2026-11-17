@@ -178,8 +178,7 @@ there downloads it again each time its container is recreated.
 | `KILN_VULNERABILITY_DB_DIR` | Hearth | `/var/lib/kiln/vulnerability-db`, or a temporary directory |
 
 The Relay's data directory must be a volume, as it is in every supported
-install, so its helpers can hand inventories back to it. Relays older than the
-`security-inventory-v1` feature show as waiting until they're updated.
+install, so its helpers can hand inventories back to it.
 
 ## Limits
 

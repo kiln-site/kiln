@@ -14,14 +14,10 @@ import type { KilnPlatform } from "@/lib/kiln-host"
 // administrators only; Hearth's logs can hold anything it printed.
 
 export interface KilnPlatformHost {
-  /** Whether the Relay browses Hearth's database (`relay-platform-database-v1`). */
-  database: boolean
   error: string | null
   relayId: string
   relayName: string
   status: RelayPlatformStatus | null
-  /** Whether the Relay streams logs and opens shells (`relay-platform-v2`). */
-  v2: boolean
 }
 
 export const getKilnPlatform = createServerFn({ method: "GET" }).handler(

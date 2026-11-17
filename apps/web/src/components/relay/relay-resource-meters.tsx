@@ -37,13 +37,6 @@ export const RelayResourceMeters = React.memo(function RelayResourceMeters({
     : relayStatus === "paused"
       ? "Paused"
       : "Offline"
-  const { data: supported = true } = useQuery({
-    ...relayResourcesQueryOptions(relay.id),
-    enabled: connected,
-    select: (reading) => reading.supported,
-  })
-  if (!supported) return null
-
   return (
     <>
       {connected ? (

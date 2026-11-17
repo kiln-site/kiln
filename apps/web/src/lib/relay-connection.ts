@@ -31,7 +31,6 @@ import {
   RelayOperationLookupSchema,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
-  relayVolumesV1Feature,
   relayDialCloseCodes,
   relaySnapshotControlDelta,
   relaySnapshotDeltaFeature,
@@ -453,6 +452,11 @@ function publishRelayState(relayId: string): void {
  */
 export function relayConnectionFailing(relayId: string): boolean {
   return connections.get(relayId)?.failing ?? false
+}
+
+/** Whether this process is connected to the Relay and authenticated. */
+export function relayConnected(relayId: string): boolean {
+  return connections.get(relayId)?.state.status === "authenticated"
 }
 
 export function relayConnectionState(relayId: string): RelayConnectionState {
@@ -2403,34 +2407,34 @@ class RelayConnection {
       // name, to refuse deleting them, and counts only those this
       // connection sends; it gets them all on every connect, again with
       // backoff until it takes them, so one a save couldn't tell it arrives.
+      // Only the first failure warns: an outdated Relay, connected only to
+      // be updated, never answers.
       this.#volumeReferencesFiber?.interruptUnsafe()
       this.#volumeReferences = "pending"
-      if (this.#features.has(relayVolumesV1Feature)) {
-        this.#volumeReferencesFiber = forkAppEffect(
-          "apps.volumeReferences.reconcileOnConnect",
-          Effect.gen({ self: this }, function* () {
-            const { importRelayAppVolumeReferencesEffect } =
-              yield* Effect.promise(() => import("@/effect/managed-apps"))
-            for (let attempt = 0; ; attempt += 1) {
-              const sent = yield* Effect.result(
-                importRelayAppVolumeReferencesEffect(this.#relay.id)
-              )
-              if (Result.isSuccess(sent)) {
-                this.#setVolumeReferences("current")
-                return
-              }
-              this.#setVolumeReferences("retrying")
-              yield* Effect.logWarning(
-                "Sending the Relay Apps' configured volumes failed; retrying",
-                { cause: sent.failure, relayId: this.#relay.id }
-              )
-              yield* Effect.sleep(
-                Math.min(MAX_BACKOFF_MS, 1_000 * 2 ** Math.min(attempt, 5))
-              )
+      this.#volumeReferencesFiber = forkAppEffect(
+        "apps.volumeReferences.reconcileOnConnect",
+        Effect.gen({ self: this }, function* () {
+          const { importRelayAppVolumeReferencesEffect } =
+            yield* Effect.promise(() => import("@/effect/managed-apps"))
+          for (let attempt = 0; ; attempt += 1) {
+            const sent = yield* Effect.result(
+              importRelayAppVolumeReferencesEffect(this.#relay.id)
+            )
+            if (Result.isSuccess(sent)) {
+              this.#setVolumeReferences("current")
+              return
             }
-          })
-        )
-      }
+            this.#setVolumeReferences("retrying")
+            yield* (attempt === 0 ? Effect.logWarning : Effect.logDebug)(
+              "Sending the Relay Apps' configured volumes failed; retrying",
+              { cause: sent.failure, relayId: this.#relay.id }
+            )
+            yield* Effect.sleep(
+              Math.min(MAX_BACKOFF_MS, 1_000 * 2 ** Math.min(attempt, 5))
+            )
+          }
+        })
+      )
       forkAppEffect(
         "backups.reconcileOnConnect",
         Effect.tryPromise({

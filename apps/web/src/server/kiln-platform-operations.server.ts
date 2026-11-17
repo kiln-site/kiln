@@ -11,11 +11,7 @@ import {
   signedIn,
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
-import {
-  databaseRpc,
-  platformDatabaseRelay,
-  platformRelay,
-} from "@/server/platform-access.server"
+import { databaseRpc, platformRelay } from "@/server/platform-access.server"
 
 // Changes to Kiln's own services and database, as operations
 // (docs/hearth-operations.md). An edit to Hearth's database holds Hearth
@@ -90,7 +86,7 @@ async function kilnDatabaseRequest(
   payload: { readonly readOnly?: boolean; readonly request: unknown }
 ): Promise<unknown> {
   const [relay, { databaseConnectionConfig }] = await Promise.all([
-    platformDatabaseRelay(relayId),
+    platformRelay(relayId),
     import("@/lib/database-config"),
   ])
   const login = databaseConnectionConfig()

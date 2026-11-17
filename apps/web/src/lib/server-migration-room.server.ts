@@ -4,14 +4,13 @@ import {
   relayControlDeadlineMs,
   relayDiskAllocationAvailableBytes,
   relaySnapshotSchema,
-  relayTransferSpaceV1Feature,
   type RelayInstance,
   type RelaySnapshot,
   type ResourceLimits,
 } from "@workspace/contracts"
 import { Schema } from "effect"
 
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { relayAllocations } from "@/lib/resource-limits.server"
 import {
@@ -24,8 +23,7 @@ import type { ServerMigrationOptions } from "@/lib/server-migration-input"
 
 /**
  * What a Relay can give a copy now and, asked about a root, how much that
- * root holds. A Relay too old to say how much room it has for transfers is
- * taken to keep everything on the disk its snapshot reports.
+ * root holds.
  */
 export async function loadRelayRoom(
   relay: PersistedRelay,
@@ -40,25 +38,19 @@ export async function loadRelayRoom(
   )
   const [allocations, space] = await Promise.all([
     relayAllocations(relay, snapshot),
-    relayConnectionFeatures(relay.id).has(relayTransferSpaceV1Feature)
-      ? relayRpc(
-          relay,
-          "transfer.space",
-          input.rootId ? { rootId: input.rootId } : {},
-          relayControlDeadlineMs("transfer.space"),
-          input.subject
-        ).then((value) =>
-          Schema.decodeUnknownSync(RelayTransferSpaceSchema)(value)
-        )
-      : null,
+    relayRpc(
+      relay,
+      "transfer.space",
+      input.rootId ? { rootId: input.rootId } : {},
+      relayControlDeadlineMs("transfer.space"),
+      input.subject
+    ).then((value) =>
+      Schema.decodeUnknownSync(RelayTransferSpaceSchema)(value)
+    ),
   ])
   const allocated = (key: "diskBytes" | "memoryBytes") =>
     allocations.reduce((total, item) => total + (item.limits[key] ?? 0), 0)
   const { node } = snapshot
-  const nodeFreeBytes = Math.max(
-    node.storage.totalBytes - node.storage.usedBytes,
-    0
-  )
   const assignableDiskBytes = relayDiskAllocationAvailableBytes(
     node.storage.totalBytes,
     allocated("diskBytes")
@@ -74,11 +66,11 @@ export async function loadRelayRoom(
       cores: node.cpu.cores,
       name: relay.name,
       relayId: relay.id,
-      rootsFreeBytes: space?.rootsFreeBytes ?? nodeFreeBytes,
-      sharedFilesystem: space?.sharedFilesystem ?? true,
-      transferFreeBytes: space?.transferFreeBytes ?? nodeFreeBytes,
+      rootsFreeBytes: space.rootsFreeBytes,
+      sharedFilesystem: space.sharedFilesystem,
+      transferFreeBytes: space.transferFreeBytes,
     },
-    rootBytes: space?.rootBytes ?? null,
+    rootBytes: space.rootBytes,
     snapshot,
   }
 }

@@ -1,13 +1,10 @@
-import {
-  relayProxyConfigurationSchema,
-  relayProxyConfigurationV1Feature,
-} from "@workspace/contracts"
+import { relayProxyConfigurationSchema } from "@workspace/contracts"
 
 import { loadPrimaryAddressesEffect } from "@/effect/primary-addresses"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayConnected, relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import {
@@ -31,7 +28,7 @@ export interface RelayWebRoute {
  * Every web route a Relay's proxy serves that the user may see, for the
  * infrastructure map. Each route needs the permission its resource's own
  * routes need: `instance.network.read` on a game server, `app.read` on the
- * Relay's apps. Null from Relays that predate the read.
+ * Relay's apps. Null while the Relay is offline.
  */
 export async function relayWebRoutesHandler(
   user: AuthenticatedUser,
@@ -43,8 +40,7 @@ export async function relayWebRoutesHandler(
   })
   authorization.require("relay.read")
   const relay = await activeRelay(relayId)
-  if (!relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature))
-    return null
+  if (!relayConnected(relay.id)) return null
   const { routes } = relayProxyConfigurationSchema.parse(
     await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
   )

@@ -45,9 +45,7 @@ export function KilnDataSection({ host }: { host: KilnPlatformHost }) {
               Export SQL
             </a>
           </Button>
-          {host.database ? (
-            <InfoSectionLink to="/kiln/viewer">View Data</InfoSectionLink>
-          ) : null}
+          <InfoSectionLink to="/kiln/viewer">View Data</InfoSectionLink>
           <RestoreBackupLink
             emptyMessage="No backups of Kiln yet"
             relayId={host.relayId}

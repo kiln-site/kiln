@@ -29,50 +29,15 @@ export const relayAppsV1Feature = "apps-v1"
 export const relayWorkloadUsageV1Feature = "workload-usage-v1"
 // The Relay serves its host's files under its own ID as a file root.
 export const relayHostFilesV1Feature = "relay-host-files-v1"
-// The Relay answers `relay.proxy.config.read` with its proxy configuration.
-export const relayProxyConfigurationV1Feature = "relay-proxy-configuration-v1"
-// The Relay restarts its own container (`relay.restart`) and its host
-// (`relay.host.restart`).
-export const relayRestartV1Feature = "relay-restart-v1"
-// The Relay reports its own usage in `node.relayResources`, and its recent
-// samples through `relay.resources.read`.
-export const relayResourcesV1Feature = "relay-resources-v1"
 // Hearth reads `errorCode` on backup tasks and their artifact outcomes, so
 // the Relay may send it.
 export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
-// The Relay answers `instance.files.put`, creating or replacing one file.
-export const relayFilePutV1Feature = "files-put-v1"
-// The Relay deploys GitHub sources from `app.deploy`'s `github` checkout,
-// and rolls deployments over once their containers are healthy.
-export const relayAppGitHubV1Feature = "app-github-v1"
-// The Relay lists, creates, renames, and deletes its Docker named volumes
-// through `relay.volumes.*`.
-export const relayVolumesV1Feature = "relay-volumes-v1"
-// The Relay reports the Kiln services on its Docker host (Hearth, its
-// database, and its cache) through `relay.platform.*`, and, when it installed
-// them itself, restarts and repairs them.
-export const relayPlatformV1Feature = "relay-platform-v1"
-// The Relay also reports the Traefik in front of Hearth, follows each of
-// Kiln's containers' output as browser resource `platform`, opens shells in
-// them through `terminal.*`, and restarts its own Traefik.
-export const relayPlatformV2Feature = "relay-platform-v2"
-// The Relay browses and edits Hearth's own database through
-// `relay.platform.database.*`, with the credentials Hearth sends.
-export const relayPlatformDatabaseV1Feature = "relay-platform-database-v1"
 // Database dumps travel as files under the database's file root
 // (`database:<id>`): `database.dump.export` writes `export` there for the
 // browser to download, and `database.dump.import` runs the file the browser
 // uploaded, which each import names for itself (`import-<random>`).
 export const relayDatabaseDumpFilesV1Feature = "database-dump-files-v1"
 export const relayDatabaseDumpExportFile = "export"
-// The Relay lists what runs on its host (`relay.security.targets`) and
-// inventories its host and images with Syft (`relay.security.inventory`),
-// so Hearth can check them for known vulnerabilities. `relay.security.cancel`
-// stops the inventory running and those waiting, as when scans are paused.
-export const relaySecurityInventoryV1Feature = "security-inventory-v1"
-// The Relay answers `instance.icon.read` with a small image's bytes, from a
-// file root or from inside one of an app's containers.
-export const relayIconReadV1Feature = "icon-read-v1"
 // Where on Hearth a Relay opens its control connection.
 export const relayControlDialPath = "/api/relays/control"
 // Where on Hearth a Relay opens a tunnel to its own listener, when Hearth

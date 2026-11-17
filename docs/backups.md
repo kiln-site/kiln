@@ -567,9 +567,7 @@ owner can then download and restore them.
 
 Restore and delete tasks for a linked backup carry `archive`, the identity
 it was made as, so the Relay finds the archive by that name and checks its
-manifest against the original server. A Relay advertises this with the
-`linked-backups-v1` feature, and Hearth won't restore a linked backup on a
-Relay without it. Downloads Hearth signs for a linked backup, and copies
+manifest against the original server. Downloads Hearth signs for a linked backup, and copies
 to another destination, name the shared archive too.
 
 Each stored copy of an archive, a Relay's own file or an S3 object, is

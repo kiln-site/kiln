@@ -2528,7 +2528,7 @@ export const relayPlatformServiceSchema = z.object({
   ]),
   /**
    * Whether it has a shell to open a terminal in; Hearth's image doesn't.
-   * From Relays with `relay-platform-v2`, and null until checked.
+   * Null until checked.
    */
   shell: z.boolean().nullable().optional(),
   version: z.string().min(1).max(100).nullable(),
@@ -2554,9 +2554,9 @@ export const relayPlatformStatusSchema = z.object({
    */
   phase: z.enum(["installing", "ready", "maintenance", "blocked"]),
   /**
-   * The Traefik in front of Hearth, from Relays with `relay-platform-v2`:
-   * the one this Relay runs (`kiln`), Coolify's, or another found on ports
-   * 80 and 443 (`external`). Only Kiln's own can be restarted from here.
+   * The Traefik in front of Hearth: the one this Relay runs (`kiln`),
+   * Coolify's, or another found on ports 80 and 443 (`external`). Only
+   * Kiln's own can be restarted from here.
    */
   proxy: relayPlatformProxySchema.nullable().optional(),
   services: z.array(relayPlatformServiceSchema).max(8),
@@ -2681,7 +2681,7 @@ export const relayTerminalClaimSchema = z
   .strict()
 
 // Hearth's own database, browsed through its MySQL container with the login
-// Hearth itself uses. Needs `relay-platform-database-v1`.
+// Hearth itself uses.
 const platformDatabaseLoginShape = {
   databaseName: z.string().regex(/^[A-Za-z0-9_$]{1,64}$/u),
   password: z.string().min(1).max(512),

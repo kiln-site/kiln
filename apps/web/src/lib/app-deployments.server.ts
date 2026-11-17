@@ -1,5 +1,4 @@
 import {
-  relayAppGitHubV1Feature,
   relayDeploymentLogSchema,
   relayAppSchema,
   relayManagedDatabaseSchema,
@@ -73,7 +72,7 @@ import { appDeploymentLocks } from "@/lib/app-lanes"
 import { appDatabaseConnectionsHandedOverEffect } from "@/lib/app-database-connections.server"
 import type { NotificationContent } from "@/lib/notifications"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayConnected, relayRpc } from "@/lib/relay-connection"
 import {
   listPersistedRelaysEffect,
   type PersistedRelay,
@@ -195,10 +194,7 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
   const relay = yield* enabledRelay(request.relayId)
   const automatic = request.trigger === "push" || request.trigger === "poll"
   const autoUpdate = request.trigger === "update" && request.userId === null
-  if (
-    (request.trigger === "poll" || autoUpdate) &&
-    relayConnectionFeatures(relay.id).size === 0
-  ) {
+  if ((request.trigger === "poll" || autoUpdate) && !relayConnected(relay.id)) {
     return null
   }
   const app = yield* loadAppConfigEffect(request.relayId, request.appId)
@@ -228,7 +224,7 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
   if (imageDigest === null) return null
   const github =
     app.config.sourceType === "github"
-      ? yield* githubCommit(relay, request)
+      ? yield* githubCommit(request)
       : undefined
   if (github === null) return null
   // A commit deployed again, as a rollback, holds until a new one lands.
@@ -459,7 +455,6 @@ const announceDeploymentEffect = Effect.fnUntraced(
 // What a GitHub app deploys: its branch's head, or the commit asked for,
 // and what makes a token that reads only its repository.
 const githubCommit = Effect.fnUntraced(function* (
-  relay: PersistedRelay,
   request: AppDeploymentRequest
 ) {
   const source = yield* loadAppGitHubSourceEffect(request.appId)
@@ -470,11 +465,6 @@ const githubCommit = Effect.fnUntraced(function* (
     !source.autoDeploy
   ) {
     return null
-  }
-  if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
-    return yield* Effect.fail(
-      new Error("Update this Relay to deploy apps from GitHub")
-    )
   }
   if (!source) {
     return yield* Effect.fail(
@@ -622,7 +612,7 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
   const relays = yield* listPersistedRelaysEffect()
   const relay = relays.find((item) => item.id === record.relayId)
   // A paused or offline Relay finishes its deployments when it's back.
-  if (!relay?.enabled || relayConnectionFeatures(relay.id).size === 0) {
+  if (!relay?.enabled || !relayConnected(relay.id)) {
     return false
   }
   const app = yield* readRelayApp(relay, record.appId)
@@ -827,7 +817,7 @@ export const deployAppOperation = durableOperation({
       const relays = yield* listPersistedRelaysEffect()
       const relay = relays.find((item) => item.id === input.relayId)
       if (relay === undefined) return true
-      if (!relay.enabled || relayConnectionFeatures(relay.id).size === 0) {
+      if (!relay.enabled || !relayConnected(relay.id)) {
         return false
       }
       if (!(yield* appDatabaseConnectionsHandedOverEffect(relay))) return false

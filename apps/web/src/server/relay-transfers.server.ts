@@ -11,7 +11,6 @@ import { randomUUID, sign } from "node:crypto"
 import {
   databaseIdFromFileRoot,
   fileTransferAction,
-  relayPeerTransfersV1Feature,
   RelayTransferPullSchema,
   RelayTransferSourceSchema,
   type RelayPeerEndpoint,
@@ -58,11 +57,7 @@ export interface RelayTransferRequest {
 
 /** Something that keeps a transfer from starting, and what fixes it. */
 export interface RelayTransferProblem {
-  readonly code:
-    | "database_root"
-    | "hearth_access"
-    | "relay_offline"
-    | "relay_outdated"
+  readonly code: "database_root" | "hearth_access" | "relay_offline"
   readonly relayId: string
   readonly message: string
   readonly remedy: string
@@ -142,9 +137,6 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
       [input.source, input.sourceRootId, "download"],
       [input.destination, input.destinationRootId, "upload"],
     ] as const
-    const { relayConnectionFeatures } = yield* Effect.promise(
-      () => import("@/lib/relay-connection")
-    )
     for (const [relay, rootId, direction] of sides) {
       if (databaseIdFromFileRoot(rootId) !== null) {
         problems.push({
@@ -161,15 +153,6 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
           message: `${relay.name} is offline`,
           relayId: relay.id,
           remedy: `Wait for ${relay.name} to reconnect, then try again`,
-        })
-        continue
-      }
-      if (!relayConnectionFeatures(relay.id).has(relayPeerTransfersV1Feature)) {
-        problems.push({
-          code: "relay_outdated",
-          message: `${relay.name} can't copy files between Relays yet`,
-          relayId: relay.id,
-          remedy: `Update ${relay.name} to the latest Kiln release`,
         })
         continue
       }

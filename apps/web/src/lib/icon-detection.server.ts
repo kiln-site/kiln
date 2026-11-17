@@ -5,7 +5,6 @@ import {
   relayAppWebRouteStateSchema,
   relayIconMaxBytes,
   relayIconReadResultSchema,
-  relayIconReadV1Feature,
   sniffIconImage,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
@@ -34,7 +33,7 @@ import {
 } from "@/lib/icons"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
-  relayConnectionFeatures,
+  relayConnected,
   relayConnectionInstances,
   relayRpc,
 } from "@/lib/relay-connection"
@@ -87,10 +86,6 @@ export function publishIconChange(subject: IconSubject): void {
   })
 }
 
-export function readsIcons(relayId: string): boolean {
-  return relayConnectionFeatures(relayId).has(relayIconReadV1Feature)
-}
-
 /**
  * Reads an image for an icon from a Relay: a file under a game server's or
  * app's files, or one inside an app service's container. Null when nothing
@@ -107,10 +102,8 @@ export const readRelayIconEffect = Effect.fn("Icons.readRelay")(function* (
       },
   subject?: string
 ) {
-  if (!readsIcons(relay.id)) {
-    return yield* Effect.fail(
-      new Error("Update this Relay to read icons from its files")
-    )
+  if (!relayConnected(relay.id)) {
+    return yield* Effect.fail(new Error("The Relay is offline"))
   }
   const result = relayIconReadResultSchema.parse(
     yield* promiseEffect(() =>
@@ -444,7 +437,12 @@ export const removeCustomIconEffect = Effect.fn("Icons.removeCustom")(
   function* (relay: PersistedRelay | null, subject: IconSubject) {
     yield* Effect.annotateCurrentSpan("kiln.icon.kind", subject.kind)
     const removed = yield* removeIconsEffect(subject, "custom")
-    if (removed && relay && subject.kind === "server" && readsIcons(relay.id)) {
+    if (
+      removed &&
+      relay &&
+      subject.kind === "server" &&
+      relayConnected(relay.id)
+    ) {
       yield* detectServerIconEffect(relay, subject.id, null).pipe(
         Effect.catchCause((cause) =>
           Effect.logDebug(
@@ -532,7 +530,7 @@ const detectRelayIconsEffect = Effect.fn("Icons.detectRelay")(function* (
 export function startIconDetection(): void {
   const sweep = Effect.gen(function* () {
     for (const relay of yield* listPersistedRelaysEffect()) {
-      if (!relay.enabled || !readsIcons(relay.id)) continue
+      if (!relay.enabled || !relayConnected(relay.id)) continue
       yield* detectRelayIconsEffect(relay).pipe(
         Effect.catchCause((cause) =>
           logException(Cause.squash(cause), {
