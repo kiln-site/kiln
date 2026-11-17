@@ -3274,20 +3274,24 @@ const ActionEditor = React.memo(function ActionEditor({
         ...schedulePickerTarget(target),
         description: volumes
           ? `Backs up ${volumes.join(", ")}`
-          : "Backs up the volumes it uses",
+          : appVolumes.loading
+            ? "Finding which volumes it uses…"
+            : "Backs up the volumes it uses; its Relay hasn't said which",
       })
     }
     return { empty, listed }
   }, [action.type, appVolumes, eligibleTargets])
   // Those of them it backs up: the dialog opens with them ticked, and its
   // row counts them by kind, an App's volumes among the volumes.
-  const { backupCounts, backupKeys } = React.useMemo(() => {
+  const { backupCounts, backupKeys, volumesUnknown } = React.useMemo(() => {
     const listed = new Set(backupTargets.listed.map(({ key }) => key))
     const chosen = selectedActionTargets.filter((target) =>
       listed.has(targetKey(target))
     )
     const counts = { apps: 0, databases: 0, instances: 0, relays: 0 }
     const volumes = new Set<string>()
+    // An App whose volumes aren't known yet has some, but not counted.
+    let unknown = false
     for (const target of chosen) {
       if (target.kind === "relay") counts.relays += 1
       else if (target.kind === "instance") counts.instances += 1
@@ -3296,7 +3300,9 @@ const ActionEditor = React.memo(function ActionEditor({
         volumes.add(`${target.relayId}/${target.name}`)
       else {
         counts.apps += 1
-        for (const name of appVolumeNames(appVolumes, target) ?? []) {
+        const names = appVolumeNames(appVolumes, target)
+        if (names === null) unknown = true
+        for (const name of names ?? []) {
           volumes.add(`${target.relayId}/${name}`)
         }
       }
@@ -3304,6 +3310,7 @@ const ActionEditor = React.memo(function ActionEditor({
     return {
       backupCounts: { ...counts, volumes: volumes.size },
       backupKeys: chosen.map(targetKey),
+      volumesUnknown: unknown,
     }
   }, [appVolumes, backupTargets, selectedActionTargets])
   const backingUp = backupKeys.length
@@ -3427,7 +3434,11 @@ const ActionEditor = React.memo(function ActionEditor({
                 </Tooltip>
               ) : null}
               <span className="type-code ml-1 hidden items-center gap-2.5 text-muted-foreground sm:flex">
-                <InstanceKindCounts counts={backupCounts} volumes="always" />
+                <InstanceKindCounts
+                  atLeast={volumesUnknown ? volumeKinds : undefined}
+                  counts={backupCounts}
+                  volumes="always"
+                />
               </span>
             </>
           ) : action.type === "power" ? (
@@ -3768,6 +3779,8 @@ function withVolumeOptions(
   return [...merged, ...fresh.values()]
 }
 
+const volumeKinds = ["volumes"] as const
+
 /**
  * Which volumes each App uses, by its Relay's listing, or nothing for a
  * Relay that hasn't said, or won't say to this person.
@@ -3775,6 +3788,8 @@ function withVolumeOptions(
 type AppVolumes = {
   readonly byApp: ReadonlyMap<string, ReadonlyArray<string>>
   readonly known: ReadonlySet<string>
+  /** The Relays haven't been asked yet. */
+  readonly loading: boolean
 }
 
 function appVolumesOf(volumes: ScheduleVolumeOptions | undefined): AppVolumes {
@@ -3792,7 +3807,7 @@ function appVolumesOf(volumes: ScheduleVolumeOptions | undefined): AppVolumes {
       byApp.set(key, [...(byApp.get(key) ?? []), option.name])
     }
   }
-  return { byApp, known }
+  return { byApp, known, loading: volumes === undefined }
 }
 
 // The volumes an App uses, or null when its Relay can't say yet.

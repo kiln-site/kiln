@@ -286,6 +286,13 @@ export function BackupConfigurationDialog({
                 onToggle={toggleTargets}
               />
               {inlineTargets.note}
+              <p className="type-meta mt-1.5 text-muted-foreground">
+                {targets.length === 0
+                  ? "It backs up targets added to the schedule later, and an App once it uses a volume."
+                  : chosen.length === targets.length
+                    ? "With every one ticked, it also backs up targets added to the schedule later, and an App once it uses a volume."
+                    : "It backs up only the ticked targets."}
+              </p>
             </div>
           ) : showTarget ? (
             <div>
