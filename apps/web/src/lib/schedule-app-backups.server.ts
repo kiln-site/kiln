@@ -4,20 +4,21 @@ import {
   type ScheduleAction,
   type ScheduleTarget,
 } from "@workspace/contracts/schedules"
-import { Effect, Result } from "effect"
+import type { RelayVolumes } from "@workspace/contracts"
 
-import { promiseEffect } from "@/effect/promise"
+import { recoverPromise } from "@/effect/promise"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { appTargets, readRelayVolumes } from "@/server/app-backups.server"
 import { requireAppsPermission } from "@/server/backup-target-access.server"
 
 /**
- * Refuses a schedule whose stopped App backup the person couldn't start by
- * hand: it stops and starts the App and every App that uses a volume it
- * owns, so it takes `app.manage` on each, as a manual one does. Which Apps
- * those are is the Relay's to say; while it can't, only a stopped backup
- * the schedule already had of that App is kept.
+ * Refuses a schedule whose stopped backup of an App or a volume the person
+ * couldn't start by hand: it stops and starts every App that uses what it
+ * backs up (for an App, itself and every App that uses a volume it uses),
+ * so it takes `instance.power.stop` on each, as a manual one does. Which
+ * Apps those are is the Relay's to say; while it can't, only a stopped
+ * backup the schedule already had of that target is kept.
  */
 export async function requireScheduleAppBackups(input: {
   readonly actions: ReadonlyArray<ScheduleAction>
@@ -25,11 +26,11 @@ export async function requireScheduleAppBackups(input: {
   readonly targets: ReadonlyArray<ScheduleTarget>
   readonly user: AuthenticatedUser
 }): Promise<void> {
-  const stopped = stoppedAppBackups(input.actions, input.targets)
+  const stopped = stoppedBackups(input.actions, input.targets)
   if (stopped.length === 0) return
   const saved = new Set(
     input.existing
-      ? stoppedAppBackups(input.existing.actions, input.targets).map(
+      ? stoppedBackups(input.existing.actions, input.targets).map(
           scheduleTargetKey
         )
       : []
@@ -37,16 +38,23 @@ export async function requireScheduleAppBackups(input: {
   const relays = new Map(
     (await listPersistedRelays()).map((relay) => [relay.id, relay])
   )
-  for (const target of stopped) {
-    const relay = relays.get(target.relayId)
-    const listed = relay?.enabled
-      ? await Effect.runPromise(
-          Effect.result(
-            promiseEffect(() => readRelayVolumes(relay, input.user.id))
-          )
+  // Asked once for each Relay, however many of its targets stop.
+  const listings = new Map<string, Promise<RelayVolumes | null>>()
+  const listingOf = (relayId: string) => {
+    const known = listings.get(relayId)
+    if (known) return known
+    const relay = relays.get(relayId)
+    const asked = relay?.enabled
+      ? recoverPromise(
+          () => readRelayVolumes(relay, input.user.id),
+          () => null
         )
-      : null
-    const listing = listed && Result.isSuccess(listed) ? listed.success : null
+      : Promise.resolve(null)
+    listings.set(relayId, asked)
+    return asked
+  }
+  for (const target of stopped) {
+    const listing = await listingOf(target.relayId)
     if (!listing?.protection.ready) {
       if (saved.has(scheduleTargetKey(target))) continue
       throw new Error(
@@ -54,9 +62,11 @@ export async function requireScheduleAppBackups(input: {
       )
     }
     const owned = new Set(
-      appTargets(target.id, listing).map((member) => member.id)
+      target.kind === "app"
+        ? appTargets(target.id, listing).map((member) => member.id)
+        : [target.id]
     )
-    const users = new Set([target.id])
+    const users = new Set(target.kind === "app" ? [target.id] : [])
     for (const volume of listing.volumes) {
       if (volume.id === null || !owned.has(volume.id)) continue
       for (const user of volume.users) users.add(user.appId)
@@ -71,8 +81,8 @@ export async function requireScheduleAppBackups(input: {
   }
 }
 
-// The App targets a stopped backup step runs on.
-function stoppedAppBackups(
+// The App and volume targets a stopped backup step runs on.
+function stoppedBackups(
   actions: ReadonlyArray<ScheduleAction>,
   targets: ReadonlyArray<ScheduleTarget>
 ): Array<ScheduleTarget> {
@@ -80,7 +90,10 @@ function stoppedAppBackups(
   for (const action of actions) {
     if (action.type !== "backup" || action.consistency !== "stopped") continue
     for (const target of targets) {
-      if (target.kind === "app" && scheduleActionAppliesToTarget(action, target))
+      if (
+        (target.kind === "app" || target.kind === "volume") &&
+        scheduleActionAppliesToTarget(action, target)
+      )
         found.set(scheduleTargetKey(target), target)
     }
   }

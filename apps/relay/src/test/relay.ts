@@ -329,6 +329,7 @@ export async function scheduleWorker(harness: RelayHarness) {
       throw new Error("not used")
     },
     findInstance: (instanceId) => harness.docker.findInstance(instanceId),
+    findVolume: async () => null,
     getBackup: async () => null,
     isPaused: () => harness.lanes.paused,
     listAppIds: async () =>

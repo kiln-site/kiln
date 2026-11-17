@@ -101,16 +101,14 @@ import {
   targetKey,
 } from "@/components/backups/table-row"
 import {
-  backupTargetGroups,
+  targetPickerGroups,
   type BackupVolumeListing,
-} from "@/lib/backup-target-groups"
+} from "@/lib/target-picker-groups"
 import { formatBytes } from "@/lib/format-bytes"
 import { BackupToolbar } from "@/components/backups/toolbar"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { grantHasPermission } from "@/lib/permissions"
-import {
-  grantsAllowBackup,
-} from "@/lib/backup-target-permissions"
+import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
   appBackupsQueryOptions,
@@ -142,9 +140,9 @@ import {
 import {
   BackupConfigurationDialog,
   type BackupConfiguration,
-  type BackupConfigurationGroup,
   type BackupConfigurationTarget,
 } from "@/components/backup-configuration-dialog"
+import type { PickerGroup } from "@/components/target-picker"
 import type { getAppDirectory } from "@/server/apps"
 import type { getInstanceGroups } from "@/server/instance-groups"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
@@ -980,7 +978,9 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
   const { data: instanceGroups } = useQuery(instanceGroupsQueryOptions())
   const createGroups = React.useMemo(
     () =>
-      backupTargetGroups({
+      targetPickerGroups({
+        // A backup keeps what an App keeps: each volume it uses.
+        app: "volumes",
         apps,
         groups: instanceGroups ?? noInstanceGroups,
         keyOf: targetKey,
@@ -1349,7 +1349,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
   dialogStore: BackupDialogStore
   /** What a new backup starts on; nothing in particular when undefined. */
   createSelection: ReadonlyArray<string> | undefined
-  groups: ReadonlyArray<BackupConfigurationGroup>
+  groups: ReadonlyArray<PickerGroup>
   restoreTargets: ReadonlyArray<RestoreTarget>
   storage: Array<BackupStorage>
   storageNames: ReadonlyMap<string, string>
@@ -1386,10 +1386,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
       <KilnRestoreDialog backup={dialog.backup} open onOpenChange={close} />
     )
   }
-  if (
-    dialog.kind === "restore" &&
-    dialog.backup.targetKind === "volume"
-  ) {
+  if (dialog.kind === "restore" && dialog.backup.targetKind === "volume") {
     return (
       <ResourceRestoreDialog
         backup={dialog.backup}
@@ -1706,7 +1703,7 @@ function CreateBackupDialog({
   storage,
   targets,
 }: {
-  groups: ReadonlyArray<BackupConfigurationGroup>
+  groups: ReadonlyArray<PickerGroup>
   initialTargetKeys: ReadonlyArray<string> | undefined
   onOpenChange: (open: boolean) => void
   open: boolean
@@ -1825,8 +1822,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
       ),
       // A Relay's Kiln volumes, which its backup permissions cover.
       ...relays.flatMap((relay) =>
-        allowed(relay.relayId) ? [kilnVolumesScopeOption(relay)]
-          : []
+        allowed(relay.relayId) ? [kilnVolumesScopeOption(relay)] : []
       ),
     ]
   }, [apps, backupScope.servers, capabilities, databases, kiln, relays])
@@ -2672,8 +2668,7 @@ function RestoreBackupDialog({
           <span>
             <span className="block text-xs font-semibold">Safety backup</span>
             <span className="type-meta mt-1 block text-muted-foreground">
-              Take a new full backup on this Relay immediately before
-              restoring.
+              Take a new full backup on this Relay immediately before restoring.
             </span>
           </span>
           <Switch

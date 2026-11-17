@@ -112,7 +112,11 @@ import {
   getResourceOwner,
   getResourceUserCount,
 } from "@/server/resource-access"
-import { getScheduleOptions, getSchedules } from "@/server/schedules"
+import {
+  getScheduleOptions,
+  getSchedules,
+  getScheduleVolumeOptions,
+} from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { readRelayReachability } from "@/lib/relay-reachability"
 import type { ServerNavigationInput } from "@/lib/server-navigation"
@@ -304,6 +308,9 @@ export const queryKeys = {
   schedules: {
     all: ["schedules"] as const,
     options: ["schedules", "options"] as const,
+    // Kept apart from the schedules' own keys: refreshing them must not ask
+    // every Relay for its volumes again.
+    volumeOptions: ["schedule-volume-options"] as const,
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
@@ -357,6 +364,19 @@ export function scheduleOptionsQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.schedules.options,
     queryFn: () => getScheduleOptions(),
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * The volumes the schedule editor offers, as every Relay lists them. Asked
+ * only while the editor is open, since it asks each Relay.
+ */
+export function scheduleVolumeOptionsQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.schedules.volumeOptions,
+    queryFn: () => getScheduleVolumeOptions(),
+    retry: false,
     staleTime: 30_000,
   })
 }

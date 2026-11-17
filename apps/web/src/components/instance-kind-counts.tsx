@@ -2,13 +2,18 @@ import * as React from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { instanceKindIcons } from "@/components/instance-kind-icon"
+import {
+  VolumeKindIcon,
+  instanceKindIcons,
+} from "@/components/instance-kind-icon"
 
 export interface InstanceKindCountValues {
   apps: number
   databases: number
   instances: number
   relays: number
+  /** Volumes aren't instances, and are counted only where something has them. */
+  volumes?: number
 }
 
 // The same icons as the infrastructure map's Relay cards.
@@ -37,6 +42,12 @@ const instanceKinds = [
     one: "database",
     other: "databases",
   },
+  {
+    key: "volumes",
+    icon: VolumeKindIcon,
+    one: "volume",
+    other: "volumes",
+  },
 ] as const
 
 /**
@@ -50,6 +61,9 @@ export const InstanceKindCounts = React.memo(function InstanceKindCounts({
 }) {
   return instanceKinds.map(({ key, icon: Icon, one, other }) => {
     const count = counts[key]
+    // Shown only where there are some, so a list without any keeps its
+    // four kinds.
+    if (key === "volumes" && !count) return null
     return (
       <span
         key={key}

@@ -47,7 +47,8 @@ function grant(
     id: target.id,
     relayId: target.relayId,
     resourceId: target.id,
-    resourceType: target.kind,
+    // A volume takes grants on its Relay; none here names one.
+    resourceType: target.kind as AccessGrant["resourceType"],
     permissions,
   }
 }

@@ -82,6 +82,7 @@ class ScheduledBackupWaitError extends Data.TaggedError(
 export interface ScheduleManagerOptions {
   readonly enqueueBackup: (input: BackupTaskInput) => Promise<RelayBackupTask>
   readonly findInstance: (instanceId: string) => Promise<object | null>
+  readonly findVolume: (volumeId: string) => Promise<object | null>
   readonly forkEffect?: (
     name: string,
     effect: Effect.Effect<void, never>
@@ -329,7 +330,7 @@ export class ScheduleManager {
           activeKey: overlapping ? null : activeKey,
           attempts: [],
           powerIntent:
-            target.kind === "relay"
+            target.kind === "relay" || target.kind === "volume"
               ? ""
               : this.#options.powerIntent(target.kind, target.id),
           error: null,
@@ -850,6 +851,9 @@ export class ScheduleManager {
     if (target.kind === "app") {
       return (await this.#options.listAppIds()).has(target.id)
     }
+    if (target.kind === "volume") {
+      return (await this.#options.findVolume(target.id)) !== null
+    }
     return (await this.#options.listDatabaseIds()).has(target.id)
   }
 
@@ -884,7 +888,11 @@ export class ScheduleManager {
         )
       }
     }
-    if (action.type === "power" && target.kind !== "relay") {
+    if (
+      action.type === "power" &&
+      target.kind !== "relay" &&
+      target.kind !== "volume"
+    ) {
       await this.#options.runPower(
         target.kind,
         target.id,
@@ -896,6 +904,7 @@ export class ScheduleManager {
     if (action.type === "backup") {
       if (
         target.kind === "app" ||
+        target.kind === "volume" ||
         together?.databases.some(({ id }) => id === target.id)
       ) {
         await this.#backUpTogether(
@@ -925,8 +934,11 @@ export class ScheduleManager {
     target: ScheduleTarget,
     scheduledAt: number
   ): Extract<BackupTaskInput, { kind: "create" }> {
-    // An App is backed up as its volumes (`#backUpTogether`).
-    if (target.kind === "app") throw new Error("An App is no backup target")
+    // An App is backed up as its volumes, and a volume with the Apps of
+    // the step that use it (`#backUpTogether`).
+    if (target.kind === "app" || target.kind === "volume") {
+      throw new Error("Volumes are backed up together")
+    }
     const execution = backupExecution(action, target)
     const deployedDestination =
       execution?.destination ??
@@ -1017,11 +1029,14 @@ export class ScheduleManager {
    * the same: a volume the App has taken up since waits for the next run,
    * and one that is gone fails alone, the rest still backed up.
    *
-   * A stopped step that backs up a database beside Apps takes them all
-   * together (`stoppedTogether`): one batch of every volume and database
-   * of the step on this Relay, so the databases are dumped while the Apps
-   * are stopped. Each target of it, App or database, asks for the same
-   * batch and waits for its own.
+   * A volume the step names as a target is backed up the same way: with
+   * the step's Apps that use it, as their batch, or alone when none does.
+   *
+   * A stopped step that backs up a database beside Apps or volumes takes
+   * them all together (`stoppedTogether`): one batch of every volume and
+   * database of the step on this Relay, so the databases are dumped while
+   * the Apps are stopped. Each target of it, App, volume or database, asks
+   * for the same batch and waits for its own.
    */
   async #backUpTogether(
     schedule: RelayScheduleProjection,
@@ -1032,16 +1047,32 @@ export class ScheduleManager {
     signal?: AbortSignal
   ) {
     const whole =
-      together && (target.kind !== "app" || together.apps.includes(target.id))
+      together &&
+      (target.kind === "app"
+        ? together.apps.includes(target.id)
+        : target.kind === "volume"
+          ? together.volumes.some(({ targetId }) => targetId === target.id)
+          : true)
         ? together
         : null
-    const { apps, executions } = whole
-      ? { apps: whole.apps, executions: whole.volumes }
-      : appBackupGroup(action, target)
+    const { apps, executions, volumeTargets } = whole
+      ? {
+          apps: whole.apps,
+          executions: whole.volumes,
+          volumeTargets: whole.volumeTargets,
+        }
+      : target.kind === "volume"
+        ? volumeBackupGroup(action, target)
+        : { ...appBackupGroup(action, target), volumeTargets: [] }
     const databases = whole?.databases ?? []
     // An App that uses no volume was sent nothing to back up, and its step
     // was skipped before it got here.
-    if (executions.length === 0) return
+    if (executions.length === 0) {
+      if (target.kind === "volume") {
+        throw new Error("Scheduled backup destination is not deployed")
+      }
+      return
+    }
     if (executions.some((execution) => !execution.destination)) {
       throw new Error("Scheduled backup destination is not deployed")
     }
@@ -1061,12 +1092,13 @@ export class ScheduleManager {
       scheduledAt,
       this.#options.relayId
     )
-    // An App alone keeps the batch it always had; Apps together are one.
+    // An App alone keeps the batch it always had; Apps together are one,
+    // and a volume none of them uses is one of its own.
     const batchId = scheduleDeterministicUuid(
       "schedule-backup-batch",
       schedule.id,
       scheduledAt,
-      whole ? ["stopped", ...apps].join(",") : apps.join(","),
+      [...(whole ? ["stopped"] : []), ...apps, ...volumeTargets].join(","),
       action.id
     )
     const stopped = action.consistency === "stopped"
@@ -1141,8 +1173,11 @@ export class ScheduleManager {
     // a volume that is gone, fails that target's step and not this one's.
     const own = queued.filter((_, index) => {
       const execution = executions[index]
-      if (!execution) return databases[index - executions.length]!.id === target.id
-      return target.kind === "app" && execution.appIds?.includes(target.id)
+      if (!execution)
+        return databases[index - executions.length]!.id === target.id
+      return target.kind === "volume"
+        ? execution.targetId === target.id
+        : target.kind === "app" && execution.appIds?.includes(target.id)
     })
     await Effect.runPromise(
       Effect.all(
@@ -1392,9 +1427,10 @@ function backupExecution(
 
 /**
  * What a stopped step takes together on this Relay when it backs up a
- * database beside Apps: every volume its Apps use, and those databases, as
- * one batch, so each database is dumped while the Apps are stopped. That
- * is what choosing Stopped for an App and its database means. It is of the
+ * database beside Apps or volumes: every volume its Apps use, each volume
+ * it names, and those databases, as one batch, so each database is dumped
+ * while the Apps are stopped. That is what choosing Stopped for an App and
+ * its database means. It is of the
  * targets the step runs on in this occurrence, and only what Hearth
  * admitted: an App or a database refused runs or doesn't as it would alone,
  * so a database is dumped while the Apps that are backed up are stopped,
@@ -1405,6 +1441,8 @@ function backupExecution(
 interface StoppedTogether {
   readonly apps: ReadonlyArray<string>
   readonly databases: ReadonlyArray<ScheduleTarget>
+  /** The volumes it names that none of its Apps uses. */
+  readonly volumeTargets: ReadonlyArray<string>
   readonly volumes: ReturnType<typeof appBackupGroup>["executions"]
 }
 
@@ -1427,14 +1465,23 @@ function stoppedTogether(
     .filter((target) => target.kind === "app")
     .map((target) => target.id)
     .sort()
-  // The volumes those Apps use, and no other App's.
+  const named = new Set(
+    targets.flatMap((target) => (target.kind === "volume" ? [target.id] : []))
+  )
+  // The volumes those Apps use, and no other App's, and those it names.
+  const used = (execution: (typeof action.executions)[number]) =>
+    execution.appIds?.some((appId) => apps.includes(appId)) ?? false
   const volumes = action.executions.filter(
     (execution) =>
       execution.targetKind === "volume" &&
-      execution.appIds?.some((appId) => apps.includes(appId))
+      (used(execution) || named.has(execution.targetId))
   )
   if (volumes.length === 0) return null
-  return { apps, databases, volumes }
+  const volumeTargets = volumes
+    .filter((execution) => !used(execution))
+    .map(({ targetId }) => targetId)
+    .sort()
+  return { apps, databases, volumeTargets, volumes }
 }
 
 // What Hearth admitted of an App's backup: each volume's it
@@ -1446,8 +1493,32 @@ function appBackupGroup(
   return scheduledAppBackupGroup(action.executions, target.id)
 }
 
+/**
+ * What a volume the step names is backed up with: the batch of the step's
+ * Apps that use it, as Hearth sent it, or the volume alone when none does.
+ */
+function volumeBackupGroup(
+  action: Extract<TargetScheduleAction, { type: "backup" }>,
+  target: ScheduleTarget
+) {
+  const execution = backupExecution(action, target)
+  const [appId] = execution?.appIds ?? []
+  if (appId !== undefined) {
+    return {
+      ...scheduledAppBackupGroup(action.executions, appId),
+      volumeTargets: [] as Array<string>,
+    }
+  }
+  return {
+    apps: [] as Array<string>,
+    executions: execution ? [execution] : [],
+    volumeTargets: [target.id],
+  }
+}
+
 // Why Hearth refused a backup step for a target, as it would a manual one.
-// An App's is refused whole when any of its backups is.
+// An App's is refused whole when any of its backups is, and so is a
+// volume's backed up with Apps.
 function backupRefusal(
   action: Extract<TargetScheduleAction, { type: "backup" }>,
   target: ScheduleTarget
@@ -1455,7 +1526,9 @@ function backupRefusal(
   const executions =
     target.kind === "app"
       ? appBackupGroup(action, target).executions
-      : [backupExecution(action, target)]
+      : target.kind === "volume"
+        ? volumeBackupGroup(action, target).executions
+        : [backupExecution(action, target)]
   return executions.find((execution) => execution?.refusal)?.refusal ?? null
 }
 

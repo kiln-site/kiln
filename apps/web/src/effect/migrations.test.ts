@@ -2647,5 +2647,47 @@ describeMysql("database migrations", () => {
         }),
       schemaBuildTimeout
     )
+
+    it.effect(
+      "keeps every schedule target and lets one be a volume",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while a schedule backed a volume up only
+          // through the Apps that use it.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 90)
+          )
+          const relayId = "1".repeat(12)
+          const scheduleId = "5".repeat(36)
+          const target = (kind: string, id: string) => ({
+            created_at: 1,
+            relay_id: relayId,
+            schedule_id: scheduleId,
+            target_id: id,
+            target_kind: kind,
+            target_name: kind,
+          })
+          yield* sql`SET FOREIGN_KEY_CHECKS = 0`
+          yield* insertRows("schedule_target", target("app", "a".repeat(12)))
+
+          yield* applyMigrations(migrations)
+
+          yield* insertRows("schedule_target", target("volume", "f".repeat(40)))
+          yield* sql`SET FOREIGN_KEY_CHECKS = 1`
+          expect(
+            yield* sql<{ id: string; kind: string }>`
+              SELECT target_kind AS kind, target_id AS id
+                FROM ${sql(databaseTableName("schedule_target"))}
+               ORDER BY target_kind
+            `
+          ).toEqual([
+            { id: "a".repeat(12), kind: "app" },
+            { id: "f".repeat(40), kind: "volume" },
+          ])
+        }),
+      schemaBuildTimeout
+    )
   })
 })

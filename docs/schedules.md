@@ -1,8 +1,8 @@
 # Schedules
 
 A schedule runs an ordered list of steps on a cron timetable, on any number
-of game servers, databases, and Apps, and on Kiln itself for its own
-backups. People make and edit them under **Automations → Schedules**;
+of game servers, databases, and Apps, on Kiln volumes, which it backs up,
+and on Kiln itself for its own backups. People make and edit them under **Automations → Schedules**;
 **Calendar** shows when they'll run and **History** what they did. Hearth
 keeps each schedule and sends every Relay the part that runs there; the
 Relay runs it on its own clock, so schedules keep running while Hearth is
@@ -16,14 +16,24 @@ enabled, and **Continue on failure**. Cron takes five fields, or `hourly`,
 forms. A schedule has up to 2,000 targets, and each step can be limited to
 some of them.
 
-The target picker lists each group of instances as a row that ticks its
-members: a quick way to choose them, and no more. The schedule keeps those
-members, each a target of its own, and nothing of the group, so it goes on
-naming them whatever becomes of the group, and names no instance that joins
-it later. A group is only offered whole: one with a member that can't be
-chosen, or that this person can't see, is listed and can't be picked. An
-App among the members is still backed up as whatever volumes it uses when
-the step runs.
+The target picker is the one New Backup draws
+(`apps/web/src/components/target-picker.tsx`): the same rows, groups, and
+summary of what is chosen. What differs is what it's given: here an App is
+a target itself, where New Backup's App row stands for its volumes. It
+lists each group of instances as a row that ticks its members: a quick way
+to choose them, and no more. The schedule keeps those members, each a
+target of its own, and nothing of the group, so it goes on naming them
+whatever becomes of the group, and names no instance that joins it later.
+A group is only offered whole: one with a member that can't be chosen, or
+that this person can't see, is listed and can't be picked. An App among the
+members is still backed up as whatever volumes it uses when the step runs.
+A target that's gone stays listed while the schedule names it, so it can be
+taken off.
+
+The picker lists each Kiln volume as its Relay does now, asked only while
+the editor is open, so a Relay that's away offers none of its volumes; one
+the schedule already names keeps its saved name. Adding a volume takes its
+Relay online, which says it exists and what it's called.
 
 Steps, each run on every target it supports:
 
@@ -34,14 +44,17 @@ Steps, each run on every target it supports:
 - **Power**: start, stop, restart, or kill a game server, database, or App.
 - **Backup**: a full backup of any target, to the Relay or an S3
   destination, or an incremental one of a game server. An App's backs up every
-  volume it uses, live or stopped, and stopped, a database beside it is
-  dumped while its Apps are stopped; Kiln's is a
-  platform bundle. See [Backups](backups.md#scheduled-backups) for how
+  volume it uses, and a volume's is of that volume, live or stopped:
+  stopped, it stops every App that uses what it backs up, and a database
+  beside them is dumped while they're stopped. A volume named beside an App
+  that uses it is backed up once, with that App. Kiln's is a platform
+  bundle. See [Backups](backups.md#scheduled-backups) for how
   scheduled backups are admitted, named, and cataloged.
 - **Wait**: pauses the whole sequence, from milliseconds to days.
 
-A step on a target it doesn't support, such as a command on Kiln or an
-incremental backup of a database, is recorded as `skipped_unsupported`; one
+A step on a target it doesn't support, such as a command on Kiln, power on
+a volume, or an incremental backup of a database, is recorded as
+`skipped_unsupported`; one
 limited to other targets as `skipped_policy`. Neither fails the target. A
 command or kill reaches a database or App only when the step names it among
 its targets, which the editor does when one is selected.
@@ -59,7 +72,9 @@ administrators may schedule Kiln's backups.
   command, and `instance.terminal` for a database's or an App's, which run
   in a shell in its container; `instance.power.<action>` for power,
   whatever the kind;
-  `backup.create` for a backup, or `instance.files.read` for an App's.
+  `backup.create` for a backup, or `instance.files.read` for an App's. A
+  volume, shared by design, takes each of these on its Relay, as backing it
+  up by hand does.
 - Editing takes `schedule.update` and every step permission of both the
   stored schedule and the new one, so removing a step nobody let you run
   doesn't let you edit around it. An edit made after someone else's is
@@ -73,8 +88,8 @@ A schedule belongs to whoever created it, and its backups run as theirs
 whoever last edited it. A personal S3 destination must be the owner's, and
 whoever saves the schedule must own it too or hold
 `platform.backups.manage-storage`; it also takes
-`backup.download` on each target backed up there. A stopped App backup
-stops and starts the App and every App using its volumes, so saving one
+`backup.download` on each target backed up there. A stopped App or volume backup
+stops and starts every App using what it backs up, so saving one
 takes `instance.power.stop` on each; the Relay must be online to say which Apps
 those are, unless the schedule already had that step.
 

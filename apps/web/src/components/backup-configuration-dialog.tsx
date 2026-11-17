@@ -2,7 +2,6 @@ import * as React from "react"
 import {
   Archive,
   Check,
-  ChevronsUpDown,
   Cloud,
   CirclePause,
   HardDrive,
@@ -23,50 +22,18 @@ import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  DrawerPopover,
-  DrawerPopoverContent,
-  DrawerPopoverTrigger,
-} from "@/components/drawer-popover"
-import { GroupPickerCard } from "@/components/group-picker-card"
-import { InstancePickerContent } from "@/components/instance-picker"
-import { InstanceCard } from "@/components/instance-card"
-import { VolumePickerCard } from "@/components/volumes/volume-field"
-import type { AnyInstancePickerItem } from "@/lib/instance-picker-filters"
+  TargetPicker,
+  type PickerGroup,
+  type PickerTarget,
+} from "@/components/target-picker"
 import { timestampedBackupName } from "@/lib/backup-name"
 import { notALoginField } from "@/lib/not-a-login-field"
 
-export interface BackupConfigurationTarget {
-  id: string
-  key: string
+export interface BackupConfigurationTarget extends PickerTarget {
   consistencyChoice?: {
     stoppedDescription?: string | undefined
     stoppedUnavailable: string | null
   }
-  kind: "app" | "volume" | "database" | "instance" | "platform"
-  name: string
-  description?: string
-  relayId: string
-  relayName: string
-  /** More that finding it matches, such as the Apps that use a volume. */
-  searchText?: string
-}
-
-/**
- * A row that stands for several targets: an App for the volumes it uses, or
- * a group of instances for what each keeps. Choosing it chooses them, and
- * what is backed up is them, never the group.
- */
-export interface BackupConfigurationGroup {
-  /** What it stands for, or why it can't be chosen. */
-  description: string
-  id: string
-  key: string
-  kind: "app" | "group"
-  /** The targets it stands for, by key. None when it can't be chosen. */
-  members: ReadonlyArray<string>
-  name: string
-  relayId: string
-  searchText?: string
 }
 
 export interface BackupConfiguration {
@@ -125,8 +92,8 @@ export function BackupConfigurationDialog({
   }
   description?: React.ReactNode
   error?: string
-  /** Rows that stand for several of `targets`. */
-  groups?: ReadonlyArray<BackupConfigurationGroup>
+  /** Rows that stand for several of `targets`: Apps and groups. */
+  groups?: ReadonlyArray<PickerGroup>
   initialConsistency?: "live" | "stopped"
   initialDestinationKeys?: ReadonlyArray<string>
   initialMode?: "full" | "incremental"
@@ -160,12 +127,30 @@ export function BackupConfigurationDialog({
   const [consistency, setConsistency] = React.useState<"live" | "stopped">(
     initialConsistency
   )
+  const selectedKeySet = React.useMemo(
+    () => new Set(selectedKeys),
+    [selectedKeys]
+  )
   // What is chosen, in the order it is listed.
-  const chosen = React.useMemo(() => {
-    if (!showTarget) return noTargets
-    const keys = new Set(selectedKeys)
-    return targets.filter((candidate) => keys.has(candidate.key))
-  }, [selectedKeys, showTarget, targets])
+  const chosen = React.useMemo(
+    () =>
+      showTarget
+        ? targets.filter((candidate) => selectedKeySet.has(candidate.key))
+        : noTargets,
+    [selectedKeySet, showTarget, targets]
+  )
+  const toggleTargets = React.useCallback(
+    (keys: ReadonlyArray<string>, selected: boolean) =>
+      setSelectedKeys((current) => {
+        const next = new Set(current)
+        for (const key of keys) {
+          if (selected) next.add(key)
+          else next.delete(key)
+        }
+        return [...next]
+      }),
+    []
+  )
   const consistencyChoice = showTarget
     ? chosenConsistencyChoice(chosen)
     : fixedConsistencyChoice
@@ -268,11 +253,14 @@ export function BackupConfigurationDialog({
           {showTarget ? (
             <div>
               <span className="mb-2 block text-xs font-medium">Targets</span>
-              <BackupTargetPicker
-                chosen={chosen}
+              <TargetPicker
+                ariaLabel="Backup targets"
+                emptyMessage="No targets available"
                 groups={groups}
+                placeholder="Choose what to back up"
+                selectedKeys={selectedKeySet}
                 targets={targets}
-                onChange={setSelectedKeys}
+                onToggle={toggleTargets}
               />
               {tooMany ? (
                 <p role="alert" className="mt-1.5 text-xs text-destructive">
@@ -545,132 +533,19 @@ function BackupDestinationChoice({
   )
 }
 
-const BackupTargetPicker = React.memo(function BackupTargetPicker({
-  chosen,
-  groups,
-  onChange,
-  targets,
-}: {
-  chosen: ReadonlyArray<BackupConfigurationTarget>
-  groups: ReadonlyArray<BackupConfigurationGroup>
-  onChange: (keys: ReadonlyArray<string>) => void
-  targets: ReadonlyArray<BackupConfigurationTarget>
-}) {
-  const [open, setOpen] = React.useState(false)
-  // Groups first: each is a quick way to what follows it.
-  const items = React.useMemo(
-    () => [...groups.map(backupGroupItem), ...targets.map(backupTargetItem)],
-    [groups, targets]
-  )
-  const [only] = chosen.length === 1 ? chosen : []
-  const onlyItem = React.useMemo(
-    () => (only ? backupTargetItem(only) : null),
-    [only]
-  )
-  const selectedKeys = React.useMemo(
-    () => new Set(chosen.map(({ key }) => key)),
-    [chosen]
-  )
-  const toggleMany = React.useCallback(
-    (keys: ReadonlyArray<string>, selected: boolean) => {
-      const next = new Set(selectedKeys)
-      for (const key of keys) {
-        if (selected) next.add(key)
-        else next.delete(key)
-      }
-      onChange([...next])
-    },
-    [onChange, selectedKeys]
-  )
-  // Several can be chosen, so the list stays open as each is ticked. A
-  // row that stands for others only ticks them: all of them, or none when
-  // they all are already.
-  const toggleItem = React.useCallback(
-    (item: AnyInstancePickerItem) => {
-      const keys = groups.find((group) => group.key === item.key)
-        ?.members ?? [item.key]
-      toggleMany(keys, !keys.every((key) => selectedKeys.has(key)))
-    },
-    [groups, selectedKeys, toggleMany]
-  )
-
-  return (
-    <DrawerPopover open={open} onOpenChange={setOpen}>
-      <DrawerPopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Backup targets"
-          disabled={targets.length === 0}
-          // One height whatever is chosen, and no wider than its field.
-          className="h-12.5 w-full min-w-0 justify-between gap-3 px-2 py-1.5 font-normal"
-        >
-          {onlyItem?.identity.kind === "volume" ? (
-            <VolumePickerCard
-              className="min-w-0 flex-1 gap-2 text-left"
-              iconClassName="size-7 border-0 bg-muted/55"
-              meta={onlyItem.meta}
-              name={onlyItem.name}
-            />
-          ) : onlyItem && onlyItem.identity.kind !== "group" ? (
-            <InstanceCard
-              className="min-w-0 flex-1 gap-2 text-left"
-              iconClassName="size-7 border-0 bg-muted/55"
-              instance={onlyItem.identity}
-              meta={onlyItem.meta}
-              metaClassName="font-mono"
-              name={onlyItem.name}
-              nameClassName="type-control-sm"
-              statusClassName="ring-background"
-            />
-          ) : chosen.length > 1 ? (
-            <span className="min-w-0 flex-1 px-1 text-left">
-              <span className="type-control-sm block">
-                {chosen.length} targets
-              </span>
-              <span className="type-meta block truncate text-muted-foreground">
-                {chosen.map(({ name }) => name).join(", ")}
-              </span>
-            </span>
-          ) : (
-            <span className="px-1 text-muted-foreground">
-              {targets.length === 0
-                ? "No targets available"
-                : "Choose what to back up"}
-            </span>
-          )}
-          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-        </Button>
-      </DrawerPopoverTrigger>
-      <DrawerPopoverContent
-        title="Backup targets"
-        align="start"
-        className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
-      >
-        <InstancePickerContent
-          ariaLabel="Backup targets"
-          emptyMessage="No targets available"
-          items={items}
-          multiple
-          selectedKeys={selectedKeys}
-          onSelect={toggleItem}
-          onSelectMany={toggleMany}
-        />
-      </DrawerPopoverContent>
-    </DrawerPopover>
-  )
-})
-
 const noTargets: ReadonlyArray<BackupConfigurationTarget> = []
-const noGroups: ReadonlyArray<BackupConfigurationGroup> = []
+const noGroups: ReadonlyArray<PickerGroup> = []
 
 // Whether what is chosen can be taken stopped: the volumes among it, which
 // stop the Apps that use them, and why not when one of them can't be.
 function chosenConsistencyChoice(
   chosen: ReadonlyArray<BackupConfigurationTarget>
-): { stoppedDescription?: string | undefined; stoppedUnavailable: string | null } | undefined {
+):
+  | {
+      stoppedDescription?: string | undefined
+      stoppedUnavailable: string | null
+    }
+  | undefined {
   const choices = chosen.flatMap(({ consistencyChoice }) =>
     consistencyChoice ? [consistencyChoice] : []
   )
@@ -681,71 +556,5 @@ function chosenConsistencyChoice(
     stoppedUnavailable:
       choices.find((choice) => choice.stoppedUnavailable !== null)
         ?.stoppedUnavailable ?? null,
-  }
-}
-
-// A group's row: an App's own card, or a group's, saying what it stands for.
-function backupGroupItem(group: BackupConfigurationGroup): AnyInstancePickerItem {
-  const row = {
-    disabled: group.members.length === 0,
-    key: group.key,
-    meta: group.description,
-    name: group.name,
-    searchText: `${group.id} ${group.searchText ?? ""}`,
-    stands: group.members,
-  }
-  return group.kind === "app"
-    ? {
-        ...row,
-        identity: { id: group.id, kind: "app", relayId: group.relayId },
-      }
-    : {
-        ...row,
-        card: <GroupPickerCard meta={group.description} name={group.name} />,
-        identity: { id: group.id, kind: "group" },
-      }
-}
-
-function backupTargetItem(
-  target: BackupConfigurationTarget
-): AnyInstancePickerItem {
-  if (target.kind === "platform") {
-    return {
-      identity: {
-        id: target.relayId,
-        kind: "relay",
-        platform: true,
-        relayId: target.relayId,
-        source: "fleet",
-      },
-      key: target.key,
-      meta: `On ${target.relayName}`,
-      name: "Kiln",
-      searchText: `kiln hearth platform ${target.relayName} ${target.relayId}`,
-    }
-  }
-  if (target.kind === "volume") {
-    // A volume's own card, as its Relay's volumes and an App's show it.
-    const meta =
-      target.description ?? `${target.relayName} · ${target.id.slice(0, 8)}`
-    return {
-      card: <VolumePickerCard meta={meta} name={target.name} />,
-      identity: { id: target.id, kind: "volume", relayId: target.relayId },
-      key: target.key,
-      meta,
-      name: target.name,
-      searchText: `${target.id} ${target.relayName} ${target.searchText ?? ""}`,
-    }
-  }
-  return {
-    identity: {
-      id: target.id,
-      kind: target.kind === "instance" ? "server" : target.kind,
-      relayId: target.relayId,
-    },
-    key: target.key,
-    meta: target.description ?? `${target.relayName} · ${target.id}`,
-    name: target.name,
-    searchText: `${target.id} ${target.relayName}`,
   }
 }

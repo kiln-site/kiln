@@ -92,7 +92,8 @@ the authority reading or writing that data does
 - An App is no backup target. Seeing which volumes it uses, and the latest
   backup of each, takes `app.read`; a schedule that backs one up takes
   `instance.files.read` on it, as reading its files does.
-- A Kiln volume, shared by design, takes `backup.*` on the Relay.
+- A Kiln volume, shared by design, takes `backup.*` on the Relay, by hand
+  or as a schedule's target.
 - A run of several things takes what backing each up alone takes, on every
   one of them, or none is made. Each volume's backup is the volume's:
   making, seeing, downloading, restoring or deleting it takes `backup.*` on
@@ -341,7 +342,9 @@ A step that backs up an App backs up each volume it uses, each admitted on its o
 or stopped once for all of them as a batch; saving a stopped one takes
 `instance.power.stop` on the App and every App using those volumes, and while their
 Relay can't say which those are, only a stopped step the schedule already had
-is kept.
+is kept. A volume can be a schedule's target too, as it can be a manual
+backup's: admitted as a manual backup of it is, and, stopped, it stops
+every App that uses it, which saving it takes `instance.power.stop` on.
 
 Hearth sends the schedule again when any of that changes: a target's backup
 limits, a destination saved or marked for deletion, a deletion starting or
@@ -642,7 +645,7 @@ here, or that this person can't see, can't be chosen as a group, since
 ticking part of it would pass for backing all of it up. Nor can an App, or
 a group with one, while its Relay doesn't yet know which volumes every App
 names: the volumes listed for it may not be all it uses
-(`apps/web/src/lib/backup-target-groups.ts`). Each volume can still be
+(`apps/web/src/lib/target-picker-groups.ts`). Each volume can still be
 chosen on its own. The page asks such a Relay again every few moments, so
 the rows come back when it is settled. With the page scoped to an App, its
 volumes are chosen as the dialog opens only when its row could be chosen:
@@ -660,9 +663,11 @@ with no volumes at all. With the page scoped to an App, its volumes
 come first and each is chosen as the dialog opens. Volumes and groups are
 types to filter by, each volume says which Apps use it, and searching an
 App's name or ID finds the volumes it uses. Someone who can't list the
-Relay's volumes is offered those of the App the page is scoped to. A
-schedule still names an App, as the group of whatever volumes it uses when
-it runs. An App's volumes are each Kiln
+Relay's volumes is offered those of the App the page is scoped to. The
+schedule editor draws the same picker
+(`apps/web/src/components/target-picker.tsx`), but a schedule names an App
+itself, as the group of whatever volumes it uses when it runs, and can name
+a volume of its own. An App's volumes are each Kiln
 volume its configuration mounts, its Compose file declares or its
 containers use, one another App uses too. A Kiln volume its configuration
 mounts or its Compose file declares that its Relay doesn't have refuses the
@@ -672,20 +677,24 @@ it among what the App's backup must take. A schedule is sent again when an App
 takes up or lets go of a volume.
 
 A scheduled step works out what it backs up before it runs, each thing
-once: for its Apps, each volume once however many of them use it. Apps that share a volume are backed up together, as one batch
+once: each volume once however many of its Apps use it, and whether or not
+the step also names it as a target. Apps that share a volume are backed up together, as one batch
 (`scheduledAppBackupGroup`): each of them asks its Relay for the same
 batch, by the same IDs, so the first makes it and the others wait for it,
-and a stopped step stops them all once. A stopped step that backs up
-databases beside Apps takes all of them on a Relay as one batch
+and a stopped step stops them all once. A volume the step names that one of
+its Apps uses is one execution with them, naming those Apps, and asks for
+their batch too, waiting on its own backup; one none of them uses is backed
+up alone, its stopped window its own. A stopped step that backs up
+databases beside Apps or volumes takes all of them on a Relay as one batch
 (`stoppedTogether`, `apps/relay/src/schedules.ts`): every volume its Apps
-use and each of those databases, so a database is dumped while the Apps are
+use, each volume it names, and each of those databases, so a database is dumped while the Apps are
 stopped, as a manual stopped run dumps it. The batch is settled once for
 the step, of the targets it still runs on in that occurrence and that
 Hearth admitted: one skipped or refused is left out and backed up by no
 other target's run, so a database is dumped while the Apps that are backed
 up are stopped. Every App of the batch stays stopped for as long as all of
 it takes; separate steps keep Apps that needn't wait on each other apart. The editor offers Stopped for a
-step of Apps, with or without databases beside them. What refuses one of
+step of Apps and volumes, with or without databases beside them. What refuses one of
 them refuses each, and a batch is at most 64 backups. The volumes are those Hearth last
 sent. It sends the schedule again as soon as a deployment of the App ends,
 and if that send fails, at its next sweep, every ten minutes, or when

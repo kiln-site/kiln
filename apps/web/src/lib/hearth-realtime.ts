@@ -118,7 +118,11 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.relayProxyModes),
     prefix(["web-routes"]),
   ],
-  "relay-volumes": [prefix(["relays", "volumes"]), prefix(appBackupsKey)],
+  "relay-volumes": [
+    prefix(["relays", "volumes"]),
+    prefix(appBackupsKey),
+    exact(queryKeys.schedules.volumeOptions),
+  ],
   relays: [
     prefix(["infra-directory"]),
     prefix(["instance-inventory"]),
@@ -219,6 +223,8 @@ function queryScopes(
       // Which of an App's volumes are backed up follows the volumes it
       // mounts, and what they are called.
       prefix([...appBackupsKey, scope.relayId]),
+      // The volumes the schedule editor offers.
+      exact(queryKeys.schedules.volumeOptions),
     ]
   }
   if (topic === "relay-proxy" && scope) {

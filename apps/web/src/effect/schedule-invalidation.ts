@@ -47,14 +47,25 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
     return
   }
   // A volume is no App's, and any App on its Relay may be backed up with
-  // it: every App's backup schedules there are sent again.
-  const target: { id: string | null; kind: string } =
+  // it: every App's backup schedules there are sent again, and those that
+  // name the volume itself.
+  const backupOnly = scope.backupOnly || scope.target.kind === "volume"
+  const [kinds, ids]: [string, ReadonlyArray<string>] =
     scope.target.kind === "platform"
-      ? { id: scope.relayId, kind: "relay" }
+      ? [
+          "target.target_kind = 'relay' AND target.target_id = ?",
+          [scope.relayId],
+        ]
       : scope.target.kind === "volume"
-        ? { id: null, kind: "app" }
-        : scope.target
-  const backupOnly = scope.backupOnly || target.id === null
+        ? [
+            `(target.target_kind = 'app'
+              OR (target.target_kind = 'volume' AND target.target_id = ?))`,
+            [scope.target.id],
+          ]
+        : [
+            "target.target_kind = ? AND target.target_id = ?",
+            [scope.target.kind, scope.target.id],
+          ]
   yield* transaction.execute(
     `UPDATE ${databaseTable("schedule_deployment")} deployment
          JOIN ${databaseTable("schedule_target")} target
@@ -63,8 +74,7 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
           SET deployment.status = 'pending',
               deployment.desired_generation = deployment.desired_generation + 1,
               deployment.updated_at = ?
-        WHERE target.relay_id = ? AND target.target_kind = ?
-          ${target.id === null ? "" : "AND target.target_id = ?"}
+        WHERE target.relay_id = ? AND ${kinds}
           ${
             backupOnly
               ? `AND EXISTS (
@@ -74,11 +84,6 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
           )`
               : ""
           }`,
-    [
-      now,
-      scope.relayId,
-      target.kind,
-      ...(target.id === null ? [] : [target.id]),
-    ]
+    [now, scope.relayId, ...ids]
   )
 })

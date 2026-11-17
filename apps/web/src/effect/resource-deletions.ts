@@ -359,10 +359,9 @@ const requestRowIn = (
     ) {
       const [backup] = yield* transaction.queryRows<
         RowDataPacket & { status: string }
-      >(
-        `SELECT status FROM ${databaseTable("backup")} WHERE id = ? LIMIT 1`,
-        [existing.backup_id]
-      )
+      >(`SELECT status FROM ${databaseTable("backup")} WHERE id = ? LIMIT 1`, [
+        existing.backup_id,
+      ])
       if (backup?.status === "available") backupId = existing.backup_id
     }
     yield* transaction.execute(
@@ -553,8 +552,9 @@ export const recordRelayDeletedEffect = Effect.fn(
 })
 
 /**
- * Refuses, inside `transaction`, to let anything new point at a game server
- * or database whose deletion was asked for, or that its Relay has deleted.
+ * Refuses, inside `transaction`, to let anything new point at a game server,
+ * database, App or Kiln volume whose deletion was asked for, or that its
+ * Relay has deleted.
  * Each check is a locking read of the resource's deletion key, which under
  * REPEATABLE READ also locks the gap where a missing row would go: a
  * deletion asked for meanwhile waits for this transaction to commit, and its
@@ -580,7 +580,8 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
     if (
       resource.kind !== "instance" &&
       resource.kind !== "database" &&
-      resource.kind !== "app"
+      resource.kind !== "app" &&
+      resource.kind !== "volume"
     )
       continue
     const [deletion] = yield* transaction.queryRows<

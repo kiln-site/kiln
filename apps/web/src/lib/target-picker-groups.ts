@@ -1,6 +1,6 @@
 import { appBackupVolumes, type RelayVolumes } from "@workspace/contracts"
 
-import type { BackupConfigurationGroup } from "@/components/backup-configuration-dialog"
+import type { PickerGroup } from "@/components/target-picker"
 
 /** What a Relay says of its volumes, as far as choosing them goes. */
 export type BackupVolumeListing = Pick<
@@ -17,20 +17,28 @@ interface GroupMember {
 }
 
 /**
- * The rows of New Backup that stand for several targets: each App, for the
- * volumes it uses, and each group of instances, for what each member keeps.
- * A row names exactly what choosing it chooses, and stands for all it keeps
- * or can't be chosen: ticking one for part of what it holds would pass for
- * backing all of it up.
+ * The rows of a target picker that stand for several targets: each group
+ * of instances, for its members, and in New Backup each App, for the
+ * volumes it uses. A row names exactly what choosing it chooses, and stands
+ * for all it holds or can't be chosen: ticking one for part of it would
+ * pass for choosing all of it.
+ *
+ * What an App is differs: New Backup backs up what an App keeps, each
+ * volume it uses, so an App stands for its volumes there (`app: "volumes"`,
+ * with each Relay's `volumes`); a schedule names the App itself, which is
+ * backed up as whatever volumes it uses when it runs (`app: "target"`).
  */
-export function backupTargetGroups({
-  apps,
+export function targetPickerGroups({
+  app,
+  apps = [],
   groups,
   keyOf,
   targets,
-  volumes,
+  volumes = {},
 }: {
-  apps: ReadonlyArray<{ id: string; name: string; relayId: string }>
+  app: "target" | "volumes"
+  /** Each App, given a row of its own where it stands for its volumes. */
+  apps?: ReadonlyArray<{ id: string; name: string; relayId: string }>
   groups: ReadonlyArray<{
     /** Members whoever is choosing can't see. */
     hidden: number
@@ -40,19 +48,20 @@ export function backupTargetGroups({
   }>
   /** A target's key in `targets`, by its kind, Relay and ID. */
   keyOf: (
-    kind: "database" | "instance" | "volume",
+    kind: "app" | "database" | "instance" | "volume",
     relayId: string,
     id: string
   ) => string
-  /** What can be chosen, each a backup of its own. */
+  /** What can be chosen, each a target of its own. */
   targets: ReadonlyArray<{ key: string; kind: string; name: string }>
   /** Each Relay's volumes, where they could be listed. */
-  volumes: Readonly<Record<string, BackupVolumeListing>>
-}): Array<BackupConfigurationGroup> {
+  volumes?: Readonly<Record<string, BackupVolumeListing>>
+}): Array<PickerGroup> {
   const offered = new Map(targets.map((target) => [target.key, target]))
   // What a row chooses, by name; what isn't a volume says what it is, since
   // a database is often called what its App is.
   const kinds: Record<string, string> = {
+    app: "App",
     database: "database",
     instance: "game server",
   }
@@ -85,7 +94,7 @@ export function backupTargetGroups({
             : null,
     }
   }
-  const rows: Array<BackupConfigurationGroup> = []
+  const rows: Array<PickerGroup> = []
   for (const group of groups) {
     const [first] = group.members
     if (!first) continue
@@ -93,7 +102,7 @@ export function backupTargetGroups({
     let unavailable: string | null =
       group.hidden > 0 ? "Holds instances you can't see" : null
     for (const member of group.members) {
-      if (member.kind === "app") {
+      if (member.kind === "app" && app === "volumes") {
         const app = ofApp(member.relayId, member.instanceId)
         const why = app ? app.unavailable : "Its volumes can't be listed"
         if (why) {
@@ -103,17 +112,17 @@ export function backupTargetGroups({
         continue
       }
       const key = keyOf(
-        member.kind === "server" ? "instance" : "database",
+        member.kind === "server" ? "instance" : member.kind,
         member.relayId,
         member.instanceId
       )
       if (offered.has(key)) members.push(key)
       else {
-        unavailable ??= `${member.name ?? (member.kind === "server" ? "A game server" : "A database")} can't be backed up here`
+        unavailable ??= `${member.name ?? (member.kind === "server" ? "A game server" : member.kind === "app" ? "An App" : "A database")} can't be chosen here`
       }
     }
     const keys = [...new Set(members)]
-    const nothing = keys.length === 0 ? "Nothing in it to back up" : null
+    const nothing = keys.length === 0 ? "Nothing in it to choose" : null
     rows.push({
       description: unavailable ?? nothing ?? named(keys),
       id: group.id,
@@ -127,19 +136,19 @@ export function backupTargetGroups({
         .join(" "),
     })
   }
-  for (const app of apps) {
-    const stands = ofApp(app.relayId, app.id)
+  for (const one of app === "volumes" ? apps : []) {
+    const stands = ofApp(one.relayId, one.id)
     if (!stands) continue
     const nothing = stands.members.length === 0 ? "No volumes to back up" : null
     const unavailable = stands.unavailable ?? nothing
     rows.push({
       description: unavailable ?? named(stands.members),
-      id: app.id,
-      key: `group:app:${app.relayId}:${app.id}`,
+      id: one.id,
+      key: `group:app:${one.relayId}:${one.id}`,
       kind: "app",
       members: unavailable ? [] : stands.members,
-      name: app.name,
-      relayId: app.relayId,
+      name: one.name,
+      relayId: one.relayId,
     })
   }
   return rows

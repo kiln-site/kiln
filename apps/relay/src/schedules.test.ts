@@ -65,6 +65,7 @@ async function manager(
     enqueueBackup: ScheduleManagerOptions["enqueueBackup"]
     listAppIds: ScheduleManagerOptions["listAppIds"]
     findInstance: (instanceId: string) => Promise<object | null>
+    findVolume: ScheduleManagerOptions["findVolume"]
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
     listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
     runContainerCommand: ScheduleManagerOptions["runContainerCommand"]
@@ -80,6 +81,7 @@ async function manager(
         throw new Error("not used")
       }),
     findInstance: overrides.findInstance ?? (async () => null),
+    findVolume: overrides.findVolume ?? (async () => null),
     getBackup: async () => null,
     listAppIds: overrides.listAppIds ?? (async () => new Set()),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
@@ -360,14 +362,22 @@ describe("Relay schedule commands in containers", () => {
 describe("Relay scheduled App backups", () => {
   const [site, blog] = ["a".repeat(12), "b".repeat(12)] as [string, string]
   const [media, uploads] = ["1".repeat(40), "2".repeat(40)] as [string, string]
-  const local = { destination: { kind: "local" as const }, mode: "full" as const }
+  const local = {
+    destination: { kind: "local" as const },
+    mode: "full" as const,
+  }
   const nightly: RelayScheduleProjection = {
     ...projection,
     actions: [
       {
         destination: { kind: "local" },
         executions: [
-          { ...local, appIds: [site, blog], targetId: media, targetKind: "volume" },
+          {
+            ...local,
+            appIds: [site, blog],
+            targetId: media,
+            targetKind: "volume",
+          },
           { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
         ],
         id: "c5a1b9d2-3e4f-4a6b-8c7d-9e0f1a2b3c4d",
@@ -484,7 +494,12 @@ describe("Relay scheduled App backups", () => {
           consistency: "stopped",
           destination: { kind: "local" },
           executions: [
-            { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
+            {
+              ...local,
+              appIds: [site],
+              targetId: uploads,
+              targetKind: "volume",
+            },
             { ...local, targetId: database, targetKind: "database" },
           ],
           id: "e7c3d1f4-5a6b-4c8d-9e0f-1a2b3c4d5e6f",
@@ -535,7 +550,12 @@ describe("Relay scheduled App backups", () => {
           consistency: "stopped",
           destination: { kind: "local" },
           executions: [
-            { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
+            {
+              ...local,
+              appIds: [site],
+              targetId: uploads,
+              targetKind: "volume",
+            },
             { ...local, targetId: database, targetKind: "database" },
           ],
           id: "f8d4e2a5-6b7c-4d9e-8f1a-2b3c4d5e6f7a",
@@ -561,6 +581,142 @@ describe("Relay scheduled App backups", () => {
     ])
     // Alone, it is the App's stopped backup, in no batch.
     expect("batch" in made[0]! && made[0].batch).toBeFalsy()
+  })
+})
+
+// A volume can be a schedule's target itself. Named beside an App that uses
+// it, it is the App's backup of it, made once; named alone, it is backed up
+// alone, stopping whatever uses it as a manual stopped backup does.
+describe("Relay scheduled volume backups", () => {
+  const site = "a".repeat(12)
+  const [media, uploads] = ["1".repeat(40), "2".repeat(40)] as [string, string]
+  const local = {
+    destination: { kind: "local" as const },
+    mode: "full" as const,
+  }
+  const queue = () => {
+    const tasks = new Map<string, RelayBackupTask>()
+    const enqueueBackup: ScheduleManagerOptions["enqueueBackup"] = async (
+      input
+    ) => {
+      const known = tasks.get(input.taskId)
+      if (known) return known
+      const task = {
+        backupId: input.backupId,
+        input,
+        status: "succeeded",
+        taskId: input.taskId,
+      } as unknown as RelayBackupTask
+      tasks.set(input.taskId, task)
+      return task
+    }
+    return { enqueueBackup, tasks }
+  }
+
+  it("backs up a volume named beside an App that uses it once, in the App's batch", async () => {
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      findVolume: async (id) => (id === media ? {} : null),
+      listAppIds: async () => new Set([site]),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          consistency: "stopped",
+          destination: { kind: "local" },
+          executions: [
+            { ...local, appIds: [site], targetId: media, targetKind: "volume" },
+            {
+              ...local,
+              appIds: [site],
+              targetId: uploads,
+              targetKind: "volume",
+            },
+          ],
+          id: "a9e5f3b6-7c8d-4e0f-9a1b-3c4d5e6f7a8b",
+          mode: "full",
+          name: "Nightly",
+          type: "backup",
+        },
+      ],
+      targets: [
+        { id: site, kind: "app", name: "Site", relayId: "relay-a" },
+        { id: media, kind: "volume", name: "Media", relayId: "relay-a" },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("succeeded")
+    )
+    const made = [...tasks.values()].map(({ input }) => input)
+    expect(made.map((input) => input.target)).toEqual(
+      expect.arrayContaining([
+        { id: media, kind: "volume" },
+        { id: uploads, kind: "volume" },
+      ])
+    )
+    expect(made).toHaveLength(2)
+    // One stopped window for the App's volumes, whichever target asked.
+    const batches = made.map((input) => ("batch" in input ? input.batch : null))
+    expect(new Set(batches.map((batch) => batch?.id)).size).toBe(1)
+    expect(batches.map((batch) => batch?.size)).toEqual([2, 2])
+    expect((await latestRun(schedules))?.targetRuns).toMatchObject([
+      { status: "succeeded", target: { kind: "app" } },
+      { status: "succeeded", target: { kind: "volume" } },
+    ])
+  })
+
+  it("backs up a volume no App of the step uses alone, and skips a power step on it", async () => {
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      findVolume: async () => ({}),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          action: "stop",
+          id: "b0f6a4c7-8d9e-4f1a-8b2c-4d5e6f7a8b9c",
+          type: "power",
+        },
+        {
+          consistency: "stopped",
+          destination: { kind: "local" },
+          executions: [{ ...local, targetId: media, targetKind: "volume" }],
+          id: "c1a7b5d8-9e0f-4a2b-9c3d-5e6f7a8b9c0d",
+          mode: "full",
+          name: "Nightly",
+          type: "backup",
+        },
+      ],
+      targets: [
+        { id: media, kind: "volume", name: "Media", relayId: "relay-a" },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("succeeded")
+    )
+    const made = [...tasks.values()].map(({ input }) => input)
+    expect(made).toHaveLength(1)
+    // Stopped, and alone: the backup stops whatever uses the volume.
+    expect(made[0]).toMatchObject({
+      consistency: "stopped",
+      target: { id: media, kind: "volume" },
+    })
+    expect("batch" in made[0]! && made[0].batch).toBeFalsy()
+    expect(
+      (await latestRun(schedules))?.targetRuns[0]?.attempts.map(
+        (attempt) => attempt.status
+      )
+    ).toEqual(["skipped_unsupported", "succeeded"])
   })
 })
 

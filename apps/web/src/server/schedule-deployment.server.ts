@@ -414,7 +414,9 @@ async function prepareRelayScheduleActions(
     if (target.kind !== "app") {
       return Promise.resolve({
         appId: null,
-        members: [{ id: target.id, kind: target.kind, relayId: target.relayId }],
+        members: [
+          { id: target.id, kind: target.kind, relayId: target.relayId },
+        ],
         refusal: null,
       })
     }
@@ -487,10 +489,13 @@ interface TargetMembers {
 
 /**
  * What one backup step backs up on a Relay, each thing once: a game
- * server, a database or Kiln itself, and for an App its volumes, each once
- * however many of the step's Apps use it, naming them all. Apps that share a volume are backed up
- * together (`scheduledAppBackupGroup`), so what refuses one of them refuses
- * each, as does being more than one run takes.
+ * server, a database or Kiln itself, and each volume once, whether the
+ * step names it as a target or takes it for an App that uses it, however
+ * many of the step's Apps do, naming them all. Apps that share a volume
+ * are backed up together (`scheduledAppBackupGroup`), so what refuses one
+ * of them refuses each, as does being more than one run takes. A volume
+ * target one of them uses is backed up with them, as part of their batch;
+ * one none of them uses is backed up alone.
  */
 function stepManifest(
   targets: ReadonlyArray<TargetMembers>
@@ -499,26 +504,26 @@ function stepManifest(
   const own: Array<{ appId: string | null; member: BackupMember }> = []
   for (const { appId, members } of targets) {
     for (const member of members) {
-      if (member.kind !== "volume" || appId === null) {
+      if (member.kind !== "volume") {
         own.push({ appId, member })
         continue
       }
       const known = volumes.get(member.id) ?? { ...member, appIds: [] }
-      known.appIds.push(appId)
+      if (appId !== null) known.appIds.push(appId)
       volumes.set(member.id, known)
     }
   }
-  const shared = [...volumes.values()].map((volume) => ({
-    ...volume,
-    appIds: [...volume.appIds].sort(),
-  }))
+  const shared = [...volumes.values()].map(
+    ({ appIds, ...volume }): BackupMember =>
+      appIds.length === 0 ? volume : { ...volume, appIds: [...appIds].sort() }
+  )
   const executions = [
     ...own.map(({ member }) => ({
       targetId: member.id,
       targetKind: member.kind,
     })),
     ...shared.map((volume) => ({
-      appIds: volume.appIds,
+      ...(volume.appIds ? { appIds: volume.appIds } : {}),
       targetId: volume.id,
       targetKind: volume.kind,
     })),
@@ -550,7 +555,7 @@ function stepManifest(
     })),
     ...shared.map((member) => ({
       member,
-      refusal: refusalOf(member.appIds[0]!),
+      refusal: member.appIds ? refusalOf(member.appIds[0]!) : null,
     })),
   ]
 }
