@@ -177,7 +177,8 @@ describe("Kiln platform backups deployed by Coolify", () => {
       } as unknown as BackupCreateTaskInput,
       backup,
       { completed: 0, total: 0 },
-      new AbortController().signal
+      new AbortController().signal,
+      null
     )
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, backup)
@@ -338,7 +339,10 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
     own.state.running = false
     const restore = async (manifest: Partial<PlatformBackupManifest>) => {
       const source = join(testDirectory, `shared-${randomUUID()}.kiln`)
-      await writeFile(source, platformBundle("CREATE TABLE kept (id int);", manifest))
+      await writeFile(
+        source,
+        platformBundle("CREATE TABLE kept (id int);", manifest)
+      )
       return restoreEncryptedPlatformBackup(harness.config, source, "kiln-test")
     }
     return { harness, mysql, restore }
@@ -357,7 +361,8 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
       } as unknown as BackupCreateTaskInput,
       backup,
       { completed: 0, total: 0 },
-      new AbortController().signal
+      new AbortController().signal,
+      null
     )
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, backup)
@@ -366,6 +371,52 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
       [...fakeDocker.execs.values()].map(({ env }) => env),
       { MYSQL_DATABASE: database }
     )
+
+    await restoreEncryptedPlatformBackup(
+      kiln.harness.config,
+      backup,
+      "kiln-test"
+    )
+
+    expect(kiln.mysql.executedSql.join("\n")).toContain(
+      "CREATE TABLE dumped (id int);"
+    )
+  })
+
+  it("carries its recovery section in format 2 and restores the dump past it", async () => {
+    const kiln = await sharedKiln()
+    kiln.mysql.sqlDump = "CREATE TABLE dumped (id int);"
+    const backup = join(testDirectory, `recovery-${randomUUID()}.kiln`)
+    await createEncryptedPlatformBackup(
+      kiln.harness.config,
+      {
+        backupId: "e".repeat(40),
+        maxBytes: null,
+        target: { id: "kiln-test", kind: "platform" },
+      } as unknown as BackupCreateTaskInput,
+      backup,
+      { completed: 0, total: 0 },
+      new AbortController().signal,
+      {
+        authSecrets: "1:hearth-secret",
+        hearthUrl: "https://kiln.example.test",
+        ownerInvitationIds: ["invitation"],
+        previousInstallationIds: [],
+        relay: {
+          clients: [],
+          identity: {
+            id: "abcdefghijkl",
+            name: "Relay",
+            privateKeyPem: "private",
+            publicKeyPem: "public",
+          },
+          tlsAuthority: null,
+        },
+      }
+    )
+    await expect(
+      inspectEncryptedPlatformBackup(recoveryKey, backup)
+    ).resolves.toMatchObject({ databaseName: database, formatVersion: 2 })
 
     await restoreEncryptedPlatformBackup(
       kiln.harness.config,
