@@ -56,14 +56,17 @@ const instanceKinds = [
  */
 export const InstanceKindCounts = React.memo(function InstanceKindCounts({
   counts,
+  volumes = "some",
 }: {
   counts: InstanceKindCountValues
+  /** `always` counts volumes at zero too, where they're among what's said. */
+  volumes?: "always" | "some"
 }) {
   return instanceKinds.map(({ key, icon: Icon, one, other }) => {
-    const count = counts[key]
+    const count = counts[key] ?? 0
     // Shown only where there are some, so a list without any keeps its
     // four kinds.
-    if (key === "volumes" && !count) return null
+    if (key === "volumes" && !count && volumes === "some") return null
     return (
       <span
         key={key}
