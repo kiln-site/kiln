@@ -423,8 +423,8 @@ never stores it; it offers three ways to keep it:
 - **Download**: `kiln-recovery-kit-<installation-id>.json`, the same file
   `export-kit` prints.
 - **Save in 1Password**: 1Password's own button, shown only when its browser
-  extension is installed. Right after setup it saves the new administrator's
-  login and the kit as one item.
+  extension is installed. It saves an item for Hearth's address with the
+  installation ID as its username and the kit's line as its password.
 - **Copy**: the kit as one line, `kiln-recovery:v1:…`, which fits one
   password-manager field.
 

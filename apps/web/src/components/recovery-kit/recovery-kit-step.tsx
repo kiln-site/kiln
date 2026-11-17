@@ -15,10 +15,6 @@ import {
 import { HearthMark } from "@/components/hearth-mark"
 import { RecoveryKitPanel } from "@/components/recovery-kit/recovery-kit-panel"
 import { useAcknowledgeRecoveryKit } from "@/components/recovery-kit/use-acknowledge-recovery-kit"
-import {
-  firstLaunchLogin,
-  forgetFirstLaunchLogin,
-} from "@/lib/first-launch-login"
 import { recoveryKitStatusQueryOptions } from "@/lib/query-options"
 
 /**
@@ -27,13 +23,10 @@ import { recoveryKitStatusQueryOptions } from "@/lib/query-options"
  */
 export function RecoveryKitStep() {
   const { data: status } = useSuspenseQuery(recoveryKitStatusQueryOptions())
-  // Read once: the first administrator's login, if this tab just made it.
-  const [login] = React.useState(firstLaunchLogin)
   const [revealed, setRevealed] = React.useState(false)
   const [skipping, setSkipping] = React.useState(false)
-  // A full load into the app, which also drops the login from memory.
+  // A full load into the app.
   const finish = React.useCallback(() => {
-    forgetFirstLaunchLogin()
     window.location.assign("/")
   }, [])
   const acknowledge = useAcknowledgeRecoveryKit(finish)
@@ -63,7 +56,6 @@ export function RecoveryKitStep() {
 
         <div className="mt-6">
           <RecoveryKitPanel
-            login={login}
             status={status}
             onRevealed={() => setRevealed(true)}
           />

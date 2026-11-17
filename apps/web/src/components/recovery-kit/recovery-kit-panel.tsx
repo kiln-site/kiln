@@ -8,7 +8,6 @@ import { Input } from "@workspace/ui/components/input"
 
 import { RecoveryKitSaveOptions } from "@/components/recovery-kit/recovery-kit-save-options"
 import { recoverPromise } from "@/effect/promise"
-import type { FirstLaunchLogin } from "@/lib/first-launch-login"
 import { queryKeys } from "@/lib/query-options"
 import type { RecoveryKitReveal, RecoveryKitStatus } from "@/lib/recovery-kit"
 import { revealRecoveryKit } from "@/server/recovery-kit"
@@ -19,11 +18,9 @@ import { revealRecoveryKit } from "@/server/recovery-kit"
  * The kit lives only in this component's state, gone when it unmounts.
  */
 export function RecoveryKitPanel({
-  login = null,
   onRevealed,
   status,
 }: {
-  login?: FirstLaunchLogin | null
   onRevealed?: () => void
   status: RecoveryKitStatus
 }) {
@@ -66,7 +63,7 @@ export function RecoveryKitPanel({
     onRevealed?.()
   }
 
-  if (reveal) return <RecoveryKitSaveOptions login={login} reveal={reveal} />
+  if (reveal) return <RecoveryKitSaveOptions reveal={reveal} />
 
   if (status.available === "none") {
     return (

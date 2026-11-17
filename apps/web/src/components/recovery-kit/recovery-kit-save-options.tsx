@@ -1,17 +1,20 @@
 import * as React from "react"
-import { Copy, Download, Eye, EyeOff } from "lucide-react"
+import { Check, Copy, Download, Eye, EyeOff } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
-import { showToast } from "@workspace/ui/components/sonner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 
-import { recoverPromise } from "@/effect/promise"
 import {
   OnePasswordSaveButton,
   type OnePasswordSaveRequest,
 } from "@/components/recovery-kit/onepassword-save-button"
-import type { FirstLaunchLogin } from "@/lib/first-launch-login"
 import { notALoginField } from "@/lib/not-a-login-field"
+import { useCopyFeedback } from "@/components/workspace-header"
 import { recoveryDocsUrl, type RecoveryKitReveal } from "@/lib/recovery-kit"
 
 /**
@@ -19,19 +22,13 @@ import { recoveryDocsUrl, type RecoveryKitReveal } from "@/lib/recovery-kit"
  * or copy its one line. Shown only while the kit is on screen.
  */
 export const RecoveryKitSaveOptions = React.memo(
-  function RecoveryKitSaveOptions({
-    login,
-    reveal,
-  }: {
-    /** The first administrator's new login, still in memory, if any. */
-    login: FirstLaunchLogin | null
-    reveal: RecoveryKitReveal
-  }) {
+  function RecoveryKitSaveOptions({ reveal }: { reveal: RecoveryKitReveal }) {
     const [shown, setShown] = React.useState(false)
     const request = React.useMemo(
-      () => onePasswordRequest(reveal, login, window.location.host),
-      [reveal, login]
+      () => onePasswordRequest(reveal, window.location.host),
+      [reveal]
     )
+    const { copied, copy } = useCopyFeedback(reveal.text)
 
     function download() {
       const { file } = reveal
@@ -43,21 +40,6 @@ export const RecoveryKitSaveOptions = React.memo(
       link.download = file.name
       link.click()
       URL.revokeObjectURL(url)
-    }
-
-    async function copy() {
-      const failed = await recoverPromise(
-        () => navigator.clipboard.writeText(reveal.text),
-        (cause) => cause
-      )
-      showToast(
-        failed
-          ? {
-              message: "Couldn't copy. Select it and copy instead.",
-              type: "error",
-            }
-          : { message: "Recovery kit copied.", type: "success" }
-      )
     }
 
     return (
@@ -93,15 +75,27 @@ export const RecoveryKitSaveOptions = React.memo(
             >
               {shown ? <EyeOff /> : <Eye />}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-lg"
-              aria-label="Copy"
-              onClick={() => void copy()}
-            >
-              <Copy />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-lg"
+                  aria-label={copied ? "Copied" : "Copy"}
+                  className={
+                    copied
+                      ? "text-emerald-400 transition-colors hover:text-emerald-400"
+                      : "transition-colors"
+                  }
+                  onClick={() => void copy()}
+                >
+                  {copied ? <Check /> : <Copy />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {copied ? "Copied" : "Copy"}
+              </TooltipContent>
+            </Tooltip>
           </div>
         </label>
         {reveal.kind === "key" ? (
@@ -117,17 +111,14 @@ export const RecoveryKitSaveOptions = React.memo(
 )
 
 /**
- * What 1Password saves. On its own, a login item for the kit: the
- * installation ID as its username and the kit's line as its password, which
- * 1Password ties to this Hearth's address. Right after setup, while the new
- * administrator's login is still in memory, one item holds both, so 1Password
- * doesn't also ask to save the account; the sign-up form skips 1Password for
- * that reason. The button takes only the autofill names it lists, and
- * `recovery-code` isn't one, so the kit's line goes in the notes there.
+ * What 1Password saves: a login item for the kit, its line as the password,
+ * the one field its save dialog always keeps (it drops notes), with the
+ * installation ID as its username. 1Password ties it to this Hearth's
+ * address. The administrator's own login is 1Password's to save as they
+ * create the account, as on any site.
  */
 function onePasswordRequest(
   reveal: RecoveryKitReveal,
-  login: FirstLaunchLogin | null,
   host: string
 ): OnePasswordSaveRequest {
   const what =
@@ -136,32 +127,20 @@ function onePasswordRequest(
       : "Kiln's recovery key (installation ID and platform backup key)"
   const restore =
     reveal.kind === "kit"
-      ? `To restore Kiln on a new host, save ${login ? "the line below" : "this item's password"} to a file and run \`kiln-relay platform import-kit <file>\` before the new Relay's first start, then restore a platform backup.`
+      ? "To restore Kiln on a new host, save this item's password to a file and run `kiln-relay platform import-kit <file>` before the new Relay's first start, then restore a platform backup."
       : "To restore, set KILN_INSTALLATION_ID and KILN_PLATFORM_BACKUP_KEY from it, with the rest of Kiln's environment file, then restore a platform backup."
-  const notes = [
-    `${what} for ${host}. It's the only way to restore Kiln and read its backups if this machine is lost. Anyone holding it can read Kiln's data.`,
-    "",
-    restore,
-    "",
-    ...(login ? ["```", reveal.text, "```", ""] : []),
-    `Steps: ${recoveryDocsUrl}`,
-  ].join("\n")
-  if (login) {
-    return {
-      fields: [
-        { autocomplete: "username", value: login.email },
-        { autocomplete: "current-password", value: login.password },
-      ],
-      notes,
-      title: `Kiln (${host})`,
-    }
-  }
   return {
     fields: [
       { autocomplete: "username", value: reveal.installationId },
       { autocomplete: "current-password", value: reveal.text },
     ],
-    notes,
+    notes: [
+      `${what} for ${host}. It's the only way to restore Kiln and read its backups if this machine is lost. Anyone holding it can read Kiln's data.`,
+      "",
+      restore,
+      "",
+      `Steps: ${recoveryDocsUrl}`,
+    ].join("\n"),
     title: `Kiln recovery kit (${host})`,
   }
 }
