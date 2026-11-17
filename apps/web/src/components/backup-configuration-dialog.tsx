@@ -107,6 +107,8 @@ export function BackupConfigurationDialog({
    * taken stopped is the step's to say, from what is ticked.
    */
   inlineTargets?: {
+    /** Every one ticked also takes targets added to the schedule later. */
+    coversLater: boolean
     consistencyChoiceFor: (
       chosen: ReadonlyArray<BackupConfigurationTarget>
     ) => ConsistencyChoice | undefined
@@ -214,7 +216,8 @@ export function BackupConfigurationDialog({
     [destinationKeysInUse]
   )
   const showMode = !consistencyChoice && (showTarget ? onlyInstances : true)
-  const tooMany = chosen.length > MAX_TARGETS
+  // A schedule's step takes as many as the schedule; one run, MAX_TARGETS.
+  const tooMany = !inlineTargets && chosen.length > MAX_TARGETS
 
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
@@ -287,11 +290,13 @@ export function BackupConfigurationDialog({
               />
               {inlineTargets.note}
               <p className="type-meta mt-1.5 text-muted-foreground">
-                {targets.length === 0
-                  ? "It backs up targets added to the schedule later, and an App once it uses a volume."
-                  : chosen.length === targets.length
-                    ? "With every one ticked, it also backs up targets added to the schedule later, and an App once it uses a volume."
-                    : "It backs up only the ticked targets."}
+                {!inlineTargets.coversLater
+                  ? "It backs up only the ticked targets."
+                  : targets.length === 0
+                    ? "It backs up targets added to the schedule later, and an App once it uses a volume."
+                    : chosen.length === targets.length
+                      ? "With every one ticked, it also backs up targets added to the schedule later, and an App once it uses a volume."
+                      : "It backs up only the ticked targets."}
               </p>
             </div>
           ) : showTarget ? (
