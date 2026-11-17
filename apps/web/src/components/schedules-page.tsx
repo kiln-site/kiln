@@ -2422,6 +2422,13 @@ function ScheduleEditorDialog({
     },
     onSuccess: (schedule) => {
       upsertScheduleCache(queryClient, schedule)
+      // A volume is among the schedule options only once a schedule names
+      // it, and the options say what may be run or edited.
+      if (schedule?.targets.some((target) => target.kind === "volume")) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.schedules.options,
+        })
+      }
       showToast({
         message: existing ? "Schedule updated" : "Schedule created",
         type: "success",
@@ -3453,7 +3460,7 @@ const ActionEditor = React.memo(function ActionEditor({
           {...(stoppable
             ? {
                 description:
-                  "Relay runs this job in its single durable queue. Every volume each App uses is backed up, and each volume chosen, a volume several of them share once. An App that uses no volume is skipped.",
+                  "Relay runs this job in its single durable queue. It backs up every volume chosen and every volume each App uses, once each, however many use it. An App that uses no volume is skipped.",
               }
             : {})}
           initialConsistency={action.consistency ?? "live"}
