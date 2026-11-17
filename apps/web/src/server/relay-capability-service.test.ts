@@ -13,7 +13,6 @@ const fakes = vi.hoisted(() => ({
   refreshUser: vi.fn(),
   requirePermissions: vi.fn(),
   revisions: vi.fn(),
-  features: new Set<string>(),
 }))
 
 vi.mock("@/lib/access-control", () => ({
@@ -23,7 +22,6 @@ vi.mock("@/lib/access-control", () => ({
 }))
 
 vi.mock("@/lib/environment", () => ({
-  browserCapabilityMinimumVersion: () => 1,
   configuredKilnInstallationId: () => "kiln-test",
   kilnPublicUrl: () => new URL("https://hearth.example.com"),
 }))
@@ -31,7 +29,6 @@ vi.mock("@/lib/environment", () => ({
 vi.mock("@/lib/relay-connection", () => ({
   relayBrowserAuthorizationReady: fakes.relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata: fakes.relayBrowserMetadata,
-  relayConnectionFeatures: () => fakes.features,
   relayRpc: fakes.relayRpc,
 }))
 
@@ -140,7 +137,6 @@ beforeEach(() => {
     browserOrigin: "https://relay-live.example.com",
     mode: "none",
   })
-  fakes.features.clear()
 })
 
 describe("Relay capability issuance orchestration", () => {
@@ -152,12 +148,6 @@ describe("Relay capability issuance orchestration", () => {
       fakes.loadRelay.mockReturnValue(
         Effect.succeed({ ...material, relay: { ...relay, id: hostId } })
       )
-      for (const feature of [
-        "browser-capability-v2",
-        "file-request-replay-v1",
-        "relay-host-files-v1",
-      ])
-        fakes.features.add(feature)
       fakes.requirePermissions.mockImplementation(
         (input: { instanceId?: string; permissions: string[] }) =>
           !input.instanceId &&
@@ -176,7 +166,6 @@ describe("Relay capability issuance orchestration", () => {
         relayId: hostId,
         path: "etc/os-release",
         publicKeyJwk,
-        optInV2: true,
         authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
       })
     it("uses host permissions and keeps another Relay's root outside the capability", async () => {
@@ -200,15 +189,7 @@ describe("Relay capability issuance orchestration", () => {
   })
 
   describe("Kiln's own logs", () => {
-    beforeEach(() => {
-      for (const feature of [
-        "browser-capability-v2",
-        "browser-lease-renewal-v1",
-        "console-resources-v1",
-      ]) {
-        fakes.features.add(feature)
-      }
-    })
+    beforeEach(() => {})
 
     const issueKilnLogs = (current: AuthenticatedUser) =>
       issueBrowserCapabilitiesForRequest({
@@ -216,7 +197,7 @@ describe("Relay capability issuance orchestration", () => {
           Promise.resolve({ sessionId: "session-one", user: current }),
         publicKeyJwk,
         relayId: "1".repeat(12),
-        requests: [{ kind: "console", optInV2: true, write: false }],
+        requests: [{ kind: "console", write: false }],
         resource: { id: "1".repeat(12), kind: "platform", stream: "hearth" },
       })
 
@@ -229,8 +210,6 @@ describe("Relay capability issuance orchestration", () => {
 
   it("refuses to sign when access is revoked during capability issuance", async () => {
     const revoked = new Error("Console access denied")
-    fakes.features.add("browser-capability-v2")
-    fakes.features.add("browser-lease-renewal-v1")
     fakes.requirePermissions
       .mockReturnValueOnce(Effect.void)
       .mockReturnValue(Effect.fail(revoked))
@@ -240,7 +219,7 @@ describe("Relay capability issuance orchestration", () => {
         authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
         publicKeyJwk,
         relayId: "1".repeat(12),
-        requests: [{ kind: "console", optInV2: true, write: true }],
+        requests: [{ kind: "console", write: true }],
         resource: { id: "instance-one", kind: "instance" },
       })
     ).rejects.toBe(revoked)

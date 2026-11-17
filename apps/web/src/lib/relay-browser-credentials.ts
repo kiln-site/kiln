@@ -5,8 +5,8 @@ import { forkPromise } from "@/effect/promise"
 import { issueBrowserCapabilities } from "@/server/relay-capability"
 
 type BrowserCapabilityRequest =
-  | { kind: "console"; optInV2: boolean; write: boolean }
-  | { kind: "resources"; optInV2: boolean }
+  | { kind: "console"; write: boolean }
+  | { kind: "resources" }
 
 type IssuedBrowserCapability = Awaited<
   ReturnType<typeof issueBrowserCapabilities>
@@ -326,9 +326,7 @@ function credentialsKey(
 }
 
 function capabilityRequestKey(request: BrowserCapabilityRequest): string {
-  return request.kind === "console"
-    ? `console:${request.optInV2}:${request.write}`
-    : `resources:${request.optInV2}`
+  return request.kind === "console" ? `console:${request.write}` : "resources"
 }
 
 function removeSettledWaiters(entry: CredentialEntry): void {

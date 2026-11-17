@@ -148,7 +148,6 @@ function authority(
     origin: "https://hearth.test",
     revision: 1,
     subject: "user-a",
-    version: 2,
     ...overrides,
   }
 }

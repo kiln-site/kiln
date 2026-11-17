@@ -10,7 +10,7 @@ vi.mock("@/server/relay-capability", () => ({
     relayCapability
       .issue(...arguments_)
       .then((capability: ConsoleCapability) => ({
-        capabilities: [{ ...capability, kind: "console", version: 1 }],
+        capabilities: [{ ...capability, kind: "console" }],
       })),
 }))
 
@@ -322,7 +322,6 @@ function dispatchChallenge(
   socket: FakeWebSocket,
   overrides: Partial<{
     expiresAt: number
-    features: Array<string>
     nonce: string
     relayId: string
     sessionId: string
@@ -343,18 +342,28 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-/** Answers a socket's auth, then waits for its console subscription. */
+/** Waits for a socket's auth and the subscription behind it, then answers. */
 async function subscribed(socket: FakeWebSocket): Promise<void> {
-  await socket.sentFrames(1)
-  socket.receive({ instanceId: "instance-one", type: "auth.ready" })
   await socket.sentFrames(2)
+  socket.receive(authReady())
 }
 
 async function finishDirectConnection(
   socket: FakeWebSocket,
   running: Promise<unknown>
 ): Promise<void> {
-  await socket.sentFrames(1)
-  socket.receive({ instanceId: "instance-one", type: "auth.ready" })
+  await socket.sentFrames(2)
+  socket.receive(authReady())
   await running
+}
+
+function authReady() {
+  return {
+    expiresAt: Date.now() + 60_000,
+    instanceId: "instance-one",
+    renewalNonce: "renewal-one",
+    renewalNonceExpiresAt: Date.now() + 10_000,
+    sessionId: "session-one",
+    type: "auth.ready",
+  }
 }

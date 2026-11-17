@@ -1,21 +1,13 @@
 import { createHash, randomUUID, sign } from "node:crypto"
 
 import {
-  relayBrowserCapabilityV2Feature,
-  relayBrowserLeaseRenewalV1Feature,
   relayBrowserPreviewLeaseMs,
   relayConsoleReadActions,
-  relayConsoleResourcesV1Feature,
-  relayWorkloadUsageV1Feature,
-  relayAppsV1Feature,
   appIdFromFileRoot,
   databaseIdFromFileRoot,
   fileRootOwner,
   fileTransferAction,
   relayFileRootId,
-  relayDatabaseDumpFilesV1Feature,
-  relayHostFilesV1Feature,
-  relayFileRequestReplayV1Feature,
   relayProxyBrowserMetadataSchema,
 } from "@workspace/contracts"
 import type {
@@ -35,10 +27,7 @@ import type {
   AuthenticatedRealtimeIdentity,
   AuthenticatedUser,
 } from "@/lib/auth-session"
-import {
-  browserCapabilityMinimumVersion,
-  kilnPublicUrl,
-} from "@/lib/environment"
+import { kilnPublicUrl } from "@/lib/environment"
 import { readAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { relayBrowserAuthorizationReady } from "@/lib/relay-connection"
 import {
@@ -80,7 +69,6 @@ interface IssuedBrowserCapability {
   expiresAt: number
   proxyMode: RelayProxyMode
   relayId: string
-  version: 1 | 2
 }
 
 export function issueBrowserCapabilitiesForRequest(input: {
@@ -88,8 +76,7 @@ export function issueBrowserCapabilitiesForRequest(input: {
   publicKeyJwk: BrowserPublicKey
   relayId: string
   requests: ReadonlyArray<
-    | { kind: "console"; optInV2: boolean; write: boolean }
-    | { kind: "resources"; optInV2: boolean }
+    { kind: "console"; write: boolean } | { kind: "resources" }
   >
   resource: RelayConsoleResource
 }): Promise<{
@@ -143,32 +130,14 @@ export function issueBrowserCapabilitiesForRequest(input: {
         identity,
       }
       yield* authorizeBrowserCapabilityEffect(authorizationInput)
-      const features = yield* Effect.promise(async () => {
-        const { relayConnectionFeatures } =
-          await import("@/lib/relay-connection")
-        return relayConnectionFeatures(material.relay.id)
-      })
-      const versions = new Map(
-        input.requests.map((request) => [
-          request.kind,
-          resourceVersion(
-            input.resource,
-            negotiatedVersion(request.kind, request.optInV2, features),
-            features,
-            request.kind
-          ),
-        ])
-      )
       const [credentials, proxy, issuerGeneration] = yield* Effect.all(
         [
           decryptRelayIssuanceCredentialsEffect(material),
           resolveRelayBrowserMetadataEffect(material.relay),
-          [...versions.values()].includes(2)
-            ? relayBrowserAuthorizationReadyEffect(
-                material.relay.id,
-                material.relay.issuerGeneration
-              )
-            : Effect.succeed(material.relay.issuerGeneration),
+          relayBrowserAuthorizationReadyEffect(
+            material.relay.id,
+            material.relay.issuerGeneration
+          ),
         ] as const,
         { concurrency: 3 }
       )
@@ -182,11 +151,10 @@ export function issueBrowserCapabilitiesForRequest(input: {
       const authorization =
         yield* authorizeBrowserCapabilityEffect(authorizationInput)
       const capabilities = yield* Effect.all(
-        input.requests.map((request) => {
-          const version = versions.get(request.kind) ?? 1
-          return createBrowserCapabilityEffect({
+        input.requests.map((request) =>
+          createBrowserCapabilityEffect({
             actions: actionsByRequest.get(request.kind) ?? [],
-            authorizationRevision: version === 2 ? authorization.revision : 0,
+            authorizationRevision: authorization.revision,
             credentials,
             loginSessionId: identity.sessionId,
             operation: request.kind,
@@ -196,11 +164,10 @@ export function issueBrowserCapabilitiesForRequest(input: {
             relay: synchronizedRelay,
             resource: input.resource,
             subject: identity.user.id,
-            version,
           }).pipe(
             Effect.map((capability) => ({ ...capability, kind: request.kind }))
           )
-        }),
+        ),
         { concurrency: "unbounded" }
       )
       return { capabilities }
@@ -233,7 +200,6 @@ export function prepareConsoleCapabilityForUser(input: {
         id: input.credentialId,
         kind: "cli_credential",
       },
-      optInV2: true,
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
@@ -258,9 +224,6 @@ export function prepareConsoleCapabilityForIdentity(input: {
     prepareBrowserCapabilityEffect({
       actions: [relayConsoleReadActions[input.resource.kind]],
       identity: Effect.succeed(input.identity),
-      // Prefer renewable v2 whenever Relay supports it. The configured floor
-      // still controls whether a rolling-upgrade fallback to v1 is allowed.
-      optInV2: true,
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
@@ -277,7 +240,6 @@ export function issueFileCapabilityForRequest(input: {
   path: string
   publicKeyJwk: BrowserPublicKey
   relayId: string
-  optInV2: boolean
 }): Promise<IssuedBrowserCapability> {
   return runAppEffect(
     "file.capability.issue",
@@ -294,7 +256,6 @@ export function issueFileCapabilityForRequest(input: {
       resolveBrowserMetadata: true,
       resource: fileRootResource(input.instanceId),
       identity: authenticatedIdentityEffect(input.authenticate),
-      optInV2: input.optInV2,
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
 }
@@ -317,7 +278,6 @@ export function issueFilePreviewCapabilityForRequest(input: {
     prepareBrowserCapabilityEffect({
       actions: [fileTransferAction(input.instanceId, "download")],
       operation: "preview",
-      optInV2: true,
       path: input.path,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
@@ -348,7 +308,6 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     identity: Effect.Effect<AuthenticatedRealtimeIdentity, unknown>
     /** Set for a preview link; other operations follow from the actions. */
     operation?: "preview"
-    optInV2?: boolean
   }) {
     const [userResult, materialResult] = yield* Effect.all(
       [
@@ -383,23 +342,9 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
         : input.actions.some((action) => resourceUsageActions.has(action))
           ? "resources"
           : "console")
-    const features = yield* Effect.promise(async () => {
-      const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-      return relayConnectionFeatures(material.relay.id)
-    })
-    // Previews are new: every Relay that can be reached takes them as v2.
-    const version =
-      operation === "preview"
-        ? 2
-        : resourceVersion(
-            input.resource,
-            negotiatedVersion(operation, input.optInV2 ?? false, features),
-            features,
-            operation
-          )
-    if (version === 2 && identity.sessionId.length === 0) {
+    if (identity.sessionId.length === 0) {
       return yield* Effect.fail(
-        new Error(`${operation} capability v2 requires a login session`)
+        new Error(`${operation} capability requires a login session`)
       )
     }
     const authorizationInput = {
@@ -423,12 +368,10 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
         input.resolveBrowserMetadata
           ? resolveRelayBrowserMetadataEffect(material.relay)
           : Effect.succeed(null),
-        version === 2
-          ? relayBrowserAuthorizationReadyEffect(
-              material.relay.id,
-              material.relay.issuerGeneration
-            )
-          : Effect.succeed(material.relay.issuerGeneration),
+        relayBrowserAuthorizationReadyEffect(
+          material.relay.id,
+          material.relay.issuerGeneration
+        ),
       ] as const,
       { concurrency: 3 }
     )
@@ -440,7 +383,7 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
       yield* authorizeBrowserCapabilityEffect(authorizationInput)
     const capability = yield* createBrowserCapabilityEffect({
       actions: input.actions,
-      authorizationRevision: version === 2 ? authorization.revision : 0,
+      authorizationRevision: authorization.revision,
       credentials,
       loginSessionId: identity.sessionId,
       operation,
@@ -450,7 +393,6 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
       relay: synchronizedRelay,
       resource: input.resource,
       subject: user.id,
-      version,
     })
     return {
       capability,
@@ -569,22 +511,20 @@ const resolveRelayBrowserMetadataEffect = Effect.fn(
 const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
   function* (input: {
     actions: ReadonlyArray<BrowserAction>
-    authorizationRevision?: number
+    authorizationRevision: number
     credentials: RelayCredentials
-    loginSessionId?: string
-    operation?: RelayBrowserOperationKind
+    loginSessionId: string
+    operation: RelayBrowserOperationKind
     path: string | null
     proxy: RelayProxyBrowserMetadata | null
     publicKeyJwk: BrowserPublicKey
     relay: PersistedRelay
     resource: RelayConsoleResource
     subject: string
-    version?: 1 | 2
   }) {
     const now = yield* Clock.currentTimeMillis
     return yield* Effect.try({
       try: () => {
-        const version = input.version ?? 1
         const mutation = input.actions.some(
           (action) =>
             action === "instance.console.write" ||
@@ -600,7 +540,7 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
             now +
             (input.operation === "preview"
               ? relayBrowserPreviewLeaseMs
-              : version === 2 && mutation
+              : mutation
                 ? 30_000
                 : 60_000),
           instanceId: input.resource.id,
@@ -610,22 +550,15 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
           origin: kilnPublicUrl().origin,
           path: input.path,
           subject: input.subject,
-          ...(version === 2
-            ? {
-                authorizationRevision: input.authorizationRevision ?? 0,
-                issuerGeneration: input.relay.issuerGeneration,
-                loginSessionId: requiredV2Field(
-                  input.loginSessionId,
-                  "login session"
-                ),
-                operation: requiredV2Field(input.operation, "operation"),
-                // Servers leave it out, for Relays that predate other kinds.
-                ...(input.resource.kind === "instance"
-                  ? {}
-                  : { resourceKind: input.resource.kind }),
-              }
-            : {}),
-          version,
+          authorizationRevision: input.authorizationRevision,
+          issuerGeneration: input.relay.issuerGeneration,
+          loginSessionId: input.loginSessionId,
+          operation: input.operation,
+          // Game servers leave it out.
+          ...(input.resource.kind === "instance"
+            ? {}
+            : { resourceKind: input.resource.kind }),
+          version: 2,
         }
         const encoded = Buffer.from(JSON.stringify(payload)).toString(
           "base64url"
@@ -642,81 +575,17 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
           expiresAt: payload.expiresAt,
           proxyMode: input.proxy?.mode ?? "none",
           relayId: input.relay.id,
-          version,
         } satisfies IssuedBrowserCapability
       },
       catch: (cause) =>
         CredentialError.make({ operation: "sign_relay_capability", cause }),
     }).pipe(
       Effect.withSpan("hearth.browser.capability.sign", {
-        attributes: {
-          "capability.operation": input.operation ?? "legacy",
-          "capability.version": input.version ?? 1,
-        },
+        attributes: { "capability.operation": input.operation },
       })
     )
   }
 )
-
-function negotiatedVersion(
-  kind: Exclude<RelayBrowserOperationKind, "preview">,
-  optInV2: boolean,
-  features: ReadonlySet<string>
-): 1 | 2 {
-  const minimum = browserCapabilityMinimumVersion(kind)
-  if (minimum === 2 && !optInV2) {
-    throw new Error(`${kind} requires browser capability v2`)
-  }
-  const supported =
-    features.has(relayBrowserCapabilityV2Feature) &&
-    (kind === "file"
-      ? features.has(relayFileRequestReplayV1Feature)
-      : features.has(relayBrowserLeaseRenewalV1Feature))
-  if (optInV2 && supported) return 2
-  if (minimum === 2) {
-    throw new Error(
-      `Relay does not support the required ${kind} capability v2 features`
-    )
-  }
-  return 1
-}
-
-// Only v2 capabilities say what kind of resource they are for, so others need
-// v2 and a Relay that knows the kind.
-function resourceVersion(
-  resource: RelayConsoleResource,
-  version: 1 | 2,
-  features: ReadonlySet<string>,
-  operation: RelayBrowserOperationKind = "console"
-): 1 | 2 {
-  if (operation === "file" && resource.kind === "relay") {
-    if (version !== 2 || !features.has(relayHostFilesV1Feature))
-      throw new Error("Update this Relay to access host files.")
-    return version
-  }
-  if (operation === "file" && resource.kind === "database") {
-    if (version !== 2 || !features.has(relayDatabaseDumpFilesV1Feature))
-      throw new Error("Update this Relay to import or export data.")
-    return version
-  }
-
-  if (
-    operation === "resources" &&
-    resource.kind !== "instance" &&
-    (version !== 2 || !features.has(relayWorkloadUsageV1Feature))
-  ) {
-    throw new Error("Update this Relay to see live usage.")
-  }
-  if (
-    resource.kind !== "instance" &&
-    (version !== 2 ||
-      !features.has(relayConsoleResourcesV1Feature) ||
-      (resource.kind === "app" && !features.has(relayAppsV1Feature)))
-  ) {
-    throw new Error("Update this Relay to view these logs.")
-  }
-  return version
-}
 
 // The action that reads each kind's live usage.
 const resourceUsageReadActions = {
@@ -781,13 +650,6 @@ function relayBrowserAuthorizationReadyEffect(
     try: () => relayBrowserAuthorizationReady(relayId, minimumIssuerGeneration),
     catch: (cause) => cause,
   }).pipe(Effect.withSpan("hearth.browser.authorization.ready"))
-}
-
-function requiredV2Field<T>(value: T | undefined, name: string): T {
-  if (value === undefined) {
-    throw new Error(`Capability v2 ${name} is required`)
-  }
-  return value
 }
 
 function authenticatedIdentityEffect(

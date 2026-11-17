@@ -1,7 +1,4 @@
-import {
-  relayBrowserAuthorizationReviseMaxItems,
-  relayBrowserCapabilityV2Feature,
-} from "@workspace/contracts"
+import { relayBrowserAuthorizationReviseMaxItems } from "@workspace/contracts"
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 import { z } from "zod"
@@ -262,16 +259,12 @@ async function reviseIssuerGeneration(
   relayId: string,
   minimumIssuerGeneration: number
 ): Promise<number | null> {
-  const [{ relayConnectionFeatures, relayRpc }, relay] = await Promise.all([
-    import("@/lib/relay-connection"),
-    loadPersistedRelay(relayId),
-  ])
-  if (
-    !relay ||
-    !relayConnectionFeatures(relayId).has(relayBrowserCapabilityV2Feature)
-  ) {
-    return null
-  }
+  const [{ relayBrowserAuthorizationConnected, relayRpc }, relay] =
+    await Promise.all([
+      import("@/lib/relay-connection"),
+      loadPersistedRelay(relayId),
+    ])
+  if (!relay || !relayBrowserAuthorizationConnected(relayId)) return null
   const result = reviseResultSchema.parse(
     await relayRpc(
       relay,
@@ -358,15 +351,9 @@ async function drain(
     () =>
       recoverPromise(
         async () => {
-          const { relayConnectionFeatures } =
+          const { relayBrowserAuthorizationConnected } =
             await import("@/lib/relay-connection")
-          if (
-            !relayConnectionFeatures(relayId).has(
-              relayBrowserCapabilityV2Feature
-            )
-          ) {
-            return
-          }
+          if (!relayBrowserAuthorizationConnected(relayId)) return
           const more = await inAuthorizationLane(
             "authorization.deliver",
             relayId,

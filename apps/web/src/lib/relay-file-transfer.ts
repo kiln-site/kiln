@@ -581,7 +581,6 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
                 ? "instance.files.upload"
                 : "instance.files.download",
             instanceId: input.instanceId,
-            optInV2: true,
             path: input.path,
             publicKeyJwk: keys.publicKeyJwk,
             relayId: input.relayId,

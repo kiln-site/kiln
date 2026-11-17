@@ -4,9 +4,7 @@ import { WebSocket } from "ws"
 import {
   relayBrowserConsoleProtocol,
   relayBrowserProofTranscript,
-  relayBrowserConsoleProtocols,
   relayBrowserMaxFrameBytes,
-  relayBrowserProtocol,
   relayConsoleStreamEventSchema,
 } from "@workspace/contracts"
 import type {
@@ -93,7 +91,7 @@ export async function* openHearthRelayConsoleStream(input: {
     : null
   const socket = new WebSocket(
     `${tunnel ? "ws" : protocol}://${formatHost(control.hostname)}:${control.port}/v1/browser`,
-    [...relayBrowserConsoleProtocols],
+    relayBrowserConsoleProtocol,
     {
       ca: control.useTls ? (relayCaCertificatePem ?? undefined) : undefined,
       ...(tunnel ? { createConnection: () => tunnel } : {}),
@@ -109,7 +107,6 @@ export async function* openHearthRelayConsoleStream(input: {
   let renewalTimer: ReturnType<typeof setTimeout> | null = null
 
   const scheduleRenewal = (message: Record<string, unknown>) => {
-    if (activeCapability.version !== 2) return
     const nonce = message.renewalNonce
     const nonceExpiresAt = message.renewalNonceExpiresAt
     const sessionId = message.sessionId
@@ -127,9 +124,6 @@ export async function* openHearthRelayConsoleStream(input: {
         forkPromise(
           async () => {
             const renewed = await prepare()
-            if (renewed.capability.version !== 2) {
-              throw new Error("Relay console renewal downgraded capability v2")
-            }
             const proof = sign(
               "sha256",
               Buffer.from(
@@ -141,9 +135,7 @@ export async function* openHearthRelayConsoleStream(input: {
                     relayId: input.relayId,
                     sessionId,
                   },
-                  socket.protocol === relayBrowserConsoleProtocol
-                    ? relayBrowserConsoleProtocol
-                    : relayBrowserProtocol
+                  relayBrowserConsoleProtocol
                 )
               ),
               { dsaEncoding: "ieee-p1363", key: keys.privateKey }
@@ -198,9 +190,7 @@ export async function* openHearthRelayConsoleStream(input: {
               relayId: input.relayId,
               sessionId: challenge.sessionId,
             },
-            socket.protocol === relayBrowserConsoleProtocol
-              ? relayBrowserConsoleProtocol
-              : relayBrowserProtocol
+            relayBrowserConsoleProtocol
           )
         ),
         { dsaEncoding: "ieee-p1363", key: keys.privateKey }
@@ -218,7 +208,7 @@ export async function* openHearthRelayConsoleStream(input: {
       if (ready.type !== "auth.ready" || ready.instanceId !== resource.id) {
         throw new Error("Relay rejected the Hearth console proxy")
       }
-      if (activeCapability.version === 2) scheduleRenewal(ready)
+      scheduleRenewal(ready)
       socket.send(
         JSON.stringify({
           instanceId: resource.id,

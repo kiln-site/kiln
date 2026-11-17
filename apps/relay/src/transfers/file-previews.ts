@@ -13,11 +13,8 @@ import { Effect, Result, Scope } from "effect"
 
 import { fileTransferAction } from "@workspace/contracts"
 
-import {
-  browserAuthority,
-  decodeCapability,
-  validateCapability,
-} from "../browser-capability.js"
+import { decodeCapability, validateCapability } from "../browser-capability.js"
+import { authorityFromCapability } from "../browser-session-registry.js"
 import { reportRelayError } from "../effect/runtime.js"
 import { fileBody } from "./bodies.js"
 import type { FileRoot, FilesystemDriver } from "../files.js"
@@ -245,7 +242,7 @@ const authenticatePreview = Effect.fn("RelayTransfer.authenticatePreview")(
       return decodeCapability(token)
     })
     const payload = parsed.payload
-    if (payload.version !== 2 || payload.operation !== "preview") {
+    if (payload.operation !== "preview") {
       return yield* Effect.fail(new Error("Capability is not for previews"))
     }
     const client = yield* options.state.findClientById(payload.issuer)
@@ -279,7 +276,7 @@ const authenticatePreview = Effect.fn("RelayTransfer.authenticatePreview")(
       return yield* Effect.fail(new Error("Browser authorization is stale"))
     }
     return {
-      authority: browserAuthority(payload),
+      authority: authorityFromCapability(payload),
       capabilityId: payload.capabilityId,
       clientId: client.id,
       current,

@@ -6,29 +6,12 @@ export const relayControlProtocol = "kiln-relay.v1" as const
 export const relayControlProtocolVersion = 8 as const
 export const relayBrowserProtocol = "kiln-relay-browser.v1" as const
 export const relayBrowserConsoleProtocol = "kiln-relay-browser.v2" as const
-export const relayBrowserConsoleProtocols = [
-  relayBrowserConsoleProtocol,
-  relayBrowserProtocol,
-] as const
 export const relayBrowserMaxFrameBytes = 256 * 1024
 // Shared safety cap for relay<->hearth control frames. File listings and
 // search results are paged well below this boundary.
 export const relayControlMaxFrameBytes = 1024 * 1024
 export const relayPairingProtocol = "kiln-relay-pair.v1" as const
 export const relayAuthenticationWindowMs = 10_000
-export const relayBrowserCapabilityV2Feature = "browser-capability-v2"
-export const relayBrowserLeaseRenewalV1Feature = "browser-lease-renewal-v1"
-export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
-// The Relay streams console output for more kinds of resource than servers;
-// see `relayBrowserResourceKinds`.
-export const relayConsoleResourcesV1Feature = "console-resources-v1"
-// The Relay deploys apps: Docker images, Dockerfiles, and Compose projects.
-export const relayAppsV1Feature = "apps-v1"
-// The Relay samples Apps' and databases' usage as game servers', and streams
-// it to browsers (`resources` capabilities for those kinds).
-export const relayWorkloadUsageV1Feature = "workload-usage-v1"
-// The Relay serves its host's files under its own ID as a file root.
-export const relayHostFilesV1Feature = "relay-host-files-v1"
 // Hearth reads `errorCode` on backup tasks and their artifact outcomes, so
 // the Relay may send it.
 export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
@@ -36,7 +19,6 @@ export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
 // (`database:<id>`): `database.dump.export` writes `export` there for the
 // browser to download, and `database.dump.import` runs the file the browser
 // uploaded, which each import names for itself (`import-<random>`).
-export const relayDatabaseDumpFilesV1Feature = "database-dump-files-v1"
 export const relayDatabaseDumpExportFile = "export"
 // Where on Hearth a Relay opens its control connection.
 export const relayControlDialPath = "/api/relays/control"
@@ -647,11 +629,12 @@ export const RelayAuthResponseSchema = Schema.Struct({
 
 export const RelayAuthReadySchema = Schema.Struct({
   actions: Schema.Array(Schema.String),
+  // Every current Relay sends it. Hearth still lets in one too old to, so it
+  // can update it, but issues it no browser capabilities.
   browserIssuerGeneration: Schema.optionalKey(
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
   ),
   clientId: Schema.String,
-  features: Schema.optionalKey(Schema.Array(Schema.String)),
   // The Relay's journal of changes, which `operation.get` answers from. A
   // rebuilt Relay state starts a new one, which forgets every change.
   journalId: Schema.optionalKey(Schema.String),
@@ -718,22 +701,7 @@ export const relayConsoleReadActions = {
   relay: "relay.logs.read",
 } as const satisfies Record<RelayBrowserResourceKind, string>
 
-export const RelayBrowserCapabilityV1Schema = Schema.Struct({
-  actions: Schema.Array(Schema.String),
-  audience: Schema.String,
-  capabilityId: Schema.String,
-  expiresAt: Schema.Number,
-  instanceId: Schema.String,
-  issuedAt: Schema.Number,
-  issuer: Schema.String,
-  keyThumbprint: Schema.String,
-  origin: Schema.String,
-  path: Schema.NullOr(Schema.String),
-  subject: Schema.String,
-  version: Schema.Literal(1),
-})
-
-export const RelayBrowserCapabilityV2Schema = Schema.Struct({
+export const RelayBrowserCapabilitySchema = Schema.Struct({
   actions: Schema.Array(Schema.String),
   audience: Schema.String,
   authorizationRevision: Schema.Number,
@@ -748,17 +716,11 @@ export const RelayBrowserCapabilityV2Schema = Schema.Struct({
   operation: RelayBrowserOperationKindSchema,
   origin: Schema.String,
   path: Schema.NullOr(Schema.String),
-  // Absent for servers, so Relays without other kinds read these unchanged.
-  // Relays that predate a kind ignore it and refuse the kind's actions.
+  // Absent for game servers.
   resourceKind: Schema.optionalKey(RelayBrowserResourceKindSchema),
   subject: Schema.String,
   version: Schema.Literal(2),
 })
-
-export const RelayBrowserCapabilitySchema = Schema.Union([
-  RelayBrowserCapabilityV1Schema,
-  RelayBrowserCapabilityV2Schema,
-])
 
 export const RelayBrowserRenewSchema = Schema.Struct({
   capability: Schema.String,
@@ -904,10 +866,6 @@ export type RelayAuthChallenge = typeof RelayAuthChallengeSchema.Type
 export type RelayAuthResponse = typeof RelayAuthResponseSchema.Type
 export type RelayAuthReady = typeof RelayAuthReadySchema.Type
 export type RelayBrowserCapability = typeof RelayBrowserCapabilitySchema.Type
-export type RelayBrowserCapabilityV1 =
-  typeof RelayBrowserCapabilityV1Schema.Type
-export type RelayBrowserCapabilityV2 =
-  typeof RelayBrowserCapabilityV2Schema.Type
 export type RelayBrowserOperationKind =
   typeof RelayBrowserOperationKindSchema.Type
 export type RelayBrowserRenew = typeof RelayBrowserRenewSchema.Type

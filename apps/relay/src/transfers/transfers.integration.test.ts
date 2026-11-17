@@ -20,7 +20,7 @@ vi.mock("node:fs/promises", async (importOriginal) =>
 
 import {
   relayBrowserRequestProofTranscript,
-  type RelayBrowserCapabilityV2,
+  type RelayBrowserCapability,
 } from "@workspace/contracts"
 
 import { attachBrowserSocket } from "../browser-socket.js"
@@ -552,7 +552,7 @@ async function startRelay(
         path: input.path ?? "clips/intro.mp4",
         subject: "user-1",
         version: 2,
-      } satisfies RelayBrowserCapabilityV2)
+      } satisfies RelayBrowserCapability)
     },
     // The Relay hears the person's access was taken away, as Hearth tells it,
     // which cuts off what's under way.
@@ -613,7 +613,7 @@ async function startRelay(
         y: String(jwk.y),
       }
       const issuedAt = Date.now()
-      const capability: RelayBrowserCapabilityV2 = {
+      const capability: RelayBrowserCapability = {
         actions: [
           input.action ??
             (input.method === "PUT"

@@ -29,7 +29,6 @@ const relativeFilePathSchema = z
 const fileCapabilityInputSchema = browserCapabilityInputSchema.extend({
   action: z.enum(["instance.files.download", "instance.files.upload"]),
   path: relativeFilePathSchema,
-  optInV2: z.boolean().optional().default(false),
 })
 
 const filePreviewCapabilityInputSchema = browserCapabilityInputSchema
@@ -47,15 +46,8 @@ const browserCapabilityBatchSchema = browserCapabilityInputSchema
     requests: z
       .array(
         z.discriminatedUnion("kind", [
-          z.object({
-            kind: z.literal("console"),
-            optInV2: z.boolean(),
-            write: z.boolean(),
-          }),
-          z.object({
-            kind: z.literal("resources"),
-            optInV2: z.boolean(),
-          }),
+          z.object({ kind: z.literal("console"), write: z.boolean() }),
+          z.object({ kind: z.literal("resources") }),
         ])
       )
       .min(1)
@@ -104,7 +96,6 @@ export const issueFileCapability = createServerFn({ method: "POST" })
       path: data.path,
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
-      optInV2: data.optInV2,
     })
   })
 

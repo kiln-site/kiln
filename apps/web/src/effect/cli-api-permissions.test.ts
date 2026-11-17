@@ -33,7 +33,6 @@ vi.mock("@/lib/relay-registry", async (original) => ({
   listPersistedRelaysEffect: f.relays,
 }))
 vi.mock("@/lib/relay-connection", () => ({
-  relayConnectionFeatures: () => new Set<string>(),
   relayRpc: f.rpc,
 }))
 vi.mock("@/lib/relay-client", async (original) => ({
