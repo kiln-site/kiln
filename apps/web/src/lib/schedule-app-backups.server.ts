@@ -18,11 +18,15 @@ import { requireAppsPermission } from "@/server/backup-target-access.server"
  * backs up (for an App, itself and every App that uses a volume it uses),
  * so it takes `instance.power.stop` on each, as a manual one does. Which
  * Apps those are is the Relay's to say; while it can't, only a stopped
- * backup the schedule already had of that target is kept.
+ * backup the saved schedule already had of that target is kept. A target
+ * the save adds is never taken for one it had.
  */
 export async function requireScheduleAppBackups(input: {
   readonly actions: ReadonlyArray<ScheduleAction>
-  readonly existing?: { readonly actions: ReadonlyArray<ScheduleAction> }
+  readonly existing?: {
+    readonly actions: ReadonlyArray<ScheduleAction>
+    readonly targets: ReadonlyArray<ScheduleTarget>
+  }
   readonly targets: ReadonlyArray<ScheduleTarget>
   readonly user: AuthenticatedUser
 }): Promise<void> {
@@ -30,7 +34,7 @@ export async function requireScheduleAppBackups(input: {
   if (stopped.length === 0) return
   const saved = new Set(
     input.existing
-      ? stoppedBackups(input.existing.actions, input.targets).map(
+      ? stoppedBackups(input.existing.actions, input.existing.targets).map(
           scheduleTargetKey
         )
       : []

@@ -93,12 +93,15 @@ describeMysql("scheduled App backups", () => {
     const check = (
       action: ScheduleAction,
       existing?: ScheduleAction,
-      targets: ReadonlyArray<ScheduleTarget> = [target]
+      targets: ReadonlyArray<ScheduleTarget> = [target],
+      existingTargets: ReadonlyArray<ScheduleTarget> = targets
     ) =>
       Effect.promise(() =>
         requireScheduleAppBackups({
           actions: [action],
-          ...(existing ? { existing: { actions: [existing] } } : {}),
+          ...(existing
+            ? { existing: { actions: [existing], targets: existingTargets } }
+            : {}),
           targets,
           user,
         }).then(
@@ -150,6 +153,15 @@ describeMysql("scheduled App backups", () => {
           relay.online = false
           expect(yield* check(backup("stopped"))).not.toBeNull()
           expect(yield* check(backup("stopped"), backup("stopped"))).toBeNull()
+          // A target added to it isn't one it had, so it isn't kept.
+          expect(
+            yield* check(
+              backup("stopped"),
+              backup("stopped"),
+              [target, volume],
+              [target]
+            )
+          ).not.toBeNull()
         }),
       60_000
     )

@@ -1107,7 +1107,7 @@ export class ScheduleManager {
     const volumes = executions.map((execution): BackupTaskInput => {
       // The App a volume's backup is named for: the first of those that
       // use it, whichever App asks.
-      const of = [...(execution.appIds ?? [])].sort()[0] ?? target.id
+      const of = [...(execution.appIds ?? [])].sort()[0] ?? execution.targetId
       const backupId = scheduleDeterministicUuid(
         "schedule-backup",
         schedule.id,

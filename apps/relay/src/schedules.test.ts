@@ -718,6 +718,55 @@ describe("Relay scheduled volume backups", () => {
       )
     ).toEqual(["skipped_unsupported", "succeeded"])
   })
+
+  // Every target of a stopped batch queues every backup in it, so each
+  // volume's backup is named for itself, whichever target asked first.
+  it("names a volume backed up alone for itself, in a batch with a database", async () => {
+    const database = "d".repeat(12)
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      findVolume: async () => ({}),
+      listDatabaseIds: async () => new Set([database]),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          consistency: "stopped",
+          destination: { kind: "local" },
+          executions: [
+            { ...local, targetId: database, targetKind: "database" },
+            { ...local, targetId: media, targetKind: "volume" },
+            { ...local, targetId: uploads, targetKind: "volume" },
+          ],
+          id: "e2b8c6d9-0f1a-4b3c-8d4e-6f7a8b9c0d1e",
+          mode: "full",
+          name: "Nightly <instance_id>",
+          type: "backup",
+        },
+      ],
+      targets: [
+        { id: database, kind: "database", name: "Shop", relayId: "relay-a" },
+        { id: media, kind: "volume", name: "Media", relayId: "relay-a" },
+        { id: uploads, kind: "volume", name: "Uploads", relayId: "relay-a" },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("succeeded")
+    )
+    const names = new Map(
+      [...tasks.values()].map(({ input }) => [
+        input.target.id,
+        "catalog" in input ? input.catalog?.name : undefined,
+      ])
+    )
+    expect(names.get(media)).toBe(`Nightly ${media}`)
+    expect(names.get(uploads)).toBe(`Nightly ${uploads}`)
+  })
 })
 
 describe("Relay scheduled App backups, of an App that keeps nothing", () => {
