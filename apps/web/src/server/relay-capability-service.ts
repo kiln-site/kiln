@@ -17,8 +17,6 @@ import {
   relayHostFilesV1Feature,
   relayFileRequestReplayV1Feature,
   relayProxyBrowserMetadataSchema,
-  relayProxyDiagnosticsSchema,
-  relayProxySettingsSchema,
 } from "@workspace/contracts"
 import type {
   RelayBrowserOperationKind,
@@ -551,28 +549,13 @@ const resolveRelayBrowserMetadataEffect = Effect.fn(
             { includeDiagnostics: false },
             5_000
           )
-          if (!value || typeof value !== "object") {
+          const metadata = relayProxyBrowserMetadataSchema.safeParse(value)
+          if (!metadata.success) {
             span.attribute("kiln.console.metadata_shape", "registry_fallback")
             return null
           }
-          const response = Object.fromEntries(Object.entries(value))
-          const metadata = relayProxyBrowserMetadataSchema.safeParse(response)
-          if (metadata.success) {
-            span.attribute("kiln.console.metadata_shape", "lightweight")
-            return metadata.data
-          }
-          // Relays predating the lightweight metadata hint ignore its payload
-          // and return full diagnostics. Keep rolling upgrades compatible
-          // without adding a second RPC.
-          const diagnostics = relayProxyDiagnosticsSchema.parse(
-            response.diagnostics
-          )
-          const settings = relayProxySettingsSchema.parse(response.settings)
-          span.attribute("kiln.console.metadata_shape", "legacy_diagnostics")
-          return {
-            browserOrigin: diagnostics.browserOrigin,
-            mode: settings.mode,
-          } satisfies RelayProxyBrowserMetadata
+          span.attribute("kiln.console.metadata_shape", "lightweight")
+          return metadata.data
         },
         () => {
           span.attribute("kiln.console.metadata_shape", "registry_fallback")

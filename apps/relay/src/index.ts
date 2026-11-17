@@ -2989,7 +2989,8 @@ async function executeControlRequest(
       }
     }
     case "database.list":
-      // Hearth's tables ask for specific views; older Hearths, for the list.
+      // Hearth's tables ask for specific views; its other reads, for the
+      // whole list.
       return "requests" in payload
         ? databases.inventory(
             Schema.decodeUnknownSync(RelayInventoryLookupSchema)(payload)
@@ -3140,7 +3141,8 @@ async function executeControlRequest(
       return workloadResources.usage("app", input.appId, input.history)
     }
     case "app.list":
-      // Hearth's tables ask for specific views; older Hearths, for the list.
+      // Hearth's tables ask for specific views; its other reads, for the
+      // whole list.
       return "requests" in payload
         ? apps.inventory(
             Schema.decodeUnknownSync(RelayInventoryLookupSchema)(payload)

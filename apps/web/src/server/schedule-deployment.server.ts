@@ -325,8 +325,7 @@ export async function deployScheduleToRelay(
             await scheduleOwner(schedule.id),
             relay
           ),
-          // Older Relays reject unknown keys, so only send the option when on.
-          ...(schedule.continueOnFailure ? { continueOnFailure: true } : {}),
+          continueOnFailure: schedule.continueOnFailure === true,
           cron: schedule.cron,
           enabled: schedule.enabled,
           generation,

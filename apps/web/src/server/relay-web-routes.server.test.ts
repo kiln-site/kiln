@@ -26,6 +26,7 @@ const route = (
   name: id,
   owner: { ...owner, service: owner.kind === "app" ? "web" : null },
   path: null,
+  redirect: null,
   stripPrefix: true,
   targetPort: 8080,
   upstream: "http://upstream:8080",

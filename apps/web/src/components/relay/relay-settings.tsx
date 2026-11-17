@@ -130,7 +130,7 @@ export function RelayGeneralSettings({
 // by default.
 function RelayDatabaseButton({ relay }: { relay: RelayDirectoryEntry }) {
   const files = useRelayHostFiles(relay)
-  if (!files?.database) return null
+  if (!files) return null
   return (
     <Button asChild size="sm" variant="outline">
       <Link

@@ -6,8 +6,8 @@ import {
   relayJoinIdPattern,
   relayNameSchema,
   relayHostAccessSchema,
+  relayProxyBrowserMetadataSchema,
   relayProxyDiagnosticsSchema,
-  relayProxyModeSchema,
   relayProxySettingsSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -662,9 +662,9 @@ export const getRelayWebRoutes = createServerFn({ method: "GET" })
 
 // Files the Info page opens in the Relay's host files: its database, and the
 // bundled Traefik's config in that mode. Paths are relative to the host's
-// root, as the Files tab's are. Each is pinned there the first time. Null
-// from older Relays. Both reads need only relay.read on the Relay, so a
-// connection that can browse host files can always find these.
+// root, as the Files tab's are. Each is pinned there the first time. Both
+// reads need only relay.read on the Relay, so a connection that can browse
+// host files can always find these.
 export const getRelayHostFiles = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
@@ -682,15 +682,13 @@ export const getRelayHostFiles = createServerFn({ method: "GET" })
         "relay.proxy.read",
         { includeDiagnostics: false },
         15_000
-      ).then((value) => relayProxyModeReadSchema.parse(value)),
+      ).then((value) => relayProxyBrowserMetadataSchema.parse(value)),
     ])
-    if (!dataDirectory) return { database: null, traefikConfig: null }
     const root = dataDirectory.replace(/^\/+/u, "")
-    const mode = proxy.mode ?? proxy.settings?.mode
     const files = {
       database: `${root}/network/relay.sqlite`,
       traefikConfig:
-        mode === "traefik"
+        proxy.mode === "traefik"
           ? `${root}/infrastructure/traefik/traefik.yaml`
           : null,
     }
@@ -731,13 +729,6 @@ export const getRelayHostFiles = createServerFn({ method: "GET" })
     }
     return files
   })
-
-// Relays answer with just the mode when asked without diagnostics; ones that
-// predate that option send the full settings.
-const relayProxyModeReadSchema = z.object({
-  mode: relayProxyModeSchema.optional(),
-  settings: z.object({ mode: relayProxyModeSchema }).optional(),
-})
 
 const saveRelayProxy = operation<z.infer<typeof relayProxyInputSchema>>()({
   name: "relay.proxy.save",

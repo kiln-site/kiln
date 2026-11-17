@@ -88,7 +88,7 @@ export function KilnInfoPage() {
                   host={host}
                 />
               ))}
-              {/* Older Relays don't report the proxy at all. */}
+              {/* No Traefik was found in front of Hearth. */}
               {status.proxy === null ? (
                 <NoProxySection status={status} />
               ) : null}

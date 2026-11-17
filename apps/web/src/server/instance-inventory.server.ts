@@ -8,11 +8,10 @@ import {
   type InstanceInventoryRequest,
   type InstanceInventoryResult,
   type InstanceObservation,
-  type RelayApp,
   type RelayManagedDatabase,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
 import { isPlatformAdmin, listUserGrantsEffect } from "@/lib/access-control"
@@ -162,53 +161,16 @@ type ReportedItem = {
 
 const decodeItem = Schema.decodeUnknownOption(RelayInventoryItemSchema)
 
-// An updated Relay answers each requested view. An older one answers with
-// its full list, which is projected onto the requested views here.
-function reportedItems(
-  kind: "app" | "database",
-  requests: ReadonlyArray<InstanceInventoryRequest>,
-  response: unknown
-) {
+// The Relay answers each requested view with an item of its own.
+function reportedItems(response: unknown) {
   const items = new Map<string, ReportedItem>()
   if (!Array.isArray(response)) return items
-  const views = new Map<string, Array<InstanceInventoryRequest["view"]>>()
-  for (const { reference, view } of requests)
-    views.set(reference.id, [...(views.get(reference.id) ?? []), view])
   for (const raw of response) {
-    if (Predicate.hasProperty(raw, "view")) {
-      const item = decodeItem(raw)
-      if (Option.isSome(item))
-        items.set(`${item.value.id}:${item.value.view}`, item.value)
-      continue
-    }
-    const legacy =
-      kind === "app"
-        ? relayAppSchema.safeParse(raw)
-        : relayManagedDatabaseSchema.safeParse(raw)
-    if (!legacy.success) continue
-    const record = legacy.data
-    for (const view of views.get(record.id) ?? [])
-      items.set(`${record.id}:${view}`, {
-        observedState: record.observedState,
-        table: "containers" in record ? appTableInventory(record) : undefined,
-        app: kind === "app" ? record : undefined,
-        database: kind === "database" ? record : undefined,
-      })
+    const item = decodeItem(raw)
+    if (Option.isSome(item))
+      items.set(`${item.value.id}:${item.value.view}`, item.value)
   }
   return items
-}
-
-function appTableInventory(app: RelayApp): AppTableInventory {
-  return {
-    containerSearchText: app.containers
-      .map((container) => `${container.name} ${container.image}`)
-      .join(" "),
-    containerCount: app.containers.length,
-    runningContainerCount: app.containers.filter(
-      (container) => container.running
-    ).length,
-    deploying: app.deployment?.state === "running",
-  }
 }
 
 function inventoryValue(
@@ -322,7 +284,7 @@ const readRelayInventory = Effect.fn("Instances.inventory.relay")(function* (
         cause,
       }),
   })
-  const items = reportedItems(kind, requests, response)
+  const items = reportedItems(response)
   return yield* Effect.forEach(requests, (request) => {
     const item = items.get(`${request.reference.id}:${request.view}`)
     const observation = observe(

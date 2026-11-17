@@ -247,8 +247,6 @@ interface ContainerInspect {
 
 interface AppContainer extends RelayAppContainer {
   appId: string
-  limits: NonNullable<RelayAppContainer["limits"]>
-  mounts: NonNullable<RelayAppContainer["mounts"]>
   deploymentId: string | null
   health: string | null
   // The digest an image app deployed, from its label.
@@ -380,10 +378,8 @@ export class AppDriver {
           id: app.id,
           limits: {
             ...NO_RESOURCE_LIMITS,
-            ...(container.limits && {
-              cpuMillis: container.limits.cpuMillis,
-              memoryBytes: container.limits.memoryBytes,
-            }),
+            cpuMillis: container.limits.cpuMillis,
+            memoryBytes: container.limits.memoryBytes,
           },
         }))
       )
