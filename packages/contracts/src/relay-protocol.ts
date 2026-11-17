@@ -42,11 +42,6 @@ export const relayResourcesV1Feature = "relay-resources-v1"
 export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
 // The Relay answers `instance.files.put`, creating or replacing one file.
 export const relayFilePutV1Feature = "files-put-v1"
-// The Relay provisions databases in the background through
-// `database.provision.*`, showing a placeholder until each one exists.
-export const relayDatabaseProvisioningV1Feature = "database-provisioning-v1"
-// The Relay provisions apps through `app.provision.*` the same way.
-export const relayAppProvisioningV1Feature = "app-provisioning-v1"
 // The Relay deploys GitHub sources from `app.deploy`'s `github` checkout,
 // and rolls deployments over once their containers are healthy.
 export const relayAppGitHubV1Feature = "app-github-v1"
@@ -70,10 +65,6 @@ export const relayPlatformDatabaseV1Feature = "relay-platform-database-v1"
 // uploaded, which each import names for itself (`import-<random>`).
 export const relayDatabaseDumpFilesV1Feature = "database-dump-files-v1"
 export const relayDatabaseDumpExportFile = "export"
-// Reads and replaces the Relay's Kiln installation ID
-// (`relay.installation.read`, `relay.installation.replace`). Relays with it
-// adopt an ID from Hearth's authentication only when they have none.
-export const relayInstallationV1Feature = "relay-installation-v1"
 // The Relay lists what runs on its host (`relay.security.targets`) and
 // inventories its host and images with Syft (`relay.security.inventory`),
 // so Hearth can check them for known vulnerabilities. `relay.security.cancel`
@@ -82,15 +73,10 @@ export const relaySecurityInventoryV1Feature = "security-inventory-v1"
 // The Relay answers `instance.icon.read` with a small image's bytes, from a
 // file root or from inside one of an app's containers.
 export const relayIconReadV1Feature = "icon-read-v1"
-// The Relay opens its control connection to Hearth when Hearth asks it to
-// (`auth.response`'s `dial`), as well as answering Hearth's.
-export const relayControlDialV1Feature = "control-dial-v1"
 // Where on Hearth a Relay opens its control connection.
 export const relayControlDialPath = "/api/relays/control"
-// The Relay opens a tunnel to its own listener on request
-// (`relay.tunnel.open`), so Hearth can reach a Relay that dials it.
-export const relayTunnelV1Feature = "tunnel-v1"
-// Where on Hearth a Relay opens those tunnels, and their subprotocol. The
+// Where on Hearth a Relay opens a tunnel to its own listener, when Hearth
+// asks it to (`relay.tunnel.open`), and their subprotocol. The
 // upgrade names the tunnel with the token Hearth asked for it with
 // (`relayTunnelTokenHeader`), so Hearth turns away any other before taking
 // it; every frame is bytes to or from the Relay's listener.
@@ -195,7 +181,6 @@ export const relayControlOperations = [
   "backup.task.cancel",
   "backup.restore.resolve",
   "backup.restore.unfinished",
-  "backup.task.get",
   "backup.task.list",
   "transfer.source.prepare",
   "transfer.source.get",
@@ -229,7 +214,6 @@ export const relayControlOperations = [
   "instance.files.write",
   "instance.files.put",
   "instance.files.upload-url",
-  "instance.files.mutate",
   "instance.files.mutate.result",
   "instance.files.database.read",
   "instance.files.database.write",
@@ -296,7 +280,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.files.write",
   "instance.files.put",
   "instance.files.upload-url",
-  "instance.files.mutate",
   "instance.files.database.write",
   "instance.console.write",
   "instance.network.ports.write",
@@ -381,7 +364,6 @@ export function relayControlOperationChanges(
     case "app.list":
     case "app.resources.read":
     case "instance.image.check":
-    case "backup.task.get":
     case "backup.task.list":
     case "backup.restore.unfinished":
     case "transfer.source.get":
@@ -481,7 +463,6 @@ export function relayControlOperationChanges(
     case "instance.files.write":
     case "instance.files.put":
     case "instance.files.upload-url":
-    case "instance.files.mutate":
     case "instance.files.mutate.result":
     case "instance.files.database.write":
     case "instance.console.write":
@@ -690,7 +671,7 @@ export const RelayAuthResponseSchema = Schema.Struct({
     Schema.Struct({ id: Schema.String, proof: Schema.String })
   ),
   // Where the Relay should open its own control connection to this Hearth,
-  // or null to stop. Relays with `relayControlDialV1Feature` keep it.
+  // or null to stop. The Relay keeps it.
   dial: Schema.optionalKey(
     Schema.NullOr(Schema.Struct({ url: Schema.String }))
   ),

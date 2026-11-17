@@ -31,7 +31,6 @@ import {
   RelayOperationLookupSchema,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
-  relayControlDialV1Feature,
   relayVolumesV1Feature,
   relayDialCloseCodes,
   relaySnapshotControlDelta,
@@ -311,11 +310,6 @@ export function relayConnectionOpener(
 ): RelayControlDirection | null {
   const connection = connections.get(relayId)
   return connection?.state.status === "authenticated" ? connection.opener : null
-}
-
-/** Whether the Relay said it can open the control connection itself. */
-export function relayConnectionDials(relayId: string): boolean {
-  return connections.get(relayId)?.relayDials ?? false
 }
 
 /**
@@ -630,8 +624,6 @@ class RelayConnection {
   #features = new Set<string>()
   // The journal the Relay keeps this Hearth's changes in (`auth.ready`).
   #journalId: string | null = null
-  // Whether the Relay said it can dial Hearth.
-  #relayDials = false
   #browserAuthorizationAdvance: Promise<number> | null = null
   #browserAuthorizationReadiness: BrowserAuthorizationReadiness | null = null
   #browserIssuerGeneration = 0
@@ -691,11 +683,6 @@ class RelayConnection {
 
   get opener(): RelayControlDirection {
     return this.#opener
-  }
-
-  /** Whether the Relay said, on its last connection, that it can dial. */
-  get relayDials(): boolean {
-    return this.#relayDials
   }
 
   // Once per connection, the first time the Relay says where it is.
@@ -1589,9 +1576,6 @@ class RelayConnection {
           this.#attempt = 0
           this.#features = new Set(message.features ?? [])
           this.#journalId = message.journalId ?? null
-          // A Relay that can dial Hearth stands by to, should Hearth's own
-          // connection fail.
-          this.#relayDials = this.#features.has(relayControlDialV1Feature)
           this.#browserAuthorizationReadiness = browserAuthorizationReadiness()
           this.#sessionId = sessionId
           this.#authenticatedAt = Date.now()
@@ -1922,6 +1906,9 @@ class RelayConnection {
     socket.send(
       JSON.stringify({
         clientId: credentials.clientId,
+        // Today's Relays read none of these. Relays a release behind still
+        // do: without them they'd send whole snapshots, drop backup failure
+        // codes, and turn browsers away while they wait to update.
         features: [
           relaySnapshotDeltaFeature,
           relaySnapshotNodeResourcesFeature,

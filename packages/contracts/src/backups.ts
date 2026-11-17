@@ -924,8 +924,6 @@ export const relayBackupTaskSchema = z
     currentArtifactId: z.uuid().nullable().default(null),
     currentPath: z.string().max(2_048).nullable().default(null),
     error: z.string().max(4_096).nullable(),
-    // Sent only to a Hearth that announced `relayBackupFailureCodesV1Feature`:
-    // older ones reject unknown fields.
     errorCode: backupFailureCodeWireSchema.nullable().default(null),
     finishedAt: z.number().int().nonnegative().nullable(),
     input: backupTaskInputSchema,
@@ -1086,33 +1084,12 @@ export function redactBackupTaskInput(input: BackupTaskInput): BackupTaskInput {
   return backupTaskInputSchema.parse(omitBackupSecrets(input))
 }
 
-/**
- * A task as a Relay sends it: without secrets, and without failure codes
- * for a Hearth that hasn't announced it reads them, since it would reject
- * the unknown fields.
- */
-export function redactRelayBackupTask(
-  task: RelayBackupTask,
-  options: { failureCodes: boolean }
-): unknown {
-  const redacted = relayBackupTaskSchema.parse({
+/** A task as a Relay sends it: without secrets. */
+export function redactRelayBackupTask(task: RelayBackupTask): unknown {
+  return relayBackupTaskSchema.parse({
     ...task,
     input: redactBackupTaskInput(task.input),
   })
-  if (options.failureCodes) return redacted
-  const { errorCode: _errorCode, result, ...legacy } = redacted
-  return {
-    ...legacy,
-    result:
-      result && "artifacts" in result && result.artifacts
-        ? {
-            ...result,
-            artifacts: result.artifacts.map(
-              ({ errorCode: _artifactErrorCode, ...artifact }) => artifact
-            ),
-          }
-        : result,
-  }
 }
 
 export function omitBackupSecrets(value: unknown): unknown {

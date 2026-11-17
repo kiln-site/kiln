@@ -17,11 +17,9 @@ import {
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_HOLD_MAX_MS,
   RELAY_JOIN_LIFETIME_MS,
-  relayControlDialV1Feature,
   relayJoinHeldHeader,
   relayJoinHoldHeader,
   relayJoinSavedHeader,
-  relayJoinPairingV1Feature,
   type RelayJoinEnvelope,
   RelayJoinAnnouncementSchema,
   type RelayJoinStatus,
@@ -71,7 +69,6 @@ import {
   listPersistedRelays,
   pairingResponseSchema,
   persistPairedRelayEffect,
-  postPairingRequest,
   publicKeyFingerprint,
   publishRelayCollectionChange,
   verifyPairingResponse,
@@ -207,7 +204,6 @@ interface RelayJoinRow extends RowDataPacket {
   envelope_digest: string | null
   error: string | null
   expires_at: number | string
-  features: ReadonlyArray<string> | string | null
   id: string
   intent: RelayJoinIntent | string | null
   lease_until: number | string | null
@@ -251,7 +247,6 @@ export interface RelayJoinView {
     readonly relayName: string
     // Whether the Relay pairs through its announcements and connects to
     // Hearth itself, so it can be added though Hearth can't reach it.
-    readonly reachesHearth: boolean
     // Why Hearth can't reach the Relay yet, while it waits to be confirmed.
     readonly unreachable: string | null
   } | null
@@ -296,7 +291,7 @@ const SELECT_JOIN = `SELECT id, created_by, secret_ciphertext, client_public_key
          client_private_key_ciphertext, expires_at, state, progress, envelope,
          envelope_digest, announced_at, intent, observed_installation,
          claim_generation, lease_until, claimed_fingerprint, paired_relay_id,
-         error, created_at, features, pairing_request, pairing_response
+         error, created_at, pairing_request, pairing_response
     FROM ${databaseTable("relay_join")}`
 
 function json<T>(value: T | string | null): T | null {
@@ -333,9 +328,7 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
       ? yield* promiseEffect(() => relayReachProblem(row.id, envelope))
       : null
   const addressTakenBy =
-    envelope && !(unreachable && pairsThroughAnnouncements(row))
-      ? relayAtAddress(envelope, relays)
-      : null
+    envelope && !unreachable ? relayAtAddress(envelope, relays) : null
   const defaultName =
     existing?.name ??
     (envelope
@@ -359,7 +352,6 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
               : null,
             installation: envelope.installation,
             managedTls: envelope.caCertificatePem !== null,
-            reachesHearth: pairsThroughAnnouncements(row),
             relayBuild: envelope.relayBuild,
             relayFingerprint: envelope.relayFingerprint,
             relayName: envelope.relayName,
@@ -787,16 +779,9 @@ const acceptAnnouncement = Effect.fn("relayJoin.announce")(function* (
           yield* transaction.execute(
             `UPDATE ${databaseTable("relay_join")}
                 SET state = 'announced', envelope = ?, envelope_digest = ?,
-                    features = ?, announced_at = ?, updated_at = ?
+                    announced_at = ?, updated_at = ?
               WHERE id = ? AND state = 'waiting'`,
-            [
-              JSON.stringify(announcement.envelope),
-              digest,
-              JSON.stringify(announcement.features ?? []),
-              now,
-              now,
-              row.id,
-            ]
+            [JSON.stringify(announcement.envelope), digest, now, now, row.id]
           )
           // At once, however long the Relay would wait: this answer makes
           // its invitation, and the installer prints the link to confirm
@@ -905,7 +890,6 @@ export const confirmRelayJoinEffect = Effect.fn("relayJoin.confirm")(
           // nothing about a Relay that connects to Hearth itself and that
           // Hearth can't reach there.
           const sharesAddress =
-            pairsThroughAnnouncements(row) &&
             (yield* promiseEffect(() =>
               relayReachProblem(row.id, envelope)
             )) !== null
@@ -1238,13 +1222,12 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
     row.client_private_key_ciphertext
   ).plaintext
   const secret = decryptPrivateKey(row.secret_ciphertext).plaintext
-  // A Relay that pairs through its announcements is never reached here: it
-  // takes the request from Hearth's next answer and replies in its next
-  // announcement, which `acceptAnnouncement` keeps.
-  const throughAnnouncements = pairsThroughAnnouncements(row)
+  // The Relay is never reached here: it takes the request from Hearth's
+  // next answer and replies in its next announcement, which
+  // `acceptAnnouncement` keeps.
   const saved = json(row.pairing_request)
   const request = saved ?? pairingRequest(row, envelope, secret, privateKey)
-  if (throughAnnouncements && !saved) {
+  if (!saved) {
     yield* claimWrite(row.id, generation, "pairing_request = ?", [
       JSON.stringify(request),
     ])
@@ -1252,7 +1235,7 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
   }
   const nonce = request.nonce
   const reply = json(row.pairing_response)
-  if (throughAnnouncements && !reply) {
+  if (!reply) {
     if (Number(row.expires_at) <= now) {
       return yield* Effect.fail(
         new RelayJoinFailure(
@@ -1263,12 +1246,10 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
     yield* untilChange(REPLY_POLL_MS)
     return
   }
-  const response = throughAnnouncements
-    ? pairingResponseSchema.parse(reply)
-    : yield* postJoinPairingRequest(envelope, request)
+  const response = pairingResponseSchema.parse(reply)
   // One kept past its expiry, as across a restart, is asked for again: the
   // next answer carries the request once more, and the Relay signs anew.
-  if (throughAnnouncements && response.expiresAt <= Date.now()) {
+  if (response.expiresAt <= Date.now()) {
     yield* claimWrite(row.id, generation, "pairing_response = NULL", [])
     return
   }
@@ -1315,9 +1296,9 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
     clientPrivateKeyCiphertext: encryptPrivateKey(privateKey),
     clientPublicKey: row.client_public_key,
     clientRole: response.role,
-    // A Relay that dials Hearth keeps doing so; Hearth's own connection is
+    // The Relay dials Hearth and keeps doing so; Hearth's own connection is
     // the fallback, when it can reach the Relay at all.
-    ...(throughAnnouncements ? { controlDial: "relay" as const } : {}),
+    controlDial: "relay",
     createdBy: intent.createdBy,
     creatorUserId: intent.creatorUserId,
     expectedExisting: existing !== null,
@@ -1372,43 +1353,6 @@ function pairingRequest(
   }
 }
 
-// Sends a pairing request straight to a Relay that can't take it through
-// its announcements.
-const postJoinPairingRequest = Effect.fnUntraced(function* (
-  envelope: RelayJoinEnvelope,
-  request: RelayPairingRequestContract
-) {
-  const pairingOrigin = relayPairingOrigin({
-    browserOrigin: new URL(envelope.browserOrigin),
-    caCertificatePem: envelope.caCertificatePem,
-  })
-  yield* Effect.try({
-    try: () =>
-      assertRelayAddress(pairingOrigin.hostname.replace(/^\[|\]$/gu, "")),
-    catch: (cause) => cause,
-  })
-  return yield* promiseEffect(async () =>
-    pairingResponseSchema.parse(
-      await postPairingRequest(
-        new URL("/v1/pair", pairingOrigin),
-        envelope.caCertificatePem,
-        request,
-        relayDestinationLookup
-      )
-    )
-  )
-})
-
-// Whether a join's Relay pairs through its announcements and opens its
-// control connection to Hearth, so Hearth needn't reach it.
-function pairsThroughAnnouncements(row: RelayJoinRow): boolean {
-  const features = json(row.features) ?? []
-  return (
-    features.includes(relayJoinPairingV1Feature) &&
-    features.includes(relayControlDialV1Feature)
-  )
-}
-
 // Reaches the Relay over its session and reads its installation ID, which
 // may have changed since it announced itself.
 const connectJoinedRelay = Effect.fn("relayJoin.connect")(function* (
@@ -1419,9 +1363,7 @@ const connectJoinedRelay = Effect.fn("relayJoin.connect")(function* (
 ) {
   yield* Effect.annotateCurrentSpan("relay.id", envelope.relayId)
   // Whether Hearth can reach the Relay itself, asked while it connects.
-  const reach = pairsThroughAnnouncements(row)
-    ? yield* Effect.forkChild(joinReach(row.id, envelope))
-    : null
+  const reach = yield* Effect.forkChild(joinReach(row.id, envelope))
   const observed = yield* readInstallation(envelope.relayId)
   // The client this one replaces can't do anything without its key, which
   // Hearth no longer has; revoke it anyway.
@@ -1446,7 +1388,7 @@ const connectJoinedRelay = Effect.fn("relayJoin.connect")(function* (
   )
   // Browsers can't reach a Relay Hearth can't, so its consoles and
   // transfers go through Hearth.
-  if (reach && (yield* Fiber.join(reach)) !== null) {
+  if ((yield* Fiber.join(reach)) !== null) {
     yield* useHearthForBrowsers(envelope.relayId).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning(

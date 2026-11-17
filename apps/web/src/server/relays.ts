@@ -274,22 +274,18 @@ export const updateRelay = createServerFn({ method: "POST" })
     })
   )
 
-// Which side opened the Relay's control connection, while it's connected,
-// and whether the Relay can open it itself.
+// Which side opened the Relay's control connection, while it's connected.
 export const getRelayConnection = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
     await requireRelayAdministrator(data.id, "relay.read")
-    const [
-      { relayConnectionDials, relayConnectionOpener },
-      { relayPassthroughUsage },
-    ] = await Promise.all([
-      import("@/lib/relay-connection"),
-      import("@/lib/relay-passthrough-limits.server"),
-    ])
+    const [{ relayConnectionOpener }, { relayPassthroughUsage }] =
+      await Promise.all([
+        import("@/lib/relay-connection"),
+        import("@/lib/relay-passthrough-limits.server"),
+      ])
     return {
       openedBy: relayConnectionOpener(data.id),
-      relayDials: relayConnectionDials(data.id),
       // What Hearth carried for it, for transfers browsers can't send it
       // directly, since Hearth started.
       throughHearth: relayPassthroughUsage(data.id),
