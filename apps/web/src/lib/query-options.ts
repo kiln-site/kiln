@@ -24,6 +24,7 @@ import {
 } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
 import { getKilnPlatform } from "@/server/platform"
+import { getRecoveryCodeStatus } from "@/server/recovery-code"
 import {
   getBrickCatalog,
   getBrickIconPresentations,
@@ -331,6 +332,7 @@ export const queryKeys = {
   kilnPlatform: {
     all: ["kiln-platform"] as const,
   },
+  recoveryCode: ["recovery-code"] as const,
   // The eligibility and latest-release reads sit under the overview, so
   // invalidating it after updates reads them again too.
   updates: ["updates", "overview"] as const,
@@ -1030,6 +1032,19 @@ export function kilnPlatformQueryOptions() {
     refetchInterval: 10_000,
     retry: false,
     staleTime: 5_000,
+  })
+}
+
+/**
+ * Whether Kiln's recovery code was saved. Platform administrators only. It
+ * changes only when someone saves it, which invalidates it.
+ */
+export function recoveryCodeStatusQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.recoveryCode,
+    queryFn: () => getRecoveryCodeStatus(),
+    retry: false,
+    staleTime: 5 * 60_000,
   })
 }
 

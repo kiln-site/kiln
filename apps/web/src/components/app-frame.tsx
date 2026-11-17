@@ -16,6 +16,7 @@ import { NotificationsProvider } from "@/components/notifications"
 import { PanelFooter } from "@/components/panel-footer"
 import { PushNotificationsPrompt } from "@/components/push-notifications-prompt"
 import { RealtimeSync } from "@/components/realtime-sync"
+import { RecoveryCodeToast } from "@/components/recovery-code/recovery-code-toast"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
 import { ResourceMigrationToasts } from "@/components/resource-migration-toasts"
 import { applyAppearance, saveAppearanceCache } from "@/lib/appearance"
@@ -60,6 +61,7 @@ export const AppFrame = React.memo(function AppFrame({
               data-slot="app-content"
               className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
             >
+              <RecoveryCodeToast />
               <AppRouteContent>{children}</AppRouteContent>
             </div>
             <PanelFooter />

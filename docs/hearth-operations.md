@@ -213,6 +213,7 @@ request is answered once.
 | `file-activity:<relay>/<root>#pins` | A file root's pinned files, under their limit          |
 | `user-settings:<id>#notifications`  | A person's notification settings                       |
 | `platform-appearance#default`       | The appearance new people start with                   |
+| `recovery-code`                     | Kiln's recovery code: showing it, and marking it saved |
 | `resource-migration:<id>`           | A game server's copy; `#task` cancelling it            |
 | `instance:<relay>/<id>#migration`   | Copying it, one copy at a time                         |
 

@@ -3,6 +3,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { requestAccountClaim, prepareAccountSignup } from "@/server/users"
 import * as React from "react"
+import { useRouter } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
   Check,
@@ -89,8 +90,21 @@ export function AuthPage({
   const [recoveryComplete, setRecoveryComplete] = React.useState(false)
   const [claimEmail, setClaimEmail] = React.useState<string | null>(null)
   const [hydrated, setHydrated] = React.useState(false)
+  const router = useRouter()
 
   React.useEffect(() => setHydrated(true), [])
+
+  // The first administrator goes on to save Kiln's recovery code.
+  async function signInToRecoveryStep(email: string, password: string) {
+    const result = await authClient.signIn.email({ email, password })
+    if (result.error) throw new Error(readAuthError(result.error))
+    if ("twoFactorRedirect" in result.data && result.data.twoFactorRedirect) {
+      sessionStorage.setItem("kiln:auth:return", "/setup/recovery")
+      window.location.assign("/two-factor")
+      return
+    }
+    await router.navigate({ to: "/setup/recovery" })
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -153,7 +167,7 @@ export function AuthPage({
                 })
                 return
               }
-              await signIn(email, password, redirectPath)
+              await signInToRecoveryStep(email, password)
               return
             }
 
@@ -269,6 +283,13 @@ export function AuthPage({
             otp: code,
           })
           if (result.error) throw new Error(readAuthError(result.error))
+          if (verification.source === "setup") {
+            await signInToRecoveryStep(
+              verification.registeredEmail,
+              verification.password
+            )
+            return
+          }
           await signIn(
             verification.registeredEmail,
             verification.password,

@@ -95,6 +95,7 @@ import { resourceMigrationParts } from "@/migrations/0094_resource_migration_par
 import { bucketCopyChecks } from "@/migrations/0095_bucket_copy_checks"
 import { relayBackupTasksRead } from "@/migrations/0096_relay_backup_tasks_read"
 import { relayPhantomGameServers } from "@/migrations/0097_relay_phantom_game_servers"
+import { recoverableBackups } from "@/migrations/0098_recoverable_backups"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -193,4 +194,5 @@ export const migrations: ReadonlyArray<Migration> = [
   bucketCopyChecks,
   relayBackupTasksRead,
   relayPhantomGameServers,
+  recoverableBackups,
 ]
