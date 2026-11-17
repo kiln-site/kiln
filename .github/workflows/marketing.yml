@@ -47,6 +47,7 @@ jobs:
       image: ${{ needs.config.outputs.prefix }}/marketing
       dockerfile: apps/marketing/Dockerfile
       cache_scope: marketing
+      github_hosted: true
       # Links the package to this repository, not Hearth's legacy source.
       source_label: ${{ needs.config.outputs.repository }}
       build_args: |
