@@ -89,7 +89,7 @@ function openUsageStream<Event>(options: {
                   "kiln.operation": "http.resources.capability",
                   "kiln.channel": "resources",
                 },
-                () => credentials.issue({ kind: "resources", optInV2: true })
+                () => credentials.issue({ kind: "resources" })
               ),
             catch: asError,
           })
@@ -122,35 +122,19 @@ function openUsageStream<Event>(options: {
             relayId,
           })
           span.end()
-          if (capability.version === 2) {
-            const lease = yield* maintainRelayBrowserLease(
-              opened,
-              opened.ready,
-              {
-                channel: "resources",
-                credentials: keys,
-                issue: () =>
-                  credentials.renew({ kind: "resources", optInV2: true }),
-                relayId,
-                write: false,
-              }
-            )
-            yield* Effect.acquireRelease(
-              Effect.sync(() =>
-                credentials.onAuthorizationChange(lease.renewNow)
-              ),
-              (unsubscribe) => Effect.sync(unsubscribe)
-            )
-          } else {
-            yield* Effect.acquireRelease(
-              Effect.sync(() =>
-                credentials.onAuthorizationChange(() => {
-                  opened.socket.close(4403, "Browser authorization changed")
-                })
-              ),
-              (unsubscribe) => Effect.sync(unsubscribe)
-            )
-          }
+          const lease = yield* maintainRelayBrowserLease(opened, opened.ready, {
+            channel: "resources",
+            credentials: keys,
+            issue: () => credentials.renew({ kind: "resources" }),
+            relayId,
+            write: false,
+          })
+          yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              credentials.onAuthorizationChange(lease.renewNow)
+            ),
+            (unsubscribe) => Effect.sync(unsubscribe)
+          )
           yield* Effect.try({
             try: () =>
               opened.socket.send(

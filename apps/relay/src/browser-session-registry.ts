@@ -2,7 +2,7 @@ import { WebSocket } from "ws"
 
 import type {
   RelayBrowserAuthorizationRevision,
-  RelayBrowserCapabilityV2,
+  RelayBrowserCapability,
   RelayBrowserOperationKind,
   RelayBrowserResourceKind,
 } from "@workspace/contracts"
@@ -21,13 +21,12 @@ export interface BrowserSessionAuthority {
   readonly issuer: string
   readonly issuerGeneration: number
   readonly keyThumbprint: string
-  readonly loginSessionId: string | null
-  readonly operation: RelayBrowserOperationKind | null
+  readonly loginSessionId: string
+  readonly operation: RelayBrowserOperationKind
   readonly origin: string
   readonly resourceKind: RelayBrowserResourceKind
   readonly revision: number
   readonly subject: string
-  readonly version: 1 | 2
 }
 
 interface ActiveSession {
@@ -117,12 +116,11 @@ export class BrowserSessionRegistry {
     )
     if (
       authority.expiresAt <= Date.now() ||
-      (authority.version === 2 &&
-        (authority.issuerGeneration !== current.issuerGeneration ||
-          authority.issuerGeneration !==
-            (this.#issuerGenerations.get(authority.issuer) ?? 0) ||
-          authority.revision < current.minimumRevision ||
-          authority.revision < this.minimumRevision(authority)))
+      authority.issuerGeneration !== current.issuerGeneration ||
+      authority.issuerGeneration !==
+        (this.#issuerGenerations.get(authority.issuer) ?? 0) ||
+      authority.revision < current.minimumRevision ||
+      authority.revision < this.minimumRevision(authority)
     ) {
       return { accepted: false, reason: "authorization", replaced: null }
     }
@@ -167,7 +165,6 @@ export class BrowserSessionRegistry {
       session.authority.expiresAt <= Date.now() ||
       authority.expiresAt <= Date.now() ||
       !sameOwner(session.authority, authority) ||
-      authority.version !== 2 ||
       authority.issuerGeneration !==
         (this.#issuerGenerations.get(authority.issuer) ?? 0) ||
       authority.revision < this.minimumRevision(authority)
@@ -229,9 +226,8 @@ export class BrowserSessionRegistry {
       active:
         authority.expiresAt > Date.now() &&
         this.#authorityIsCurrent(authority) &&
-        (authority.version === 1 ||
-          (authority.issuerGeneration === current.issuerGeneration &&
-            authority.revision >= current.minimumRevision)),
+        authority.issuerGeneration === current.issuerGeneration &&
+        authority.revision >= current.minimumRevision,
     }
     const release = () => {
       transfer.active = false
@@ -333,14 +329,7 @@ export class BrowserSessionRegistry {
       ...(authority.resourceKind === "instance"
         ? ([{ instanceId: authority.instanceId, kind: "instance" }] as const)
         : []),
-      ...(authority.loginSessionId
-        ? ([
-            {
-              kind: "login_session",
-              loginSessionId: authority.loginSessionId,
-            },
-          ] as const)
-        : []),
+      { kind: "login_session", loginSessionId: authority.loginSessionId },
     ]
     for (const scope of scopes) {
       minimum = Math.max(
@@ -354,7 +343,6 @@ export class BrowserSessionRegistry {
   }
 
   #authorityIsCurrent(authority: BrowserSessionAuthority): boolean {
-    if (authority.version !== 2) return true
     return (
       authority.issuerGeneration ===
         (this.#issuerGenerations.get(authority.issuer) ?? 0) &&
@@ -417,7 +405,7 @@ export class BrowserSessionRegistry {
 }
 
 export function authorityFromCapability(
-  capability: RelayBrowserCapabilityV2
+  capability: RelayBrowserCapability
 ): BrowserSessionAuthority {
   return {
     actions: new Set(capability.actions),
@@ -432,7 +420,6 @@ export function authorityFromCapability(
     resourceKind: capability.resourceKind ?? "instance",
     revision: capability.authorizationRevision,
     subject: capability.subject,
-    version: 2,
   }
 }
 

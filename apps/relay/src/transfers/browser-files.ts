@@ -18,16 +18,16 @@ import {
 } from "@workspace/contracts"
 
 import {
-  browserAuthority,
   BrowserPublicKeySchema,
   browserKeyThumbprint,
   decodeCapability,
   validateCapability,
 } from "../browser-capability.js"
 import { isCanonicalBrowserFileProofNonce } from "../browser-security.js"
-import type {
-  BrowserSessionAuthority,
-  BrowserSessionRegistry,
+import {
+  authorityFromCapability,
+  type BrowserSessionAuthority,
+  type BrowserSessionRegistry,
 } from "../browser-session-registry.js"
 import type { RelayConfig } from "../config.js"
 import type { DockerDriver } from "../docker.js"
@@ -140,9 +140,6 @@ export interface BrowserFileTransfers {
 export function browserFileTransfers(
   options: BrowserFileTransferOptions
 ): BrowserFileTransfers {
-  // Proofs for v1 capabilities, which the Relay replays against in memory;
-  // v2 proofs are reserved in its state.
-  const legacyRequestProofs = new Map<string, number>()
   const audits = previewAudits()
 
   // Authentication, including reading a download's form, is bounded in how
@@ -176,7 +173,6 @@ export function browserFileTransfers(
               })
           )
     )
-  const pendingLegacyRequestProofs = new Set<string>()
   let pendingAuthentications = 0
 
   const authenticate = Effect.fn("RelayTransfer.authenticateBrowser")(
@@ -229,128 +225,89 @@ export function browserFileTransfers(
         }
         return { nonce, publicKeyJwk, requestedAt }
       })
-      const replayKey = `${parsed.payload.capabilityId}:${nonce}`
-      if (parsed.payload.version === 1) {
-        for (const [key, expiresAt] of legacyRequestProofs) {
-          if (expiresAt <= Date.now()) legacyRequestProofs.delete(key)
-        }
-        if (
-          legacyRequestProofs.has(replayKey) ||
-          pendingLegacyRequestProofs.has(replayKey)
-        ) {
-          return yield* Effect.fail(new Error("Browser proof was replayed"))
-        }
-        const limit = options.config.browserLimits.fileReplayEntries
-        if (
-          legacyRequestProofs.size >= limit ||
-          pendingLegacyRequestProofs.size >= limit
-        ) {
-          return yield* Effect.fail(new Error("Browser replay table is full"))
-        }
-        pendingLegacyRequestProofs.add(replayKey)
+      const client = yield* options.state.findClientById(parsed.payload.issuer)
+      if (!client) {
+        return yield* Effect.fail(new Error("Capability issuer was revoked"))
       }
-      return yield* Effect.gen(function* () {
-        const client = yield* options.state.findClientById(
-          parsed.payload.issuer
+      yield* Effect.try(() => {
+        validateCapability(
+          parsed,
+          client,
+          input.origin,
+          options.identity.id,
+          requiredAction
         )
-        if (!client) {
-          return yield* Effect.fail(new Error("Capability issuer was revoked"))
+        if (parsed.payload.operation !== "file") {
+          throw new Error("Capability is not for file requests")
         }
-        yield* Effect.try(() => {
-          validateCapability(
-            parsed,
-            client,
-            input.origin,
-            options.identity.id,
-            requiredAction
-          )
-          if (
-            parsed.payload.version === 2 &&
-            parsed.payload.operation !== "file"
-          ) {
-            throw new Error("Capability is not for file requests")
-          }
-          if (
-            parsed.payload.instanceId !== input.instanceId ||
-            parsed.payload.path !== input.path
-          ) {
-            throw new Error("Capability scope does not match the file")
-          }
-          const proof = Buffer.from(
-            input.credentials?.proof ?? requiredHeader(request, "x-kiln-proof"),
-            "base64url"
-          )
-          const valid = verify(
-            "sha256",
-            Buffer.from(
-              relayBrowserRequestProofTranscript({
-                capabilityId: parsed.payload.capabilityId,
-                expiresAt: parsed.payload.expiresAt,
-                instanceId: input.instanceId,
-                method: input.method,
-                nonce,
-                path: input.path,
-                relayId: options.identity.id,
-                requestedAt,
-              })
-            ),
-            {
-              dsaEncoding: "ieee-p1363",
-              key: createPublicKey({ format: "jwk", key: publicKeyJwk }),
-            },
-            proof
-          )
-          if (!valid) throw new Error("Browser request proof is invalid")
-        })
-        let current = { issuerGeneration: 0, minimumRevision: 0 }
-        if (parsed.payload.version === 2) {
-          const authority = yield* options.state.browserAuthority({
-            instanceId: parsed.payload.instanceId,
-            issuer: parsed.payload.issuer,
-            loginSessionId: parsed.payload.loginSessionId,
-            subject: parsed.payload.subject,
-          })
-          if (
-            parsed.payload.issuerGeneration !== authority.issuerGeneration ||
-            parsed.payload.authorizationRevision < authority.minimumRevision
-          ) {
-            return yield* Effect.fail(
-              new Error("Browser authorization is stale")
-            )
-          }
-          current = authority
-          const reservation = yield* options.state.reserveBrowserFileReplay({
-            capabilityId: parsed.payload.capabilityId,
-            expiresAt: parsed.payload.expiresAt,
-            maxEntries: options.config.browserLimits.fileReplayEntries,
-            nonce,
-            now: Date.now(),
-          })
-          if (reservation !== "reserved") {
-            return yield* Effect.fail(
-              new Error(
-                reservation === "full"
-                  ? "Browser replay table is full"
-                  : "Browser proof was replayed"
-              )
-            )
-          }
-        } else {
-          legacyRequestProofs.set(replayKey, parsed.payload.expiresAt)
+        if (
+          parsed.payload.instanceId !== input.instanceId ||
+          parsed.payload.path !== input.path
+        ) {
+          throw new Error("Capability scope does not match the file")
         }
-        return {
-          authority: browserAuthority(parsed.payload),
-          current,
-          capabilityId: parsed.payload.capabilityId,
-          clientId: client.id,
-          instanceId: parsed.payload.instanceId,
-          subject: parsed.payload.subject,
-        } satisfies BrowserFileAuthentication
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => pendingLegacyRequestProofs.delete(replayKey))
+        const proof = Buffer.from(
+          input.credentials?.proof ?? requiredHeader(request, "x-kiln-proof"),
+          "base64url"
         )
-      )
+        const valid = verify(
+          "sha256",
+          Buffer.from(
+            relayBrowserRequestProofTranscript({
+              capabilityId: parsed.payload.capabilityId,
+              expiresAt: parsed.payload.expiresAt,
+              instanceId: input.instanceId,
+              method: input.method,
+              nonce,
+              path: input.path,
+              relayId: options.identity.id,
+              requestedAt,
+            })
+          ),
+          {
+            dsaEncoding: "ieee-p1363",
+            key: createPublicKey({ format: "jwk", key: publicKeyJwk }),
+          },
+          proof
+        )
+        if (!valid) throw new Error("Browser request proof is invalid")
+      })
+      const current = yield* options.state.browserAuthority({
+        instanceId: parsed.payload.instanceId,
+        issuer: parsed.payload.issuer,
+        loginSessionId: parsed.payload.loginSessionId,
+        subject: parsed.payload.subject,
+      })
+      if (
+        parsed.payload.issuerGeneration !== current.issuerGeneration ||
+        parsed.payload.authorizationRevision < current.minimumRevision
+      ) {
+        return yield* Effect.fail(new Error("Browser authorization is stale"))
+      }
+      const reservation = yield* options.state.reserveBrowserFileReplay({
+        capabilityId: parsed.payload.capabilityId,
+        expiresAt: parsed.payload.expiresAt,
+        maxEntries: options.config.browserLimits.fileReplayEntries,
+        nonce,
+        now: Date.now(),
+      })
+      if (reservation !== "reserved") {
+        return yield* Effect.fail(
+          new Error(
+            reservation === "full"
+              ? "Browser replay table is full"
+              : "Browser proof was replayed"
+          )
+        )
+      }
+      return {
+        authority: authorityFromCapability(parsed.payload),
+        current,
+        capabilityId: parsed.payload.capabilityId,
+        clientId: client.id,
+        instanceId: parsed.payload.instanceId,
+        subject: parsed.payload.subject,
+      } satisfies BrowserFileAuthentication
     }
   )
 

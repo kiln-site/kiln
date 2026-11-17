@@ -77,7 +77,10 @@ challenge that expires in 10 seconds. The browser signs the subprotocol, Relay
 ID, session ID, nonce, challenge expiry, and capability ID. It sends that
 signature with the capability and its public key. The Relay checks the key
 against `keyThumbprint`, verifies the proof, checks the issuer generation and
-revision floors, and admits the socket.
+revision floors, and admits the socket. Consoles speak `kiln-relay-browser.v2`
+and usage `kiln-relay-browser.v1`; a capability is admitted only on its
+operation's subprotocol. The browser sends its subscription right behind the
+auth, and the Relay handles it once the auth is accepted.
 
 A file request signs the capability ID and expiry, the method, root, and
 path, a 32-byte nonce, and `requestedAt`. `requestedAt` must be within 30
@@ -130,8 +133,10 @@ The **issuer generation** applies to a whole pairing. Hearth increments it when
 a Relay is re-paired, disabled, or deleted. It also increments it when a Relay
 reports a lower generation than Hearth last acknowledged, which means the
 Relay's state was rolled back. The Relay refuses capabilities from any other
-generation. Hearth mints v2 capabilities only in a process with a live control
-connection to that Relay, after its generation is in sync. If a pairing's
+generation. Hearth mints capabilities only in a process with a live control
+connection to that Relay, after its generation is in sync. A Relay too old to
+report its generation still connects, so Hearth can update it, but gets no
+capabilities. If a pairing's
 client is updated or revoked on the Relay, every session and transfer from
 that issuer ends.
 
@@ -205,20 +210,9 @@ falls behind.
 ## One Hearth process
 
 Relay connections, delivery workers, and realtime fan-out live in one
-Hearth process's memory, and v2 issuance needs that process's control
+Hearth process's memory, and issuance needs that process's control
 connection, so Kiln supports one Hearth process. Floors and pending
 deliveries are durable on both sides and survive a restart.
-
-## Version 1 capabilities
-
-Version 1 capabilities are still accepted. They have no login session,
-revision, or generation, Hearth issues them for 60 seconds whatever the action,
-the Relay doesn't cap their lifetime, and they don't renew; only expiry or
-issuer revocation ends one. Hearth issues v2 whenever the caller asks (every
-current caller does) and the Relay reports `browser-capability-v2` plus
-`browser-lease-renewal-v1` (sockets) or `file-request-replay-v1` (files).
-`KILN_BROWSER_CAPABILITY_{CONSOLE,RESOURCES,FILE}_MIN_VERSION=2` stops Hearth
-issuing v1. Don't build on v1; remove it when you touch it.
 
 ## Invariants
 

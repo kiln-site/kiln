@@ -57,7 +57,6 @@ describe("Relay browser credential coordinator", () => {
           kind: request.kind,
           proxyMode: "none",
           relayId: "relay-one",
-          version: 2,
         })),
       })
     )
@@ -71,8 +70,8 @@ describe("Relay browser credential coordinator", () => {
     )
 
     const [readCapability, writeCapability] = await Promise.all([
-      readLease.issue({ kind: "console", optInV2: true, write: false }),
-      writeLease.issue({ kind: "console", optInV2: true, write: true }),
+      readLease.issue({ kind: "console", write: false }),
+      writeLease.issue({ kind: "console", write: true }),
     ])
 
     expect(readCapability.capability).toBe("read.signature")

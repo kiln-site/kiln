@@ -18,7 +18,6 @@ import { z } from "zod"
 
 import {
   relayPairingRequestTranscript,
-  relayBrowserCapabilityV2Feature,
   relayPairingResponseTranscript,
   relayBootstrapDiscoveryTranscript,
   relayBootstrapEnrollmentTranscript,
@@ -1282,10 +1281,9 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
 )
 
 export async function deletePersistedRelay(id: string): Promise<void> {
-  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-  const supportsRevisionDelivery = relayConnectionFeatures(id).has(
-    relayBrowserCapabilityV2Feature
-  )
+  const { relayBrowserAuthorizationConnected } =
+    await import("@/lib/relay-connection")
+  const supportsRevisionDelivery = relayBrowserAuthorizationConnected(id)
   const [retireResult] = await databasePool.execute<
     import("mysql2/promise").ResultSetHeader
   >(

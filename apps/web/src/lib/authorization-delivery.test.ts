@@ -12,12 +12,9 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, selectRows } from "@/test/seed"
 
 // The Relay control channel is the only external boundary here.
-const relay = vi.hoisted(() => ({
-  features: new Set<string>(["browser-capability-v2"]),
-  rpc: vi.fn(),
-}))
+const relay = vi.hoisted(() => ({ rpc: vi.fn() }))
 vi.mock("@/lib/relay-connection", () => ({
-  relayConnectionFeatures: () => relay.features,
+  relayBrowserAuthorizationConnected: () => true,
   relayRpc: relay.rpc,
 }))
 

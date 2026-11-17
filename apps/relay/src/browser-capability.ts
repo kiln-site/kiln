@@ -12,14 +12,9 @@ import {
 } from "@workspace/contracts"
 import type {
   RelayBrowserCapability,
-  RelayBrowserCapabilityV2,
   RelayBrowserResourceKind,
 } from "@workspace/contracts"
 
-import {
-  authorityFromCapability,
-  type BrowserSessionAuthority,
-} from "./browser-session-registry.js"
 import {
   BROWSER_ISSUED_AT_SKEW_MS,
   BROWSER_PREVIEW_LEASE_MAX_MS,
@@ -65,7 +60,7 @@ export function validateCapability(
 ): void {
   const now = Date.now()
   const payload = capability.payload
-  if (payload.version === 2) validateCapabilityV2(payload, now)
+  validateCapabilityShape(payload, now)
   // From the client's role, as the control socket does, so a client paired
   // before an action existed still has every action its role grants.
   const clientActions: ReadonlyArray<string> = actionsForRole(
@@ -93,8 +88,8 @@ export function validateCapability(
   }
 }
 
-function validateCapabilityV2(
-  capability: RelayBrowserCapabilityV2,
+function validateCapabilityShape(
+  capability: RelayBrowserCapability,
   now: number
 ): void {
   const allowed = new Set(
@@ -138,14 +133,14 @@ function validateCapabilityV2(
       (capability.path !== null) ||
     (capability.path?.length ?? 0) > 2_048
   ) {
-    throw new Error("Browser capability v2 is invalid")
+    throw new Error("Browser capability is invalid")
   }
 }
 
-// The actions a v2 capability may carry, by resource kind and operation.
+// The actions a capability may carry, by resource kind and operation.
 const browserCapabilityActions: Record<
   RelayBrowserResourceKind,
-  Record<RelayBrowserCapabilityV2["operation"], ReadonlyArray<string>>
+  Record<RelayBrowserCapability["operation"], ReadonlyArray<string>>
 > = {
   app: {
     console: [relayConsoleReadActions.app],
@@ -187,14 +182,12 @@ const browserCapabilityActions: Record<
   },
 }
 
-// Capabilities name the kind of resource they are for; v1 capabilities and
-// v2 ones without a kind are for servers.
+// Capabilities name the kind of resource they are for; those without a kind
+// are for game servers.
 export function capabilityResourceKind(
   capability: RelayBrowserCapability
 ): RelayBrowserResourceKind {
-  return capability.version === 2
-    ? (capability.resourceKind ?? "instance")
-    : "instance"
+  return capability.resourceKind ?? "instance"
 }
 
 // The server whose access revisions apply to the capability, if it is for
@@ -205,29 +198,6 @@ export function serverScopeId(
   return capabilityResourceKind(capability) === "instance"
     ? capability.instanceId
     : null
-}
-
-export function browserAuthority(
-  capability: RelayBrowserCapability
-): BrowserSessionAuthority {
-  if (capability.version === 2) return authorityFromCapability(capability)
-  return {
-    actions: new Set(capability.actions),
-    expiresAt: capability.expiresAt,
-    instanceId: capability.instanceId,
-    resourceKind: "instance",
-    issuer: capability.issuer,
-    issuerGeneration: 0,
-    keyThumbprint: capability.keyThumbprint,
-    loginSessionId: null,
-    operation: capability.actions.includes("instance.read")
-      ? "resources"
-      : "console",
-    origin: capability.origin,
-    revision: 0,
-    subject: capability.subject,
-    version: 1,
-  }
 }
 
 export function browserKeyThumbprint(jwk: {

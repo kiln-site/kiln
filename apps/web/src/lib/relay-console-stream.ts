@@ -1,7 +1,6 @@
 import { withRenderedAccount } from "@/lib/browser-accounts"
 import {
   relayBrowserConsoleProtocol,
-  relayBrowserConsoleProtocols,
   relayConsoleStreamEventSchema,
 } from "@workspace/contracts"
 import type {
@@ -16,10 +15,7 @@ import {
   startConsoleTimingSpan,
   withConsoleTimingSpan,
 } from "@/lib/console-performance"
-import type {
-  ConsoleLoadTiming,
-  ConsoleTrace,
-} from "@/lib/console-performance"
+import type { ConsoleLoadTiming, ConsoleTrace } from "@/lib/console-performance"
 import {
   authenticateRelayBrowserSocket,
   isTerminalRelayBrowserFailure,
@@ -223,18 +219,16 @@ function openDirectRelayConsoleStream(
       }
 
       // A kept connection has been sent output since its console left, so it
-      // subscribes again for the session afresh. What comes before the frame
-      // a session starts with, a reset or on older Relays a ready, is
-      // dropped, as it would follow the cached output with a gap. One the
-      // Relay sent before taking the new subscription is as current as the
-      // one it sends next, being the same console's on the same socket, and
-      // the output after it follows on in order.
+      // subscribes again for the session afresh. What comes before the reset
+      // a session starts with is dropped, as it would follow the cached
+      // output with a gap. One the Relay sent before taking the new
+      // subscription is as current as the one it sends next, being the same
+      // console's on the same socket, and the output after it follows on in
+      // order.
       if (reused === "kept") yield* Effect.sync(connection.subscribe)
-      const sessionStart =
-        socket.protocol === relayBrowserConsoleProtocol ? "reset" : "ready"
       const events = inbox.stream.pipe(
         reused === "kept"
-          ? Stream.dropWhile((message) => message.type !== sessionStart)
+          ? Stream.dropWhile((message) => message.type !== "reset")
           : (messages) => messages,
         Stream.mapEffect((message) =>
           Effect.try({
@@ -291,8 +285,7 @@ function connectDirectRelayConsole(
       "Issue console capability",
       "http.console.capability",
       Effect.tryPromise({
-        try: () =>
-          credentialLease.issue({ kind: "console", optInV2: true, write }),
+        try: () => credentialLease.issue({ kind: "console", write }),
         catch: asError,
       })
     )
@@ -360,40 +353,21 @@ function connectDirectRelayConsole(
         traceparent,
       })
     )
-    if (capability.version === 2) {
-      const lease = yield* maintainRelayBrowserLease(relaySocket, ready, {
-        channel: "console",
-        credentials: { keys, publicKeyJwk },
-        issue: () =>
-          credentialLease.renew({
-            kind: "console",
-            optInV2: true,
-            write,
-          }),
-        relayId,
-        write,
-      })
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          credentialLease.onAuthorizationChange(() => {
-            void lease.renewNow()
-          })
-        ),
-        (unsubscribe) => Effect.sync(unsubscribe)
-      )
-    } else {
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          credentialLease.onAuthorizationChange(() => {
-            socket.close(4403, "Browser authorization changed")
-          })
-        ),
-        (unsubscribe) => Effect.sync(unsubscribe)
-      )
-    }
-    // An older Relay takes the subscription only once authenticated.
-    if (!ready.sentAfterAuth)
-      yield* Effect.sync(() => socket.send(JSON.stringify(subscription)))
+    const lease = yield* maintainRelayBrowserLease(relaySocket, ready, {
+      channel: "console",
+      credentials: { keys, publicKeyJwk },
+      issue: () => credentialLease.renew({ kind: "console", write }),
+      relayId,
+      write,
+    })
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        credentialLease.onAuthorizationChange(() => {
+          void lease.renewNow()
+        })
+      ),
+      (unsubscribe) => Effect.sync(unsubscribe)
+    )
     return {
       ...relaySocket,
       // Subscribes again, for the console's session afresh.
@@ -673,7 +647,7 @@ function openRelayConsoleSocket(
       browserOrigin,
       channel: "console",
       closeReason: "Console view closed",
-      protocols: relayBrowserConsoleProtocols,
+      protocols: relayBrowserConsoleProtocol,
       relayId,
     })
   )

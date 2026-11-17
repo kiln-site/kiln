@@ -8,7 +8,6 @@ import {
   RelayBrowserRenewSchema,
   relayBrowserProofTranscript,
   relayBrowserConsoleProtocol,
-  relayBrowserConsoleProtocols,
   relayBrowserMaxFrameBytes,
   relayBrowserProtocol,
   relayInstanceLifecycleEventTime as lifecycleEventTime,
@@ -64,7 +63,6 @@ import {
 } from "./browser-session-registry.js"
 import { requestUrl } from "./request-url.js"
 import {
-  browserAuthority,
   BrowserPublicKeySchema,
   browserKeyThumbprint,
   capabilityResourceKind,
@@ -78,9 +76,9 @@ import type { Server } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 
 const AUTHENTICATION_WINDOW_MS = 10_000
-// Advertised in the browser challenge: messages may follow the auth at once.
-export const BROWSER_EARLY_MESSAGES_FEATURE = "early-messages"
-// A browser has one message to send behind its auth; a few are tolerated.
+// A browser may send its next message, such as a console subscription, right
+// behind its auth instead of waiting for it. It has one to send; a few are
+// tolerated.
 const MAX_EARLY_BROWSER_MESSAGES = 4
 const HEARTBEAT_INTERVAL_MS = 15_000
 const MAX_PENDING_CONSOLE_OPERATIONS_PER_SOCKET = 8
@@ -246,9 +244,8 @@ export function attachBrowserSocket(
       request.headers["sec-websocket-protocol"]
     )
     if (
-      !relayBrowserConsoleProtocols.some((protocol) =>
-        requestedProtocols.includes(protocol)
-      )
+      !requestedProtocols.includes(relayBrowserConsoleProtocol) &&
+      !requestedProtocols.includes(relayBrowserProtocol)
     ) {
       socket.write("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n")
       socket.destroy()
@@ -357,9 +354,6 @@ function authenticateBrowser(
 ): void {
   const challenge = {
     expiresAt: Date.now() + AUTHENTICATION_WINDOW_MS,
-    // Browsers that see this may send their next message, such as a console
-    // subscription, right behind their auth instead of waiting for it.
-    features: [BROWSER_EARLY_MESSAGES_FEATURE],
     nonce: randomBytes(32).toString("base64url"),
     relayId: options.identity.id,
     sessionId: randomUUID(),
@@ -434,7 +428,7 @@ function authenticateBrowser(
     }
     const renewal = decodeBrowserRenew(value)
     if (Option.isSome(renewal)) {
-      if (authenticationAttempt || capability.version !== 2) {
+      if (authenticationAttempt) {
         socket.close(4400, "Browser renewal is not available")
         return
       }
@@ -471,7 +465,7 @@ function authenticateBrowser(
       )
       if (
         subscription.instanceId !== resource.id ||
-        (capability.version === 2 && capability.operation !== "console") ||
+        capability.operation !== "console" ||
         !registry.isActive(socket, source.readAction)
       ) {
         socket.close(4403, "Console capability does not allow this resource")
@@ -523,7 +517,7 @@ function authenticateBrowser(
       if (
         !isResourceUsageKind(kind) ||
         subscription.instanceId !== capability.instanceId ||
-        (capability.version === 2 && capability.operation !== "resources") ||
+        capability.operation !== "resources" ||
         !registry.isActive(socket, resourceReadActions[kind])
       ) {
         socket.close(4403, "Resource capability does not allow this instance")
@@ -538,7 +532,7 @@ function authenticateBrowser(
       if (
         capabilityResourceKind(capability) !== "instance" ||
         request.instanceId !== capability.instanceId ||
-        (capability.version === 2 && capability.operation !== "console") ||
+        capability.operation !== "console" ||
         !registry.isActive(socket, "instance.console.write")
       ) {
         socket.close(4403, "Console capability does not allow writes")
@@ -568,7 +562,7 @@ function authenticateBrowser(
       if (
         capabilityResourceKind(capability) !== "instance" ||
         request.instanceId !== capability.instanceId ||
-        (capability.version === 2 && capability.operation !== "console") ||
+        capability.operation !== "console" ||
         !registry.isActive(socket, "instance.console.write")
       ) {
         socket.close(4403, "Console capability does not allow completion")
@@ -670,31 +664,34 @@ function authenticateBrowser(
             relayId: challenge.relayId,
             sessionId: challenge.sessionId,
           },
-          socket.protocol === relayBrowserConsoleProtocol
-            ? relayBrowserConsoleProtocol
-            : relayBrowserProtocol
+          socketProtocol(socket)
         )
       ),
       { dsaEncoding: "ieee-p1363", key: browserKey },
       Buffer.from(auth.signature, "base64url")
     )
     if (!validProof) throw new Error("Browser proof is invalid")
-    const authority = browserAuthority(parsed.payload)
-    const current =
-      parsed.payload.version === 2
-        ? await options.runEffect(
-            options.state.browserAuthority({
-              instanceId: serverScopeId(parsed.payload),
-              issuer: parsed.payload.issuer,
-              loginSessionId: parsed.payload.loginSessionId,
-              subject: parsed.payload.subject,
-            })
-          )
-        : { issuerGeneration: 0, minimumRevision: 0 }
-    const nextRenewal =
-      parsed.payload.version === 2
-        ? renewalChallenge(parsed.payload.expiresAt)
-        : undefined
+    // Consoles speak their own subprotocol; usage speaks the first.
+    if (
+      socketProtocol(socket) !==
+      (parsed.payload.operation === "console"
+        ? relayBrowserConsoleProtocol
+        : parsed.payload.operation === "resources"
+          ? relayBrowserProtocol
+          : null)
+    ) {
+      throw new Error("Capability is not for this socket")
+    }
+    const authority = authorityFromCapability(parsed.payload)
+    const current = await options.runEffect(
+      options.state.browserAuthority({
+        instanceId: serverScopeId(parsed.payload),
+        issuer: parsed.payload.issuer,
+        loginSessionId: parsed.payload.loginSessionId,
+        subject: parsed.payload.subject,
+      })
+    )
+    const nextRenewal = renewalChallenge(parsed.payload.expiresAt)
     if (clientConfiguration !== registry.clientConfiguration) {
       throw new Error("Capability issuer changed during authentication")
     }
@@ -721,13 +718,9 @@ function authenticateBrowser(
       JSON.stringify({
         expiresAt: capability.expiresAt,
         instanceId: capability.instanceId,
-        ...(nextRenewal
-          ? {
-              renewalNonce: nextRenewal.nonce,
-              renewalNonceExpiresAt: nextRenewal.nonceExpiresAt,
-              sessionId: challenge.sessionId,
-            }
-          : {}),
+        renewalNonce: nextRenewal.nonce,
+        renewalNonceExpiresAt: nextRenewal.nonceExpiresAt,
+        sessionId: challenge.sessionId,
         type: "auth.ready",
         v: 1,
       }),
@@ -738,7 +731,7 @@ function authenticateBrowser(
   async function renew(
     value: typeof RelayBrowserRenewSchema.Type
   ): Promise<void> {
-    if (!browserKey || !capability || capability.version !== 2) {
+    if (!browserKey || !capability) {
       throw new Error("Browser session cannot renew")
     }
     const renewal = registry.renewalChallenge(socket)
@@ -746,9 +739,6 @@ function authenticateBrowser(
       throw new Error("Browser renewal challenge expired")
     }
     const parsed = decodeCapability(value.capability)
-    if (parsed.payload.version !== 2) {
-      throw new Error("Browser renewal requires capability v2")
-    }
     const client = await options.runEffect(
       options.state.findClientById(parsed.payload.issuer)
     )
@@ -765,9 +755,7 @@ function authenticateBrowser(
             relayId: options.identity.id,
             sessionId: renewal.sessionId,
           },
-          socket.protocol === relayBrowserConsoleProtocol
-            ? relayBrowserConsoleProtocol
-            : relayBrowserProtocol
+          socketProtocol(socket)
         )
       ),
       { dsaEncoding: "ieee-p1363", key: browserKey },
@@ -1735,10 +1723,7 @@ class ConsoleHub {
           if (kept.length === 0) return
           // Browsers still being sent history reach these lines in turn.
           for (const socket of this.#subscribers) {
-            if (
-              socket.protocol === relayBrowserConsoleProtocol &&
-              !this.#historyReaders.has(socket)
-            ) {
+            if (!this.#historyReaders.has(socket)) {
               this.#sendHistory(socket, this.#position(kept.length))
             }
           }
@@ -1763,28 +1748,6 @@ class ConsoleHub {
   #deliverSession(socket: WebSocket): void {
     const lifecycle = this.#sessionLifecycle ?? []
     const snapshotStart = Math.max(0, this.#recent.length - 200)
-    if (socket.protocol === relayBrowserProtocol) {
-      this.#deliver(
-        socket,
-        JSON.stringify({
-          type: "ready",
-          instanceId: this.#resourceId,
-          lifecycle,
-        }),
-        "console",
-        this.#source.readAction
-      )
-      for (const line of this.#recent.slice(snapshotStart)) {
-        this.#deliver(
-          socket,
-          encodeConsoleLineFrame(line),
-          "console",
-          this.#source.readAction
-        )
-      }
-      return
-    }
-
     const reset = encodeNewestConsoleBatch(
       {
         type: "reset",
@@ -2004,4 +1967,13 @@ function asError(cause: unknown): Error {
 
 function parseProtocols(value: string | undefined): ReadonlyArray<string> {
   return value?.split(",").map((protocol) => protocol.trim()) ?? []
+}
+
+// The subprotocol the browser and the Relay agreed on for this socket.
+function socketProtocol(
+  socket: WebSocket
+): typeof relayBrowserConsoleProtocol | typeof relayBrowserProtocol {
+  return socket.protocol === relayBrowserConsoleProtocol
+    ? relayBrowserConsoleProtocol
+    : relayBrowserProtocol
 }

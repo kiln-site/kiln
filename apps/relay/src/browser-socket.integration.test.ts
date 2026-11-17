@@ -8,7 +8,7 @@ import { WebSocket } from "ws"
 import {
   relayBrowserConsoleProtocol,
   relayBrowserProofTranscript,
-  type RelayBrowserCapabilityV2,
+  type RelayBrowserCapability,
   type RelayConsoleLine,
   type RelayManagedDatabase,
 } from "@workspace/contracts"
@@ -302,7 +302,7 @@ async function startRelay(
 // Authenticates a socket with a capability built from `overrides`.
 async function authenticate(
   relay: TestRelay,
-  overrides: Partial<RelayBrowserCapabilityV2>
+  overrides: Partial<RelayBrowserCapability>
 ) {
   const socket = relay.connect(origin)
   const messages = messageCollector(socket)
@@ -338,7 +338,7 @@ function sendAuth(
   socket: WebSocket,
   relay: TestRelay,
   challenge: Record<string, unknown>,
-  overrides: Partial<RelayBrowserCapabilityV2>,
+  overrides: Partial<RelayBrowserCapability>,
   keys: { issuerPrivateKey?: KeyObject } = {}
 ): void {
   const authCapability = {
@@ -371,12 +371,12 @@ const databaseCapability = {
   actions: ["instance.logs.read"],
   instanceId: sharedId,
   resourceKind: "database",
-} satisfies Partial<RelayBrowserCapabilityV2>
+} satisfies Partial<RelayBrowserCapability>
 
 async function attemptAuthentication(
   relay: TestRelay,
   overrides: {
-    capability?: Partial<RelayBrowserCapabilityV2>
+    capability?: Partial<RelayBrowserCapability>
     issuerPrivateKey?: KeyObject
     proofPrivateKey?: KeyObject
     socketOrigin?: string
@@ -422,7 +422,7 @@ function capability(input: {
   capabilityId: string
   keyThumbprint: string
   revision: number
-}): RelayBrowserCapabilityV2 {
+}): RelayBrowserCapability {
   const issuedAt = Date.now()
   return {
     actions: ["instance.console.read"],
@@ -445,7 +445,7 @@ function capability(input: {
 }
 
 function encodeCapability(
-  capability: RelayBrowserCapabilityV2,
+  capability: RelayBrowserCapability,
   privateKey: KeyObject
 ): string {
   const encoded = Buffer.from(JSON.stringify(capability)).toString("base64url")

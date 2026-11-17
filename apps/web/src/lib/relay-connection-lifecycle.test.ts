@@ -9,7 +9,6 @@ import type { AddressInfo } from "node:net"
 import type { WebSocket } from "ws"
 
 import {
-  relayBrowserCapabilityV2Feature,
   relayAuthChallengeTranscript,
   relayControlProtocol,
 } from "@workspace/contracts"
@@ -408,7 +407,6 @@ function authenticateRelaySocket(
           actions: [],
           browserIssuerGeneration: 3,
           clientId: "hearth-client",
-          features: [relayBrowserCapabilityV2Feature],
           journalId: journal.id,
           protocol: relayControlProtocol,
           relayBuild: "test",

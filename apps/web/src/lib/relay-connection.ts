@@ -19,9 +19,6 @@ import {
   isAuditedRelayControlOperation,
   relayAuthenticationWindowMs,
   relayBackupFailureCodesV1Feature,
-  relayBrowserCapabilityV2Feature,
-  relayBrowserLeaseRenewalV1Feature,
-  relayFileRequestReplayV1Feature,
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
   relayControlDeadlineMs,
@@ -548,8 +545,12 @@ export function relayConnectionBrowserMetadata(
   return connections.get(relayId)?.browserMetadata ?? null
 }
 
-export function relayConnectionFeatures(relayId: string): ReadonlySet<string> {
-  return connections.get(relayId)?.features ?? new Set()
+/**
+ * Whether this process is connected to the Relay and it takes browser
+ * capabilities and authorization revisions.
+ */
+export function relayBrowserAuthorizationConnected(relayId: string): boolean {
+  return connections.get(relayId)?.browserAuthorization ?? false
 }
 
 export function relayBrowserAuthorizationReady(
@@ -625,9 +626,11 @@ class RelayConnection {
   #recordedVersion: string | null = null
   #recordingVersion = false
   #eventSequence = 0
-  #features = new Set<string>()
   // The journal the Relay keeps this Hearth's changes in (`auth.ready`).
   #journalId: string | null = null
+  // Whether the Relay reported its browser issuer generation, and so takes
+  // browser capabilities and authorization revisions.
+  #browserAuthorization = false
   #browserAuthorizationAdvance: Promise<number> | null = null
   #browserAuthorizationReadiness: BrowserAuthorizationReadiness | null = null
   #browserIssuerGeneration = 0
@@ -1002,8 +1005,8 @@ class RelayConnection {
       : null
   }
 
-  get features(): ReadonlySet<string> {
-    return this.#state.status === "authenticated" ? this.#features : new Set()
+  get browserAuthorization(): boolean {
+    return this.#state.status === "authenticated" && this.#browserAuthorization
   }
 
   get browserAuthorizationReadiness(): BrowserAuthorizationReadiness | null {
@@ -1275,7 +1278,6 @@ class RelayConnection {
     this.#connectionsFiber = null
     this.#socket?.close(1000, "Hearth connection closed")
     this.#socket = null
-    this.#features.clear()
     this.#journalId = null
     this.#browserAuthorizationAdvance = null
     this.#browserIssuerGeneration = 0
@@ -1578,15 +1580,16 @@ class RelayConnection {
             return
           }
           this.#attempt = 0
-          this.#features = new Set(message.features ?? [])
           this.#journalId = message.journalId ?? null
+          const browserIssuerGeneration = message.browserIssuerGeneration
+          this.#browserAuthorization = browserIssuerGeneration !== undefined
           this.#browserAuthorizationReadiness = browserAuthorizationReadiness()
           this.#sessionId = sessionId
           this.#authenticatedAt = Date.now()
           this.#lastHeardAt = this.#authenticatedAt
           this.#setState("authenticated", null)
           this.#watchLiveness(activeSocket)
-          const synchronizeBrowserAuthorization = () => {
+          const synchronizeBrowserAuthorization = (generation: number) => {
             if (
               this.#socket !== activeSocket ||
               activeSocket.readyState !== WebSocket.OPEN
@@ -1600,19 +1603,10 @@ class RelayConnection {
                   synchronizeRelayIssuerGeneration,
                   wakeAuthorizationDelivery,
                 } = await import("@/lib/authorization-delivery")
-                if (
-                  this.#features.has(relayBrowserCapabilityV2Feature) &&
-                  message.browserIssuerGeneration === undefined
-                ) {
-                  throw new Error("Relay omitted its browser issuer generation")
-                }
-                const issuerGeneration =
-                  message.browserIssuerGeneration !== undefined
-                    ? await synchronizeRelayIssuerGeneration(
-                        this.#relay.id,
-                        message.browserIssuerGeneration
-                      )
-                    : 0
+                const issuerGeneration = await synchronizeRelayIssuerGeneration(
+                  this.#relay.id,
+                  generation
+                )
                 if (
                   this.#socket !== activeSocket ||
                   this.#browserAuthorizationReadiness !== readiness
@@ -1648,14 +1642,22 @@ class RelayConnection {
                 this.#browserAuthorizationReadiness =
                   browserAuthorizationReadiness()
                 const retry = setTimeout(
-                  synchronizeBrowserAuthorization,
+                  () => synchronizeBrowserAuthorization(generation),
                   1_000 + Math.floor(Math.random() * 2_000)
                 )
                 retry.unref()
               }
             )
           }
-          synchronizeBrowserAuthorization()
+          if (browserIssuerGeneration === undefined) {
+            // A Relay too old to report it takes no browser capabilities or
+            // revisions, but stays connected so Hearth can update it.
+            this.#browserAuthorizationReadiness.reject(
+              new Error("Update this Relay to use it from the browser.")
+            )
+          } else {
+            synchronizeBrowserAuthorization(browserIssuerGeneration)
+          }
           authenticated = true
           if (this.#hasPushedSnapshot) resume(Effect.void)
           return
@@ -1911,14 +1913,11 @@ class RelayConnection {
       JSON.stringify({
         clientId: credentials.clientId,
         // Today's Relays read none of these. Relays a release behind still
-        // do: without them they'd send whole snapshots, drop backup failure
-        // codes, and turn browsers away while they wait to update.
+        // do: without them they'd send whole snapshots and drop backup
+        // failure codes while they wait to update.
         features: [
           relaySnapshotDeltaFeature,
           relaySnapshotNodeResourcesFeature,
-          relayBrowserCapabilityV2Feature,
-          relayBrowserLeaseRenewalV1Feature,
-          relayFileRequestReplayV1Feature,
           relayBackupFailureCodesV1Feature,
         ],
         signature: sign(
