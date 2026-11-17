@@ -28,6 +28,10 @@ on:
         required: false
         type: string
         default: '["amd64", "arm64"]'
+      github_hosted:
+        description: Use GitHub-hosted runners instead of configured build runners
+        type: boolean
+        default: false
       build_args:
         description: Newline-delimited Docker build arguments
         required: false
@@ -84,11 +88,11 @@ permissions:
 jobs:
   build:
     name: ${{ inputs.name }}${{ matrix.architecture == 'arm64' && ' · arm64' || '' }}
-    # Repository variables opt push builds into a preferred runner provider.
+    # Callers can use GitHub runners instead of the preferred push-build provider.
     runs-on: >-
       ${{ matrix.architecture == 'arm64'
-          && (github.event_name == 'push' && vars.BUILD_RUNNER_ARM64 || 'ubuntu-24.04-arm')
-          || (github.event_name == 'push' && vars.BUILD_RUNNER_AMD64 || 'ubuntu-24.04') }}
+          && (!inputs.github_hosted && github.event_name == 'push' && vars.BUILD_RUNNER_ARM64 || 'ubuntu-24.04-arm')
+          || (!inputs.github_hosted && github.event_name == 'push' && vars.BUILD_RUNNER_AMD64 || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
