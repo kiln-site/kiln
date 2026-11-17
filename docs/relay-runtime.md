@@ -472,7 +472,6 @@ users, or SELinux confines the Relay, the Files page says which files it can't
 reach. Links with absolute targets resolve inside the Relay's container, so the
 Files page refuses to open them.
 
-The Database page inspects the live `/data/network/relay.sqlite` file in
-read-only mode. `relay.database.read` grants access to its state, including
-sensitive configuration. When host files are mounted, `relay.files.read` can
-read the same file through Docker's volume directory.
+The Relay's own state, the live `/data/network/relay.sqlite` file, opens from
+the Files page when host files are mounted, through Docker's volume directory.
+Reading it takes `relay.files.read`, and it holds sensitive configuration.

@@ -15,7 +15,6 @@ export const relayActions = [
   "relay.audit.read",
   "relay.logs.read",
   "relay.terminal",
-  "relay.database.read",
   "relay.files.read",
   "relay.files.write",
   "relay.files.mount",

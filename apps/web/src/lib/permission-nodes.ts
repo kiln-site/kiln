@@ -205,7 +205,6 @@ const hostLevelPermissions: ReadonlySet<string> = new Set([
   "relay.files.read",
   "relay.files.write",
   "relay.files.mount",
-  "relay.database.read",
   "app.manage",
 ])
 // Ones that reach it only from a Relay, where they cover its Apps: an App's

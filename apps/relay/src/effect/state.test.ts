@@ -404,7 +404,7 @@ describe("Relay state", () => {
   )
 
   it.effect(
-    "keeps what a client or invitation could do to an App's files, to a database's and an App's power, to deploy an App or change its limits, and to open its shell, as the actions every instance takes",
+    "keeps what a client or invitation could do to an App's files, to a database's and an App's power, to deploy an App or change its limits, and to open its shell, as the actions every instance takes, and drops reading the Relay's own state",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -438,6 +438,7 @@ describe("Relay state", () => {
                 "app.terminal",
                 "app.logs.read",
                 "database.logs.read",
+                "relay.database.read",
               ])
               yield* store.createInvitation(used)
               yield* store.pairClient({
@@ -452,7 +453,11 @@ describe("Relay state", () => {
                 sourceCidrs: [],
               })
               yield* store.createInvitation(
-                invitation("unused", ["app.files.write", "app.manage"])
+                invitation("unused", [
+                  "app.files.write",
+                  "app.manage",
+                  "relay.database.read",
+                ])
               )
             })
           )

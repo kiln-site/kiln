@@ -2534,5 +2534,118 @@ describeMysql("database migrations", () => {
         }),
       schemaBuildTimeout
     )
+
+    it.effect(
+      "drops reading the Relay's own state from grants, presets and Relay clients, so they still load",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while the Relay's state had a tab, and a
+          // permission, of its own.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 89)
+          )
+          const relayId = "1".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify([
+              "relay.read",
+              "relay.database.read",
+              "relay.files.read",
+            ]),
+            client_role: "custom",
+          })
+          const selections = (
+            owner: Record<string, string>,
+            keys: ReadonlyArray<string>
+          ) =>
+            keys.map((key) => ({
+              ...owner,
+              selection_kind: key.endsWith(".all")
+                ? "collection"
+                : "permission",
+              selection_key: key,
+            }))
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId: relayId,
+              resourceType: "relay",
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              selections({ access_id: id }, keys)
+            )
+          })
+          yield* grant("host", ["relay.database.read", "relay.files.read"])
+          yield* grant("block", ["relay.database.all", "relay.logs.all"])
+          yield* grant("state", ["relay.database.read"])
+          yield* insertRows("permission_preset", {
+            created_at: 1,
+            id: "preset",
+            name: "Relay operator",
+            relay_id: relayId,
+            resource_id: relayId,
+            resource_type: "relay",
+            updated_at: 1,
+          })
+          yield* insertRows(
+            "preset_selection",
+            selections({ preset_id: "preset" }, [
+              "relay.database.read",
+              "relay.terminal",
+            ])
+          )
+
+          yield* applyMigrations(migrations)
+
+          const selected = (table: string, owner: string, id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\` FROM ${sql(databaseTableName(table))}
+               WHERE ${sql(owner)} = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          const granted = (id: string) =>
+            selected("access_selection", "access_id", id)
+          expect(yield* granted("host")).toEqual(["relay.files.read"])
+          expect(yield* granted("block")).toEqual(["relay.logs.all"])
+          expect(yield* granted("state")).toEqual([])
+          expect(
+            yield* selected("preset_selection", "preset_id", "preset")
+          ).toEqual(["relay.terminal"])
+
+          // What was stored now loads, with everything else it allowed.
+          const loaded = (keys: ReadonlyArray<string>) =>
+            expandStoredSelections(
+              keys.map((key) => ({
+                key,
+                kind: key.endsWith(".all") ? "collection" : "permission",
+              })),
+              "relay"
+            )
+          expect(loaded(yield* granted("host"))).toEqual(
+            expect.arrayContaining(["relay.read", "relay.files.read"])
+          )
+          expect(loaded(yield* granted("block"))).toEqual(
+            expect.arrayContaining(["relay.read", "relay.logs.read"])
+          )
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual(["relay.read", "relay.files.read"])
+        }),
+      schemaBuildTimeout
+    )
   })
 })

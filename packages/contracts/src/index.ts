@@ -421,10 +421,6 @@ export const relayDatabaseContainerSchema = z
 
 export const relayDatabaseWipeSchema = relayDatabaseExportSchema
 
-export const relayStateDatabaseReadSchema = z
-  .object({ request: databaseReadRequestSchema })
-  .strict()
-
 export const relayDatabaseDataReadSchema = relayDatabaseExportSchema.extend({
   request: databaseReadRequestSchema,
 })

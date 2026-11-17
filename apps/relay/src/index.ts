@@ -34,7 +34,6 @@ import {
   relayConsoleShareInputSchema,
   relayPrepareDatabaseSchema,
   relayProvisionDatabaseSchema,
-  relayStateDatabaseReadSchema,
   relayPrepareAppSchema,
   relayProvisionAppSchema,
   appIdFromFileRoot,
@@ -166,14 +165,13 @@ import {
   discoverRelayAdvertisedHost,
   discoverRelayGameHost,
   loadConfig,
-  relayStateDatabasePath,
 } from "./config.js"
 import { attachControlSocket } from "./control-socket.js"
 import { startControlDials } from "./control-dial.js"
 import { dialWakePath, sendDialWake } from "./dial-wake.js"
 import { openControlTunnel } from "./control-tunnel.js"
 import { DockerDriver } from "./docker.js"
-import { DatabaseBrowser, readDatabaseFile } from "./database-browser.js"
+import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import {
   browseManagedDatabase,
@@ -2546,13 +2544,6 @@ async function executeControlRequest(
       }
       await snapshotHub.refresh()
       return { mode, removed: mode === "commit" }
-    }
-    case "relay.database.read": {
-      const input = relayStateDatabaseReadSchema.parse(request.payload)
-      return runRelayEffect(
-        "relay.database.read",
-        readDatabaseFile(relayStateDatabasePath(config), input.request)
-      )
     }
     case "relay.host.read":
       return {

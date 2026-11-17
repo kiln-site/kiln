@@ -91,7 +91,6 @@ export const accessPermissions = [
   "relay.audit.read",
   "relay.logs.read",
   "relay.terminal",
-  "relay.database.read",
   "relay.files.read",
   "relay.files.write",
   "relay.files.mount",
@@ -210,7 +209,6 @@ const permissionPlacement: Record<
   "relay.audit.read": ["relay.activity", "relay"],
   "relay.logs.read": ["relay.logs", "relay"],
   "relay.terminal": ["relay.terminal", "relay"],
-  "relay.database.read": ["relay.database", "relay"],
   "relay.files.read": ["relay.files", "relay"],
   "relay.files.write": ["relay.files", "relay"],
   "relay.files.mount": ["relay.files", "relay"],
@@ -664,11 +662,6 @@ const permissionCopy: Record<
     description:
       "Restart the Relay with its host’s filesystem mounted, so host files can be browsed.",
   },
-  "relay.database.read": {
-    label: "View Relay database",
-    description:
-      "Inspect the Relay’s SQLite state, including pairing records and sensitive configuration.",
-  },
   "relay.terminal": {
     label: "Open host terminal",
     description: "Run a root shell on the Relay’s host node.",
@@ -778,7 +771,6 @@ const blockLabels: Record<string, string> = {
   "relay.activity": "Relay activity",
   "relay.logs": "Relay logs",
   "relay.terminal": "Host terminal",
-  "relay.database": "Relay database",
   "relay.files": "Host files",
 }
 export const permissionBlocks = Object.freeze(
