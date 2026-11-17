@@ -42,7 +42,8 @@ The app needs iOS 27 or later: its navigation is iOS's liquid glass tab bar
 and sheets, with no fallback for older versions.
 
 Prerequisites: Xcode 27 (with an iOS 27 simulator runtime) and CocoaPods
-(`brew install cocoapods`). Use `vp install` from the repository root.
+(`brew install cocoapods watchman`). Watchman keeps Metro source watching
+reliable across large worktrees. Use `vp install` from the repository root.
 
 ```sh
 cd apps/mobile
@@ -99,3 +100,53 @@ Release`; the phone must reach this Mac on the network.
 - Live state over `/api/realtime`, which takes only cookie sessions; the app
   polls instead.
 - Push notifications, which a free Apple account can't sign.
+
+### Kiln Dev: Fast Refresh over Tailscale
+
+`Kiln Dev` installs beside standalone `Kiln` with bundle ID
+`gg.quartzdev.kiln.mobile.dev` and scheme `kiln-dev`. Build it once:
+
+```sh
+cd apps/mobile
+APP_VARIANT=development KILN_IOS_TEAM_ID=<your-team> pnpm exec expo prebuild --platform ios
+pnpm ios:dev
+```
+
+Start Metro from the checkout you want to work on:
+
+```sh
+pnpm dev:tailscale
+```
+
+The command checks Tailscale, binds Metro to loopback on port 8082, and creates
+an HTTPS Serve listener on 8482. It refuses to replace another service. It
+prints a QR code/deep link for Kiln Dev; open that link on the phone, or enter
+the printed HTTPS URL in the development client's launcher. The launcher
+remembers recent projects. No Expo account, public tunnel, shared Wi-Fi, or
+USB cable is needed after installation. Both devices must be connected to the
+same tailnet. The command prevents idle sleep on macOS while Metro runs;
+keep the Mac powered on and its lid open.
+
+React/TypeScript and styling changes Fast Refresh on save. Branch switches
+in the same checkout use the same URL; reload the project after switching.
+Install that branch's dependencies first. For concurrent worktrees, start
+another Metro with a different free pair of ports:
+
+```sh
+METRO_PORT=8083 METRO_HTTPS_PORT=8483 pnpm dev:tailscale
+```
+
+Open its printed link to switch the same Kiln Dev app to that checkout.
+Different branches don't need different apps when their native dependencies
+and native configuration match. Swift changes (including the custom bar),
+Expo SDK upgrades, or adding/removing native modules require rebuilding and
+installing Kiln Dev from that branch. Two incompatible native versions tested
+at once would need separate app variants.
+
+The default Tailscale HTTPS port **8482** is reserved for Kiln Metro. Stopping
+Metro leaves its Serve listener in place, so other previews see the port as
+occupied. While Metro is stopped the URL returns a gateway error; start the
+command again to reconnect. Metro itself uses loopback port **8082**. The URL
+is remembered by Kiln Dev, rather than compiled into the app. Use `pnpm dev` for ordinary LAN development. To build
+standalone Kiln again, regenerate without `APP_VARIANT=development` before
+using `pnpm ios:release`.

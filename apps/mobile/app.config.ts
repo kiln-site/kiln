@@ -3,8 +3,12 @@ import type { ConfigContext, ExpoConfig } from "expo/config"
 // Free Apple "Personal Team" signing needs a bundle identifier no one else has
 // registered. Set KILN_IOS_BUNDLE_ID (for example com.yourname.kiln) before
 // `expo prebuild` when the default is taken.
-const bundleIdentifier =
+const isDevelopment = process.env.APP_VARIANT === "development"
+const baseBundleIdentifier =
   process.env.KILN_IOS_BUNDLE_ID?.trim() || "gg.quartzdev.kiln.mobile"
+const bundleIdentifier = isDevelopment
+  ? `${baseBundleIdentifier}.dev`
+  : baseBundleIdentifier
 // Your Apple team ID (a free Personal Team works), written into the Xcode
 // project so `expo run:ios --device` can sign without opening Xcode. Find it
 // in Xcode → Settings → Accounts, or in the error the first build prints.
@@ -43,9 +47,9 @@ const fonts = [
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
-  name: "Kiln",
+  name: isDevelopment ? "Kiln Dev" : "Kiln",
   slug: "kiln",
-  scheme: "kiln",
+  scheme: isDevelopment ? "kiln-dev" : "kiln",
   version: "0.0.1",
   orientation: "portrait",
   icon: "./assets/icon.png",
@@ -73,6 +77,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
   },
   plugins: [
+    ["expo-dev-client", { addGeneratedScheme: isDevelopment }],
     "expo-secure-store",
     "expo-web-browser",
     [
