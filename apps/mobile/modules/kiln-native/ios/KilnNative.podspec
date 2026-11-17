@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'The floating navigation bar and other UIKit-backed chrome.'
   s.author         = 'Kiln'
   s.homepage       = 'https://github.com/kiln-site/kiln'
-  s.platforms      = { :ios => '17.0' }
+  s.platforms      = { :ios => '27.0' }
   s.source         = { :path => '.' }
   s.static_framework = true
 

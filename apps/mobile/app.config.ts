@@ -100,7 +100,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       "expo-build-properties",
       {
-        ios: { deploymentTarget: "17.0" },
+        // iOS 27 only: the tab bar and sheets are iOS 26+ liquid glass, with
+        // no fallback to keep.
+        ios: { deploymentTarget: "27.0" },
         android: { usesCleartextTraffic: true },
       },
     ],

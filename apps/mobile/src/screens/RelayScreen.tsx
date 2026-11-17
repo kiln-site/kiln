@@ -68,10 +68,7 @@ export function RelayScreen({ route }: Props): ReactElement {
   const { relay, node } = info.data
 
   return (
-    <Screen
-      refreshing={info.isRefetching}
-      onRefresh={() => void info.refetch()}
-    >
+    <Screen onRefresh={() => info.refetch()}>
       <Card className="mt-2 flex-row items-center justify-between p-4">
         <StatePill state={relay.status} />
         <MonoText className="text-foreground-muted text-xs">

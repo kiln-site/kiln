@@ -30,18 +30,21 @@ import {
 } from "react-native"
 import { SafeAreaProvider } from "react-native-safe-area-context"
 
-import { NavBar, type ContentRoute } from "./components/NavBar"
+import { NavBar } from "./components/NavBar"
+import { recordVisit } from "./lib/recent-pages"
+import { contentRouteOf, type ContentRoute, type DrawerKind } from "./menus"
 import { AppText, Icon } from "./components/ui"
 import { usePalette } from "./lib/palette"
 import {
   HOME,
   SERVER_PAGES,
-  sectionLabel,
+  pageTitle,
   type RootStackParamList,
 } from "./navigation"
 import { AccountScreen } from "./screens/AccountScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { ConsoleScreen } from "./screens/ConsoleScreen"
+import { DrawerScreen } from "./screens/DrawerScreen"
 import { RelayScreen } from "./screens/RelayScreen"
 import { SearchScreen } from "./screens/SearchScreen"
 import { NotYet, SectionScreen } from "./screens/SectionScreen"
@@ -120,7 +123,7 @@ function ServerRouteScreen({
   if (route.params.page === "console") return <ConsoleScreen route={route} />
   if (route.params.page === "info") return <ServerScreen route={route} />
   const page = SERVER_PAGES.find((entry) => entry.id === route.params.page)
-  return <NotYet eyebrow={route.params.name} title={page?.label ?? ""} />
+  return <NotYet title={page?.label ?? ""} />
 }
 
 const relayTitle = (params: unknown) =>
@@ -147,12 +150,17 @@ const RootStack = createNativeStackNavigator({
           screen: SectionScreen,
           initialParams: HOME,
           options: ({ navigation, route }): NativeStackNavigationOptions => ({
-            // The page names itself in its heading; the title only labels
-            // the back button's history menu.
-            title: sectionLabel(route.params as RootStackParamList["Section"]),
-            headerTitle: "",
-            headerLeft: () => <Brand />,
-            headerLeftBackgroundVisible: false,
+            title: pageTitle(route.params as RootStackParamList["Section"]),
+            // Home, always the bottom of the stack, carries the brand instead
+            // of a title; every other page gets its title, the back button
+            // and the back swipe.
+            ...(navigation.getState().routes[0]?.key === route.key
+              ? {
+                  headerTitle: "",
+                  headerLeft: () => <Brand />,
+                  headerLeftBackgroundVisible: false,
+                }
+              : {}),
             headerRight: () => <HeaderActions />,
             unstable_headerRightItems: () => [
               {
@@ -168,8 +176,6 @@ const RootStack = createNativeStackNavigator({
                 onPress: () => navigation.navigate("Account"),
               },
             ],
-            // Switching sections swaps the root page; cross-fade like a tab.
-            animation: "fade",
           }),
         },
         Server: {
@@ -179,6 +185,15 @@ const RootStack = createNativeStackNavigator({
         Relay: {
           screen: RelayScreen,
           options: ({ route }) => ({ title: relayTitle(route.params) }),
+        },
+        Drawer: {
+          screen: DrawerScreen,
+          options: {
+            presentation: "formSheet",
+            sheetAllowedDetents: "fitToContents",
+            sheetGrabberVisible: true,
+            headerShown: false,
+          },
         },
         Search: {
           screen: SearchScreen,
@@ -192,12 +207,13 @@ const RootStack = createNativeStackNavigator({
         },
         Account: {
           screen: AccountScreen,
+          // A drawer, like the bar's.
           options: {
             title: "Account",
             presentation: "formSheet",
-            sheetAllowedDetents: [0.75, 1],
+            sheetAllowedDetents: "fitToContents",
             sheetGrabberVisible: true,
-            headerTransparent: false,
+            headerShown: false,
           },
         },
       },
@@ -208,15 +224,12 @@ const RootStack = createNativeStackNavigator({
 const Navigation = createStaticNavigation(RootStack)
 const navigationRef = createNavigationContainerRef<RootStackParamList>()
 
-const CONTENT_ROUTES = new Set(["Section", "Server", "Relay"])
-
-/** The top page under any sheet, which the bar describes. */
-function contentRoute(): ContentRoute | null {
-  const routes = navigationRef.isReady()
-    ? (navigationRef.getRootState()?.routes ?? [])
-    : []
-  const route = routes.findLast((entry) => CONTENT_ROUTES.has(entry.name))
-  return (route as ContentRoute | undefined) ?? null
+/** The drawer open on top, whose tab the bar shows as selected. */
+function openDrawer(): DrawerKind | null {
+  const top = navigationRef.getRootState()?.routes.at(-1)
+  return top?.name === "Drawer"
+    ? (top.params as RootStackParamList["Drawer"]).kind
+    : null
 }
 
 function Root() {
@@ -225,7 +238,14 @@ function Root() {
   const { state } = useSessionContext()
   const ready = state.status !== "loading"
   const [content, setContent] = useState<ContentRoute | null>(null)
-  const syncContent = () => setContent(contentRoute())
+  const [drawer, setDrawer] = useState<DrawerKind | null>(null)
+  const syncContent = () => {
+    if (!navigationRef.isReady()) return
+    const next = contentRouteOf(navigationRef.getRootState())
+    setContent(next)
+    setDrawer(openDrawer())
+    if (next) recordVisit(next)
+  }
 
   useEffect(() => {
     if (ready) void SplashScreen.hideAsync()
@@ -255,7 +275,9 @@ function Root() {
         onReady={syncContent}
         onStateChange={syncContent}
       />
-      {content ? <NavBar navigation={navigationRef} route={content} /> : null}
+      {content ? (
+        <NavBar navigation={navigationRef} route={content} drawer={drawer} />
+      ) : null}
     </>
   )
 }

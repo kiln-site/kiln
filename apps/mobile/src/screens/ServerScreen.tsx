@@ -101,10 +101,7 @@ export function ServerScreen({ route }: Props): ReactElement {
   }
 
   return (
-    <Screen
-      refreshing={info.isRefetching}
-      onRefresh={() => void info.refetch()}
-    >
+    <Screen onRefresh={() => info.refetch()}>
       <Card className="mt-2 gap-4 p-4">
         <View className="flex-row items-center justify-between">
           <StatePill state={state} />

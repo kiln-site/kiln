@@ -1,25 +1,17 @@
 import ExpoModulesCore
 import UIKit
 
-struct NavItem: Record {
-  @Field var id: String = ""
-  @Field var title: String = ""
-  @Field var systemImage: String = ""
-  @Field var selected: Bool = false
-}
-
+/// A tab: it either goes to a page or opens its drawer, as JS decides.
 struct NavSection: Record {
   @Field var id: String = ""
   @Field var title: String = ""
-  @Field var menuTitle: String = ""
   @Field var systemImage: String = ""
-  @Field var items: [NavItem] = []
 }
 
+/// The circle beside the tabs, for the pages of what's on screen.
 struct NavContext: Record {
   @Field var title: String = ""
   @Field var systemImage: String = ""
-  @Field var items: [NavItem] = []
 }
 
 public final class KilnNativeModule: Module {

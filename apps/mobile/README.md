@@ -15,21 +15,22 @@ your linked CLIs and is unlinked the same way.
 
 ## Layout
 
-| Path                                    | What                                                      |
-| --------------------------------------- | --------------------------------------------------------- |
-| `app.config.ts`                         | App name, bundle ID, fonts, splash, ATS                   |
-| `metro.config.js`                       | Monorepo watch, workspace sources, Uniwind                |
-| `global.css`                            | Hearth's palette as Uniwind (Tailwind 4) theme tokens     |
-| `src/App.tsx`                           | Providers, the native stack, and the header               |
-| `src/navigation.ts`                     | Routes and Hearth's Infra, Manage and game server pages   |
-| `src/components/NavBar.tsx`             | The floating bar: section menus and the page menu         |
-| `modules/kiln-native/`                  | The bar's UIKit view (liquid glass, native menus)         |
-| `src/api/hearth.ts`                     | Effect-based fetch client and `HearthError`               |
-| `src/api/sign-in.ts`                    | Sign-in through Hearth's page in a browser sheet          |
-| `src/api/queries.ts`                    | TanStack Query hooks; polling only while a screen is open |
-| `src/api/console.ts`                    | Console history plus NDJSON follow stream (`expo/fetch`)  |
-| `src/session/`                          | Session in secure storage, sign-in state                  |
-| `src/screens/`, `src/components/ui.tsx` | Screens and shared primitives                             |
+| Path                                           | What                                                      |
+| ---------------------------------------------- | --------------------------------------------------------- |
+| `app.config.ts`                                | App name, bundle ID, fonts, splash, ATS                   |
+| `metro.config.js`                              | Monorepo watch, workspace sources, Uniwind                |
+| `global.css`                                   | Hearth's palette as Uniwind (Tailwind 4) theme tokens     |
+| `src/App.tsx`                                  | Providers, the native stack, and the header               |
+| `src/navigation.ts`                            | Routes and Hearth's Infra, Manage and game server pages   |
+| `src/components/NavBar.tsx`                    | The floating bar: Home, Infra, Manage and the page circle |
+| `modules/kiln-native/`                         | The bar's UIKit view: iOS's tab bar and a glass button    |
+| `src/menus.ts`, `src/screens/DrawerScreen.tsx` | The drawers the bar opens                                 |
+| `src/api/hearth.ts`                            | Effect-based fetch client and `HearthError`               |
+| `src/api/sign-in.ts`                           | Sign-in through Hearth's page in a browser sheet          |
+| `src/api/queries.ts`                           | TanStack Query hooks; polling only while a screen is open |
+| `src/api/console.ts`                           | Console history plus NDJSON follow stream (`expo/fetch`)  |
+| `src/session/`                                 | Session in secure storage, sign-in state                  |
+| `src/screens/`, `src/components/ui.tsx`        | Screens and shared primitives                             |
 
 Response shapes come from `@workspace/contracts/cli`, the same zod schemas the
 CLI uses, so a contract change breaks the app's typecheck rather than its
@@ -37,7 +38,10 @@ runtime.
 
 ## Run it
 
-Prerequisites: Xcode (with an iOS simulator runtime) and CocoaPods
+The app needs iOS 27 or later: its navigation is iOS's liquid glass tab bar
+and sheets, with no fallback for older versions.
+
+Prerequisites: Xcode 27 (with an iOS 27 simulator runtime) and CocoaPods
 (`brew install cocoapods`). Use `vp install` from the repository root.
 
 ```sh

@@ -1,168 +1,36 @@
-import {
-  CommonActions,
-  type NavigationContainerRef,
-} from "@react-navigation/native"
+import type { NavigationContainerRef } from "@react-navigation/native"
 import * as Haptics from "expo-haptics"
 import type { SFSymbol } from "expo-symbols"
-import { useState, type ReactElement } from "react"
-import {
-  Modal,
-  Pressable,
-  View,
-  useColorScheme,
-  type ViewStyle,
-} from "react-native"
+import type { ReactElement } from "react"
+import { Pressable, View, useColorScheme, type ViewStyle } from "react-native"
 
-import {
-  NativeNavBar,
-  type NavContext,
-  type NavItem,
-  type NavSection,
-} from "../../modules/kiln-native"
+import { NativeNavBar, type NavContext } from "../../modules/kiln-native"
 import { cn } from "../lib/cn"
 import { usePalette } from "../lib/palette"
 import {
-  INFRA_PAGES,
-  MANAGE_PAGES,
-  SERVER_PAGES,
-  managePages,
-  sectionLabel,
-  showSection,
-  type InfraPage,
-  type ManagePage,
-  type RootStackParamList,
-  type SectionParams,
-} from "../navigation"
+  TABS,
+  contextDrawer,
+  tabOf,
+  type ContentRoute,
+  type DrawerKind,
+  type Tab,
+} from "../menus"
+import { HOME, showSection, type RootStackParamList } from "../navigation"
 import { BAR_HEIGHT, useBarFrame, useKeyboardOpen } from "./chrome"
 import { AppText, Icon } from "./ui"
 
-/** The page under any sheet: what the bar describes and acts on. */
-export type ContentRoute =
-  | {
-      readonly key: string
-      readonly name: "Section"
-      readonly params: SectionParams
-    }
-  | {
-      readonly key: string
-      readonly name: "Server"
-      readonly params: RootStackParamList["Server"]
-    }
-  | {
-      readonly key: string
-      readonly name: "Relay"
-      readonly params: RootStackParamList["Relay"]
-    }
-
 type Navigation = NavigationContainerRef<RootStackParamList>
 
-function infraPageOf(route: ContentRoute): InfraPage | null {
-  if (route.name === "Server") return "servers"
-  if (route.name === "Relay") return "relays"
-  return route.params.area === "infra" ? route.params.page : null
-}
-
-function managePageOf(route: ContentRoute): ManagePage | null {
-  return route.name === "Section" && route.params.area === "manage"
-    ? route.params.page
-    : null
-}
-
-function sectionsFor(route: ContentRoute): NavSection[] {
-  const infraPage = infraPageOf(route)
-  const managePage = managePageOf(route)
-  return [
-    {
-      id: "infra",
-      title: "Infra",
-      menuTitle: "Infrastructure",
-      systemImage: "square.stack.3d.up",
-      items: INFRA_PAGES.map((page) => ({
-        id: `infra:${page.id}`,
-        title: page.label,
-        systemImage: page.symbol,
-        selected: page.id === infraPage,
-      })),
-    },
-    {
-      id: "manage",
-      title: "Manage",
-      menuTitle: "Manage",
-      systemImage: "switch.2",
-      items: MANAGE_PAGES.map((page) => ({
-        id: `manage:${page.id}`,
-        title: page.label,
-        systemImage: page.symbol,
-        selected: page.id === managePage,
-      })),
-    },
-  ]
-}
-
-/** The circle's menu: the pages of whatever is on screen, if it has any. */
-function contextFor(route: ContentRoute): NavContext | null {
-  if (route.name === "Server") {
-    const current = SERVER_PAGES.find((page) => page.id === route.params.page)
-    return {
-      title: route.params.name,
-      systemImage: current?.symbol ?? "ellipsis",
-      items: SERVER_PAGES.map((page) => ({
-        id: `page:${page.id}`,
-        title: page.label,
-        systemImage: page.symbol,
-        selected: page.id === route.params.page,
-      })),
-    }
-  }
-  if (route.name === "Section" && route.params.area === "manage") {
-    const { sub } = route.params
-    const pages = managePages(route.params.page)
-    if (pages.length === 0) return null
-    const current = pages.find((page) => page.id === sub) ?? pages[0]
-    return {
-      title: sectionLabel(route.params),
-      systemImage: current?.symbol ?? "ellipsis",
-      items: pages.map((page) => ({
-        id: `sub:${page.id}`,
-        title: page.label,
-        systemImage: page.symbol,
-        selected: page.id === current?.id,
-      })),
-    }
-  }
-  return null
-}
-
-function select(navigation: Navigation, route: ContentRoute, id: string) {
-  const [kind, value = ""] = id.split(":")
-  void Haptics.selectionAsync()
-  const setParams = (params: object) =>
-    navigation.dispatch({
-      ...CommonActions.setParams(params),
-      source: route.key,
-    })
-
-  if (kind === "infra") {
-    const page = INFRA_PAGES.find((entry) => entry.id === value)
-    if (page) showSection(navigation, { area: "infra", page: page.id })
-  } else if (kind === "manage") {
-    const page = MANAGE_PAGES.find((entry) => entry.id === value)
-    if (page)
-      showSection(navigation, {
-        area: "manage",
-        page: page.id,
-        sub: page.pages[0]?.id,
-      })
-  } else if (kind === "page") {
-    setParams({ page: value })
-  } else if (kind === "sub") {
-    setParams({ sub: value })
-  }
-}
-
+/**
+ * The floating bottom bar. Home goes straight to Home; Infra and Manage open
+ * a drawer of their pages, and the circle a drawer of the pages of what's on
+ * screen.
+ */
 export function NavBar(props: {
   readonly navigation: Navigation
   readonly route: ContentRoute
+  /** The drawer open over the page, which its tab shows as selected. */
+  readonly drawer: DrawerKind | null
 }): ReactElement | null {
   const palette = usePalette()
   const scheme = useColorScheme()
@@ -170,26 +38,36 @@ export function NavBar(props: {
   // The bar would sit on the keyboard; inputs above it take its place.
   if (useKeyboardOpen()) return null
 
-  const sections = sectionsFor(props.route)
-  const selectedSection =
-    props.route.name === "Section" ? props.route.params.area : "infra"
-  const context = contextFor(props.route)
-  const onSelect = (id: string) => select(props.navigation, props.route, id)
-  const style: ViewStyle = {
-    position: "absolute",
-    left: 16,
-    right: 16,
-    bottom: frame.bottom,
-    height: BAR_HEIGHT,
+  const drawer = contextDrawer(props.route)
+  const context: NavContext | null = drawer
+    ? { title: `${drawer.title} pages`, systemImage: drawer.symbol }
+    : null
+  const selected: Tab =
+    props.drawer && props.drawer !== "context"
+      ? props.drawer
+      : tabOf(props.route)
+  const onSelect = (id: string) => {
+    void Haptics.selectionAsync()
+    if (id === "home") showSection(props.navigation, HOME)
+    else if (id === "infra" || id === "manage" || id === "context")
+      props.navigation.navigate("Drawer", { kind: id })
   }
 
   if (NativeNavBar) {
     return (
       <NativeNavBar
-        style={style}
+        // UIKit's tab bar insets itself from the screen's edges and keeps
+        // above the home indicator.
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 128,
+        }}
         pointerEvents="box-none"
-        sections={sections}
-        selectedSection={selectedSection}
+        sections={TABS}
+        selectedSection={selected}
         context={context}
         tint={palette.primaryText}
         appearance={scheme === "light" ? "light" : "dark"}
@@ -199,28 +77,27 @@ export function NavBar(props: {
   }
   return (
     <FallbackNavBar
-      style={style}
-      sections={sections}
-      selectedSection={selectedSection}
+      style={{
+        position: "absolute",
+        left: 16,
+        right: 16,
+        bottom: frame.bottom,
+        height: BAR_HEIGHT,
+      }}
+      selected={selected}
       context={context}
       onSelect={onSelect}
     />
   )
 }
 
-/** Android: the same bar drawn in React Native, with sheet menus. */
+/** Android: the same bar drawn in React Native. */
 function FallbackNavBar(props: {
   readonly style: ViewStyle
-  readonly sections: readonly NavSection[]
-  readonly selectedSection: string
+  readonly selected: Tab
   readonly context: NavContext | null
   readonly onSelect: (id: string) => void
 }): ReactElement {
-  const [menu, setMenu] = useState<{
-    readonly title: string
-    readonly items: readonly NavItem[]
-  } | null>(null)
-  const close = () => setMenu(null)
   return (
     <View
       style={props.style}
@@ -228,24 +105,22 @@ function FallbackNavBar(props: {
       className="flex-row items-end justify-between"
     >
       <View className="h-full flex-row rounded-full border border-border bg-card p-1">
-        {props.sections.map((section) => {
-          const selected = section.id === props.selectedSection
+        {TABS.map((tab) => {
+          const selected = tab.id === props.selected
           return (
             <Pressable
-              key={section.id}
+              key={tab.id}
               accessibilityRole="button"
-              accessibilityLabel={section.title}
+              accessibilityLabel={tab.title}
               accessibilityState={{ selected }}
-              onPress={() =>
-                setMenu({ title: section.menuTitle, items: section.items })
-              }
+              onPress={() => props.onSelect(tab.id)}
               className={cn(
                 "w-20 items-center justify-center gap-0.5 rounded-full",
                 selected && "bg-raised"
               )}
             >
               <Icon
-                name={section.systemImage as SFSymbol}
+                name={tab.systemImage}
                 color={selected ? "primaryText" : "foreground"}
               />
               <AppText
@@ -254,7 +129,7 @@ function FallbackNavBar(props: {
                   selected && "text-primary-text"
                 )}
               >
-                {section.title}
+                {tab.title}
               </AppText>
             </Pressable>
           )
@@ -263,57 +138,13 @@ function FallbackNavBar(props: {
       {props.context ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${props.context.title} pages`}
-          onPress={() =>
-            props.context &&
-            setMenu({ title: props.context.title, items: props.context.items })
-          }
+          accessibilityLabel={props.context.title}
+          onPress={() => props.onSelect("context")}
           className="size-[62px] items-center justify-center rounded-full border border-border bg-card"
         >
           <Icon name={props.context.systemImage as SFSymbol} size={20} />
         </Pressable>
       ) : null}
-      <Modal
-        visible={menu !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={close}
-      >
-        <Pressable
-          className="flex-1 justify-end bg-black/50 p-3"
-          onPress={close}
-        >
-          <View className="border border-border bg-card py-2">
-            <AppText className="font-mono-medium text-2xs text-foreground-muted px-4 pt-1 pb-2 tracking-widest uppercase">
-              {menu?.title}
-            </AppText>
-            {menu?.items.map((item) => (
-              <Pressable
-                key={item.id}
-                accessibilityRole="button"
-                onPress={() => {
-                  close()
-                  props.onSelect(item.id)
-                }}
-                className="active:bg-raised min-h-12 flex-row items-center gap-3 px-4"
-              >
-                <Icon
-                  name={item.systemImage as SFSymbol}
-                  color={item.selected ? "primaryText" : "muted"}
-                />
-                <AppText
-                  className={cn(
-                    "flex-1 text-base",
-                    item.selected && "text-primary-text"
-                  )}
-                >
-                  {item.title}
-                </AppText>
-              </Pressable>
-            ))}
-          </View>
-        </Pressable>
-      </Modal>
     </View>
   )
 }

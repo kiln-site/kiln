@@ -7,6 +7,7 @@ import {
   cliRevokeResponseSchema,
   type HearthSession,
 } from "../api/hearth"
+import { clearRecentPages } from "../lib/recent-pages"
 import { clearSession, loadSession, saveSession } from "./store"
 
 type SessionState =
@@ -61,6 +62,7 @@ export function SessionProvider(props: { readonly children: ReactNode }) {
             method: "DELETE",
           }).pipe(Effect.ignore)
         yield* clearSession().pipe(Effect.ignore)
+        clearRecentPages()
         queryClient.clear()
         setState({ status: "signed-out" })
       })

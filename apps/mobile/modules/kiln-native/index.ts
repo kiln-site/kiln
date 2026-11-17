@@ -6,25 +6,17 @@ import {
   type ViewProps,
 } from "react-native"
 
-export interface NavItem {
-  readonly id: string
-  readonly title: string
-  readonly systemImage: string
-  readonly selected: boolean
-}
-
+/** A tab: it goes to a page or opens its drawer, as the app decides. */
 export interface NavSection {
   readonly id: string
   readonly title: string
-  readonly menuTitle: string
   readonly systemImage: string
-  readonly items: readonly NavItem[]
 }
 
+/** The circle beside the tabs, for the pages of what's on screen. */
 export interface NavContext {
   readonly title: string
   readonly systemImage: string
-  readonly items: readonly NavItem[]
 }
 
 export type NativeNavBarProps = ViewProps & {
@@ -33,6 +25,7 @@ export type NativeNavBarProps = ViewProps & {
   readonly context: NavContext | null
   readonly tint: string
   readonly appearance: "light" | "dark"
+  /** A tab's ID, or "context" for the circle. */
   readonly onSelect: (event: NativeSyntheticEvent<{ id: string }>) => void
 }
 

@@ -4,12 +4,13 @@ import { FlatList, View } from "react-native"
 import { errorMessage } from "../api/hearth"
 import { useActivity } from "../api/queries"
 import { ActivityRow } from "../components/ActivityRow"
-import { useBarInset } from "../components/chrome"
-import { AppText, Loading, Notice, PageHeading } from "../components/ui"
+import { useBarInset, usePullToRefresh } from "../components/chrome"
+import { AppText, Loading, Notice } from "../components/ui"
 
 export function ActivityScreen(): ReactElement {
   const activity = useActivity()
   const barInset = useBarInset()
+  const pull = usePullToRefresh(() => activity.refetch())
 
   if (activity.isPending)
     return (
@@ -26,13 +27,12 @@ export function ActivityScreen(): ReactElement {
       data={activity.data ?? []}
       keyExtractor={(entry) => entry.id}
       renderItem={({ item }) => <ActivityRow entry={item} />}
-      refreshing={activity.isRefetching}
-      onRefresh={() => void activity.refetch()}
+      refreshing={pull.refreshing}
+      onRefresh={pull.onRefresh}
       ListHeaderComponent={
         <View className="px-4">
-          <PageHeading eyebrow="Manage" title="Activity" />
           {activity.isError ? (
-            <View className="pb-4">
+            <View className="py-4">
               <Notice
                 tone="danger"
                 title="Couldn't load activity"

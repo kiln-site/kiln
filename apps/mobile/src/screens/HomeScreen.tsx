@@ -1,70 +1,69 @@
 import { useNavigation } from "@react-navigation/native"
+import type { SFSymbol } from "expo-symbols"
 import type { ReactElement } from "react"
 import { Pressable, View } from "react-native"
 
 import { errorMessage } from "../api/hearth"
 import {
-  useActivity,
   useRelayInfo,
   useRelays,
   useServers,
   type RelaySummary,
   type ServerSummary,
 } from "../api/queries"
-import { ActivityRow } from "../components/ActivityRow"
 import {
   AppText,
   Card,
+  Icon,
+  KindIcon,
   KindTile,
   Loading,
   MonoText,
   Notice,
-  PageHeading,
   Screen,
   SectionLabel,
   StatePill,
   stateTone,
+  type InstanceKind,
 } from "../components/ui"
 import { cn } from "../lib/cn"
 import { formatBytes, formatPercent } from "../lib/format"
-import { showSection } from "../navigation"
+import { useRecentPages, type RecentPage } from "../lib/recent-pages"
+import {
+  INFRA_PAGES,
+  MANAGE_PAGES,
+  SERVER_PAGES,
+  sectionLabel,
+  showSection,
+  type RootStackParamList,
+  type SectionParams,
+} from "../navigation"
 
 // Hearth's tree lines run through the centre of the Relay's tile.
 const TILE = 36
 const ROW_X = 16
 const TRUNK_X = ROW_X + TILE / 2
 
-function Summary(props: {
+/** A kind and how many there are, as Hearth's target counts show them. */
+function KindCount(props: {
+  readonly kind: InstanceKind
+  readonly count: number | undefined
   readonly label: string
-  readonly value: number | null
-  readonly total?: number | null
-  readonly detail: string
-  readonly alert?: boolean
+  readonly onPress: () => void
 }) {
+  const none = !props.count
   return (
-    <View className="flex-1 gap-1.5 px-3.5 py-3">
-      <MonoText className="text-2xs text-foreground-muted tracking-widest uppercase">
-        {props.label}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${props.count ?? 0} ${props.label}`}
+      onPress={props.onPress}
+      className="flex-row items-center gap-2 py-1 active:opacity-60"
+    >
+      <KindIcon kind={props.kind} size={24} />
+      <MonoText className={cn("text-2xl", none && "text-foreground-muted")}>
+        {props.count ?? 0}
       </MonoText>
-      <View className="flex-row items-baseline">
-        <MonoText
-          className={cn(
-            "font-mono-medium text-2xl",
-            props.alert && "text-danger"
-          )}
-        >
-          {props.value ?? "–"}
-        </MonoText>
-        {props.total != null ? (
-          <MonoText className="text-foreground-muted text-sm">
-            /{props.total}
-          </MonoText>
-        ) : null}
-      </View>
-      <AppText className="text-foreground-muted text-xs">
-        {props.detail}
-      </AppText>
-    </View>
+    </Pressable>
   )
 }
 
@@ -231,106 +230,177 @@ function RelayNode(props: {
   )
 }
 
-function RecentActivity() {
+const RECENT_TILES = {
+  Relay: "relay",
+  Server: "server",
+} as const satisfies Partial<Record<RecentPage["name"], InstanceKind>>
+
+/** What a remembered page is called, and where it sits. */
+function describe(page: RecentPage): {
+  readonly title: string
+  readonly detail: string
+  readonly symbol: SFSymbol | null
+} {
+  if (page.name === "Server") {
+    const params = page.params as RootStackParamList["Server"]
+    const sub = SERVER_PAGES.find((entry) => entry.id === params.page)
+    return {
+      title: params.name,
+      detail: `Game server · ${sub?.label ?? ""}`,
+      symbol: null,
+    }
+  }
+  if (page.name === "Relay") {
+    const params = page.params as RootStackParamList["Relay"]
+    return { title: params.name, detail: "Relay", symbol: null }
+  }
+  const params = page.params as SectionParams
+  const destination =
+    params.area === "infra"
+      ? INFRA_PAGES.find((entry) => entry.id === params.page)
+      : params.area === "manage"
+        ? MANAGE_PAGES.find((entry) => entry.id === params.page)
+        : null
+  return {
+    title: sectionLabel(params),
+    detail: params.area === "manage" ? "Manage" : "Infrastructure",
+    symbol: destination?.symbol ?? null,
+  }
+}
+
+function RecentPages() {
   const navigation = useNavigation()
-  const activity = useActivity()
-  const recent = activity.data?.slice(0, 4) ?? []
+  const recent = useRecentPages()
+
+  const open = (page: RecentPage) => {
+    if (page.name === "Section")
+      showSection(navigation, page.params as SectionParams)
+    else if (page.name === "Server")
+      navigation.navigate("Server", page.params as RootStackParamList["Server"])
+    else
+      navigation.navigate("Relay", page.params as RootStackParamList["Relay"])
+  }
 
   return (
     <>
-      <SectionLabel
-        trailing={
-          <Pressable
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={() =>
-              showSection(navigation, { area: "manage", page: "activity" })
-            }
-          >
-            <MonoText className="text-2xs text-primary-text tracking-widest uppercase">
-              All activity
-            </MonoText>
-          </Pressable>
-        }
-      >
-        Recent activity
-      </SectionLabel>
-      {activity.isPending ? (
-        <Loading />
-      ) : activity.isError ? (
-        <Notice
-          tone="danger"
-          title="Couldn't load activity"
-          message={errorMessage(activity.error)}
-        />
-      ) : recent.length === 0 ? (
-        <Notice title="Nothing has happened yet" />
+      <SectionLabel>Recent</SectionLabel>
+      {recent.length === 0 ? (
+        <AppText className="text-foreground-muted px-1 text-sm">
+          Pages you open show up here.
+        </AppText>
       ) : (
         <Card>
-          {recent.map((entry, index) => (
-            <ActivityRow
-              key={entry.id}
-              entry={entry}
-              divider={index < recent.length - 1}
-            />
-          ))}
+          {recent.map((page, index) => {
+            const { title, detail, symbol } = describe(page)
+            const kind =
+              page.name === "Section" ? null : RECENT_TILES[page.name]
+            return (
+              <Pressable
+                key={page.key}
+                accessibilityRole="button"
+                accessibilityLabel={`${title}, ${detail}`}
+                onPress={() => open(page)}
+                className={cn(
+                  "active:bg-raised flex-row items-center gap-3 px-4 py-2.5",
+                  index < recent.length - 1 && "border-b border-border"
+                )}
+              >
+                {kind ? (
+                  <KindTile kind={kind} size={32} />
+                ) : (
+                  <View className="bg-screen size-8 items-center justify-center border border-border">
+                    <Icon
+                      name={symbol ?? "square.grid.2x2"}
+                      size={15}
+                      color="muted"
+                    />
+                  </View>
+                )}
+                <View className="min-w-0 flex-1">
+                  <AppText className="text-sm font-medium" numberOfLines={1}>
+                    {title}
+                  </AppText>
+                  <MonoText
+                    className="text-2xs text-foreground-muted"
+                    numberOfLines={1}
+                  >
+                    {detail}
+                  </MonoText>
+                </View>
+                <Icon name="chevron.right" size={12} color="muted" />
+              </Pressable>
+            )
+          })}
         </Card>
       )}
     </>
   )
 }
 
-/** Infra › Overview: Hearth's map, as a tree of Relays and what they run. */
-export function OverviewScreen(): ReactElement {
+/** Home: what's here at a glance, where you were, and the Relay tree. */
+export function HomeScreen(): ReactElement {
+  const navigation = useNavigation()
   const servers = useServers()
   const relays = useRelays()
 
-  const running = servers.data?.filter(
-    (server) => server.state === "running"
-  ).length
-  const online = relays.data?.filter(
-    (relay) => relay.status === "connected"
-  ).length
   const attention =
     servers.data && relays.data
       ? servers.data.filter((server) => stateTone(server.state) === "danger")
           .length +
         relays.data.filter((relay) => stateTone(relay.status) === "danger")
           .length
-      : null
+      : 0
 
   return (
     <Screen
-      refreshing={servers.isRefetching || relays.isRefetching}
-      onRefresh={() => {
-        void servers.refetch()
-        void relays.refetch()
-      }}
+      onRefresh={() => Promise.all([servers.refetch(), relays.refetch()])}
     >
-      <PageHeading eyebrow="Infrastructure" title="Overview" />
-
-      <Card className="flex-row">
-        <Summary
-          label="Game servers"
-          value={running ?? null}
-          total={servers.data?.length}
-          detail="running"
-        />
-        <View className="w-px bg-border" />
-        <Summary
+      {/* Every kind, as Hearth's target counts show them. The CLI API
+          doesn't serve apps or databases yet; they read 0 until it does. */}
+      <View className="flex-row items-center justify-center gap-8 pt-3 pb-1">
+        <KindCount
+          kind="relay"
           label="Relays"
-          value={online ?? null}
-          total={relays.data?.length}
-          detail="online"
+          count={relays.data?.length}
+          onPress={() =>
+            showSection(navigation, { area: "infra", page: "relays" })
+          }
         />
-        <View className="w-px bg-border" />
-        <Summary
-          label="Attention"
-          value={attention}
-          detail={attention ? "need a look" : "all clear"}
-          alert={Boolean(attention)}
+        <KindCount
+          kind="server"
+          label="game servers"
+          count={servers.data?.length}
+          onPress={() =>
+            showSection(navigation, { area: "infra", page: "servers" })
+          }
         />
-      </Card>
+        <KindCount
+          kind="app"
+          label="apps"
+          count={0}
+          onPress={() =>
+            showSection(navigation, { area: "infra", page: "apps" })
+          }
+        />
+        <KindCount
+          kind="database"
+          label="databases"
+          count={0}
+          onPress={() =>
+            showSection(navigation, { area: "infra", page: "databases" })
+          }
+        />
+      </View>
+      {attention > 0 ? (
+        <View className="flex-row items-center justify-center gap-1.5 pt-1">
+          <View className="bg-danger size-2" />
+          <MonoText className="text-danger text-xs">
+            {attention} need a look
+          </MonoText>
+        </View>
+      ) : null}
+
+      <RecentPages />
 
       <SectionLabel>Relays</SectionLabel>
       {relays.isPending ? (
@@ -359,8 +429,6 @@ export function OverviewScreen(): ReactElement {
           />
         ))
       )}
-
-      <RecentActivity />
     </Screen>
   )
 }

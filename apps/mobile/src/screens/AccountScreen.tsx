@@ -1,23 +1,26 @@
 import type { ReactElement } from "react"
 import { useState } from "react"
-import { Alert, View } from "react-native"
+import { ActivityIndicator, Alert, View } from "react-native"
 
 import { useWhoami } from "../api/queries"
-import {
-  AppText,
-  Button,
-  Card,
-  Divider,
-  MonoText,
-  Screen,
-  SectionLabel,
-} from "../components/ui"
+import { DrawerRow, DrawerSheet } from "../components/drawer"
+import { AppText, MonoText } from "../components/ui"
 import { formatRelative } from "../lib/format"
+import { usePalette } from "../lib/palette"
 import { useSession, useSessionContext } from "../session/SessionProvider"
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/u)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("")
+}
 
 function Detail(props: { readonly label: string; readonly value: string }) {
   return (
-    <View className="flex-row items-center justify-between gap-4 px-4 py-3">
+    <View className="flex-row items-center justify-between gap-4 px-6 py-2">
       <AppText className="text-foreground-muted text-sm">{props.label}</AppText>
       <MonoText
         className="shrink text-right text-sm"
@@ -30,11 +33,15 @@ function Detail(props: { readonly label: string; readonly value: string }) {
   )
 }
 
+/** The account sheet: who's signed in, this device's link, and sign out. */
 export function AccountScreen(): ReactElement {
   const session = useSession()
   const { signOut } = useSessionContext()
   const whoami = useWhoami()
+  const palette = usePalette()
   const [signingOut, setSigningOut] = useState(false)
+  const name = whoami.data?.user.name ?? ""
+  const { credential } = session
 
   const confirmSignOut = () =>
     Alert.alert(
@@ -53,28 +60,34 @@ export function AccountScreen(): ReactElement {
       ]
     )
 
-  const { credential } = session
   return (
-    <Screen>
-      <SectionLabel>Signed in as</SectionLabel>
-      <Card className="gap-1 p-4">
-        <AppText className="text-lg font-semibold">
-          {whoami.data?.user.name ?? "…"}
-        </AppText>
-        <AppText className="text-foreground-muted text-sm">
-          {whoami.data?.user.email ?? " "}
-        </AppText>
-      </Card>
+    <DrawerSheet title="Account">
+      <View className="flex-row items-center gap-3 px-6 py-2.5">
+        {/* Hearth's avatar without a picture: initials on the accent. */}
+        <View
+          className="size-11 items-center justify-center"
+          style={{ backgroundColor: `${palette.primary}26` }}
+        >
+          <AppText className="text-primary-text text-base font-semibold">
+            {initials(name)}
+          </AppText>
+        </View>
+        <View className="min-w-0 flex-1">
+          <AppText className="text-base font-semibold" numberOfLines={1}>
+            {name || "…"}
+          </AppText>
+          <AppText className="text-foreground-muted text-sm" numberOfLines={1}>
+            {whoami.data?.user.email ?? " "}
+          </AppText>
+        </View>
+      </View>
 
-      <SectionLabel>This device</SectionLabel>
-      <Card>
+      <View className="my-2 border-y border-border py-1">
         <Detail label="Hearth" value={new URL(session.url).host} />
-        <Divider />
         <Detail
           label="Access"
           value={credential.mode === "read_only" ? "read-only" : "full access"}
         />
-        <Divider />
         <Detail
           label="Expires"
           value={
@@ -83,18 +96,18 @@ export function AccountScreen(): ReactElement {
               : "never"
           }
         />
-        <Divider />
-        <Detail label="Name" value={credential.name} />
-      </Card>
+        <Detail label="Device" value={credential.name} />
+      </View>
 
-      <Button
-        className="mt-8"
+      <DrawerRow
+        symbol="rectangle.portrait.and.arrow.right"
         label="Sign out"
         tone="danger"
-        icon="rectangle.portrait.and.arrow.right"
-        loading={signingOut}
         onPress={confirmSignOut}
+        trailing={
+          signingOut ? <ActivityIndicator color={palette.danger} /> : null
+        }
       />
-    </Screen>
+    </DrawerSheet>
   )
 }

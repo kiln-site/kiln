@@ -11,15 +11,14 @@ import {
   Loading,
   MonoText,
   Notice,
-  PageHeading,
   Screen,
   StatePill,
   type InstanceKind,
 } from "../components/ui"
 import { cn } from "../lib/cn"
-import { managePages, sectionLabel, type SectionParams } from "../navigation"
+import { pageTitle, sectionLabel, type SectionParams } from "../navigation"
 import { ActivityScreen } from "./ActivityScreen"
-import { OverviewScreen } from "./OverviewScreen"
+import { HomeScreen } from "./HomeScreen"
 
 type Props = StaticScreenProps<SectionParams>
 
@@ -59,11 +58,7 @@ function ServersPage(): ReactElement {
   const navigation = useNavigation()
   const servers = useServers()
   return (
-    <Screen
-      refreshing={servers.isRefetching}
-      onRefresh={() => void servers.refetch()}
-    >
-      <PageHeading eyebrow="Infrastructure" title="Game Servers" />
+    <Screen onRefresh={() => servers.refetch()}>
       {servers.isPending ? (
         <Loading />
       ) : servers.isError ? (
@@ -107,11 +102,7 @@ function RelaysPage(): ReactElement {
   const navigation = useNavigation()
   const relays = useRelays()
   return (
-    <Screen
-      refreshing={relays.isRefetching}
-      onRefresh={() => void relays.refetch()}
-    >
-      <PageHeading eyebrow="Infrastructure" title="Relays" />
+    <Screen onRefresh={() => relays.refetch()}>
       {relays.isPending ? (
         <Loading />
       ) : relays.isError ? (
@@ -157,14 +148,10 @@ function RelaysPage(): ReactElement {
 }
 
 /** A page Hearth has that the CLI API can't serve the app yet. */
-export function NotYet(props: {
-  readonly eyebrow: string
-  readonly title: string
-}): ReactElement {
+export function NotYet(props: { readonly title: string }): ReactElement {
   return (
     <Screen>
-      <PageHeading eyebrow={props.eyebrow} title={props.title} />
-      <Card className="gap-1 p-4">
+      <Card className="mt-2 gap-1 p-4">
         <AppText className="text-sm font-semibold">Not on mobile yet</AppText>
         <AppText className="text-foreground-muted text-sm">
           Open {props.title} in Hearth for now. It comes to the app once the CLI
@@ -177,18 +164,12 @@ export function NotYet(props: {
 
 export function SectionScreen({ route }: Props): ReactElement {
   const params = route.params
+  if (params.area === "home") return <HomeScreen />
   if (params.area === "infra") {
-    if (params.page === "overview") return <OverviewScreen />
     if (params.page === "servers") return <ServersPage />
     if (params.page === "relays") return <RelaysPage />
-    return <NotYet eyebrow="Infrastructure" title={sectionLabel(params)} />
+    return <NotYet title={sectionLabel(params)} />
   }
   if (params.page === "activity") return <ActivityScreen />
-  const sub = managePages(params.page).find((page) => page.id === params.sub)
-  return (
-    <NotYet
-      eyebrow={sub ? `Manage / ${sectionLabel(params)}` : "Manage"}
-      title={sub?.label ?? sectionLabel(params)}
-    />
-  )
+  return <NotYet title={pageTitle(params)} />
 }

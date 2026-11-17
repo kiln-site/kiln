@@ -12,7 +12,7 @@ import {
 
 import { cn } from "../lib/cn"
 import { usePalette, type PaletteColor } from "../lib/palette"
-import { useBarInset } from "./chrome"
+import { useBarInset, usePullToRefresh } from "./chrome"
 
 export function AppText(props: TextProps & { readonly className?: string }) {
   const { className, ...rest } = props
@@ -286,11 +286,12 @@ export function Meter(props: {
 
 export function Screen(props: {
   readonly children: ReactNode
-  readonly refreshing?: boolean
-  readonly onRefresh?: () => void
+  /** Refetches the page; the spinner shows only for a pull. */
+  readonly onRefresh?: () => Promise<unknown>
 }) {
   const palette = usePalette()
   const barInset = useBarInset()
+  const pull = usePullToRefresh(props.onRefresh ?? (() => Promise.resolve()))
   return (
     <ScrollView
       className="bg-screen flex-1"
@@ -301,8 +302,8 @@ export function Screen(props: {
       refreshControl={
         props.onRefresh ? (
           <RefreshControl
-            refreshing={props.refreshing ?? false}
-            onRefresh={props.onRefresh}
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={palette.primary}
           />
         ) : undefined
@@ -366,6 +367,15 @@ const KIND_ICONS = {
   { name: SymbolViewProps["name"]; color: PaletteColor }
 >
 
+/** A kind's glyph in its own colour, as Hearth's target counts show it. */
+export function KindIcon(props: {
+  readonly kind: InstanceKind
+  readonly size?: number
+}) {
+  const icon = KIND_ICONS[props.kind]
+  return <Icon name={icon.name} size={props.size ?? 16} color={icon.color} />
+}
+
 /**
  * An instance's icon as Hearth draws it: the kind's glyph in its own colour,
  * in a square tile, with the status dot on its corner.
@@ -395,27 +405,6 @@ export function KindTile(props: {
           )}
         />
       ) : null}
-    </View>
-  )
-}
-
-/** The page title, under the area it belongs to, as Hearth's breadcrumb. */
-export function PageHeading(props: {
-  readonly eyebrow: string
-  readonly title: string
-  readonly trailing?: ReactNode
-}) {
-  return (
-    <View className="flex-row items-end justify-between pt-1 pb-5">
-      <View accessibilityRole="header" accessible>
-        <MonoText className="text-2xs text-foreground-muted tracking-widest uppercase">
-          {props.eyebrow}
-        </MonoText>
-        <AppText className="mt-1 text-3xl font-semibold tracking-tight">
-          {props.title}
-        </AppText>
-      </View>
-      {props.trailing}
     </View>
   )
 }

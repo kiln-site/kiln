@@ -5,6 +5,7 @@ import { FlatList, Pressable, View } from "react-native"
 
 import { AppText, Icon, MonoText } from "../components/ui"
 import {
+  HOME,
   INFRA_PAGES,
   MANAGE_PAGES,
   showSection,
@@ -13,6 +14,13 @@ import {
 } from "../navigation"
 
 const DESTINATIONS = [
+  {
+    key: "home",
+    label: "Home",
+    symbol: "house" as const,
+    area: "Kiln",
+    params: HOME,
+  },
   ...INFRA_PAGES.map((page) => ({
     key: `infra:${page.id}`,
     label: page.label,
