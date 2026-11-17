@@ -4,6 +4,7 @@ import { z } from "zod"
 
 import { SecurityPage } from "@/components/security-page"
 import { pageTitle } from "@/lib/page-title"
+import { recoveryKitStatusQueryOptions } from "@/lib/query-options"
 import { securityScopeSchema } from "@/lib/security"
 import { securityOverviewQueryOptions } from "@/lib/security-queries"
 
@@ -14,6 +15,7 @@ export const Route = createFileRoute("/_app/kiln/security")({
   loader: ({ context, deps }) =>
     Promise.all([
       context.queryClient.ensureQueryData(securityOverviewQueryOptions(null)),
+      context.queryClient.ensureQueryData(recoveryKitStatusQueryOptions()),
       deps.scope
         ? context.queryClient.ensureQueryData(
             securityOverviewQueryOptions(deps.scope)

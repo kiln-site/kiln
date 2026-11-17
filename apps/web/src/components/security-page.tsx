@@ -26,6 +26,7 @@ import {
 } from "@/components/data-table-workspace"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
+import { RecoveryKitCard } from "@/components/recovery-kit/recovery-kit-card"
 import { RelativeTime } from "@/components/relative-time"
 import { SecurityDialog } from "@/components/security-dialog"
 import { securityFixLabel } from "@/components/security-fix"
@@ -89,6 +90,7 @@ export const SecurityPage = React.memo(function SecurityPage({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-card px-5 py-6 sm:px-7">
+      <RecoveryKitCard />
       <SecurityScopePicker
         resources={everything.resources}
         scannable={everything.scannable}

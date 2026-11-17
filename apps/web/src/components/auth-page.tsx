@@ -3,6 +3,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { requestAccountClaim, prepareAccountSignup } from "@/server/users"
 import * as React from "react"
+import { useRouter } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
   Check,
@@ -21,6 +22,7 @@ import { AuthPageShell } from "@/components/auth-page-shell"
 import { HearthMark } from "@/components/hearth-mark"
 import { authClient } from "@/lib/auth-client"
 import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
+import { rememberFirstLaunchLogin } from "@/lib/first-launch-login"
 import {
   createInitialAdministrator,
   enableDevelopmentBypass,
@@ -89,8 +91,24 @@ export function AuthPage({
   const [recoveryComplete, setRecoveryComplete] = React.useState(false)
   const [claimEmail, setClaimEmail] = React.useState<string | null>(null)
   const [hydrated, setHydrated] = React.useState(false)
+  const router = useRouter()
 
   React.useEffect(() => setHydrated(true), [])
+
+  // The first administrator goes on to save Kiln's recovery kit. The page
+  // doesn't reload on the way, so the login they just chose stays in this
+  // tab's memory for 1Password to save with the kit (`first-launch-login`).
+  async function signInToRecoveryStep(email: string, password: string) {
+    const result = await authClient.signIn.email({ email, password })
+    if (result.error) throw new Error(readAuthError(result.error))
+    if ("twoFactorRedirect" in result.data && result.data.twoFactorRedirect) {
+      sessionStorage.setItem("kiln:auth:return", "/setup/recovery")
+      window.location.assign("/two-factor")
+      return
+    }
+    rememberFirstLaunchLogin({ email, password })
+    await router.navigate({ to: "/setup/recovery" })
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -153,7 +171,7 @@ export function AuthPage({
                 })
                 return
               }
-              await signIn(email, password, redirectPath)
+              await signInToRecoveryStep(email, password)
               return
             }
 
@@ -269,6 +287,13 @@ export function AuthPage({
             otp: code,
           })
           if (result.error) throw new Error(readAuthError(result.error))
+          if (verification.source === "setup") {
+            await signInToRecoveryStep(
+              verification.registeredEmail,
+              verification.password
+            )
+            return
+          }
           await signIn(
             verification.registeredEmail,
             verification.password,
@@ -616,6 +641,7 @@ export function AuthPage({
                     Boolean(lockedEmail)
                   }
                   className="h-11 bg-card/60 font-mono"
+                  {...firstAdministratorPasswordField(mode)}
                 />
               </Field>
             ) : null}
@@ -631,6 +657,7 @@ export function AuthPage({
                   placeholder="••••••••••••"
                   required
                   className="h-11 bg-card/60 font-mono"
+                  {...firstAdministratorPasswordField(mode)}
                 />
               </Field>
             ) : null}
@@ -1158,6 +1185,15 @@ async function signIn(email: string, password: string, redirectPath?: string) {
   }
   sessionStorage.removeItem("kiln:auth:return")
   window.location.assign(destination(redirectPath))
+}
+
+/**
+ * Setup's password fields. The next step offers to save this login in
+ * 1Password together with Kiln's recovery kit, so 1Password isn't asked to
+ * save it here as well.
+ */
+function firstAdministratorPasswordField(mode: AuthMode) {
+  return mode === "setup" ? { "data-1p-ignore": "true" } : {}
 }
 
 function validateNewPassword(password: string, confirmation: string) {

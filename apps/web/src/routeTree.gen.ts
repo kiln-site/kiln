@@ -43,6 +43,7 @@ import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
 import { Route as ApiTerminalRouteImport } from './routes/api.terminal'
 import { Route as CliAuthorizeRouteImport } from './routes/cli.authorize'
 import { Route as DownloadsIdRouteImport } from './routes/downloads.$id'
+import { Route as SetupRecoveryRouteImport } from './routes/setup.recovery'
 import { Route as AppAppAppIdRouteImport } from './routes/_app/app/$appId'
 import { Route as AppAutomationsIndexRouteImport } from './routes/_app.automations.index'
 import { Route as AppAutomationsCalendarRouteImport } from './routes/_app.automations.calendar'
@@ -310,6 +311,11 @@ const CliAuthorizeRoute = CliAuthorizeRouteImport.update({
 const DownloadsIdRoute = DownloadsIdRouteImport.update({
   id: '/downloads/$id',
   path: '/downloads/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRecoveryRoute = SetupRecoveryRouteImport.update({
+  id: '/setup/recovery',
+  path: '/setup/recovery',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppAppAppIdRoute = AppAppAppIdRouteImport.update({
@@ -855,6 +861,7 @@ export interface FileRoutesByFullPath {
   '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/setup/recovery': typeof SetupRecoveryRoute
   '/app/$appId': typeof AppAppAppIdRouteWithChildren
   '/automations/calendar': typeof AppAutomationsCalendarRoute
   '/automations/history': typeof AppAutomationsHistoryRoute
@@ -984,6 +991,7 @@ export interface FileRoutesByTo {
   '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/setup/recovery': typeof SetupRecoveryRoute
   '/automations/calendar': typeof AppAutomationsCalendarRoute
   '/automations/history': typeof AppAutomationsHistoryRoute
   '/automations/schedules': typeof AppAutomationsSchedulesRoute
@@ -1115,6 +1123,7 @@ export interface FileRoutesById {
   '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/setup/recovery': typeof SetupRecoveryRoute
   '/_app/app/$appId': typeof AppAppAppIdRouteWithChildren
   '/_app/automations/calendar': typeof AppAutomationsCalendarRoute
   '/_app/automations/history': typeof AppAutomationsHistoryRoute
@@ -1251,6 +1260,7 @@ export interface FileRouteTypes {
     | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/setup/recovery'
     | '/app/$appId'
     | '/automations/calendar'
     | '/automations/history'
@@ -1380,6 +1390,7 @@ export interface FileRouteTypes {
     | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/setup/recovery'
     | '/automations/calendar'
     | '/automations/history'
     | '/automations/schedules'
@@ -1510,6 +1521,7 @@ export interface FileRouteTypes {
     | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/setup/recovery'
     | '/_app/app/$appId'
     | '/_app/automations/calendar'
     | '/_app/automations/history'
@@ -1635,6 +1647,7 @@ export interface RootRouteChildren {
   ApiTerminalRoute: typeof ApiTerminalRoute
   CliAuthorizeRoute: typeof CliAuthorizeRoute
   DownloadsIdRoute: typeof DownloadsIdRoute
+  SetupRecoveryRoute: typeof SetupRecoveryRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiConsoleInstanceIdRoute: typeof ApiConsoleInstanceIdRoute
   ApiGithubManifestRoute: typeof ApiGithubManifestRoute
@@ -1889,6 +1902,13 @@ declare module '@tanstack/react-router' {
       path: '/downloads/$id'
       fullPath: '/downloads/$id'
       preLoaderRoute: typeof DownloadsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/setup/recovery': {
+      id: '/setup/recovery'
+      path: '/setup/recovery'
+      fullPath: '/setup/recovery'
+      preLoaderRoute: typeof SetupRecoveryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/app/$appId': {
@@ -2938,6 +2958,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTerminalRoute: ApiTerminalRoute,
   CliAuthorizeRoute: CliAuthorizeRoute,
   DownloadsIdRoute: DownloadsIdRoute,
+  SetupRecoveryRoute: SetupRecoveryRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiConsoleInstanceIdRoute: ApiConsoleInstanceIdRoute,
   ApiGithubManifestRoute: ApiGithubManifestRoute,

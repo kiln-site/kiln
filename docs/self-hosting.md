@@ -405,17 +405,56 @@ docker run --rm -it --entrypoint kiln-relay \
 
 A [platform backup](backups.md) holds Hearth's catalog. The recovery kit holds
 what isn't in it: the installation ID and every secret, including the
-platform backup key that decrypts those backups. Export it after installing,
-and keep it offline, apart from the backups:
+platform backup key that decrypts those backups. Without it, a lost machine
+can't be restored and Kiln's backups can't be read. Save it after installing,
+and keep it offline, apart from the backups.
+
+Anyone with the kit can read Kiln's database and sign Hearth sessions.
+
+### Saving it from Hearth
+
+Right after the first administrator account is created, Hearth asks for the
+recovery kit to be saved before opening the app, and until a platform
+administrator says it's saved, a banner keeps asking. Any platform
+administrator can save it again from **Kiln → Security** (or `/setup/recovery`
+while nobody has). Hearth reads it from the Relay hosting Kiln each time and
+never stores it; it offers three ways to keep it:
+
+- **Download**: `kiln-recovery-kit-<installation-id>.json`, the same file
+  `export-kit` prints.
+- **Save in 1Password**: 1Password's own button, shown only when its browser
+  extension is installed. Right after setup it saves the new administrator's
+  login and the kit as one item.
+- **Copy**: the kit as one line, `kiln-recovery:v1:…`, which fits one
+  password-manager field.
+
+The first time it's shown needs nothing more. After that, every showing asks
+for a fresh code from the administrator's authenticator app, or one of their
+backup codes, so an administrator must turn on two-factor authentication in
+their account settings first. Five wrong codes in 15 minutes pause the
+checks. Each showing, and each "I've saved it", is recorded in the audit
+log, never the kit itself.
+
+A Kiln whose secrets come from its own environment (Compose, Coolify, a
+Relay not in platform mode) has no kit. Hearth offers a **recovery key**
+instead, if the Relay beside it has `KILN_PLATFORM_BACKUP_KEY`: the
+installation ID and platform backup key, as `kiln-recovery-key-<id>.txt` or
+one line. The rest of its secrets live in the operator's own environment
+file; keep that too.
+
+### From the Relay's command line
 
 ```sh
 docker exec kiln-relay kiln-relay platform export-kit > kiln-recovery.json
 ```
 
-Anyone with the kit can read Kiln's database and sign Hearth sessions.
+### Restoring
 
 To restore Kiln on a new host, import the kit into the new Relay's data volume
-before the Relay's first start, so it doesn't install a new installation:
+before the Relay's first start, so it doesn't install a new installation.
+`import-kit` takes a file holding either the kit's JSON or its
+`kiln-recovery:v1:` line; it refuses a recovery key, which restores by
+setting `KILN_INSTALLATION_ID` and `KILN_PLATFORM_BACKUP_KEY` instead:
 
 ```sh
 docker volume create kiln-relay-data
@@ -431,8 +470,8 @@ It creates an empty database and holds Hearth stopped. Restore the platform
 backup into it and start Hearth:
 
 ```sh
-docker cp backup.zip kiln-relay:/data/restore.zip
-docker exec kiln-relay kiln-relay platform-backup restore /data/restore.zip \
+docker cp backup-<id>.kiln kiln-relay:/data/restore.kiln
+docker exec kiln-relay kiln-relay platform-backup restore /data/restore.kiln \
   --confirm <installation-id>
 docker exec kiln-relay kiln-relay platform start-hearth
 ```
