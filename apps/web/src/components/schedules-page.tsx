@@ -2320,6 +2320,10 @@ function ScheduleEditorDialog({
       (option) => option.available || referenced.has(targetKey(option))
     )
   }, [existing, options, volumeOptions])
+  const appVolumes = React.useMemo(
+    () => appVolumesOf(volumeOptions),
+    [volumeOptions]
+  )
   const timeZone = useBrowserTimeZone()
   const [name, setName] = React.useState(existing?.name ?? "")
   // A new schedule runs daily at the viewer's midnight.
@@ -2507,6 +2511,7 @@ function ScheduleEditorDialog({
           <ScheduleEditorFields
             actionSelectionValid={actionSelectionValid}
             actions={actions}
+            appVolumes={appVolumes}
             continueOnFailure={continueOnFailure}
             cron={cron}
             cronSummary={cronSummary}
@@ -2577,6 +2582,7 @@ function ScheduleEditorDialog({
 const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
   actionSelectionValid,
   actions,
+  appVolumes,
   continueOnFailure,
   cron,
   cronSummary,
@@ -2599,6 +2605,7 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
 }: {
   actionSelectionValid: boolean
   actions: ReadonlyArray<ScheduleActionDraft>
+  appVolumes: AppVolumes
   continueOnFailure: boolean
   cron: string
   cronSummary: string | null
@@ -2682,6 +2689,7 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
       >
         <ScheduleActionsEditor
           actions={actions}
+          appVolumes={appVolumes}
           hideHeader
           permissionKey={permissionKey}
           selectedOptions={selectedOptions}
@@ -2998,6 +3006,7 @@ const noInstanceGroups: Awaited<ReturnType<typeof getInstanceGroups>> = []
 
 const ScheduleActionsEditor = React.memo(function ScheduleActionsEditor({
   actions,
+  appVolumes,
   hideHeader = false,
   permissionKey,
   selectedOptions,
@@ -3008,6 +3017,7 @@ const ScheduleActionsEditor = React.memo(function ScheduleActionsEditor({
   onReorder,
 }: {
   actions: ReadonlyArray<ScheduleActionDraft>
+  appVolumes: AppVolumes
   hideHeader?: boolean
   permissionKey: "canCreate" | "canUpdate"
   selectedOptions: ReadonlyArray<ScheduleOption>
@@ -3074,6 +3084,7 @@ const ScheduleActionsEditor = React.memo(function ScheduleActionsEditor({
               <ActionEditor
                 key={action.id}
                 action={action}
+                appVolumes={appVolumes}
                 dragging={draggedActionId === action.id}
                 index={index}
                 permissionKey={permissionKey}
@@ -3150,6 +3161,7 @@ function Field({
 
 const ActionEditor = React.memo(function ActionEditor({
   action,
+  appVolumes,
   dragging,
   index,
   permissionKey,
@@ -3164,6 +3176,7 @@ const ActionEditor = React.memo(function ActionEditor({
   onRemove,
 }: {
   action: ScheduleActionDraft
+  appVolumes: AppVolumes
   dragging: boolean
   index: number
   permissionKey: "canCreate" | "canUpdate"
@@ -3240,24 +3253,60 @@ const ActionEditor = React.memo(function ActionEditor({
       ),
     }
   }, [action, permissionKey, selectedOptions])
-  // Apps and volumes are backed up as volumes, which stop what uses them.
-  const stopsApps = (target: ScheduleOption) =>
-    target.kind === "app" || target.kind === "volume"
-  const backsUpAppsOnly =
-    action.type === "backup" &&
-    selectedActionTargets.length > 0 &&
-    selectedActionTargets.every(stopsApps)
-  // Apps and volumes, with or without databases beside them, can be backed
-  // up stopped: each database on their Relay is then dumped while the Apps
-  // are.
-  const backsUpDatabasesToo =
-    action.type === "backup" &&
-    selectedActionTargets.some(stopsApps) &&
-    selectedActionTargets.some((target) => target.kind === "database") &&
-    selectedActionTargets.every(
-      (target) => stopsApps(target) || target.kind === "database"
+  // What a backup step lists: each of its targets with something to back
+  // up, saying what. An App that uses no volume has nothing, so it's left
+  // out, and said so beneath the list.
+  const backupTargets = React.useMemo(() => {
+    const listed: Array<BackupConfigurationTarget> = []
+    const empty: Array<ScheduleOption> = []
+    if (action.type !== "backup") return { empty, listed }
+    for (const target of eligibleTargets) {
+      if (isBackupOption(target)) {
+        listed.push(scheduleBackupTarget(target))
+        continue
+      }
+      const volumes = appVolumeNames(appVolumes, target)
+      if (volumes?.length === 0) {
+        empty.push(target)
+        continue
+      }
+      listed.push({
+        ...schedulePickerTarget(target),
+        description: volumes
+          ? `Backs up ${volumes.join(", ")}`
+          : "Backs up the volumes it uses",
+      })
+    }
+    return { empty, listed }
+  }, [action.type, appVolumes, eligibleTargets])
+  // Those of them it backs up: the dialog opens with them ticked, and its
+  // row counts them by kind, an App's volumes among the volumes.
+  const { backupCounts, backupKeys } = React.useMemo(() => {
+    const listed = new Set(backupTargets.listed.map(({ key }) => key))
+    const chosen = selectedActionTargets.filter((target) =>
+      listed.has(targetKey(target))
     )
-  const stoppable = backsUpAppsOnly || backsUpDatabasesToo
+    const counts = { apps: 0, databases: 0, instances: 0, relays: 0 }
+    const volumes = new Set<string>()
+    for (const target of chosen) {
+      if (target.kind === "relay") counts.relays += 1
+      else if (target.kind === "instance") counts.instances += 1
+      else if (target.kind === "database") counts.databases += 1
+      else if (target.kind === "volume")
+        volumes.add(`${target.relayId}/${target.name}`)
+      else {
+        counts.apps += 1
+        for (const name of appVolumeNames(appVolumes, target) ?? []) {
+          volumes.add(`${target.relayId}/${name}`)
+        }
+      }
+    }
+    return {
+      backupCounts: { ...counts, volumes: volumes.size },
+      backupKeys: chosen.map(targetKey),
+    }
+  }, [appVolumes, backupTargets, selectedActionTargets])
+  const backingUp = backupKeys.length
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
       onChange(namingNewTargets(action, next, selectedOptions, permissionKey)),
@@ -3346,19 +3395,41 @@ const ActionEditor = React.memo(function ActionEditor({
               }
             />
           ) : action.type === "backup" ? (
-            <Button
-              aria-label="Configure Backup"
-              className="size-8 max-w-full min-w-0 justify-center truncate px-0 sm:w-fit sm:justify-start sm:px-2.5"
-              type="button"
-              title={action.name}
-              variant="outline"
-              onClick={() => setBackupConfigOpen(true)}
-            >
-              <SlidersHorizontal className="size-4 shrink-0" />
-              <span className="hidden truncate sm:inline">
-                Configure Backup
+            <>
+              <Button
+                aria-label="Configure Backup"
+                className="size-8 max-w-full min-w-0 shrink-0 justify-center truncate px-0 sm:w-fit sm:justify-start sm:px-2.5"
+                type="button"
+                title={action.name}
+                variant="outline"
+                onClick={() => setBackupConfigOpen(true)}
+              >
+                <SlidersHorizontal className="size-4 shrink-0" />
+                <span className="hidden truncate sm:inline">
+                  Configure Backup
+                </span>
+              </Button>
+              {backingUp === 0 ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      aria-label="This step has nothing to back up"
+                      className="grid size-6 shrink-0 place-items-center text-amber-300 light:text-amber-700"
+                      role="img"
+                    >
+                      <TriangleAlert className="size-3.5" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Nothing to back up. Choose what it backs up in Configure
+                    Backup.
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              <span className="type-code ml-1 hidden items-center gap-2.5 text-muted-foreground sm:flex">
+                <InstanceKindCounts counts={backupCounts} volumes="always" />
               </span>
-            </Button>
+            </>
           ) : action.type === "power" ? (
             <Select
               value={action.action}
@@ -3392,27 +3463,29 @@ const ActionEditor = React.memo(function ActionEditor({
                 restrictedTargets={restrictedTargets}
                 unsupportedTargets={unsupportedTargets}
               />
-              <ScheduleActionTargetsButton
-                action={action}
-                eligibleTargets={eligibleTargets}
-                targets={selectedOptions}
-                selectedTargets={selectedActionTargets}
-                onToggle={(targetKeyValues, checked) => {
-                  if (action.type === null) return
-                  const eligibleKeys = new Set(eligibleTargets.map(targetKey))
-                  const next = new Set([
-                    ...actionTargetKeys,
-                    ...namedRestrictedTargets.map(targetKey),
-                  ])
-                  for (const targetKeyValue of targetKeyValues) {
-                    // Only targets this person may run it on can be added.
-                    if (checked && eligibleKeys.has(targetKeyValue))
-                      next.add(targetKeyValue)
-                    else if (!checked) next.delete(targetKeyValue)
-                  }
-                  onChange({ ...action, targetKeys: [...next] })
-                }}
-              />
+              {action.type === "backup" ? null : (
+                <ScheduleActionTargetsButton
+                  action={action}
+                  eligibleTargets={eligibleTargets}
+                  targets={selectedOptions}
+                  selectedTargets={selectedActionTargets}
+                  onToggle={(targetKeyValues, checked) => {
+                    if (action.type === null) return
+                    const eligibleKeys = new Set(eligibleTargets.map(targetKey))
+                    const next = new Set([
+                      ...actionTargetKeys,
+                      ...namedRestrictedTargets.map(targetKey),
+                    ])
+                    for (const targetKeyValue of targetKeyValues) {
+                      // Only targets this person may run it on can be added.
+                      if (checked && eligibleKeys.has(targetKeyValue))
+                        next.add(targetKeyValue)
+                      else if (!checked) next.delete(targetKeyValue)
+                    }
+                    onChange({ ...action, targetKeys: [...next] })
+                  }}
+                />
+              )}
               <Separator
                 className="mx-1 data-vertical:h-4 data-vertical:self-center"
                 orientation="vertical"
@@ -3445,24 +3518,7 @@ const ActionEditor = React.memo(function ActionEditor({
       {action.type === "backup" ? (
         <BackupConfigurationDialog
           allowIncremental
-          // A step that backs up Apps takes the volumes they use, live or
-          // stopped; Hearth checks stopping them as it saves.
-          consistencyChoice={
-            stoppable
-              ? {
-                  stoppedDescription: backsUpDatabasesToo
-                    ? "Stops each App once, and dumps the databases while they are stopped"
-                    : "Stops each App that uses a volume it backs up",
-                  stoppedUnavailable: null,
-                }
-              : undefined
-          }
-          {...(stoppable
-            ? {
-                description:
-                  "Relay runs this job in its single durable queue. It backs up every volume chosen and every volume each App uses, once each, however many use it. An App that uses no volume is skipped.",
-              }
-            : {})}
+          description="Relay runs this job in its single durable queue. An App is backed up by the volumes it uses, and a volume several of them use is backed up once."
           initialConsistency={action.consistency ?? "live"}
           initialDestinationKeys={
             action.destination.kind === "storage"
@@ -3471,30 +3527,68 @@ const ActionEditor = React.memo(function ActionEditor({
           }
           initialMode={action.mode}
           initialName={action.name}
+          initialTargetKeys={backupKeys}
+          inlineTargets={{
+            consistencyChoiceFor: (chosen) =>
+              backupStepConsistency(
+                chosen.map((target) => ({
+                  kind: target.kind === "platform" ? "relay" : target.kind,
+                }))
+              ),
+            note:
+              backupTargets.empty.length > 0 ? (
+                <p className="type-meta mt-1.5 text-muted-foreground">
+                  {targetList(backupTargets.empty)}{" "}
+                  {backupTargets.empty.length === 1 ? "uses" : "use"} no volume,
+                  so there&rsquo;s nothing of{" "}
+                  {backupTargets.empty.length === 1 ? "it" : "them"} to back up.
+                </p>
+              ) : null,
+          }}
           onOpenChange={setBackupConfigOpen}
           onSubmit={(configuration) => {
-            const { consistency: _consistency, ...rest } = action
+            const {
+              consistency: _consistency,
+              targetKeys: _keys,
+              ...rest
+            } = action
+            const chosen = new Set(configuration.targetKeys ?? [])
+            const chosenTargets = eligibleTargets.filter((target) =>
+              chosen.has(targetKey(target))
+            )
+            const stopped =
+              configuration.consistency === "stopped" &&
+              backupStepConsistency(chosenTargets) !== undefined
+            // Every one it lists, ticked, is every target: those added
+            // later are backed up too. Fewer, or one it can't name, and it
+            // names them.
+            const everyTarget =
+              chosen.size === backupTargets.listed.length &&
+              namedRestrictedTargets.length === 0
             onChange({
               ...rest,
-              ...(stoppable && configuration.consistency === "stopped"
-                ? { consistency: "stopped" as const }
-                : {}),
+              ...(stopped ? { consistency: "stopped" as const } : {}),
               destination: scheduleBackupDestination(
                 configuration.destinationKeys[0]
               ),
-              mode: stoppable ? "full" : configuration.mode,
+              mode: stopped ? "full" : configuration.mode,
               name: configuration.name,
+              ...(everyTarget
+                ? {}
+                : {
+                    targetKeys: [
+                      ...chosen,
+                      ...namedRestrictedTargets.map(targetKey),
+                    ],
+                  }),
             })
             setBackupConfigOpen(false)
           }}
           open={backupConfigOpen}
-          showTarget={false}
           singleDestination
           storage={storage}
           submitLabel="Save backup"
-          targets={selectedOptions
-            .filter(isBackupOption)
-            .map(scheduleBackupTarget)}
+          targets={backupTargets.listed}
           title="Configure Backup"
         />
       ) : null}
@@ -3672,6 +3766,66 @@ function withVolumeOptions(
       : option
   })
   return [...merged, ...fresh.values()]
+}
+
+/**
+ * Which volumes each App uses, by its Relay's listing, or nothing for a
+ * Relay that hasn't said, or won't say to this person.
+ */
+type AppVolumes = {
+  readonly byApp: ReadonlyMap<string, ReadonlyArray<string>>
+  readonly known: ReadonlySet<string>
+}
+
+function appVolumesOf(volumes: ScheduleVolumeOptions | undefined): AppVolumes {
+  const byApp = new Map<string, Array<string>>()
+  const known = new Set(volumes?.listed ?? [])
+  for (const option of volumes?.options ?? []) {
+    // Who uses one is said only once it's settled; until then no App on
+    // its Relay can be said to use none.
+    if (!option.usedBy) {
+      known.delete(option.relayId)
+      continue
+    }
+    for (const user of option.usedBy) {
+      const key = `${option.relayId}/${user.id}`
+      byApp.set(key, [...(byApp.get(key) ?? []), option.name])
+    }
+  }
+  return { byApp, known }
+}
+
+// The volumes an App uses, or null when its Relay can't say yet.
+function appVolumeNames(
+  volumes: AppVolumes,
+  app: ScheduleOption
+): ReadonlyArray<string> | null {
+  if (!volumes.known.has(app.relayId)) return null
+  return volumes.byApp.get(`${app.relayId}/${app.id}`) ?? []
+}
+
+/**
+ * Whether a backup step of these targets can be taken stopped, and what
+ * that does: Apps and volumes, which stop what uses them, alone or with
+ * databases, each dumped while the Apps are stopped.
+ */
+function backupStepConsistency(
+  targets: ReadonlyArray<Pick<ScheduleOption, "kind">>
+): { stoppedDescription: string; stoppedUnavailable: null } | undefined {
+  const stopsApps = (target: Pick<ScheduleOption, "kind">) =>
+    target.kind === "app" || target.kind === "volume"
+  if (!targets.some(stopsApps)) return undefined
+  if (
+    !targets.every((target) => stopsApps(target) || target.kind === "database")
+  ) {
+    return undefined
+  }
+  return {
+    stoppedDescription: targets.some((target) => target.kind === "database")
+      ? "Stops each App once, and dumps the databases while they are stopped"
+      : "Stops each App that uses a volume it backs up",
+    stoppedUnavailable: null,
+  }
 }
 
 // The targets the backup dialog lists. It names game servers, databases,
