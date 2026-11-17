@@ -11,7 +11,6 @@ import { createWebSocketStream, WebSocket } from "ws"
 import {
   relayAuthChallengeTranscript,
   relayControlDialPath,
-  relayControlDialV1Feature,
   relayControlProtocol,
   relayDialCloseCodes,
   relayTunnelPath,
@@ -322,7 +321,6 @@ function ready() {
   return {
     actions: [],
     clientId,
-    features: [relayControlDialV1Feature],
     protocol: relayControlProtocol,
     relayBuild: "test",
     role: "full_access",

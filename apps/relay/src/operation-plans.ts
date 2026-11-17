@@ -585,7 +585,6 @@ export function controlRequestLocks(
     // It takes the locks its restore held, in its own step.
     case "backup.restore.resolve":
     case "backup.restore.unfinished":
-    case "backup.task.get":
     case "backup.task.list":
     // A transfer packs its source and installs its pull in lanes of its own.
     case "transfer.source.prepare":
@@ -868,7 +867,6 @@ export function controlRequestLocks(
     case "instance.files.write":
     case "instance.files.put":
     case "instance.files.upload-url":
-    case "instance.files.mutate":
     case "instance.files.mutate.result":
     case "instance.files.database.write":
       return fileRoot()

@@ -40,8 +40,6 @@ import {
   relayLinkedBackupsV1Feature,
   relayTransferSpaceV1Feature,
   relayPeerTransfersV1Feature,
-  relayControlDialV1Feature,
-  relayTunnelV1Feature,
   relayRestartV1Feature,
   relayResourcesV1Feature,
   relayFilePutV1Feature,
@@ -52,14 +50,9 @@ import {
   relayPlatformV2Feature,
   relayPlatformDatabaseV1Feature,
   relayDatabaseDumpFilesV1Feature,
-  relayInstallationV1Feature,
   relayVolumesV1Feature,
-  relayDatabaseProvisioningV1Feature,
-  relayAppProvisioningV1Feature,
   fileTransferAction,
   relayFileRequestReplayV1Feature,
-  relaySnapshotDeltaFeature,
-  relaySnapshotNodeResourcesFeature,
   isAuditedRelayControlOperation,
   relayControlOperationChanges,
   relayControlOperationRefusedWhilePaused,
@@ -161,8 +154,6 @@ export interface ControlSocketOptions {
       payload: unknown,
       timeoutMs: number
     ) => Promise<unknown>,
-    /** What the connected Hearth announced it understands. */
-    hearthFeatures: ReadonlySet<string>,
     /** The control connection the request came on (`clientConnected`). */
     connectionId: string
   ) => Promise<unknown>
@@ -478,9 +469,6 @@ function authenticateSocket(
   let unsubscribeSnapshots: (() => void) | null = null
   let eventSequence = 0
   let previousSnapshot: RelaySnapshot | null = null
-  let snapshotDeltasEnabled = false
-  let hearthFeatures: ReadonlySet<string> = new Set()
-  let nodeResourceDeltasEnabled = false
   const inFlight = new Map<string, InFlightRequest>()
   const reversePending = new Map<string, Deferred.Deferred<unknown, Error>>()
   const tracked = { inFlight, reversePending }
@@ -538,7 +526,6 @@ function authenticateSocket(
         authenticateClientEffect(
           message.clientId,
           message.signature,
-          message.features ?? [],
           message.installationId,
           message.relayName,
           message.hearthContainer
@@ -785,7 +772,6 @@ function authenticateSocket(
   function authenticateClientEffect(
     clientId: string,
     signature: string,
-    features: ReadonlyArray<string>,
     installationId: string | undefined,
     relayName: string | undefined,
     hearthContainer: { readonly id: string; readonly proof: string } | undefined
@@ -814,11 +800,6 @@ function authenticateSocket(
       ) {
         return yield* controlFailure("Invalid Hearth identity proof")
       }
-      hearthFeatures = new Set(features)
-      snapshotDeltasEnabled = features.includes(relaySnapshotDeltaFeature)
-      nodeResourceDeltasEnabled = features.includes(
-        relaySnapshotNodeResourcesFeature
-      )
       yield* completedAuthenticationEffect(
         client,
         installationId,
@@ -908,7 +889,6 @@ function authenticateSocket(
                         timeoutMs,
                         request.subject
                       ),
-                    hearthFeatures,
                     connectionId
                   ),
                 { "relay.operation": request.operation }
@@ -1341,22 +1321,17 @@ function authenticateSocket(
           relayRestartV1Feature,
           relayResourcesV1Feature,
           relayFilePutV1Feature,
-          relayDatabaseProvisioningV1Feature,
-          relayAppProvisioningV1Feature,
           relayAppGitHubV1Feature,
           relayVolumesV1Feature,
           relayPlatformV1Feature,
           relayPlatformV2Feature,
           relayPlatformDatabaseV1Feature,
           relayDatabaseDumpFilesV1Feature,
-          relayInstallationV1Feature,
           relaySecurityInventoryV1Feature,
           relayPeerTransfersV1Feature,
           relayIconReadV1Feature,
           relayLinkedBackupsV1Feature,
           relayTransferSpaceV1Feature,
-          relayControlDialV1Feature,
-          relayTunnelV1Feature,
         ],
         journalId: options.journalId,
         protocol: relayControlProtocol,
@@ -1386,20 +1361,8 @@ function authenticateSocket(
         const next = payload as RelaySnapshot
         previousSnapshot = next
         if (!previous) return
-        if (!snapshotDeltasEnabled) {
-          const update: RelayControlEvent = {
-            event: "relay.snapshot",
-            id: randomUUID(),
-            payload: next,
-            seq: ++eventSequence,
-            type: "event",
-            v: 1,
-          }
-          send(socket, update)
-          return
-        }
         const delta = createRelaySnapshotDelta(previous, next, {
-          nodeResources: nodeResourceDeltasEnabled,
+          nodeResources: true,
         })
         if (!delta) return
         const update: RelayControlEvent = {
@@ -1994,7 +1957,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // Finishing a restore writes its target as the restore would.
     case "backup.restore.resolve":
       return "backup.restore"
-    case "backup.task.get":
     case "backup.task.list":
     case "backup.restore.unfinished":
       return "backup.read"
@@ -2067,7 +2029,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.files.write":
     case "instance.files.put":
       return "instance.files.write"
-    case "instance.files.mutate":
     case "instance.files.mutate.result":
       return fileMutationAction(objectString(request.payload, "operation"))
     case "instance.files.upload-url":

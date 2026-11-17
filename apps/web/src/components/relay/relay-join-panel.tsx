@@ -320,9 +320,8 @@ function JoinReview({
       (view.progress === null || view.progress === "pairing"))
   const existing = announcement.existingRelay
   const holder = announcement.addressTakenBy
+  // The Relay connects to Hearth itself, so it can be added all the same.
   const unreachable = holder ? null : announcement.unreachable
-  // A Relay that connects to Hearth itself can be added all the same.
-  const blocked = unreachable !== null && !announcement.reachesHearth
 
   return (
     <div className="min-w-0 space-y-4">
@@ -388,20 +387,11 @@ function JoinReview({
         </div>
       ) : null}
 
-      {blocked ? (
-        <div className="flex items-start gap-3 border border-amber-400/25 bg-amber-400/8 px-3 py-2.5">
-          <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200 light:text-amber-800" />
-          <p className="type-meta min-w-0 flex-1 text-amber-200 light:text-amber-800">
-            {unreachable} This updates once Hearth can reach it. Or, since this
-            Relay's version can't connect to Hearth itself, cancel and run the
-            new command on its machine, which updates it.
-          </p>
-        </div>
-      ) : unreachable ? (
+      {unreachable ? (
         <p className="type-meta text-muted-foreground">
-          This Relay connects to Hearth, and its consoles and file transfers
-          go through Hearth. If the internet can reach this machine, Kiln moves
-          it to its own HTTPS after it's added.
+          This Relay connects to Hearth, and its consoles and file transfers go
+          through Hearth. If the internet can reach this machine, Kiln moves it
+          to its own HTTPS after it's added.
         </p>
       ) : null}
 
@@ -435,7 +425,7 @@ function JoinReview({
         ) : null}
         <Button
           type="button"
-          disabled={working || confirm.isPending || holder !== null || blocked}
+          disabled={working || confirm.isPending || holder !== null}
           onClick={() => confirm.mutate()}
         >
           {confirm.isPending ? (

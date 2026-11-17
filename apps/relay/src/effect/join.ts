@@ -5,11 +5,9 @@ import {
   RELAY_JOIN_ID_LABEL,
   RELAY_JOIN_INVITATION_LABEL,
   RELAY_JOIN_LIFETIME_MS,
-  relayControlDialV1Feature,
   relayJoinHeldHeader,
   relayJoinHoldHeader,
   relayJoinSavedHeader,
-  relayJoinPairingV1Feature,
   type RelayJoinPairingResponseSchema,
   type RelayJoinEnvelope,
   RelayJoinEnvelopeSchema,
@@ -57,9 +55,6 @@ const REQUEST_TIMEOUT_MS = 15_000
 const HELD_GAP_MS = 250
 // Room for the pairing request a join's answer can carry.
 const MAX_RESPONSE_BYTES = 16_384
-// What the Relay tells Hearth it can do when it announces itself: pair
-// through its announcements, and open its control connection to Hearth.
-const JOIN_FEATURES = [relayJoinPairingV1Feature, relayControlDialV1Feature]
 
 export class RelayJoinError extends Schema.TaggedError<RelayJoinError>()(
   "RelayJoinError",
@@ -201,16 +196,9 @@ export const runRelayJoin = Effect.fnUntraced(function* (
         Effect.succeed({ reason: error.reason })
       )
     )
-    // Hearth has the Relay, so it can dial Hearth now: Hearth says so, or,
-    // when it answers at once as Hearths that predate holding do, it has at
-    // least taken the reply rather than asked for it again. Its dialer would
-    // find Hearth on its next pass anyway.
-    if (
-      paired &&
-      !woken &&
-      !("reason" in answered) &&
-      (answered.saved || (!answered.held && !answered.response.pairing))
-    ) {
+    // Hearth says it has the Relay, so it can dial Hearth now. Its dialer
+    // would find Hearth on its next pass anyway.
+    if (paired && !woken && !("reason" in answered) && answered.saved) {
       woken = true
       if (input.wakeDials) {
         yield* input.wakeDials.pipe(Effect.withSpan("RelayJoin.wakeDials"))
@@ -410,7 +398,6 @@ function announce(
   const unsigned = { envelope, joinId, nonce, version: 1 as const }
   const body = JSON.stringify({
     ...unsigned,
-    features: JOIN_FEATURES,
     mac: createHmac("sha256", link.secret)
       .update(relayJoinAnnouncementTranscript(unsigned))
       .digest("base64url"),

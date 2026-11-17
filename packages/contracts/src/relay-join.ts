@@ -102,18 +102,17 @@ export const RelayJoinEnvelopeSchema = Schema.Struct({
 
 export type RelayJoinEnvelope = typeof RelayJoinEnvelopeSchema.Type
 
-// A Relay with this pairs through its announcements: Hearth's answer carries
-// the pairing request it would otherwise send the Relay (`pairing`), and the
-// Relay's next announcement carries its signed reply. Hearth then needn't
-// reach the Relay at all, as for one behind a home router.
-export const relayJoinPairingV1Feature = "join-pairing-v1"
+// A Relay pairs through its announcements: Hearth's answer carries its
+// pairing request (`pairing`), and the Relay's next announcement carries its
+// signed reply. Hearth then needn't reach the Relay at all, as for one behind
+// a home router.
 
 // A Relay that already has its invitation asks Hearth, with this request
 // header (milliseconds), to hold its announcement until there's something
 // new to answer: someone confirmed it, Hearth saved it, or the join ended.
 // Hearth caps the wait, and says it held the announcement with
 // `relayJoinHeldHeader`, so the Relay asks again at once rather than after
-// its usual pause. Hearths that predate it answer at once, as before.
+// its usual pause.
 export const relayJoinHoldHeader = "kiln-join-hold"
 export const relayJoinHeldHeader = "kiln-join-held"
 // On an answer once Hearth saved the Relay: the Relay dials Hearth then, and
@@ -162,14 +161,6 @@ export const RelayJoinPairingResponseSchema = Schema.Struct({
 
 export const RelayJoinAnnouncementSchema = Schema.Struct({
   envelope: RelayJoinEnvelopeSchema,
-  // What the Relay can do, such as `relayJoinPairingV1Feature`. Outside the
-  // MAC, so Hearths that predate it check announcements as before; it only
-  // ever offers something, which Hearth's own answer then asks for.
-  features: Schema.optionalKey(
-    Schema.Array(Schema.String.check(Schema.isMaxLength(64))).check(
-      Schema.isMaxLength(32)
-    )
-  ),
   joinId: Schema.String.check(Schema.isPattern(JOIN_ID)),
   mac: Schema.String.check(Schema.isMaxLength(128)),
   nonce: Schema.String.check(Schema.isPattern(/^[A-Za-z\d_-]{22,86}$/u)),
@@ -198,8 +189,7 @@ export const RelayJoinResponseSchema = Schema.Struct({
   clientId: Schema.NullOr(Schema.String.check(Schema.isPattern(FINGERPRINT))),
   expiresAt: Schema.NullOr(Schema.Number),
   mac: Schema.String.check(Schema.isMaxLength(128)),
-  // For a Relay with `relayJoinPairingV1Feature`, once someone confirmed it:
-  // Hearth's pairing request, and where the Relay should open its control
+  // Once someone confirmed it: Hearth's pairing request, and where the Relay should open its control
   // connection to Hearth (or null when it can't).
   pairing: Schema.optionalKey(
     Schema.Struct({

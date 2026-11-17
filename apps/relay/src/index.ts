@@ -135,7 +135,6 @@ import {
   relaySystemUpdateSchema,
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
-  relayBackupFailureCodesV1Feature,
   relayPlatformActionInputSchema,
   RelayTunnelOpenSchema,
 } from "@workspace/contracts"
@@ -2422,14 +2421,10 @@ async function executeControlRequest(
     payload: unknown,
     timeoutMs: number
   ) => Promise<unknown>,
-  hearthFeatures: ReadonlySet<string>,
   connectionId: string
 ): Promise<unknown> {
   if (signal.aborted) throw new Error("Relay request was cancelled")
-  const sendBackupTask = (task: RelayBackupTask) =>
-    redactRelayBackupTask(task, {
-      failureCodes: hearthFeatures.has(relayBackupFailureCodesV1Feature),
-    })
+  const sendBackupTask = (task: RelayBackupTask) => redactRelayBackupTask(task)
   const payload = payloadRecord(request.payload)
   switch (request.operation) {
     case "relay.tunnel.open": {
@@ -3300,13 +3295,6 @@ async function executeControlRequest(
     }
     case "backup.restore.unfinished":
       return backupManager.unfinishedTarRestores()
-    case "backup.task.get":
-      return runRelayEffect(
-        "relay.backups.get",
-        backupManager
-          .get(backupTaskIdSchema.parse(requiredString(payload, "taskId")))
-          .pipe(Effect.map((task) => (task ? sendBackupTask(task) : task)))
-      )
     case "backup.task.list": {
       const updatedAfter = payload.updatedAfter
       if (
@@ -3840,17 +3828,6 @@ async function executeControlRequest(
               .upload(target.root, input.path, source)
               .pipe(Effect.map(relayRemoteFileUploadResultSchema.parse))
           )
-        )
-      )
-    }
-    case "instance.files.mutate": {
-      const input = relayFileMutationInputSchema.parse(payload)
-      return withFileTarget(payload, (target) =>
-        runRelayEffect(
-          "relay.files.mutate.legacy",
-          target.filesystem
-            .mutate(target.root, input)
-            .pipe(Effect.andThen(target.filesystem.tree(target.root)))
         )
       )
     }
