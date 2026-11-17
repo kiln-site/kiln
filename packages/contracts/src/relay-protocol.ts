@@ -56,7 +56,6 @@ export const relayControlOperations = [
   "relay.host.read",
   "relay.host.files.mount",
   "relay.host.restart",
-  "relay.database.read",
   "terminal.attach",
   "terminal.heartbeat",
   "terminal.detach",
@@ -286,7 +285,6 @@ export function relayControlOperationChanges(
     case "tunnel.list":
     case "tunnel.state":
     case "relay.host.read":
-    case "relay.database.read":
     case "relay.proxy.read":
     case "relay.proxy.config.read":
     case "relay.volumes.read":

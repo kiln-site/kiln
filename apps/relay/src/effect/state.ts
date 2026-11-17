@@ -1967,10 +1967,15 @@ const migrations = SqliteMigrator.fromRecord({
       RENAME TO relay_instance_legacy_ids
     `
   }),
+  // Reading the Relay's own state moved to its host files, which take
+  // their own action, so `relay.database.read` allows nothing and is gone.
+  "49_relay_database_action": moveCustomActions((actions) =>
+    actions.filter((action) => action !== "relay.database.read")
+  ),
 })
 
 // Rewrites the actions of every client and invitation given actions of its
-// own, when an action is replaced by ones every instance takes.
+// own, when an action is replaced by ones every instance takes, or dropped.
 function moveCustomActions(
   move: (actions: ReadonlyArray<string>) => Array<string>
 ) {

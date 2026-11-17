@@ -87,6 +87,7 @@ import { manualDomains } from "@/migrations/0086_manual_domains"
 import { tunnelDomains } from "@/migrations/0087_tunnel_domains"
 import { tunnelGatewayDns } from "@/migrations/0088_tunnel_gateway_dns"
 import { relayJoinFeatures } from "@/migrations/0089_relay_join_features"
+import { relayDatabasePermission } from "@/migrations/0090_relay_database_permission"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -177,4 +178,5 @@ export const migrations: ReadonlyArray<Migration> = [
   tunnelDomains,
   tunnelGatewayDns,
   relayJoinFeatures,
+  relayDatabasePermission,
 ]

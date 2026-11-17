@@ -561,9 +561,12 @@ from a tag or an image name today.
 
 1. Kill on every instance, with one rule for stopped and failed. Done.
 2. One power permission for every kind. Done.
-3. Remove unused Relay requests and checks for older Relays. Done for four
-   requests and the resource limit checks; other checks for older Relays go
-   as their code is touched.
+3. Remove unused Relay requests and checks for older Relays. Done: the
+   Relay announces no features and Hearth checks none, browser capabilities
+   are only v2, Relays pair only through their announcements, and responses
+   carry every field the Relay sends. What stays is what an outdated Relay
+   needs to connect and update, and Hearth's own feature list, which a Relay
+   a release behind still reads.
 4. The new Brick format, with the v1 converter and the official recipes.
    Done for game servers: Hearth and Relays read `kiln.brick/v2`, and
    convert v1 where it is stored.

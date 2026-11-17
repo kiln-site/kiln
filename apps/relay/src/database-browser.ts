@@ -52,25 +52,19 @@ export class DatabaseBrowser {
   }
 }
 
-// A database outside any file root, such as the Relay's own state. It is
-// always opened, and reported, read-only.
-export function readDatabaseFile(path: string, request: DatabaseReadRequest) {
-  return runDatabase(path, request, "inspect")
-}
-
 function runDatabase(
   path: string,
   request: DatabaseReadRequest | DatabaseWriteRequest,
-  mode: "inspect" | "read" | "write"
+  mode: "read" | "write"
 ) {
   return Effect.gen(function* () {
     yield* assertSqliteFile(path)
-    const writable =
-      mode !== "inspect" &&
-      (yield* promiseEffect(() => access(path, fsConstants.W_OK)).pipe(
-        Effect.map(() => true),
-        Effect.catch(() => Effect.succeed(false))
-      ))
+    const writable = yield* promiseEffect(() =>
+      access(path, fsConstants.W_OK)
+    ).pipe(
+      Effect.map(() => true),
+      Effect.catch(() => Effect.succeed(false))
+    )
     if (mode === "write" && !writable) {
       return yield* Effect.fail(
         RelayDatabaseBrowserError.make({
