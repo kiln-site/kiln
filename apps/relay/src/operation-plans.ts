@@ -503,6 +503,9 @@ export function controlRequestLocks(
     // Asks the package manager what's new, changing only its package lists.
     case "relay.host.packages.read":
     case "relay.platform.database.read":
+    // Reads Kiln's installation record, which changes only from the
+    // Relay's command line or under its own lock.
+    case "relay.platform.recovery.read":
     case "relay.installation.read":
     case "browser.authorization.revise":
     case "brick.catalog":

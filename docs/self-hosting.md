@@ -403,19 +403,64 @@ docker run --rm -it --entrypoint kiln-relay \
 
 ## Recovery
 
-A [platform backup](backups.md) holds Hearth's catalog. The recovery kit holds
-what isn't in it: the installation ID and every secret, including the
-platform backup key that decrypts those backups. Export it after installing,
-and keep it offline, apart from the backups:
+Kiln's **recovery code** (`kiln-rk-…`) is its platform backup key, the one
+thing to keep apart from Kiln. A [platform backup](backups.md) made by a Relay
+in platform mode (format 2) carries everything else a new machine needs, so
+that backup and the code restore Kiln. Without the code, Kiln's backups can't
+be read. Save it after installing, and keep it apart from the backups.
+
+Anyone with the code and a backup can read everything that backup holds.
+
+### Saving it from Hearth
+
+Right after the first administrator account is created, Hearth asks for the
+recovery code to be saved before opening the app, and until a platform
+administrator says it's saved, a notification stays on every page; its
+**Save** opens the code on **Kiln → Security**
+(`/kiln/security?recoveryCode=save`, or `/setup/recovery` while nobody has
+saved it). Hearth reads the code from the Relay hosting Kiln each time and
+never stores it. It shows it masked, with three ways to keep it:
+
+- **Copy** it into a password manager or anywhere else.
+- **Download**: `kiln-recovery-code-<installation-id>.txt`.
+- **Save in 1Password**: 1Password's own button, shown only when its browser
+  extension is installed. It saves an API Credential item: the installation ID
+  as its key name, the code as its credential, and Hearth's address as its
+  hostname.
+
+The first time it's shown needs nothing more, and the administrator who saw it
+may see it again for 30 minutes, until it's saved, so a reload doesn't lock
+them out. After that, every showing asks for a fresh code from the
+administrator's authenticator app, or one of their backup codes, so an
+administrator must turn on two-factor authentication in their account settings
+first. Five wrong codes in 15 minutes pause the checks. Each showing, and each
+"I've saved it", is recorded in the audit log, never the code itself.
+
+The Security card also says whether a backup the code restores exists away
+from this machine: a format 2 platform backup with a copy on a backup
+destination. Kiln's daily schedule keeps its backups on this machine's disk,
+which doesn't survive losing it; add a destination to keep one elsewhere.
+
+A Kiln whose secrets come from its own environment (Coolify, or Hearth run by
+hand) writes format 1 backups, which hold only Hearth's database. Hearth still
+offers its code, if the Relay beside it has `KILN_PLATFORM_BACKUP_KEY`, and the
+operator's own environment file must be kept too: restoring needs both.
+
+### Recovery kits
+
+Before format 2, a Relay in platform mode restored from a **recovery kit**: its
+whole installation record, every secret included. A kit still restores a
+format 1 backup, which doesn't carry Kiln's secrets itself:
 
 ```sh
 docker exec kiln-relay kiln-relay platform export-kit > kiln-recovery.json
 ```
 
-Anyone with the kit can read Kiln's database and sign Hearth sessions.
+### Restoring
 
-To restore Kiln on a new host, import the kit into the new Relay's data volume
-before the Relay's first start, so it doesn't install a new installation:
+To restore a format 1 backup on a new host, import the kit into the new Relay's
+data volume before the Relay's first start, so it doesn't install a new
+installation:
 
 ```sh
 docker volume create kiln-relay-data
@@ -431,8 +476,8 @@ It creates an empty database and holds Hearth stopped. Restore the platform
 backup into it and start Hearth:
 
 ```sh
-docker cp backup.zip kiln-relay:/data/restore.zip
-docker exec kiln-relay kiln-relay platform-backup restore /data/restore.zip \
+docker cp backup-<id>.kiln kiln-relay:/data/restore.kiln
+docker exec kiln-relay kiln-relay platform-backup restore /data/restore.kiln \
   --confirm <installation-id>
 docker exec kiln-relay kiln-relay platform start-hearth
 ```

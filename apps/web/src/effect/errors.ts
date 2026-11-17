@@ -121,6 +121,18 @@ export class PasswordAttemptsError extends Schema.TaggedError<PasswordAttemptsEr
   { message: Schema.String }
 ) {}
 
+/** Too many wrong two-factor codes lately: none is checked until it passes. */
+export class TwoFactorAttemptsError extends Schema.TaggedError<TwoFactorAttemptsError>()(
+  "TwoFactorAttemptsError",
+  { message: Schema.String }
+) {}
+
+/** Something asks for a fresh second factor the account hasn't set up. */
+export class TwoFactorRequiredError extends Schema.TaggedError<TwoFactorRequiredError>()(
+  "TwoFactorRequiredError",
+  { message: Schema.String }
+) {}
+
 export class RelayUnavailableError extends Schema.TaggedError<RelayUnavailableError>()(
   "RelayUnavailableError",
   {

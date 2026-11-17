@@ -1819,9 +1819,11 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.read"
     case "relay.platform.action":
       return "relay.update"
-    // Hearth's own database holds everything Hearth knows.
+    // Hearth's own database holds everything Hearth knows, and the recovery
+    // code opens every backup of it.
     case "relay.platform.database.read":
     case "relay.platform.database.write":
+    case "relay.platform.recovery.read":
       return "relay.update"
     // Only full access, which the handler checks too.
     case "relay.installation.read":

@@ -1446,7 +1446,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup")}
                 SET status = ?, filename = ?, bytes = ?,
-                    checksum_sha256 = ?, restic_snapshot_id = ?, warnings = ?,
+                    checksum_sha256 = ?, restic_snapshot_id = ?,
+                    recoverable = ?, warnings = ?,
                     completed_at = ?, updated_at = ?
               WHERE id = ?`,
             [
@@ -1455,6 +1456,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
               task.result.bytes,
               checksum,
               snapshotId,
+              archiveResult?.recoverable === true,
               JSON.stringify(task.result.warnings),
               task.finishedAt ?? now,
               now,
