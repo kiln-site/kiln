@@ -1167,6 +1167,8 @@ const scheduleManager = await ScheduleManager.make({
       backupManager.enqueue(input)
     ),
   findInstance: (instanceId) => docker.findInstance(instanceId),
+  findVolume: (volumeId) =>
+    runRelayEffect("relay.schedules.volume", volumes.find(volumeId)),
   forkEffect: (name, effect) => forkRelayEffect(name, effect),
   getBackup: (taskId) =>
     runRelayEffect("relay.schedules.backup.get", backupManager.get(taskId)),

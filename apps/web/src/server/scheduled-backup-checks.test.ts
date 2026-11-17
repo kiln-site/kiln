@@ -480,5 +480,78 @@ describeMysql("Scheduled backups, checked before they run", () => {
           assert.include(refusals()[media], "65 Apps, more than the 64")
         })
     )
+
+    // A volume can be a target of its own. Named beside an App that uses
+    // it, it is that App's backup of it, sent once; named alone, it is a
+    // backup of its own, admitted as a manual one of it would be.
+    it.effect(
+      "sends a volume target's backup once beside the Apps that use it, and refuses it while it's deleted",
+      () =>
+        Effect.gen(function* () {
+          const site = "d".repeat(12)
+          const [media, uploads] = ["1", "2"].map((digit) =>
+            digit.repeat(40)
+          ) as [string, string]
+          yield* seed
+          relay.volumes = [
+            { id: media, users: [site] },
+            { id: uploads, users: [] },
+          ]
+          yield* createAppRecordEffect({
+            appId: site,
+            createdBy: "owner",
+            mounts: [
+              {
+                id: `mount0${site.slice(0, 6)}`,
+                readOnly: false,
+                service: null,
+                source: { type: "volume" as const, volumeId: media },
+                target: "/data",
+              },
+            ],
+            name: "Site",
+            relayId,
+          })
+          const volume = (id: string) => ({
+            id,
+            kind: "volume" as const,
+            name: id.slice(0, 4),
+            relayId,
+          })
+          yield* deploy({
+            ...backupSchedule({ kind: "local" }, [site], "app"),
+            targets: [target(site, "app"), volume(media), volume(uploads)],
+          })
+
+          const sent = relay.applied.at(-1)?.actions[0]?.executions ?? []
+          assert.sameMembers(
+            sent.map((execution) => execution.targetId),
+            [media, uploads]
+          )
+          // The App's volume once, naming the App; the other alone.
+          assert.deepStrictEqual(executions()[media]?.appIds, [site])
+          assert.notProperty(executions()[uploads], "appIds")
+          assert.deepStrictEqual(executions()[uploads]?.destination, {
+            kind: "local",
+          })
+          assert.isNull(executions()[uploads]?.refusal ?? null)
+
+          yield* requestResourceDeletionRowEffect({
+            finalBackup: false,
+            kind: "volume",
+            relayId,
+            resourceId: uploads,
+            storageId: null,
+            user: owner,
+          })
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+
+          assert.strictEqual(
+            executions()[uploads]?.refusal,
+            "it's being permanently deleted"
+          )
+          assert.isNull(executions()[media]?.refusal ?? null)
+        })
+    )
   })
 })

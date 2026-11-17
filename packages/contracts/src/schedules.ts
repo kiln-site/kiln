@@ -127,11 +127,14 @@ export const scheduleActionSchema = z.discriminatedUnion("type", [
 
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>
 
+// A `relay` target is Kiln itself, backed up on that Relay. A `volume` is
+// a Kiln volume on its Relay, which only a backup step reaches.
 export const scheduleTargetKindSchema = z.enum([
   "instance",
   "database",
   "app",
   "relay",
+  "volume",
 ])
 
 export const scheduleTargetSchema = z
@@ -314,7 +317,8 @@ const relayScheduleBackupExecutionSchema = z
     repositoryId: z.uuid().nullable().optional(),
     /**
      * The App targets of the step whose backups take this volume: a volume
-     * several of them use is one execution, backed up once.
+     * several of them use is one execution, backed up once. A volume the
+     * step also names as a target of its own is that same execution.
      */
     appIds: z.array(z.string().min(1).max(120)).min(1).max(2_000).optional(),
     targetId: z.string().min(1).max(120),
@@ -350,7 +354,7 @@ export function scheduledAppBackupGroup<
   const taken = (execution: Execution) =>
     execution.targetKind === "volume" &&
     (execution.appIds?.some((id) => apps.has(id)) ?? false)
-  for (let grown = true; grown; ) {
+  for (let grown = true; grown;) {
     grown = false
     for (const execution of executions) {
       if (!taken(execution)) continue
@@ -574,9 +578,11 @@ export function scheduleActionSupportsTarget(
 ): boolean {
   if (action.type === "wait") return true
   // A game server's goes to its console; a database's runs in its
-  // container's shell, and an App's in one of its services'.
-  if (action.type === "console_command") return target.kind !== "relay"
-  if (action.type === "power") return target.kind !== "relay"
+  // container's shell, and an App's in one of its services'. Kiln and a
+  // volume are only backed up.
+  if (action.type === "console_command" || action.type === "power") {
+    return target.kind !== "relay" && target.kind !== "volume"
+  }
   // An App's volumes are archives, never restic snapshots.
   if (action.mode === "incremental") return target.kind === "instance"
   return true

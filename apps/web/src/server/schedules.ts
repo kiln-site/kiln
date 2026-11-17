@@ -42,7 +42,11 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
 import { requireScheduleAppBackups } from "@/lib/schedule-app-backups.server"
 import { requireScheduleAppServices } from "@/lib/schedule-app-services.server"
-import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
+import {
+  scheduleTargetsWithAvailability,
+  type ScheduleTargetAvailability,
+} from "@/lib/schedule-target-options"
+import { readRelayVolumes } from "@/server/app-backups.server"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { scheduleKey, scheduleSettingsKey } from "@/lib/schedule-lanes"
@@ -111,71 +115,182 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
         loadReferencedScheduleTargets(),
         listPersistedRelays(),
       ])
-    const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
     const targets = scheduleTargetsWithAvailability(
-      availableTargets,
+      // Only its Relay can say a volume is gone, which the editor asks
+      // (`getScheduleVolumeOptions`); one a schedule names is kept until
+      // it does.
+      [
+        ...availableTargets,
+        ...referencedTargets.filter((target) => target.kind === "volume"),
+      ],
       referencedTargets
     )
-    return targets.flatMap((target) => {
-      // Kiln's backups are platform administrators' alone.
-      if (target.kind === "relay" && !isPlatformAdmin(user)) return []
-      if (
-        !hasScheduleTargetPermission({
-          grants,
-          permission: "schedule.read",
-          target,
-          user,
-        })
-      ) {
-        return []
-      }
-      const permittedActions = (
-        ["console_command", "backup", "power", "wait"] as const
-      ).filter((type) => {
-        const permissions = scheduleActionOptionPermissions(type, target)
-        return (
-          permissions.length === 0 ||
-          permissions.some((permission) =>
-            hasScheduleTargetPermission({ grants, permission, target, user })
-          )
-        )
-      })
-      return [
-        {
-          ...target,
-          relayName: relayNames.get(target.relayId) ?? target.relayId,
-          canCreate:
-            target.available &&
-            hasScheduleTargetPermission({
-              grants,
-              permission: "schedule.create",
-              target,
-              user,
-            }),
-          canDelete: hasScheduleTargetPermission({
-            grants,
-            permission: "schedule.delete",
-            target,
-            user,
-          }),
-          canExecute: hasScheduleTargetPermission({
-            grants,
-            permission: "schedule.execute",
-            target,
-            user,
-          }),
-          canUpdate: hasScheduleTargetPermission({
-            grants,
-            permission: "schedule.update",
-            target,
-            user,
-          }),
-          permittedActions,
-        },
-      ]
-    })
+    return scheduleOptions(targets, { grants, relays, user })
   }
 )
+
+/**
+ * The Kiln volumes a schedule can back up, as each Relay lists them now,
+ * offered to whoever may schedule on that Relay, as a manual backup of a
+ * volume takes `backup.*` on its Relay. Asked by the editor alone, since
+ * every Relay is asked: the Relays that answered are `listed`, so a volume
+ * a schedule names that isn't among theirs is gone.
+ */
+export const getScheduleVolumeOptions = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  const user = await requireEligibleResourceUser()
+  const [grants, relays, apps] = await Promise.all([
+    isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
+    listPersistedRelays(),
+    loadAppNames(),
+  ])
+  const asked = relays.filter(
+    (relay) =>
+      relay.enabled &&
+      hasScheduleTargetPermission({
+        grants,
+        permission: "schedule.read",
+        target: { id: "", kind: "volume", name: "", relayId: relay.id },
+        user,
+      })
+  )
+  const listings = await Promise.all(
+    asked.map(async (relay) => ({
+      listing: await recoverPromise(
+        () => readRelayVolumes(relay, user.id, scheduleVolumeListTimeoutMs),
+        () => null
+      ),
+      relay,
+    }))
+  )
+  const targets: Array<ScheduleTargetAvailability> = []
+  const usedBy = new Map<string, ReadonlyArray<ScheduleVolumeUser> | null>()
+  for (const { listing, relay } of listings) {
+    if (!listing) continue
+    // Which Apps use a volume is said only to whoever may see its Apps.
+    const seesApps = hasScheduleTargetPermission({
+      grants,
+      permission: "app.read",
+      target: { id: "", kind: "volume", name: "", relayId: relay.id },
+      user,
+    })
+    for (const volume of listing.volumes) {
+      if (volume.id === null || volume.kind !== "kiln") continue
+      const target = {
+        available: true,
+        id: volume.id,
+        kind: "volume" as const,
+        name: volume.name,
+        relayId: relay.id,
+      }
+      targets.push(target)
+      // Said only once it's settled: "not used" must never be a guess.
+      usedBy.set(
+        targetKey(target),
+        seesApps && listing.protection.ready
+          ? [...new Set(volume.users.map((use) => use.appId))].map((id) => ({
+              id,
+              name: apps.get(`${relay.id}/${id}`) ?? id,
+            }))
+          : null
+      )
+    }
+  }
+  return {
+    listed: listings.flatMap(({ listing, relay }) =>
+      listing ? [relay.id] : []
+    ),
+    options: scheduleOptions(targets, { grants, relays, user }).map(
+      (option) => ({
+        ...option,
+        usedBy: usedBy.get(targetKey(option)) ?? null,
+      })
+    ),
+  }
+})
+
+// A Relay that doesn't answer soon leaves its volumes out of the editor
+// rather than hold up every other Relay's.
+const scheduleVolumeListTimeoutMs = 10_000
+
+interface ScheduleVolumeUser {
+  id: string
+  name: string
+}
+
+/** What a person may do with each target on the Schedules pages. */
+function scheduleOptions(
+  targets: ReadonlyArray<ScheduleTargetAvailability>,
+  context: {
+    grants: ReadonlyArray<AccessGrant>
+    relays: ReadonlyArray<{ id: string; name: string }>
+    user: AuthenticatedUser
+  }
+) {
+  const { grants, user } = context
+  const relayNames = new Map(
+    context.relays.map((relay) => [relay.id, relay.name])
+  )
+  return targets.flatMap((target) => {
+    // Kiln's backups are platform administrators' alone.
+    if (target.kind === "relay" && !isPlatformAdmin(user)) return []
+    if (
+      !hasScheduleTargetPermission({
+        grants,
+        permission: "schedule.read",
+        target,
+        user,
+      })
+    ) {
+      return []
+    }
+    const permittedActions = (
+      ["console_command", "backup", "power", "wait"] as const
+    ).filter((type) => {
+      const permissions = scheduleActionOptionPermissions(type, target)
+      return (
+        permissions.length === 0 ||
+        permissions.some((permission) =>
+          hasScheduleTargetPermission({ grants, permission, target, user })
+        )
+      )
+    })
+    return [
+      {
+        ...target,
+        relayName: relayNames.get(target.relayId) ?? target.relayId,
+        canCreate:
+          target.available &&
+          hasScheduleTargetPermission({
+            grants,
+            permission: "schedule.create",
+            target,
+            user,
+          }),
+        canDelete: hasScheduleTargetPermission({
+          grants,
+          permission: "schedule.delete",
+          target,
+          user,
+        }),
+        canExecute: hasScheduleTargetPermission({
+          grants,
+          permission: "schedule.execute",
+          target,
+          user,
+        }),
+        canUpdate: hasScheduleTargetPermission({
+          grants,
+          permission: "schedule.update",
+          target,
+          user,
+        }),
+        permittedActions,
+      },
+    ]
+  })
+}
 
 export const getSchedules = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -320,7 +435,7 @@ const saveSchedule = operation<ScheduleUpdate>()({
             actions: scheduleActionsForSave(input.actions),
             cron: normalizeScheduleCron(input.cron),
             revision: input.revision + 1,
-            targets: await canonicalTargets(input.targets),
+            targets: await canonicalTargets(input.targets, existing.targets),
           })
           requireScheduleAuthorization({
             actions: definition.actions,
@@ -834,18 +949,91 @@ async function loadReferencedScheduleTargets(): Promise<Array<ScheduleTarget>> {
   )
 }
 
+/**
+ * The targets asked for, as Hearth knows them now. A volume is its Relay's
+ * to name, so adding one takes its Relay online; one the schedule already
+ * names keeps its saved name while its Relay can't be asked.
+ */
 async function canonicalTargets(
-  requested: ReadonlyArray<ScheduleTarget>
+  requested: ReadonlyArray<ScheduleTarget>,
+  saved: ReadonlyArray<ScheduleTarget> = []
 ): Promise<Array<ScheduleTarget>> {
-  const directory = await loadTargetDirectory()
-  const targets = new Map(
-    directory.map((target) => [targetKey(target), target])
+  const volumeRelays = new Set(
+    requested.flatMap((target) =>
+      target.kind === "volume" ? [target.relayId] : []
+    )
   )
+  const [directory, volumes] = await Promise.all([
+    loadTargetDirectory(),
+    volumeRelays.size === 0
+      ? Promise.resolve(new Map<string, ReadonlyArray<ScheduleTarget> | null>())
+      : listVolumeTargets(volumeRelays),
+  ])
+  const targets = new Map(
+    [
+      ...directory,
+      ...[...volumes.values()].flatMap((listed) => listed ?? []),
+    ].map((target) => [targetKey(target), target])
+  )
+  const kept = new Map(saved.map((target) => [targetKey(target), target]))
   return requested.map((target) => {
-    const canonical = targets.get(targetKey(target))
-    if (!canonical) throw new Error(`${target.name} is no longer available`)
-    return canonical
+    const key = targetKey(target)
+    const canonical = targets.get(key)
+    if (canonical) return canonical
+    if (target.kind === "volume" && volumes.get(target.relayId) === null) {
+      const stored = kept.get(key)
+      if (stored) return stored
+      throw new Error(
+        `${target.name}'s Relay must be online to add it to a schedule`
+      )
+    }
+    throw new Error(`${target.name} is no longer available`)
   })
+}
+
+// Each Relay's Kiln volumes as schedule targets, or null for one that
+// can't be asked.
+async function listVolumeTargets(
+  relayIds: ReadonlySet<string>
+): Promise<Map<string, ReadonlyArray<ScheduleTarget> | null>> {
+  const relays = (await listPersistedRelays()).filter(
+    (relay) => relay.enabled && relayIds.has(relay.id)
+  )
+  const listed = new Map<string, ReadonlyArray<ScheduleTarget> | null>(
+    [...relayIds].map((relayId) => [relayId, null])
+  )
+  await Promise.all(
+    relays.map(async (relay) => {
+      const listing = await recoverPromise(
+        () => readRelayVolumes(relay),
+        () => null
+      )
+      listed.set(
+        relay.id,
+        listing?.volumes.flatMap((volume) =>
+          volume.id !== null && volume.kind === "kiln"
+            ? [
+                {
+                  id: volume.id,
+                  kind: "volume" as const,
+                  name: volume.name,
+                  relayId: relay.id,
+                },
+              ]
+            : []
+        ) ?? null
+      )
+    })
+  )
+  return listed
+}
+
+// Every App's name, by its Relay and ID, to say which use a volume.
+async function loadAppNames(): Promise<Map<string, string>> {
+  const [rows] = await databasePool.query<
+    Array<{ app_id: string; name: string; relay_id: string } & RowDataPacket>
+  >(`SELECT app_id, name, relay_id FROM ${databaseTable("app")}`)
+  return new Map(rows.map((row) => [`${row.relay_id}/${row.app_id}`, row.name]))
 }
 
 function targetKey(target: ScheduleTarget) {

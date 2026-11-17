@@ -12,7 +12,6 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
-  ChevronDown,
   CirclePause,
   CirclePlay,
   CircleCheck,
@@ -117,6 +116,7 @@ import {
 } from "@/components/kiln/kiln-presentation"
 import {
   ServerKindIcon,
+  VolumeKindIcon,
   instanceKindIcons,
 } from "@/components/instance-kind-icon"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
@@ -132,11 +132,12 @@ import {
   DrawerPopoverContent,
   DrawerPopoverTrigger,
 } from "@/components/drawer-popover"
-import { GroupPickerCard } from "@/components/group-picker-card"
+import { InstancePickerContent } from "@/components/instance-picker"
 import {
-  InstancePickerContent,
-  type InstancePickerItem,
-} from "@/components/instance-picker"
+  TargetPicker,
+  targetPickerItem,
+  type PickerTarget,
+} from "@/components/target-picker"
 import {
   useScheduleScope,
   type ScheduleScope,
@@ -157,6 +158,7 @@ import type {
 } from "@/lib/instance-picker-filters"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
+import { targetPickerGroups } from "@/lib/target-picker-groups"
 import {
   schedulePresetCron,
   schedulePresetFromCron,
@@ -181,24 +183,33 @@ import {
   queryKeys,
   relaySnapshotQueryOptions,
   scheduleOptionsQueryOptions,
+  scheduleVolumeOptionsQueryOptions,
   schedulesQueryOptions,
   instanceGroupsQueryOptions,
 } from "@/lib/query-options"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { getBackupStorage } from "@/server/backup-storage"
 import type { GitHubSyncRunView } from "@/server/github-sync.server"
+import type { getInstanceGroups } from "@/server/instance-groups"
 import { getRelaySnapshot } from "@/server/relay"
 import {
   createSchedule,
   deleteSchedule,
   getScheduleOptions,
   getSchedules,
+  type getScheduleVolumeOptions,
   runScheduleNow,
   updateSchedule,
 } from "@/server/schedules"
 
 type Schedule = Awaited<ReturnType<typeof getSchedules>>[number]
-type ScheduleOption = Awaited<ReturnType<typeof getScheduleOptions>>[number]
+type ScheduleOption = Awaited<ReturnType<typeof getScheduleOptions>>[number] & {
+  /** For a volume, once its Relay has settled it: the Apps that use it. */
+  usedBy?: ReadonlyArray<{ id: string; name: string }> | null
+}
+type ScheduleVolumeOptions = Awaited<
+  ReturnType<typeof getScheduleVolumeOptions>
+>
 type RelaySnapshot = Awaited<ReturnType<typeof getRelaySnapshot>>
 type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
 type EditorMode = { kind: "create" } | { kind: "edit"; schedule: Schedule }
@@ -1226,7 +1237,7 @@ function scheduleHistoryRuns(
 /** A schedule or sync target, by the kind the instance picker uses. */
 interface HistoryTarget {
   id: string
-  kind: InstancePickerKind
+  kind: InstancePickerKind | "volume"
   name: string
   /** A schedule's Relay target: Kiln, backed up on that Relay. */
   platform?: boolean
@@ -1313,11 +1324,12 @@ function historyEntryBase(
 function historyTargetCounts(
   targets: ReadonlyArray<HistoryTarget>
 ): InstanceKindCountValues {
-  const counts = { apps: 0, databases: 0, instances: 0, relays: 0 }
+  const counts = { apps: 0, databases: 0, instances: 0, relays: 0, volumes: 0 }
   for (const target of targets) {
     if (target.kind === "server") counts.instances += 1
     else if (target.kind === "app") counts.apps += 1
     else if (target.kind === "database") counts.databases += 1
+    else if (target.kind === "volume") counts.volumes += 1
     else counts.relays += 1
   }
   return counts
@@ -1799,7 +1811,7 @@ const HistoryTargetPicker = React.memo(function HistoryTargetPicker({
     [relayName, servers, targets]
   )
   const select = React.useCallback(
-    (item: InstancePickerItem) => {
+    (item: AnyInstancePickerItem) => {
       onNavigate()
       void navigate({ href: historyTargetHref(item.identity) })
     },
@@ -1822,7 +1834,17 @@ function historyTargetPickerItem(
   target: HistoryTarget,
   servers: ReadonlyMap<string, HistoryTargetServer> | undefined,
   runRelayName: string
-): InstancePickerItem {
+): AnyInstancePickerItem {
+  if (target.kind === "volume") {
+    return targetPickerItem({
+      id: target.id,
+      key: `${target.kind}:${target.relayId}:${target.id}`,
+      kind: "volume",
+      name: target.name,
+      relayId: target.relayId,
+      relayName: target.relayName ?? runRelayName,
+    })
+  }
   const server =
     target.kind === "server"
       ? servers?.get(`${target.relayId}:${target.id}`)
@@ -1868,8 +1890,13 @@ function historyTargetPickerItem(
   }
 }
 
-// Each workspace route takes the instance's ID.
-function historyTargetHref(identity: InstancePickerItem["identity"]) {
+// Each workspace route takes the instance's ID. A volume has no page of its
+// own: its Relay's Volumes lists it.
+function historyTargetHref(identity: AnyInstancePickerItem["identity"]) {
+  if (identity.kind === "volume") {
+    return `/relay/${encodeURIComponent(identity.relayId)}/volumes`
+  }
+  if (identity.kind === "group") return "/automations/history"
   if (identity.kind === "server") {
     return `/server/${encodeURIComponent(identity.id)}`
   }
@@ -2135,8 +2162,12 @@ function TargetRunAudit({
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold">{run.target.name}</p>
           <p className="type-meta truncate font-mono text-muted-foreground">
-            {run.target.kind === "app" ? "App" : run.target.kind} ·{" "}
-            {run.target.id}
+            {run.target.kind === "app"
+              ? "App"
+              : run.target.kind === "relay"
+                ? "Kiln"
+                : run.target.kind}{" "}
+            · {run.target.id}
           </p>
         </div>
         <span className="type-meta text-muted-foreground">
@@ -2278,12 +2309,17 @@ function ScheduleEditorDialog({
   const queryClient = useQueryClient()
   const existing = mode.kind === "edit" ? mode.schedule : null
   const permissionKey = mode.kind === "create" ? "canCreate" : "canUpdate"
+  // Volumes are their Relays' to list, asked for only while editing.
+  const { data: volumeOptions } = useQuery({
+    ...scheduleVolumeOptionsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+  })
   const editorOptions = React.useMemo(() => {
     const referenced = new Set(existing?.targets.map(targetKey) ?? [])
-    return options.filter(
+    return withVolumeOptions(options, volumeOptions).filter(
       (option) => option.available || referenced.has(targetKey(option))
     )
-  }, [existing, options])
+  }, [existing, options, volumeOptions])
   const timeZone = useBrowserTimeZone()
   const [name, setName] = React.useState(existing?.name ?? "")
   // A new schedule runs daily at the viewer's midnight.
@@ -2370,18 +2406,13 @@ function ScheduleEditorDialog({
         cron,
         enabled,
         name,
-        targets: selectedOptions.map(
-          ({
-            canCreate: _,
-            canDelete: __,
-            canExecute: ___,
-            canUpdate: ____,
-            available: _____,
-            permittedActions: ______,
-            relayName: _______,
-            ...target
-          }) => target
-        ),
+        // Only what names it: Hearth takes no other keys of a target.
+        targets: selectedOptions.map(({ id, kind, name, relayId }) => ({
+          id,
+          kind,
+          name,
+          relayId,
+        })),
       }
       return existing
         ? updateSchedule({
@@ -2391,6 +2422,13 @@ function ScheduleEditorDialog({
     },
     onSuccess: (schedule) => {
       upsertScheduleCache(queryClient, schedule)
+      // A volume is among the schedule options only once a schedule names
+      // it, and the options say what may be run or edited.
+      if (schedule?.targets.some((target) => target.kind === "volume")) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.schedules.options,
+        })
+      }
       showToast({
         message: existing ? "Schedule updated" : "Schedule created",
         type: "success",
@@ -2599,10 +2637,8 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
         title="Targets"
       >
         <ScheduleTargetSelector
-          hideHeader
           options={options}
           permissionKey={permissionKey}
-          selectedOptionsCount={selectedOptionsCount}
           selectedTargets={selectedTargets}
           onToggle={onTargetToggle}
         />
@@ -2909,150 +2945,56 @@ const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
   )
 })
 
+// The same picker New Backup draws. A schedule names an App itself, backed
+// up as whatever volumes it uses when it runs, so a group's App is one of
+// its members here rather than standing for its volumes.
 const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
-  hideHeader = false,
   options,
   permissionKey,
-  selectedOptionsCount,
   selectedTargets,
   onToggle,
 }: {
-  hideHeader?: boolean
   options: ReadonlyArray<ScheduleOption>
   permissionKey: "canCreate" | "canUpdate"
-  selectedOptionsCount: number
   selectedTargets: ReadonlySet<string>
   onToggle: (keys: ReadonlyArray<string>, checked: boolean) => void
 }) {
-  const [open, setOpen] = React.useState(false)
-  const { data: groups } = useQuery(instanceGroupsQueryOptions())
-  const pickerItems = React.useMemo((): Array<AnyInstancePickerItem> => {
-    const targets = options.map((option): InstancePickerItem => {
-      const key = targetKey(option)
-      return {
-        ...scheduleTargetPickerItem(option),
-        // Unavailable targets stay removable so stale schedules can be fixed.
-        disabled:
-          (!option[permissionKey] || !option.available) &&
-          !(selectedTargets.has(key) && !option.available),
-      }
-    })
-    // A group of instances is a row that ticks its members: the schedule
-    // keeps them, each a target of its own, and never the group.
-    const choosable = new Map(
-      targets.flatMap((item, index) =>
-        item.disabled ? [] : [[item.key, options[index]!] as const]
-      )
-    )
-    const rows = (groups ?? []).map((group): AnyInstancePickerItem => {
-      const members = group.members.flatMap((member) => {
-        const key = targetKey({
-          id: member.instanceId,
-          kind: member.kind === "server" ? "instance" : member.kind,
-          relayId: member.relayId,
-        })
-        return choosable.has(key) ? [key] : []
-      })
-      // It stands for all it holds or isn't chosen as one: ticking it for
-      // some of its members would pass for scheduling all of them.
-      const whole =
-        group.hidden === 0 && members.length === group.members.length
-      // Each says what it is: a database is often called what its App is.
-      const meta =
-        group.hidden > 0
-          ? "Holds instances you can't see"
-          : !whole
-            ? "Not every member can be chosen"
-            : members
-              .map((key) => {
-                const { kind, name } = choosable.get(key)!
-                return `${name} (${kind === "instance" ? "game server" : kind === "app" ? "App" : "database"})`
-              })
-              .join(", ")
-      return {
-        card: <GroupPickerCard meta={meta} name={group.name} />,
-        disabled: !whole,
-        identity: { id: group.id, kind: "group" },
-        key: `group:${group.id}`,
-        meta,
-        name: group.name,
-        searchText: group.members
-          .map((member) => `${member.instanceId} ${member.name ?? ""}`)
-          .join(" "),
-        stands: whole ? members : [],
-      }
-    })
-    return [...rows, ...targets]
-  }, [groups, options, permissionKey, selectedTargets])
-  const selectedNames = React.useMemo(() => {
-    const names: Array<string> = []
-    for (const option of options) {
-      if (selectedTargets.has(targetKey(option)))
-        names.push(option.kind === "relay" ? "Kiln" : option.name)
-    }
-    return names
-  }, [options, selectedTargets])
-  const selectTarget = React.useCallback(
-    (item: AnyInstancePickerItem) => {
-      // A group ticks every member, or unticks them once all are.
-      const keys = item.stands ?? [item.key]
-      onToggle(keys, !keys.every((key) => selectedTargets.has(key)))
-    },
-    [onToggle, selectedTargets]
+  const { data: instanceGroups } = useQuery({
+    ...instanceGroupsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+  })
+  const targets = React.useMemo(
+    () => options.map((option) => schedulePickerTarget(option, permissionKey)),
+    [options, permissionKey]
+  )
+  // A group is a row that ticks its members: the schedule keeps them, each
+  // a target of its own, and never the group.
+  const groups = React.useMemo(
+    () =>
+      targetPickerGroups({
+        app: "target",
+        groups: instanceGroups ?? noInstanceGroups,
+        keyOf: (kind, relayId, id) => targetKey({ id, kind, relayId }),
+        targets: targets.filter(
+          (target) => !target.disabled && !target.unavailable
+        ),
+      }),
+    [instanceGroups, targets]
   )
   return (
-    <div>
-      {hideHeader ? null : (
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h3 className="text-sm font-semibold">Targets</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Select every game server, database, or Kiln this schedule applies
-              to.
-            </p>
-          </div>
-          <span className="type-code text-muted-foreground">
-            {selectedOptionsCount} selected
-          </span>
-        </div>
-      )}
-      <DrawerPopover open={open} onOpenChange={setOpen}>
-        <DrawerPopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            className={`${hideHeader ? "" : "mt-3"} h-auto min-h-10 w-full justify-between gap-3 px-3 py-2 font-normal`}
-          >
-            <span className="min-w-0 truncate text-left">
-              {selectedNames.length === 0
-                ? "Select game servers, Apps, databases, or Relays"
-                : selectedNames.slice(0, 3).join(", ")}
-              {selectedNames.length > 3 ? ` +${selectedNames.length - 3}` : ""}
-            </span>
-            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-          </Button>
-        </DrawerPopoverTrigger>
-        <DrawerPopoverContent
-          title="Targets"
-          align="start"
-          className="z-[70] w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
-        >
-          <InstancePickerContent
-            multiple
-            ariaLabel="Targets"
-            emptyMessage="No accessible schedule targets found."
-            items={pickerItems}
-            selectedKeys={selectedTargets}
-            onSelect={selectTarget}
-            onSelectMany={onToggle}
-          />
-        </DrawerPopoverContent>
-      </DrawerPopover>
-    </div>
+    <TargetPicker
+      ariaLabel="Targets"
+      emptyMessage="No accessible schedule targets found."
+      groups={groups}
+      placeholder="Choose game servers, Apps, databases, volumes, or Kiln"
+      selectedKeys={selectedTargets}
+      targets={targets}
+      onToggle={onToggle}
+    />
   )
 })
+
+const noInstanceGroups: Awaited<ReturnType<typeof getInstanceGroups>> = []
 
 const ScheduleActionsEditor = React.memo(function ScheduleActionsEditor({
   actions,
@@ -3298,18 +3240,22 @@ const ActionEditor = React.memo(function ActionEditor({
       ),
     }
   }, [action, permissionKey, selectedOptions])
+  // Apps and volumes are backed up as volumes, which stop what uses them.
+  const stopsApps = (target: ScheduleOption) =>
+    target.kind === "app" || target.kind === "volume"
   const backsUpAppsOnly =
     action.type === "backup" &&
     selectedActionTargets.length > 0 &&
-    selectedActionTargets.every((target) => target.kind === "app")
-  // Apps, with or without databases beside them, can be backed up stopped:
-  // each database on an App's Relay is then dumped while the Apps are.
+    selectedActionTargets.every(stopsApps)
+  // Apps and volumes, with or without databases beside them, can be backed
+  // up stopped: each database on their Relay is then dumped while the Apps
+  // are.
   const backsUpDatabasesToo =
     action.type === "backup" &&
-    selectedActionTargets.some((target) => target.kind === "app") &&
+    selectedActionTargets.some(stopsApps) &&
     selectedActionTargets.some((target) => target.kind === "database") &&
     selectedActionTargets.every(
-      (target) => target.kind === "app" || target.kind === "database"
+      (target) => stopsApps(target) || target.kind === "database"
     )
   const stoppable = backsUpAppsOnly || backsUpDatabasesToo
   const changeAction = React.useCallback(
@@ -3506,7 +3452,7 @@ const ActionEditor = React.memo(function ActionEditor({
               ? {
                   stoppedDescription: backsUpDatabasesToo
                     ? "Stops each App once, and dumps the databases while they are stopped"
-                    : "Stops each App once for every volume it uses",
+                    : "Stops each App that uses a volume it backs up",
                   stoppedUnavailable: null,
                 }
               : undefined
@@ -3514,7 +3460,7 @@ const ActionEditor = React.memo(function ActionEditor({
           {...(stoppable
             ? {
                 description:
-                  "Relay runs this job in its single durable queue. Every volume each App uses is backed up, a volume several of them share once. An App that uses no volume is skipped.",
+                  "Relay runs this job in its single durable queue. It backs up every volume chosen and every volume each App uses, once each, however many use it. An App that uses no volume is skipped.",
               }
             : {})}
           initialConsistency={action.consistency ?? "live"}
@@ -3611,15 +3557,15 @@ const ScheduleActionTargetsButton = React.memo(
     // A target it can't run on stays removable while the step names it.
     const items = React.useMemo(() => {
       const eligibleKeys = new Set(eligibleTargets.map(targetKey))
-      return targets.map((target): InstancePickerItem => ({
-        ...scheduleTargetPickerItem(target),
+      return targets.map((target) => ({
+        ...targetPickerItem(schedulePickerTarget(target)),
         disabled:
           !eligibleKeys.has(targetKey(target)) &&
           !selectedKeys.has(targetKey(target)),
       }))
     }, [eligibleTargets, selectedKeys, targets])
     const toggleTarget = React.useCallback(
-      (item: InstancePickerItem) =>
+      (item: AnyInstancePickerItem) =>
         onToggle([item.key], !selectedKeys.has(item.key)),
       [onToggle, selectedKeys]
     )
@@ -3667,43 +3613,70 @@ const ScheduleActionTargetsButton = React.memo(
   }
 )
 
-// A Relay target is Kiln itself, backed up on that Relay.
-function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
-  const kind =
-    option.kind === "instance"
-      ? "Game Server"
-      : option.kind === "database"
-        ? "Database"
-        : option.kind === "app"
-          ? "App"
-          : "Kiln"
+/**
+ * A schedule's target as the target picker lists it. A Relay target is
+ * Kiln itself, backed up on that Relay. Under `permission`, one this person
+ * can't schedule can't be chosen, and one that's gone can only be removed.
+ */
+function schedulePickerTarget(
+  option: ScheduleOption,
+  permission?: "canCreate" | "canUpdate"
+): PickerTarget {
   return {
-    identity:
-      option.kind === "instance"
-        ? { id: option.id, kind: "server", relayId: option.relayId }
-        : option.kind === "database" || option.kind === "app"
-          ? { id: option.id, kind: option.kind, relayId: option.relayId }
-          : {
-              id: option.relayId,
-              kind: "relay",
-              platform: true,
-              relayId: option.relayId,
-              source: "fleet",
-            },
+    id: option.kind === "relay" ? option.relayId : option.id,
     key: targetKey(option),
-    meta: option.available
-      ? option.kind === "relay"
-        ? `On ${option.relayName}`
-        : `${option.relayName} · ${option.id}`
-      : `Unavailable · ${kind} · ${option.relayName}`,
+    kind: option.kind === "relay" ? "platform" : option.kind,
     name: option.kind === "relay" ? "Kiln" : option.name,
-    searchText: `${kind} ${option.relayName} ${option.id}`,
+    relayId: option.relayId,
+    relayName: option.relayName,
+    ...(option.usedBy
+      ? {
+          description:
+            option.usedBy.length > 0
+              ? `Used by ${option.usedBy.map((user) => user.name).join(", ")}`
+              : "Not used by an App",
+          searchText: option.usedBy
+            .map((user) => `${user.id} ${user.name}`)
+            .join(" "),
+        }
+      : {}),
+    ...(permission
+      ? { disabled: !option[permission], unavailable: !option.available }
+      : {}),
   }
 }
 
+/**
+ * The editor's targets with each Relay's volumes as it lists them. A
+ * volume a schedule names that its Relay no longer lists is gone; one on a
+ * Relay that couldn't be asked stays as Hearth last knew it.
+ */
+function withVolumeOptions(
+  options: ReadonlyArray<ScheduleOption>,
+  volumes: ScheduleVolumeOptions | undefined
+): ReadonlyArray<ScheduleOption> {
+  if (!volumes) return options
+  const listed = new Set(volumes.listed)
+  const fresh = new Map(
+    volumes.options.map((option) => [targetKey(option), option])
+  )
+  const merged = options.map((option): ScheduleOption => {
+    if (option.kind !== "volume") return option
+    const known = fresh.get(targetKey(option))
+    if (known) {
+      fresh.delete(targetKey(option))
+      return known
+    }
+    return listed.has(option.relayId)
+      ? { ...option, available: false, canCreate: false }
+      : option
+  })
+  return [...merged, ...fresh.values()]
+}
+
 // The targets the backup dialog lists. It names game servers, databases,
-// and Kiln; an App's backups are of the volumes it uses, set live or
-// stopped there instead.
+// volumes, and Kiln; an App's backups are of the volumes it uses, set live
+// or stopped there instead.
 function isBackupOption(
   target: ScheduleOption
 ): target is ScheduleOption & { kind: Exclude<ScheduleOption["kind"], "app"> } {
@@ -3714,12 +3687,8 @@ function scheduleBackupTarget(
   target: ScheduleOption & { kind: Exclude<ScheduleOption["kind"], "app"> }
 ): BackupConfigurationTarget {
   return {
-    id: target.id,
-    key: targetKey(target),
+    ...schedulePickerTarget(target),
     kind: target.kind === "relay" ? "platform" : target.kind,
-    name: target.kind === "relay" ? "Kiln" : target.name,
-    relayId: target.relayId,
-    relayName: target.relayName,
   }
 }
 
@@ -4144,7 +4113,12 @@ function TargetIcon({
   kind: ScheduleTarget["kind"]
   className?: string
 }) {
-  const Icon = kind === "instance" ? ServerKindIcon : instanceKindIcons[kind]
+  const Icon =
+    kind === "instance"
+      ? ServerKindIcon
+      : kind === "volume"
+        ? VolumeKindIcon
+        : instanceKindIcons[kind]
   return <Icon className={className} aria-hidden="true" />
 }
 

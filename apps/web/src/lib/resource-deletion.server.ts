@@ -772,8 +772,18 @@ const cleanUp = (input: DeletionInput) =>
     // Its backups, incremental snapshots and their repositories among them,
     // stay until they're deleted as backups are, and can be restored into
     // another resource meanwhile.
-    // Hearth keeps nothing of a Kiln volume but its backups, which stay.
-    if (input.kind !== "volume") {
+    // Hearth keeps nothing else of a Kiln volume but the schedules that
+    // back it up, which stop naming it, and its backups, which stay.
+    if (input.kind === "volume") {
+      yield* promiseEffect(async () => {
+        const { removeDeletedResourceFromSchedules } =
+          await import("@/server/schedules")
+        await removeDeletedResourceFromSchedules(
+          { id: input.resourceId, kind: "volume", relayId: input.relayId },
+          subject
+        )
+      })
+    } else {
       const resource = {
         id: input.resourceId,
         kind: input.kind,

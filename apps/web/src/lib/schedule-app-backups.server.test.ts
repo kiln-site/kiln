@@ -90,12 +90,19 @@ const allow = (permission: AccessPermission) =>
 
 describeMysql("scheduled App backups", () => {
   layer(TestDatabase)((it) => {
-    const check = (action: ScheduleAction, existing?: ScheduleAction) =>
+    const check = (
+      action: ScheduleAction,
+      existing?: ScheduleAction,
+      targets: ReadonlyArray<ScheduleTarget> = [target],
+      existingTargets: ReadonlyArray<ScheduleTarget> = targets
+    ) =>
       Effect.promise(() =>
         requireScheduleAppBackups({
           actions: [action],
-          ...(existing ? { existing: { actions: [existing] } } : {}),
-          targets: [target],
+          ...(existing
+            ? { existing: { actions: [existing], targets: existingTargets } }
+            : {}),
+          targets,
           user,
         }).then(
           () => null,
@@ -124,14 +131,37 @@ describeMysql("scheduled App backups", () => {
           expect(yield* check(backup("live"))).toBeNull()
           expect(yield* check(backup("stopped"))).not.toBeNull()
 
+          // A volume named on its own stops every App that uses it too.
+          const volume: ScheduleTarget = {
+            id: "c".repeat(40),
+            kind: "volume",
+            name: "data",
+            relayId,
+          }
+          expect(
+            yield* check(backup("stopped"), undefined, [volume])
+          ).not.toBeNull()
+
           yield* allow("instance.power.stop")
           expect(yield* check(backup("stopped"))).toBeNull()
+          expect(
+            yield* check(backup("stopped"), undefined, [volume])
+          ).toBeNull()
 
           // While its Relay can't say which Apps it would stop, only a
           // stopped backup the schedule already had is kept.
           relay.online = false
           expect(yield* check(backup("stopped"))).not.toBeNull()
           expect(yield* check(backup("stopped"), backup("stopped"))).toBeNull()
+          // A target added to it isn't one it had, so it isn't kept.
+          expect(
+            yield* check(
+              backup("stopped"),
+              backup("stopped"),
+              [target, volume],
+              [target]
+            )
+          ).not.toBeNull()
         }),
       60_000
     )

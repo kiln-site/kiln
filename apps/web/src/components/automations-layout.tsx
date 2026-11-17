@@ -171,7 +171,9 @@ function scheduleScopeOptions(
   )
   const options: Array<ServerPickerOption<ScheduleScopeKind>> = []
   for (const target of targets) {
-    if (!target.available) continue
+    // A volume is no instance to scope automations to; its schedules show
+    // under its Relay's other targets, or unscoped.
+    if (!target.available || target.kind === "volume") continue
     options.push({
       description: `${scheduleTargetKindLabel(target.kind)} · ${target.relayName} · ${target.id}`,
       id: target.id,

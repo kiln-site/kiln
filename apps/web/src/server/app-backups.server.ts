@@ -107,8 +107,7 @@ export async function getAppBackupsHandler(
           return restore ? publicBackup(restore) : null
         })(),
         unfinished: shown
-          ? (unfinished.find((restore) => same(target, restore.target)) ??
-            null)
+          ? (unfinished.find((restore) => same(target, restore.target)) ?? null)
           : null,
       }
     }),
@@ -260,10 +259,11 @@ export async function resolveUnfinishedRestoreHandler(
 export async function readRelayVolumes(
   relay: PersistedRelay,
   // Who asks, for the Relay's audit; none when Hearth asks for itself.
-  userId?: string
+  userId?: string,
+  timeoutMs = 30_000
 ): Promise<RelayVolumes> {
   return relayVolumesSchema.parse(
-    await relayRpc(relay, "relay.volumes.read", {}, 30_000, userId)
+    await relayRpc(relay, "relay.volumes.read", {}, timeoutMs, userId)
   )
 }
 

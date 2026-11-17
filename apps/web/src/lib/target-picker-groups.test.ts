@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  backupTargetGroups,
+  targetPickerGroups,
   type BackupVolumeListing,
-} from "./backup-target-groups"
+} from "./target-picker-groups"
 
 const relayId = "1".repeat(12)
 const site = "a".repeat(12)
@@ -31,7 +31,10 @@ const listing = (change: Partial<BackupVolumeListing> = {}) => ({
   [relayId]: {
     missing: [],
     protection: { ready: true, reason: null },
-    volumes: [volume(media, "media", [site]), volume(uploads, "uploads", [site])],
+    volumes: [
+      volume(media, "media", [site]),
+      volume(uploads, "uploads", [site]),
+    ],
     ...change,
   },
 })
@@ -57,7 +60,8 @@ const rows = (input: {
   volumes?: ReturnType<typeof listing>
 }) =>
   Object.fromEntries(
-    backupTargetGroups({
+    targetPickerGroups({
+      app: "volumes",
       apps: [{ id: site, name: "Site", relayId }],
       groups: input.groups ?? [group],
       keyOf,
@@ -84,7 +88,10 @@ describe("New Backup's App and group rows", () => {
       rows({
         volumes: listing({
           ...unsettled,
-          volumes: [volume(media, "media", [site]), volume(uploads, "uploads", [])],
+          volumes: [
+            volume(media, "media", [site]),
+            volume(uploads, "uploads", []),
+          ],
         }),
       })
     ).toEqual({ app: [], group: [] })
