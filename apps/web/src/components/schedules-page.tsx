@@ -3259,8 +3259,20 @@ const ActionEditor = React.memo(function ActionEditor({
   const backupTargets = React.useMemo(() => {
     const listed: Array<BackupConfigurationTarget> = []
     const empty: Array<ScheduleOption> = []
-    if (action.type !== "backup") return { empty, listed }
-    for (const target of eligibleTargets) {
+    const eligible: Array<ScheduleOption> = []
+    const restricted: Array<ScheduleOption> = []
+    if (action.type !== "backup") return { eligible, empty, listed, restricted }
+    // What it can back up in either mode: a full backup takes every kind,
+    // so the list holds still as the mode changes, and incremental is
+    // offered only while game servers alone are ticked.
+    const full = { ...action, mode: "full" as const }
+    for (const target of selectedOptions) {
+      if (!scheduleActionSupportsTarget(full, target)) continue
+      if (target[permissionKey] && target.permittedActions.includes("backup")) {
+        eligible.push(target)
+      } else restricted.push(target)
+    }
+    for (const target of eligible) {
       if (isBackupOption(target)) {
         listed.push(scheduleBackupTarget(target))
         continue
@@ -3279,8 +3291,18 @@ const ActionEditor = React.memo(function ActionEditor({
             : "Backs up the volumes it uses; its Relay hasn't said which",
       })
     }
-    return { empty, listed }
-  }, [action.type, appVolumes, eligibleTargets])
+    // One the step names that this person can't back up shows ticked, so
+    // it can be taken off, and can't be ticked again.
+    for (const target of restricted) {
+      if (action.targetKeys?.includes(targetKey(target)) !== true) continue
+      listed.push({
+        ...schedulePickerTarget(target),
+        kind: target.kind === "relay" ? "platform" : target.kind,
+        unavailable: true,
+      })
+    }
+    return { eligible, empty, listed, restricted }
+  }, [action, appVolumes, permissionKey, selectedOptions])
   // Those of them it backs up: the dialog opens with them ticked, and its
   // row counts them by kind, an App's volumes among the volumes.
   const { backupCounts, backupKeys, volumesUnknown } = React.useMemo(() => {
@@ -3288,11 +3310,14 @@ const ActionEditor = React.memo(function ActionEditor({
     const chosen = selectedActionTargets.filter((target) =>
       listed.has(targetKey(target))
     )
+    const restricted = new Set(backupTargets.restricted.map(targetKey))
     const counts = { apps: 0, databases: 0, instances: 0, relays: 0 }
     const volumes = new Set<string>()
     // An App whose volumes aren't known yet has some, but not counted.
     let unknown = false
     for (const target of chosen) {
+      // It can't be backed up, so it isn't counted.
+      if (restricted.has(targetKey(target))) continue
       if (target.kind === "relay") counts.relays += 1
       else if (target.kind === "instance") counts.instances += 1
       else if (target.kind === "database") counts.databases += 1
@@ -3313,7 +3338,13 @@ const ActionEditor = React.memo(function ActionEditor({
       volumesUnknown: unknown,
     }
   }, [appVolumes, backupTargets, selectedActionTargets])
-  const backingUp = backupKeys.length
+  const backingUp = backupKeys.filter(
+    (key) =>
+      !backupTargets.restricted.some((target) => targetKey(target) === key)
+  ).length
+  // Leaving every target ticked can mean every target, those added later
+  // too, only where none it would reach is one this person can't back up.
+  const backupCoversLater = backupTargets.restricted.length === 0
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
       onChange(namingNewTargets(action, next, selectedOptions, permissionKey)),
@@ -3540,6 +3571,7 @@ const ActionEditor = React.memo(function ActionEditor({
           initialName={action.name}
           initialTargetKeys={backupKeys}
           inlineTargets={{
+            coversLater: backupCoversLater,
             consistencyChoiceFor: (chosen) =>
               backupStepConsistency(
                 chosen.map((target) => ({
@@ -3564,18 +3596,18 @@ const ActionEditor = React.memo(function ActionEditor({
               ...rest
             } = action
             const chosen = new Set(configuration.targetKeys ?? [])
-            const chosenTargets = eligibleTargets.filter((target) =>
+            const chosenTargets = backupTargets.eligible.filter((target) =>
               chosen.has(targetKey(target))
             )
             const stopped =
               configuration.consistency === "stopped" &&
               backupStepConsistency(chosenTargets) !== undefined
-            // Every one it lists, ticked, is every target: those added
-            // later are backed up too. Fewer, or one it can't name, and it
-            // names them.
+            // Every one it can back up, ticked, is every target: those
+            // added later are backed up too. Fewer, or a target it would
+            // reach that this person can't back up, and it names them.
             const everyTarget =
-              chosen.size === backupTargets.listed.length &&
-              namedRestrictedTargets.length === 0
+              backupCoversLater &&
+              backupTargets.listed.every((target) => chosen.has(target.key))
             onChange({
               ...rest,
               ...(stopped ? { consistency: "stopped" as const } : {}),
@@ -3584,14 +3616,7 @@ const ActionEditor = React.memo(function ActionEditor({
               ),
               mode: stopped ? "full" : configuration.mode,
               name: configuration.name,
-              ...(everyTarget
-                ? {}
-                : {
-                    targetKeys: [
-                      ...chosen,
-                      ...namedRestrictedTargets.map(targetKey),
-                    ],
-                  }),
+              ...(everyTarget ? {} : { targetKeys: [...chosen] }),
             })
             setBackupConfigOpen(false)
           }}
