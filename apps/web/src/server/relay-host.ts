@@ -6,8 +6,6 @@ import {
   relayIdSchema,
   relayInstanceResourcesSchema,
   relayResourceHistoryMaxSamples,
-  relayResourcesV1Feature,
-  relayRestartV1Feature,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
@@ -201,11 +199,7 @@ export const restartRelayHost = createServerFn({ method: "POST" })
   )
 
 async function requireRelayRestart(relay: PersistedRelay): Promise<void> {
-  const { isRelayUpdating, relayConnectionFeatures } =
-    await import("@/lib/relay-connection")
-  if (!relayConnectionFeatures(relay.id).has(relayRestartV1Feature)) {
-    throw new Error("Update this Relay to restart it from Hearth.")
-  }
+  const { isRelayUpdating } = await import("@/lib/relay-connection")
   // A restart could interrupt the update replacing the Relay.
   if (isRelayUpdating(relay.id)) {
     throw new Error("Wait for this Relay's update to finish.")
@@ -219,15 +213,11 @@ export const getRelayResources = createServerFn({ method: "GET" })
   .validator(targetSchema)
   .handler(async ({ data }) => {
     await authorizedRelay(data.relayId, "relay.read")
-    const { relayConnectionFeatures, relayConnectionNode } =
-      await import("@/lib/relay-connection")
+    const { relayConnectionNode } = await import("@/lib/relay-connection")
     const node = relayConnectionNode(data.relayId)
     return {
       resources: node?.relayResources ?? null,
       startedAt: node?.startedAt ?? null,
-      supported: relayConnectionFeatures(data.relayId).has(
-        relayResourcesV1Feature
-      ),
     }
   })
 
@@ -236,10 +226,6 @@ export const getRelayResourceHistory = createServerFn({ method: "GET" })
   .validator(targetSchema)
   .handler(async ({ data }) => {
     const { relay } = await authorizedRelay(data.relayId, "relay.read")
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (!relayConnectionFeatures(relay.id).has(relayResourcesV1Feature)) {
-      return []
-    }
     return relayResourceHistorySchema.parse(
       await databaseRpc(relay, "relay.resources.read", {}, 15_000)
     ).history

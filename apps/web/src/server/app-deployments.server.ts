@@ -1,6 +1,5 @@
 import {
   appConfigSchema,
-  relayAppGitHubV1Feature,
   relayDeploymentLogSchema,
   type AppGitHubBuild,
   type RelayDeploymentLog,
@@ -68,7 +67,7 @@ import { runOperationPromise } from "@/operations/operation"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { publishGitHubSyncChange } from "@/lib/github-sync.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { relayConnectionFeatures } from "@/lib/relay-connection"
+import { relayConnected } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { readInfraServerDirectory } from "@/server/infra-directory.server"
@@ -681,13 +680,7 @@ export async function saveAppGitHubSourceHandler(
   }
   // Changing its source is configuring it; deploying it at once is a deploy.
   if (data.deploy) await authorizedAppFor(user, data, "instance.deploy")
-  if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
-    throw new Error(
-      relayConnectionFeatures(relay.id).size === 0
-        ? "The Relay is offline"
-        : "Update this Relay to deploy apps from GitHub"
-    )
-  }
+  if (!relayConnected(relay.id)) throw new Error("The Relay is offline")
   const token = await connectionToken(user, data.connectionId)
   // The repository's ID survives renames, so pushes match it after one.
   const repository = await runAppEffect(
@@ -856,7 +849,7 @@ export async function getDeploymentLogHandler(
     return { log: null, reason: "The Relay refused this deployment" }
   }
   const relay = await requiredRelay(record.relayId)
-  if (relayConnectionFeatures(relay.id).size === 0) {
+  if (!relayConnected(relay.id)) {
     return { log: null, reason: "The Relay is offline" }
   }
   const log = relayDeploymentLogSchema.parse(

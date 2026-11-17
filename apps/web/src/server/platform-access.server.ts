@@ -1,9 +1,4 @@
-import {
-  relayPlatformDatabaseV1Feature,
-  relayPlatformStatusSchema,
-  relayPlatformV1Feature,
-  relayPlatformV2Feature,
-} from "@workspace/contracts"
+import { relayPlatformStatusSchema } from "@workspace/contracts"
 
 import { recoverPromise } from "@/effect/promise"
 import type { KilnPlatformHost } from "@/server/platform"
@@ -34,9 +29,7 @@ export async function platformRelays() {
   ])
   return (await listPersistedRelays()).filter(
     (relay) =>
-      relay.enabled &&
-      connection.relayConnectionPlatform(relay.id) !== null &&
-      connection.relayConnectionFeatures(relay.id).has(relayPlatformV1Feature)
+      relay.enabled && connection.relayConnectionPlatform(relay.id) !== null
   )
 }
 
@@ -48,62 +41,31 @@ export async function platformRelay(relayId: string) {
   return relay
 }
 
-// A Relay that follows Kiln's containers' output and opens shells in them.
-export async function platformV2Relay(relayId: string) {
-  const [relay, { relayConnectionFeatures }] = await Promise.all([
-    platformRelay(relayId),
-    import("@/lib/relay-connection"),
-  ])
-  if (!relayConnectionFeatures(relay.id).has(relayPlatformV2Feature)) {
-    throw new Error("Update this Relay to open Kiln's terminals.")
-  }
-  return relay
-}
-
-// A Relay that browses Hearth's own database.
-export async function platformDatabaseRelay(relayId: string) {
-  const [relay, { relayConnectionFeatures }] = await Promise.all([
-    platformRelay(relayId),
-    import("@/lib/relay-connection"),
-  ])
-  if (!relayConnectionFeatures(relay.id).has(relayPlatformDatabaseV1Feature)) {
-    throw new Error("Update this Relay to browse Kiln's database.")
-  }
-  return relay
-}
-
 /** Each Relay that reports Kiln's services, with what it reports of them. */
 export async function kilnPlatformHosts(): Promise<Array<KilnPlatformHost>> {
-  const [relays, { relayConnectionFeatures, relayRpc }] = await Promise.all([
+  const [relays, { relayRpc }] = await Promise.all([
     platformRelays(),
     import("@/lib/relay-connection"),
   ])
   return Promise.all(
-    relays.map((relay) => {
-      const features = relayConnectionFeatures(relay.id)
-      const v2 = features.has(relayPlatformV2Feature)
-      const database = features.has(relayPlatformDatabaseV1Feature)
-      return recoverPromise(
+    relays.map((relay) =>
+      recoverPromise(
         async (): Promise<KilnPlatformHost> => ({
-          database,
           error: null,
           relayId: relay.id,
           relayName: relay.name,
           status: relayPlatformStatusSchema.parse(
             await relayRpc(relay, "relay.platform.read", {}, 15_000)
           ),
-          v2,
         }),
         (cause): KilnPlatformHost => ({
-          database,
           error:
             cause instanceof Error ? cause.message : "The Relay didn't answer",
           relayId: relay.id,
           relayName: relay.name,
           status: null,
-          v2,
         })
       )
-    })
+    )
   )
 }

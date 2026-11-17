@@ -284,15 +284,10 @@ const VolumesToolbar = React.memo(function VolumesToolbar({
   onAppFilterChange: (appId: string | null) => void
 }) {
   const queryClient = useQueryClient()
-  // Older Relays can't make volumes; the table says to update them.
-  const { data: supported = true } = useQuery({
-    ...relayVolumesQueryOptions(relayId),
-    select: selectSupported,
-  })
   return (
     <DataTableToolbar
       actions={
-        canManage && supported ? (
+        canManage ? (
           <NewVolumeButton relayId={relayId}>
             <Button aria-label="New volume" onPointerEnter={warmVolumeDialogs}>
               <Plus />
@@ -328,10 +323,6 @@ const VolumesToolbar = React.memo(function VolumesToolbar({
     />
   )
 })
-
-function selectSupported(data: { supported: boolean }): boolean {
-  return data.supported
-}
 
 const noApps: ReadonlyArray<string> = []
 
@@ -559,14 +550,13 @@ function VolumesTable({
     relayName,
   ])
 
-  const supported = volumes.data?.supported !== false
   const emptyState = React.useCallback(
     ({ searchActive: searching }: { searchActive: boolean }) => {
       const searchActive = searching || appFilter !== null
       return (
         <DataTableEmptyState
           action={
-            searchActive || !canManage || !supported ? undefined : (
+            searchActive || !canManage ? undefined : (
               <NewVolumeButton align="center" relayId={relayId}>
                 <Button size="sm" onPointerEnter={warmVolumeDialogs}>
                   <Plus /> New volume
@@ -579,9 +569,7 @@ function VolumesTable({
               ? searching
                 ? "Try a different name."
                 : "This App neither owns nor uses any volume."
-              : supported
-                ? "Volumes keep data across deployments, and Apps on this Relay can share them."
-                : "Update this Relay to manage its volumes from Hearth."
+              : "Volumes keep data across deployments, and Apps on this Relay can share them."
           }
           icon={
             <HardDrive className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
@@ -591,14 +579,12 @@ function VolumesTable({
               ? searching
                 ? "No volumes match your search"
                 : "No volumes for this App"
-              : supported
-                ? "No volumes yet"
-                : "Volumes need a newer Relay"
+              : "No volumes yet"
           }
         />
       )
     },
-    [appFilter, canManage, relayId, supported]
+    [appFilter, canManage, relayId]
   )
 
   return (
@@ -691,12 +677,12 @@ const VolumeActions = React.memo(function VolumeActions({
   const deleteBlocked = own
     ? "The Relay keeps its data here"
     : protectionPending !== null
-        ? `The Relay doesn't know yet which Apps use it${protectionPending ? `: ${protectionPending}` : ""}`
-        : volume.users.some((user) => user.configured)
-          ? "An App's configuration or Compose file names it; remove it there first"
-          : volume.mounts.length > 0
-            ? "Remove what mounts it first"
-            : null
+      ? `The Relay doesn't know yet which Apps use it${protectionPending ? `: ${protectionPending}` : ""}`
+      : volume.users.some((user) => user.configured)
+        ? "An App's configuration or Compose file names it; remove it there first"
+        : volume.mounts.length > 0
+          ? "Remove what mounts it first"
+          : null
   return (
     <DataTableActionGroup>
       {canManage && kiln ? (

@@ -1,9 +1,6 @@
 import { posix } from "node:path"
 
-import {
-  relayFilePutResultSchema,
-  relayFilePutV1Feature,
-} from "@workspace/contracts"
+import { relayFilePutResultSchema } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
 import {
   Cause,
@@ -47,7 +44,7 @@ import { exclusive, partKey, shared } from "@/operations/lanes"
 import { inLanes, OperationBusyError } from "@/operations/operation"
 import { githubSyncTargetAccess } from "@/lib/github-sync-targets"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayConnected, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 
 // A put carries the file in one control frame, which caps its size.
@@ -123,11 +120,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
   const relays = yield* listPersistedRelaysEffect()
   const relay = relays.find((item) => item.enabled && item.id === sync.relayId)
   if (!relay) return yield* fail("The Relay is no longer available")
-  const features = relayConnectionFeatures(relay.id)
-  if (features.size === 0) return yield* fail("The Relay is offline")
-  if (!features.has(relayFilePutV1Feature)) {
-    return yield* fail("Update this Relay to sync files from GitHub")
-  }
+  if (!relayConnected(relay.id)) return yield* fail("The Relay is offline")
 
   const credentials = {
     appId: connection.appId,

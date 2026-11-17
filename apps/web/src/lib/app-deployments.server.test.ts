@@ -35,7 +35,7 @@ const relay = vi.hoisted(() => ({
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayConnectionFeatures: () => new Set(["connected"]),
+  relayConnected: () => true,
   relayJournal: async () => ({ clientId: "hearth-one", journalId: "one" }),
   relayRpc: async (
     _relay: unknown,

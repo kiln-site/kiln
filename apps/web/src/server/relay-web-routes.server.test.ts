@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { relayProxyConfigurationV1Feature } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
@@ -36,7 +35,7 @@ const route = (
 // one for each of two game servers and one for an app.
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayConnectionFeatures: () => new Set([relayProxyConfigurationV1Feature]),
+  relayConnected: () => true,
   relayRpc: async (_relay: unknown, operation: string) => {
     if (operation !== "relay.proxy.config.read")
       throw new Error("Relay is offline")

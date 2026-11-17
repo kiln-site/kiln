@@ -8,7 +8,6 @@ import {
   relayConsoleResourcesV1Feature,
   relayWorkloadUsageV1Feature,
   relayAppsV1Feature,
-  relayPlatformV2Feature,
   appIdFromFileRoot,
   databaseIdFromFileRoot,
   fileRootOwner,
@@ -729,8 +728,7 @@ function resourceVersion(
     resource.kind !== "instance" &&
     (version !== 2 ||
       !features.has(relayConsoleResourcesV1Feature) ||
-      (resource.kind === "app" && !features.has(relayAppsV1Feature)) ||
-      (resource.kind === "platform" && !features.has(relayPlatformV2Feature)))
+      (resource.kind === "app" && !features.has(relayAppsV1Feature)))
   ) {
     throw new Error("Update this Relay to view these logs.")
   }

@@ -205,7 +205,6 @@ describe("Relay capability issuance orchestration", () => {
         "browser-capability-v2",
         "browser-lease-renewal-v1",
         "console-resources-v1",
-        "relay-platform-v2",
       ]) {
         fakes.features.add(feature)
       }

@@ -102,7 +102,7 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
    failed or not, deletes what it fetched. Artifacts nobody discards are
    deleted after a day; finished pulls' records after a week.
 
-`transfer.space` (`transfer-space-v1`) reports a Relay's free disk where it
+`transfer.space` reports a Relay's free disk where it
 keeps artifacts and where it keeps game servers' folders, and, asked about
 a root, the disk a copy of it takes, archived or unpacked, so Hearth can
 check a copy fits first. It walks the root as packing does, counting each

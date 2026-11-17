@@ -1,7 +1,6 @@
 // The server migration server functions in ./server-migrations authenticate
 // the caller and hand the signed-in user to these handlers.
 import {
-  relayLinkedBackupsV1Feature,
   relayInstanceWebRouteStateSchema,
   relaySnapshotSchema,
   type RelayInstance,
@@ -59,8 +58,6 @@ import {
 export interface ServerMigrationDestination {
   readonly current: boolean
   readonly id: string
-  /** Whether it can restore backups linked from another server. */
-  readonly linksBackups: boolean
   readonly name: string
   readonly nodeArch: string | null
   readonly problems: ReadonlyArray<RelayTransferProblem>
@@ -160,13 +157,9 @@ export async function previewServerMigrationHandler(
               () => null
             ),
       ])
-      const { relayConnectionFeatures } = await import("@/lib/relay-connection")
       return {
         current: candidate.id === relay.id,
         id: candidate.id,
-        linksBackups: relayConnectionFeatures(candidate.id).has(
-          relayLinkedBackupsV1Feature
-        ),
         name: candidate.name,
         nodeArch: candidate.nodeArch,
         problems,
@@ -271,16 +264,6 @@ export async function startServerMigrationHandler(
   }
   // Each option needs its own permission, checked again as the copy goes.
   await requireMigrationPermissions(user, asked)
-  if (options.linkBackups) {
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (
-      !relayConnectionFeatures(destination.id).has(relayLinkedBackupsV1Feature)
-    ) {
-      throw new Error(
-        `Update ${destination.name} to the latest Kiln release to link backups to a copy there`
-      )
-    }
-  }
   // A backup first goes where they chose: the copy holds that while it runs.
   const backupStorageIds = options.backup ? [options.backup.storageId] : []
   await requireBackupStorageSelection({

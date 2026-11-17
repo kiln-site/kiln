@@ -5,7 +5,6 @@ import {
   relayControlDeadlineMs,
   relaySecurityInventoryMaxBytes,
   relaySecurityInventoryResponseSchema,
-  relaySecurityInventoryV1Feature,
   relaySecurityTargetsSchema,
   type AccessPermission,
   type RelaySecurityInventoryResponse,
@@ -49,7 +48,7 @@ import type {
   NotificationContent,
   NotificationResource,
 } from "@/lib/notifications"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayConnected, relayRpc } from "@/lib/relay-connection"
 import {
   listPersistedRelaysEffect,
   type PersistedRelay,
@@ -123,10 +122,7 @@ export const securityNotifyPermissions = {
 >
 
 function inventories(relay: PersistedRelay): boolean {
-  return (
-    relay.enabled &&
-    relayConnectionFeatures(relay.id).has(relaySecurityInventoryV1Feature)
-  )
+  return relay.enabled && relayConnected(relay.id)
 }
 
 /** Has the worker look at this Relay at once, as after Scan now. */
@@ -644,7 +640,7 @@ export const setSecurityScansPausedEffect = Effect.fn(
   if (running) yield* Fiber.interrupt(running)
   // A paused Relay may still be collecting one, and takes the cancel.
   const relays = (yield* listPersistedRelaysEffect()).filter((relay) =>
-    relayConnectionFeatures(relay.id).has(relaySecurityInventoryV1Feature)
+    relayConnected(relay.id)
   )
   yield* Effect.forEach(
     relays,

@@ -16,7 +16,6 @@ vi.mock("@/lib/relay-registry", () => ({
 }))
 vi.mock("@/lib/relay-connection", () => ({
   reconnectRelayConnections: () => undefined,
-  relayConnectionFeatures: () => new Set<string>(),
   relayRpc: async (relay: { id: string }) => {
     if (relays.unreachable.has(relay.id)) throw new Error("Relay is offline")
     relays.held.push(relay.id)

@@ -89,27 +89,22 @@ function KilnTerminalUnavailable({ host }: { host: KilnPlatformHost | null }) {
   const deployer = kilnDeployer(status)
   const message = !host
     ? { title: "No Relay reports Kiln", detail: "" }
-    : !host.v2
+    : status?.management === "external"
       ? {
-          title: "Update this Relay",
-          detail: `Update ${host.relayName} to open shells in Kiln's containers.`,
+          title: "Kiln only shows these containers",
+          detail: `${deployer} manages them, so open a shell ${deployer === "Coolify" ? "in Coolify" : "where they were deployed"}.`,
         }
-      : status?.management === "external"
+      : !status?.canManage
         ? {
-            title: "Kiln only shows these containers",
-            detail: `${deployer} manages them, so open a shell ${deployer === "Coolify" ? "in Coolify" : "where they were deployed"}.`,
+            title: "Only the Hearth this Relay installed",
+            detail:
+              "Shells open only from the Hearth that the Relay installed.",
           }
-        : !status?.canManage
-          ? {
-              title: "Only the Hearth this Relay installed",
-              detail:
-                "Shells open only from the Hearth that the Relay installed.",
-            }
-          : {
-              title: "No container to open a shell in",
-              detail:
-                "Hearth's image has no shell, and the others aren't running.",
-            }
+        : {
+            title: "No container to open a shell in",
+            detail:
+              "Hearth's image has no shell, and the others aren't running.",
+          }
   return (
     <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
       <div className="max-w-sm">

@@ -28,18 +28,14 @@ export function KilnViewerPage() {
     () => (relayId ? kilnDatabaseSource(relayId) : null),
     [relayId]
   )
-  if (!host || !source || !host.database) {
+  if (!source) {
     return (
       <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
         <div className="max-w-sm">
           <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground">
             <Table2 className="size-5" />
           </div>
-          <p className="text-sm font-semibold">Update this Relay</p>
-          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-            Update {host?.relayName ?? "the Relay on Kiln's host"} to browse
-            Kiln&apos;s database.
-          </p>
+          <p className="text-sm font-semibold">No Relay reports Kiln</p>
         </div>
       </div>
     )

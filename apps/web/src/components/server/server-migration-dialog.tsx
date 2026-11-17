@@ -242,7 +242,7 @@ function MigrationForm({
     name ?? defaultName(server.name, mode, selected?.takenNames ?? [])
 
   const linkableBackups =
-    selected && selected.linksBackups && preview.allowed.linkBackups
+    selected && preview.allowed.linkBackups
       ? selected.current
         ? preview.backups.here
         : preview.backups.anywhere
@@ -839,13 +839,11 @@ function metadataItems({
           ? "It has no backups"
           : !allowed.linkBackups
             ? "Needs permission to download its backups"
-            : relay && !relay.linksBackups
-              ? `Update ${relay.name} to link backups`
-              : linkableBackups === 0
-                ? relay?.current
-                  ? "Its backups are incremental"
-                  : "Its backups are on this Relay or incremental"
-                : null,
+            : linkableBackups === 0
+              ? relay?.current
+                ? "Its backups are incremental"
+                : "Its backups are on this Relay or incremental"
+              : null,
     },
     {
       detail: "Its history, up to the copy",

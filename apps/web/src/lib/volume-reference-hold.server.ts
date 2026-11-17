@@ -1,10 +1,4 @@
-import { relayVolumesV1Feature } from "@workspace/contracts"
-
-import {
-  reconnectRelayConnections,
-  relayConnectionFeatures,
-  relayRpc,
-} from "@/lib/relay-connection"
+import { reconnectRelayConnections, relayRpc } from "@/lib/relay-connection"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { holdVolumeReferences } from "@/lib/volume-reference-gate"
@@ -26,19 +20,14 @@ export async function holdingRelayVolumeReferences<A>(
       const relays = await listPersistedRelays()
       const unreachable: Array<string> = []
       await Promise.all(
-        relays.map(async (relay) => {
-          const features = relayConnectionFeatures(relay.id)
-          // A Relay from before volumes keeps no configurations to hold.
-          if (features.size > 0 && !features.has(relayVolumesV1Feature)) {
-            return
-          }
-          await recoverPromise(
+        relays.map((relay) =>
+          recoverPromise(
             () => relayRpc(relay, "relay.volumes.references.hold", {}, 30_000),
             () => {
               unreachable.push(relay.name)
             }
           )
-        })
+        )
       )
       if (unreachable.length > 0) {
         const one = unreachable.length === 1

@@ -61,9 +61,8 @@ copy, and its first step each check, from what the Relays report
   copy on the same Relay needs all of it there.
 
 Relays measure the folder and report their free disk through
-`transfer.space` (`transfer-space-v1`). An older Relay is taken to keep
-everything on the disk its snapshot reports, and a stopped server's size on
-it is taken to be its disk limit. Disk is checked once more just before the
+`transfer.space`. A stopped server's size on a Relay that can't measure it
+is taken to be its disk limit. Disk is checked once more just before the
 old server stops.
 
 ## How it runs

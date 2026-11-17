@@ -135,16 +135,12 @@ export function kilnVersion(status: RelayPlatformStatus | null) {
   )
 }
 
-/**
- * Whether a shell can open in it: Kiln manages it, the Relay opens shells
- * (`relay-platform-v2`), and its image has one.
- */
+/** Whether a shell can open in it: Kiln manages it, and its image has one. */
 export function kilnShellAvailable(
   host: KilnPlatformHost,
   container: KilnContainer
 ): boolean {
   return (
-    host.v2 &&
     host.status?.canManage === true &&
     container.shell === true &&
     (container.target !== "proxy" || container.managedBy === "kiln")

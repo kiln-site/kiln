@@ -383,7 +383,7 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
         <InfoRailLink leading={<ScrollText />} to="/kiln/logs">
           Logs
         </InfoRailLink>
-        {status?.canManage && host.v2 ? (
+        {status?.canManage ? (
           <InfoRailLink leading={<TerminalSquare />} to="/kiln/terminal">
             Terminal
           </InfoRailLink>

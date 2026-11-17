@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 
 import {
   relayProxyConfigurationSchema,
-  relayProxyConfigurationV1Feature,
   relaySnapshotSchema,
   webRouteHostnames,
 } from "@workspace/contracts"
@@ -52,7 +51,7 @@ import {
 } from "@/lib/domain-schemas"
 import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayConnected, relayRpc } from "@/lib/relay-connection"
 import {
   activeRelay,
   listPersistedRelays,
@@ -365,9 +364,7 @@ async function readRelayRoutes(relays: ReadonlyArray<PersistedRelay>): Promise<{
 }> {
   const perRelay = await Promise.all(
     relays
-      .filter((relay) =>
-        relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
-      )
+      .filter((relay) => relayConnected(relay.id))
       .map((relay) =>
         recoverPromise(
           async () => {
@@ -389,11 +386,7 @@ async function readRelayRoutes(relays: ReadonlyArray<PersistedRelay>): Promise<{
       )
   )
   const read = new Set(
-    relays
-      .filter((relay) =>
-        relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
-      )
-      .map((relay) => relay.id)
+    relays.filter((relay) => relayConnected(relay.id)).map((relay) => relay.id)
   )
   return {
     routes: perRelay.flatMap(({ routes }) => routes),
