@@ -587,10 +587,9 @@ export const relayHostAccessSchema = z.object({
   files: relayHostFilesSchema,
   /**
    * The Relay's data folder on its host, where its database and the bundled
-   * Traefik's files are, for opening them in its host files. Absent from
-   * older Relays.
+   * Traefik's files are, for opening them in its host files.
    */
-  dataDirectory: z.string().min(1).optional(),
+  dataDirectory: z.string().min(1),
 })
 
 // The node's desktop, as the Relay finds it (apps/relay/src/desktop.ts):
@@ -1083,10 +1082,10 @@ export const relayAppContainerSchema = z.object({
   id: z.string().min(1),
   image: z.string(),
   labels: z.record(z.string(), z.string()),
-  // The memory and CPU it runs with. Absent from older Relays.
-  limits: observedResourceLimitsSchema.optional(),
-  // What it mounts. Absent from older Relays.
-  mounts: z.array(relayAppContainerMountSchema).optional(),
+  // The memory and CPU it runs with.
+  limits: observedResourceLimitsSchema,
+  // What it mounts.
+  mounts: z.array(relayAppContainerMountSchema),
   name: z.string().min(1),
   networks: z.array(z.string()),
   ports: z.array(appPortSchema),
@@ -1911,8 +1910,7 @@ export const relayProxyConfigurationSchema = z.object({
         service: z.string().nullable(),
       }),
       path: z.string().nullable(),
-      // Absent from older Relays.
-      redirect: relayWebRouteRedirectSchema.nullable().default(null),
+      redirect: relayWebRouteRedirectSchema.nullable(),
       stripPrefix: z.boolean(),
       targetPort: z.number().int().nullable(),
       // Where requests go: the upstream it proxies to, or a redirect's URL.
@@ -2509,7 +2507,7 @@ export const relayPlatformServiceSchema = z.object({
   actions: z.array(z.enum(["restart"])).max(4),
   /**
    * Who runs it: this Relay (`kiln`), Coolify, Docker Compose, or something
-   * else. Absent from older Relays.
+   * else. Absent when it has no container and this Relay doesn't run it.
    */
   managedBy: z.enum(["kiln", "coolify", "compose", "external"]).optional(),
   container: z.string().min(1).max(255).nullable(),
@@ -2530,7 +2528,7 @@ export const relayPlatformServiceSchema = z.object({
    * Whether it has a shell to open a terminal in; Hearth's image doesn't.
    * Null until checked.
    */
-  shell: z.boolean().nullable().optional(),
+  shell: z.boolean().nullable(),
   version: z.string().min(1).max(100).nullable(),
 })
 
@@ -2555,10 +2553,10 @@ export const relayPlatformStatusSchema = z.object({
   phase: z.enum(["installing", "ready", "maintenance", "blocked"]),
   /**
    * The Traefik in front of Hearth: the one this Relay runs (`kiln`),
-   * Coolify's, or another found on ports 80 and 443 (`external`). Only
-   * Kiln's own can be restarted from here.
+   * Coolify's, or another found on ports 80 and 443 (`external`), or null
+   * when there's none. Only Kiln's own can be restarted from here.
    */
-  proxy: relayPlatformProxySchema.nullable().optional(),
+  proxy: relayPlatformProxySchema.nullable(),
   services: z.array(relayPlatformServiceSchema).max(8),
 })
 

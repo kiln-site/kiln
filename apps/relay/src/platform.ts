@@ -1086,7 +1086,7 @@ function serviceStatus(
   container: DockerContainerInspect | null,
   updating: boolean,
   canManage: boolean
-): RelayPlatformService {
+): Omit<RelayPlatformService, "shell"> {
   return { ...serviceFields(container, updating, canManage), role }
 }
 
@@ -1094,7 +1094,7 @@ function serviceFields(
   container: DockerContainerInspect | null,
   updating: boolean,
   canManage: boolean
-): Omit<RelayPlatformService, "role"> {
+): Omit<RelayPlatformService, "role" | "shell"> {
   const health = container?.State.Health?.Status
   return {
     actions: canManage && container ? ["restart"] : [],

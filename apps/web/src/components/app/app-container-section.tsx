@@ -292,11 +292,11 @@ const ContainerUsage = React.memo(function ContainerUsage({
 // Null when any of them runs without one, since they then share the node.
 function combinedLimit(
   containers: ReadonlyArray<AppContainer>,
-  read: (limits: NonNullable<AppContainer["limits"]>) => number | null
+  read: (limits: AppContainer["limits"]) => number | null
 ): number | null {
   let total = 0
   for (const container of containers) {
-    const limit = container.limits ? read(container.limits) : null
+    const limit = read(container.limits)
     if (limit === null) return null
     total += limit
   }

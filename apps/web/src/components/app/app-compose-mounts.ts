@@ -105,7 +105,7 @@ function runningMount(
   }
   const running = containers
     .find((container) => container.service === mount.service)
-    ?.mounts?.find((candidate) => candidate.destination === mount.target)
+    ?.mounts.find((candidate) => candidate.destination === mount.target)
   if (running?.type === "volume") {
     return { ...mount, dockerName: running.source, kind: "volume" }
   }

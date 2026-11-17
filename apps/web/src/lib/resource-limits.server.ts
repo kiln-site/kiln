@@ -95,8 +95,8 @@ export async function relayAllocations(
         kind: "app" as const,
         limits: {
           ...NO_RESOURCE_LIMITS,
-          cpuMillis: container.limits?.cpuMillis ?? null,
-          memoryBytes: container.limits?.memoryBytes ?? null,
+          cpuMillis: container.limits.cpuMillis,
+          memoryBytes: container.limits.memoryBytes,
         },
       }))
     ),
