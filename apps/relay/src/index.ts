@@ -318,6 +318,7 @@ import {
   platformStatus,
   platformUpdateRefusal,
   platformManagedContainer,
+  platformRecoveryMaterial,
   platformTargetContainer,
   reconcilePlatform,
   restartPlatformService,
@@ -4082,6 +4083,15 @@ async function executeControlRequest(
         )
       )
     }
+    // Every secret of Kiln: only the Hearth this Relay installed, or, where
+    // it only reports Kiln, a full-access Hearth. Not a change, so neither
+    // the Relay's journal nor Hearth's audit keeps the answer.
+    case "relay.platform.recovery.read":
+      await requirePlatformReader(client.id, "read Kiln's recovery kit")
+      return runRelayEffect(
+        "relay.platform.recovery.read",
+        platformRecoveryMaterial(config)
+      )
     case "relay.platform.database.write": {
       const input = relayPlatformDatabaseWriteSchema.parse(request.payload)
       await requirePlatformReader(client.id, "change Kiln's database")

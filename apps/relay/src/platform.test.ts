@@ -1,6 +1,9 @@
 import { createHmac } from "node:crypto"
+import { writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
+import { join } from "node:path"
 
+import { decodeRecoveryText, encodeRecoveryText } from "@workspace/contracts"
 import { Effect } from "effect"
 import { describe, expect, it } from "vite-plus/test"
 
@@ -10,11 +13,13 @@ import {
   isPlatformOwner,
   platformTargetContainer,
   identifyHearth,
+  platformRecoveryMaterial,
   platformStatus,
   reconcilePlatform,
   runPlatformCli,
   startPlatform,
 } from "./platform.js"
+import { readPlatformState } from "./platform-state.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
@@ -131,6 +136,76 @@ describe("platform mode", () => {
       isPlatformOwner(withOwner, { ...owner, invitationId: "another-pairing" })
     ).toBe(false)
     expect(isPlatformOwner(null, owner)).toBe(false)
+  })
+})
+
+// Recovery kits are kept offline for years, in a file or a password
+// manager's one-line field, and must restore Kiln with any later Relay.
+describe("recovery kits", () => {
+  it("restores from a kit's JSON or its one line, and refuses a recovery key", async () => {
+    const source = await platformRelay()
+    const { state } = await source.start()
+    if (!state) throw new Error("The Relay didn't install Kiln")
+    const json = await source.cli("export-kit")
+    const kit = JSON.parse(json)
+    const line = encodeRecoveryText(kit)
+    expect(line).toMatch(/^kiln-recovery:v1:[A-Za-z0-9_-]+$/u)
+    expect(decodeRecoveryText(line)).toEqual(kit)
+    // Hearth hands out the same kit the command line prints.
+    expect(await run(platformRecoveryMaterial(source.config))).toEqual({
+      kind: "kit",
+      kit: { ...kit, exportedAt: expect.any(String) },
+    })
+
+    // A new Relay, before its first start, as the recovery steps run it.
+    const importInto = async (content: string) => {
+      const { config } = await relayHarness({ KILN_RELAY_MODE: "platform" })
+      const file = join(config.dataDirectory, "recovery")
+      await writeFile(file, content)
+      const printed = run(
+        runPlatformCli(
+          ["platform", "import-kit", file],
+          { config, engine: new DockerEngine(config.dockerSocket) },
+          () => {}
+        )
+      )
+      return {
+        printed,
+        state: () =>
+          printed.then(() => run(readPlatformState(config.dataDirectory))),
+        target: { config },
+      }
+    }
+    for (const content of [json, `  ${line}\n`]) {
+      const imported = await importInto(content)
+      expect(await imported.state()).toMatchObject({
+        installationId: state.installationId,
+        phase: "maintenance",
+        secrets: state.secrets,
+      })
+    }
+
+    const key = {
+      formatVersion: 1 as const,
+      installationId: state.installationId,
+      kind: "kiln-recovery-key" as const,
+      platformBackupKey: state.secrets.platformBackupKey,
+    }
+    const keyLine = encodeRecoveryText(key)
+    expect(decodeRecoveryText(keyLine)).toEqual(key)
+    const refused = await importInto(keyLine)
+    await expect(refused.printed).rejects.toThrow(
+      "That's a recovery key, not a recovery kit"
+    )
+    expect(
+      await run(readPlatformState(refused.target.config.dataDirectory))
+    ).toBeNull()
+
+    const damaged = await importInto(line.slice(0, -4))
+    await expect(damaged.printed).rejects.toThrow()
+    expect(
+      await run(readPlatformState(damaged.target.config.dataDirectory))
+    ).toBeNull()
   })
 })
 

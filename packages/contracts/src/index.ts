@@ -55,6 +55,7 @@ export * from "./web-routes.js"
 export * from "./relay-protocol.js"
 export * from "./relay-transfers.js"
 export * from "./installation-id.js"
+export * from "./recovery-kit.js"
 export * from "./container-identity.js"
 export * from "./relay-join.js"
 export * from "./release-version.js"
@@ -2553,6 +2554,12 @@ export const relayPlatformStatusSchema = z.object({
    * when there's none. Only Kiln's own can be restarted from here.
    */
   proxy: relayPlatformProxySchema.nullable(),
+  /**
+   * What this Relay can hand out to restore Kiln
+   * (`relay.platform.recovery.read`): the recovery kit of the Kiln it
+   * installed, the recovery key it was given, or nothing.
+   */
+  recovery: z.enum(["kit", "key"]).nullable(),
   services: z.array(relayPlatformServiceSchema).max(8),
 })
 

@@ -28,6 +28,7 @@ import { isIP } from "node:net"
 import { join } from "node:path"
 
 import {
+  decodeRecoveryText,
   hostnameContainerId,
   isKilnInstallationId,
   kilnImageRepository,
@@ -36,8 +37,17 @@ import {
   type RelayPlatformServiceRole,
   type RelayPlatformTarget,
   type RelayPlatformStatus,
+  type RelayRecoveryMaterial,
 } from "@workspace/contracts"
-import { Effect, Fiber, Option, Result, Schema, Semaphore } from "effect"
+import {
+  Effect,
+  Fiber,
+  Option,
+  Predicate,
+  Result,
+  Schema,
+  Semaphore,
+} from "effect"
 
 import type { ProvenContainer, ProvenHearth, RelayConfig } from "./config.js"
 import { createContainer, type ContainerSpec } from "./docker-container-spec.js"
@@ -319,6 +329,51 @@ export function platformRecoveryKit(state: PlatformState) {
     kind: "kiln-platform-recovery-kit" as const,
     state,
   }
+}
+
+/**
+ * What restores the Kiln this Relay hosts, for Hearth to show its platform
+ * administrators: the recovery kit `export-kit` prints, in platform mode, or
+ * else the installation ID and platform backup key it was given, which are
+ * all of Kiln's secrets outside the operator's own environment file.
+ */
+export const platformRecoveryMaterial = Effect.fn(
+  "Relay.platform.recovery.read"
+)(function* (
+  config: Pick<
+    RelayConfig,
+    "dataDirectory" | "installationId" | "mode" | "platformBackupKey"
+  >
+) {
+  const state =
+    config.mode === "platform"
+      ? yield* readPlatformState(config.dataDirectory)
+      : null
+  if (state) {
+    return {
+      kind: "kit",
+      kit: platformRecoveryKit(state),
+    } satisfies RelayRecoveryMaterial
+  }
+  if (config.installationId && config.platformBackupKey) {
+    return {
+      installationId: config.installationId,
+      kind: "key",
+      platformBackupKey: config.platformBackupKey,
+    } satisfies RelayRecoveryMaterial
+  }
+  return yield* new PlatformError({
+    reason:
+      "This Relay doesn't hold Kiln's recovery kit: it didn't install Kiln, and it has no KILN_PLATFORM_BACKUP_KEY",
+  })
+})
+
+function platformRecoveryKind(
+  config: Pick<RelayConfig, "installationId" | "platformBackupKey">,
+  state: PlatformState | null
+): RelayPlatformStatus["recovery"] {
+  if (state) return "kit"
+  return config.installationId && config.platformBackupKey ? "key" : null
 }
 
 interface ServiceSpec {
@@ -1077,6 +1132,7 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       actions: canManage && proxy.managedBy === "kiln" ? ["restart"] : [],
       managedBy: proxy.managedBy,
     },
+    recovery: platformRecoveryKind(config, state),
     services,
   } satisfies RelayPlatformStatus
 })
@@ -2076,7 +2132,8 @@ const CLI_USAGE = `Usage: kiln-relay platform <command>
   start-hearth                   Let Hearth run again
   recover --confirm <id>         Start an empty database after its volume was lost
   export-kit                     Print the recovery kit (secrets) as JSON
-  import-kit <path>              Install from a recovery kit on a new Relay`
+  import-kit <path>              Install from a recovery kit on a new Relay:
+                                 its JSON, or its kiln-recovery:v1: line`
 
 /**
  * `kiln-relay platform …`, for an operator at the Relay's console. These work
@@ -2186,6 +2243,30 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
   }
 })
 
+/**
+ * The kit's JSON from a file holding either it, as `export-kit` prints it,
+ * or its one-line form, as Hearth's recovery kit page and password managers
+ * keep it. A recovery key restores only an installation whose secrets
+ * live in its own environment, so it's refused here.
+ */
+const recoveryKitJson = Effect.fnUntraced(function* (text: string) {
+  if (!text.trim().startsWith("kiln-recovery:")) return text
+  const decoded = decodeRecoveryText(text)
+  if (decoded === null) {
+    return yield* new PlatformError({
+      reason:
+        "That kiln-recovery: line is damaged or from a newer Kiln; copy it again in full",
+    })
+  }
+  if (Predicate.isObject(decoded) && decoded.kind === "kiln-recovery-key") {
+    return yield* new PlatformError({
+      reason:
+        "That's a recovery key, not a recovery kit. A key restores a Kiln whose secrets are in its own environment: set KILN_INSTALLATION_ID and KILN_PLATFORM_BACKUP_KEY from it, with the rest of its environment file, then restore the platform backup.",
+    })
+  }
+  return JSON.stringify(decoded)
+})
+
 const importPlatformKit = Effect.fnUntraced(function* (
   config: RelayConfig,
   path: string
@@ -2195,7 +2276,9 @@ const importPlatformKit = Effect.fnUntraced(function* (
     catch: (cause) =>
       new PlatformError({ reason: `Can't read ${path}`, cause }),
   })
-  const kit = yield* decodePlatformRecoveryKit(text).pipe(
+  const kit = yield* decodePlatformRecoveryKit(
+    yield* recoveryKitJson(text)
+  ).pipe(
     Effect.mapError(
       (cause) =>
         new PlatformError({
