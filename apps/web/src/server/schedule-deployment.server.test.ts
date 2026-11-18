@@ -9,9 +9,14 @@ import { Effect } from "effect"
 import { afterAll, expect, vi } from "vite-plus/test"
 
 import { disposeAppRuntime } from "@/effect/runtime"
-import { deploySchedule } from "@/server/schedule-deployment.server"
+import { databasePool } from "@/lib/database"
+import { databaseTable } from "@/lib/database-config"
+import {
+  deploySchedule,
+  redeployUnacknowledgedSchedules,
+} from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertRows } from "@/test/seed"
+import { insertRelay, insertRows, selectRows } from "@/test/seed"
 
 // Each Relay takes a projection as a Relay does, refusing one it can't
 // parse, and keeps what it was given.
@@ -27,11 +32,20 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ) => {
     if (operation !== "schedule.apply") throw new Error("Relay is offline")
     const projection = relayScheduleProjectionSchema.parse(payload)
-    relays.applied.set(relay.id, projection)
+    // A newer generation of the same revision is kept over this one.
+    const held = relays.applied.get(relay.id)
+    const kept =
+      held &&
+      held.revision === projection.revision &&
+      (held.generation ?? 0) > (projection.generation ?? 0)
+        ? held
+        : projection
+    relays.applied.set(relay.id, kept)
     return {
-      acknowledgedRevision: projection.revision,
+      acknowledgedGeneration: kept.generation,
+      acknowledgedRevision: kept.revision,
       nextRunAt: null,
-      scheduleId: projection.id,
+      scheduleId: kept.id,
     }
   },
 }))
@@ -110,6 +124,83 @@ describeMysql("schedule deployment", () => {
           })
           expect(onB?.actions[0]).toMatchObject({ targetKeys: [] })
           expect(onB?.actions[0]).not.toHaveProperty("services")
+        }),
+      60_000
+    )
+
+    it.effect(
+      "takes over a projection a Relay kept from before Kiln was restored",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relays.applied.clear()
+          yield* insertRelay(relayA, { enabled: true })
+          const schedule = scheduleDefinitionSchema.parse({
+            actions: [
+              {
+                action: "restart",
+                id: "a4c1e6b9-2f7d-4c0a-8e35-7b9d2c6f1e44",
+                type: "power",
+              },
+            ],
+            cron: "daily",
+            enabled: true,
+            id: "14bb1e12-fab9-45f3-8f85-ae22d2f074e5",
+            name: "Nightly",
+            revision: 1,
+            targets: [appA],
+          })
+          yield* insertRows("schedule", {
+            cron_expression: schedule.cron,
+            created_at: 1_000,
+            created_by: "user-a",
+            id: schedule.id,
+            name: schedule.name,
+            revision: 1,
+            updated_at: 1_000,
+          })
+          yield* insertRows("schedule_action", {
+            action_config: JSON.stringify(schedule.actions[0]),
+            action_type: "power",
+            created_at: 1_000,
+            id: schedule.actions[0]!.id,
+            position: 0,
+            schedule_id: schedule.id,
+          })
+          yield* insertRows("schedule_target", {
+            created_at: 1_000,
+            relay_id: relayA,
+            schedule_id: schedule.id,
+            target_id: appA.id,
+            target_kind: "app",
+            target_name: appA.name,
+          })
+          // The lost machine's Hearth sent this revision five times.
+          yield* Effect.promise(() => deploySchedule(schedule, "user-a"))
+          relays.applied.set(relayA, {
+            ...relays.applied.get(relayA)!,
+            generation: 5,
+            name: "Nightly (lost)",
+          })
+          // Restored, Hearth owes its Relays their schedules again.
+          yield* Effect.promise(() =>
+            databasePool.execute(
+              `UPDATE ${databaseTable("schedule_deployment")} SET status = 'pending'`
+            )
+          )
+
+          // The first send is below what the Relay kept; the next isn't.
+          yield* Effect.promise(() => redeployUnacknowledgedSchedules())
+          expect(relays.applied.get(relayA)?.name).toBe("Nightly (lost)")
+          yield* Effect.promise(() => redeployUnacknowledgedSchedules())
+
+          expect(relays.applied.get(relayA)).toMatchObject({
+            name: "Nightly",
+            targets: [appA],
+          })
+          expect(
+            yield* selectRows<{ status: string }>("schedule_deployment")
+          ).toMatchObject([{ status: "applied" }])
         }),
       60_000
     )

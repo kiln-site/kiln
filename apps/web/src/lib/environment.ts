@@ -96,6 +96,17 @@ export function configuredKilnInstallationId(): string | null {
   return configured
 }
 
+/**
+ * The installation IDs Kiln was restored from, oldest first, which the Relay
+ * hosting Kiln sets in KILN_PREVIOUS_INSTALLATION_IDS after a restore.
+ */
+export function configuredPreviousInstallationIds(): ReadonlyArray<string> {
+  return (process.env.KILN_PREVIOUS_INSTALLATION_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(isKilnInstallationId)
+}
+
 export function developmentBypassEnabled(): boolean {
   return kilnEnvironment() === "dev"
 }

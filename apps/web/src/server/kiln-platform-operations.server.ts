@@ -116,7 +116,7 @@ const importIntoKilnDatabase = operation<{ readonly content: string }>()({
       const [
         { importKilnDatabaseSql },
         { runAppEffect },
-        { kilnInstallationId },
+        { kilnInstallationId, loadInstallationId },
         { holdingRelayVolumeReferences },
       ] = await Promise.all([
         import("@/server/kiln-database-dump.server"),
@@ -135,6 +135,9 @@ const importIntoKilnDatabase = operation<{ readonly content: string }>()({
           })
         )
       )
+      // The export saved its own installation ID; an export from before Kiln
+      // was restored brings rows under an earlier one, which this moves on.
+      await loadInstallationId()
       return { imported: true as const }
     }),
   audit: () => ({ id: "platform", kind: "platform" }),

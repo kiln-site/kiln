@@ -341,10 +341,19 @@ export async function deployScheduleToRelay(
         // generation Hearth has issued: an answer for an older send, or one
         // overtaken by a change since, leaves it owed.
         const acknowledgedGeneration = result.acknowledgedGeneration ?? 0
+        // A generation of this revision Hearth never issued is one from
+        // before Kiln was restored from a backup, which the Relay keeps over
+        // anything lower: owed again above it, so the next send takes over.
+        // One statement, so a stop between can't leave it marked applied.
+        // MySQL assigns left to right, so the conditions read
+        // desired_generation before it's raised, last.
+        const foreign =
+          "(? = desired_revision AND ? > desired_generation)"
         await databasePool.execute(
           `UPDATE ${databaseTable("schedule_deployment")}
-          SET status = IF(? >= desired_revision AND ? >= desired_generation,
-                'applied', status),
+          SET status = IF(${foreign}, 'pending',
+                IF(? >= desired_revision AND ? >= desired_generation,
+                  'applied', status)),
               next_run_at = IF(? >= desired_revision, ?, next_run_at),
               last_error = IF(? >= desired_revision AND ? >= desired_generation,
                 NULL, last_error),
@@ -352,9 +361,12 @@ export async function deployScheduleToRelay(
                 COALESCE(acknowledged_revision, 0), ?),
               acknowledged_generation = GREATEST(
                 COALESCE(acknowledged_generation, 0), ?),
-              updated_at = ?
+              updated_at = ?,
+              desired_generation = IF(${foreign}, ?, desired_generation)
         WHERE schedule_id = ? AND relay_id = ?`,
           [
+            result.acknowledgedRevision,
+            acknowledgedGeneration,
             result.acknowledgedRevision,
             acknowledgedGeneration,
             result.acknowledgedRevision,
@@ -364,6 +376,9 @@ export async function deployScheduleToRelay(
             result.acknowledgedRevision,
             acknowledgedGeneration,
             Date.now(),
+            result.acknowledgedRevision,
+            acknowledgedGeneration,
+            acknowledgedGeneration + 1,
             schedule.id,
             relayId,
           ]

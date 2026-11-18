@@ -442,9 +442,37 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
             <span className="text-muted-foreground">—</span>
           )}
         </InfoFact>
+        {status?.restored ? <KilnRestoredFact restored={status.restored} /> : null}
       </InfoRailCard>
       {relay ? <KilnNodeCard relay={relay.entry} /> : null}
     </>
+  )
+}
+
+// A restore gives Kiln a new installation ID; the one it came from, which
+// its older backups were made under, stays on record here.
+function KilnRestoredFact({
+  restored,
+}: {
+  restored: NonNullable<RelayPlatformStatus["restored"]>
+}) {
+  const from = restored.previousInstallationIds.at(-1)
+  return (
+    <InfoFact label="Restored">
+      <span className="flex min-w-0 items-center gap-1">
+        <RelativeTime timestamp={Date.parse(restored.at)} />
+        {from ? (
+          <>
+            <span className="text-muted-foreground">from</span>
+            <InfoCopyValue
+              display={from.slice(0, 8)}
+              label="previous installation ID"
+              value={from}
+            />
+          </>
+        ) : null}
+      </span>
+    </InfoFact>
   )
 }
 

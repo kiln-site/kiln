@@ -44,6 +44,12 @@ import { Effect, Fiber, Option, Result, Schema, Semaphore } from "effect"
 import type { ProvenContainer, ProvenHearth, RelayConfig } from "./config.js"
 import { createContainer, type ContainerSpec } from "./docker-container-spec.js"
 import {
+  clearFinishedRestore,
+  completePendingRestore,
+  readRestoredAt,
+  restoreWaiting,
+} from "./platform-restore.js"
+import {
   type DockerContainerInspect,
   type DockerEngine,
   type DockerMount,
@@ -379,7 +385,9 @@ interface ServiceSpec {
 
 function serviceSpecs(
   state: PlatformState,
-  config: Pick<RelayConfig, "platformProxy" | "resourceNamespace">
+  config: Pick<RelayConfig, "platformProxy" | "resourceNamespace">,
+  /** When Kiln was restored from a backup here, for Hearth to hear. */
+  restoredAt: string | null
 ): ReadonlyArray<ServiceSpec> {
   const { names } = state
   const labels = (role: RelayPlatformServiceRole) => ({
@@ -450,6 +458,10 @@ function serviceSpecs(
       KILN_RELAY_BOOTSTRAP_TOKEN: state.secrets.bootstrapToken,
       KILN_RELAY_HOST: state.relay.host,
       KILN_RELAY_PORT: String(state.relay.port),
+      ...(restoredAt && { KILN_RESTORED_AT: restoredAt }),
+      ...(state.previousInstallationIds.length > 0 && {
+        KILN_PREVIOUS_INSTALLATION_IDS: state.previousInstallationIds.join(","),
+      }),
       ...Object.fromEntries(
         Object.entries(state.hearth.environment).sort(([left], [right]) =>
           left.localeCompare(right)
@@ -463,6 +475,9 @@ function serviceSpecs(
     // backups leave it out.
     mounts: [
       {
+        // Labeled as this installation's when Docker creates it, so a
+        // restore that never finished removes it and nothing else.
+        labels: { [KILN_INSTALLATION_LABEL]: state.installationId },
         source: `${names.hearth}-data`,
         target: "/var/lib/kiln",
         type: "volume",
@@ -611,7 +626,11 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
       Effect.gen(function* () {
         let state = yield* readPlatformState(config.dataDirectory)
         if (!state) return blocked(null, "This Relay hasn't installed Kiln")
-        const specs = serviceSpecs(state, config)
+        let specs = serviceSpecs(
+          state,
+          config,
+          yield* readRestoredAt(config.dataDirectory)
+        )
         const spec = (role: RelayPlatformServiceRole) =>
           specs.find((candidate) => candidate.role === role)?.spec
 
@@ -681,7 +700,21 @@ export const reconcilePlatform = Effect.fn("Relay.platform.reconcile")(
 
         if (state.phase === "maintenance") {
           const issue = yield* stopForMaintenance(engine, config, state)
-          return issue ? waiting(state, issue) : passed(state)
+          if (issue) return waiting(state, issue)
+          // A backup waiting from `kiln-relay platform restore`.
+          const restore = yield* completePendingRestore(config, state)
+          if (!restore) return passed(state)
+          if (restore.outcome === "failed") {
+            return blocked(state, restore.issue)
+          }
+          state = restore.state
+          specs = serviceSpecs(
+            state,
+            config,
+            yield* readRestoredAt(config.dataDirectory)
+          )
+        } else {
+          yield* clearFinishedRestore(config.dataDirectory)
         }
 
         const invitationId = yield* context.beforeHearth ?? Effect.succeed(null)
@@ -1129,6 +1162,14 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       managedBy: proxy.managedBy,
     },
     recovery: platformRecoveryScope(config, state),
+    restored:
+      state && state.previousInstallationIds.length > 0
+        ? {
+            at:
+              (yield* readRestoredAt(config.dataDirectory)) ?? state.createdAt,
+            previousInstallationIds: [...state.previousInstallationIds],
+          }
+        : null,
     services,
   } satisfies RelayPlatformStatus
 })
@@ -2002,6 +2043,13 @@ export const startPlatform = Effect.fn("Relay.platform.start")(function* (
   }
   const inputs = platformInputs(input.environment)
   let state = existing
+  if (!state && (yield* restoreWaiting(config.dataDirectory))) {
+    return {
+      refused:
+        "A restore on this Relay didn't finish, so it doesn't install Kiln new. Start the restore over on a new Relay: remove this one's volume first.",
+      state: null,
+    } satisfies PlatformStartup
+  }
   if (!state) {
     // An ID the operator set is the one to install with; one adopted from
     // a Hearth means this Relay already serves an installation.
@@ -2128,7 +2176,10 @@ const CLI_USAGE = `Usage: kiln-relay platform <command>
   start-hearth                   Let Hearth run again
   recover --confirm <id>         Start an empty database after its volume was lost
   export-kit                     Print the recovery kit (secrets) as JSON
-  import-kit <path>              Install from a recovery kit on a new Relay`
+  restore <backup> [--url <url>] Restore Kiln on a new Relay from a backup;
+                                 asks for the recovery code
+  import-kit <path>              Install from a recovery kit on a new Relay,
+                                 for a backup from before recovery codes`
 
 /**
  * `kiln-relay platform …`, for an operator at the Relay's console. These work
@@ -2172,10 +2223,17 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
         { blocked: false, config, engine: context.engine, issue: null },
         null
       )
+      const restore = yield* restoreWaiting(config.dataDirectory)
       print(
         [
           `Installation ${state.installationId} (${state.phase})`,
           `Hearth       ${state.hearth.url}`,
+          // On a line of its own, for the installer.
+          ...(restore?.problem
+            ? [`Problem      ${restore.problem}`]
+            : restore
+              ? ["Restoring    the backup isn't in yet"]
+              : []),
           ...status.services.map(
             (service) =>
               `${service.role.padEnd(12)} ${service.state}${service.image ? `  ${service.image}` : ""}`
@@ -2196,15 +2254,43 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
     }
     case "stop-hearth":
     case "start-hearth": {
-      const phase = command === "stop-hearth" ? "maintenance" : "ready"
-      yield* updatePlatformState(config.dataDirectory, (current) =>
-        current.phase === phase ? current : { ...current, phase }
+      // Hearth stays stopped while a restore is under way and starts once
+      // the backup is in, so neither command applies until then. Decided
+      // under the lock the running Relay restores under.
+      yield* withPlatformLock(
+        config.dataDirectory,
+        Effect.gen(function* () {
+          const current = yield* readPlatformState(config.dataDirectory)
+          if (!current) {
+            return yield* new PlatformError({
+              reason: "This Relay hasn't installed Kiln",
+            })
+          }
+          const restore = yield* restoreWaiting(config.dataDirectory)
+          if (restore) {
+            return yield* new PlatformError({
+              reason:
+                restore.problem ??
+                "Kiln is being restored from a backup; Hearth starts once it's in.",
+            })
+          }
+          // What a restore whose backup is in left goes first, so a pass
+          // after this one doesn't take it for a restore to finish.
+          yield* clearFinishedRestore(config.dataDirectory)
+          const phase = command === "stop-hearth" ? "maintenance" : "ready"
+          if (current.phase !== phase) {
+            yield* writePlatformState(config.dataDirectory, {
+              ...current,
+              phase,
+            })
+          }
+        })
       )
       const result = yield* reconcilePlatform(context)
       if (result.issue)
         return yield* new PlatformError({ reason: result.issue })
       print(
-        phase === "maintenance"
+        command === "stop-hearth"
           ? "Hearth is stopped and stays stopped until `kiln-relay platform start-hearth`"
           : "Hearth is running"
       )

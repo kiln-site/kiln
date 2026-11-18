@@ -34,6 +34,8 @@ export interface ContainerMount {
   readonly readOnly?: boolean
   /** A volume Docker doesn't fill with the image's files when it's empty. */
   readonly noCopy?: boolean
+  /** Labels Docker gives the volume when it creates it for this mount. */
+  readonly labels?: Readonly<Record<string, string>>
 }
 
 export interface ContainerHealthcheck {
@@ -188,7 +190,12 @@ function containerCreateBody(spec: ContainerSpec): unknown {
           Source: mount.source,
           Target: mount.target,
           Type: mount.type,
-          ...(mount.noCopy && { VolumeOptions: { NoCopy: true } }),
+          ...((mount.noCopy || mount.labels) && {
+            VolumeOptions: {
+              ...(mount.noCopy && { NoCopy: true }),
+              ...(mount.labels && { Labels: { ...mount.labels } }),
+            },
+          }),
         })),
       }),
       ...(network && {
