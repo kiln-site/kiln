@@ -114,6 +114,7 @@ export interface UpdateCleanupState {
 interface InstallationIdentity {
   readonly installationId?: string | null
   readonly installationIdConfigured?: boolean
+  readonly previousInstallationIds?: ReadonlyArray<string>
 }
 
 interface SystemUpdateTargetInput {
@@ -153,6 +154,7 @@ export class SystemUpdateManager {
       gitRepository?: string
       installationId?: string | null
       installationIdConfigured?: boolean
+      previousInstallationIds?: ReadonlyArray<string>
     },
     options: {
       refuseTarget?: (container: string) => Effect.Effect<string | null>
@@ -1319,10 +1321,13 @@ function updateEligibility(
   const installationId = labels[KILN_INSTALLATION_LABEL]?.trim() || null
   // Containers created before Kiln generated installation IDs have no label.
   // They stay updatable unless KILN_INSTALLATION_ID asks for an exact match,
-  // and their replacement gets the label.
+  // and their replacement gets the label. So do ones labeled with an ID Kiln
+  // had before it was restored from a backup, relabeled with the new one.
   const sameInstallation =
     installationId === (installation.installationId ?? null) ||
-    (installationId === null && !installation.installationIdConfigured)
+    (installationId === null && !installation.installationIdConfigured) ||
+    (installationId !== null &&
+      (installation.previousInstallationIds ?? []).includes(installationId))
   const official = isKilnGitRepositorySource(
     labels["org.opencontainers.image.source"],
     gitRepository

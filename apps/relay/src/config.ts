@@ -172,6 +172,10 @@ export interface RelayConfig {
   installationId: string | null
   // Whether KILN_INSTALLATION_ID set it, so Hearth's ID doesn't replace it.
   installationIdConfigured: boolean
+  // The IDs this Relay's installation had before Kiln was restored from a
+  // backup, oldest first. Kiln's containers labeled with one are still its
+  // own.
+  previousInstallationIds: ReadonlyArray<string>
   /**
    * The Hearth that last proved the container it runs in, which the Relay
    * saves and loads at startup. While it's for this installation, Kiln's
@@ -358,6 +362,7 @@ export function loadConfig(
     host: environment.KILN_RELAY_BIND_HOST?.trim() || "0.0.0.0",
     installationId,
     installationIdConfigured: installationId !== null,
+    previousInstallationIds: [],
     provenHearth: null,
     managedLabel: "kiln.relay.managed=true",
     mclogsApiUrl:

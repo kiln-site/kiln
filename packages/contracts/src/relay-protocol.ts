@@ -607,6 +607,9 @@ export const RelayAuthResponseSchema = Schema.Struct({
   // Hearth's installation ID, which the Relay saves as its own. Relays
   // validate it themselves so an ID they can't use never fails authentication.
   installationId: Schema.optionalKey(Schema.String),
+  // The IDs Kiln had before it was restored from a backup, oldest first. A
+  // Relay that still has one of them takes Hearth's new ID in its place.
+  previousInstallationIds: Schema.optionalKey(Schema.Array(Schema.String)),
   // What Hearth calls this Relay, which it saves as its own name. Hearth
   // names a Relay when someone confirms it, after the Relay chose a default.
   relayName: Schema.optionalKey(Schema.String),

@@ -203,6 +203,12 @@ Relay finds; it doesn't separate anything else, since every Hearth paired
 with full access can manage the Relay. `KILN_INSTALLATION_ID`, or a Relay
 that installed Kiln itself, fixes the ID.
 
+Kiln [restored on a new machine](#restoring-on-a-new-machine) gets a new
+installation ID. Its Hearth tells each Relay the IDs Kiln had before, so a
+Relay that has one of them takes the new ID when it reconnects, without
+asking. The lost machine's Hearth doesn't know the new ID, so it can't take a
+Relay back.
+
 Several Hearths can manage the same Relay, but this isn't recommended: each
 Hearth orders only its own changes, so two changing the same thing at once,
 such as a tailnet both reach, can leave it wrong until the next

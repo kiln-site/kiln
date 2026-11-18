@@ -189,6 +189,7 @@ type CleanupConfig = Pick<
   | "desktopImage"
   | "installationId"
   | "mode"
+  | "previousInstallationIds"
   | "resourceNamespace"
   | "selfContainer"
   | "serverIdLabel"
@@ -818,7 +819,11 @@ export class DockerCleanup {
             continue
           }
           const installation = labels[KILN_INSTALLATION_LABEL]
-          if (installation && installation !== this.#config.installationId) {
+          if (
+            installation &&
+            installation !== this.#config.installationId &&
+            !this.#config.previousInstallationIds.includes(installation)
+          ) {
             continue
           }
           yield* remove(container.Id, "update-backup")

@@ -175,8 +175,10 @@ export function replaceContainerEffect(
           Labels: {
             ...current.Config.Labels,
             ...target.Config?.Labels,
-            ...(input.installationId &&
-            !current.Config.Labels?.[KILN_INSTALLATION_LABEL]?.trim()
+            // Only a container of this installation is updated, so its
+            // replacement takes the current ID: one unlabeled, or labeled
+            // with an ID Kiln had before it was restored, gets it.
+            ...(input.installationId
               ? { [KILN_INSTALLATION_LABEL]: input.installationId }
               : {}),
             "org.opencontainers.image.version": input.targetVersion,
