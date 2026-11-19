@@ -31,6 +31,7 @@ function backupStorage(
     endpoint: "https://s3.example.com",
     forcePathStyle: false,
     id: overrides.id,
+    kind: "s3",
     lastError: null,
     lastVerifiedAt: null,
     name: overrides.id,

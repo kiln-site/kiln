@@ -44,6 +44,7 @@ import {
   type DatabaseReadRequest,
   type DatabaseWriteRequest,
   relaySnapshotSchema,
+  instanceIdSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -172,7 +173,7 @@ const deleteInstanceInputSchema = instanceInputSchema
   .extend(deleteConfirmationSchema.shape)
   .extend({
     createBackup: z.boolean().default(true),
-    storageId: z.uuid().nullable(),
+    storageId: instanceIdSchema.nullable(),
   })
 
 const deleteInstanceResultSchema = z.object({

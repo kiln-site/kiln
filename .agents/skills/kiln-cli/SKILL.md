@@ -223,12 +223,12 @@ read commands still accept legacy stored names up to 120 characters.
 Permanently delete a server and its data only after verifying the full target:
 
 ```sh
-kiln server delete <server> --confirm <name> --storage <local|destination-uuid>
+kiln server delete <server> --confirm <name> --storage <local|destination-id>
 ```
 
 `--confirm` takes the server's name exactly as `kiln server info <server>`
 shows it, the same confirmation Hearth asks for. `--storage` says where the
-final backup goes: `local` for the Relay, or a destination's UUID. The CLI then
+final backup goes: `local` for the Relay, or a destination's 12-character ID. The CLI then
 asks for the account password without echoing it; pipe it with `--password-stdin` when
 there's no terminal. A wrong name or password deletes nothing. After five
 wrong passwords in 15 minutes, the account's password checks are refused
@@ -274,12 +274,12 @@ default to incremental restic snapshots stored on the Relay or an S3
 destination. Pass `--mode full` for a portable zip, which can also use local or
 S3 storage; `--mode` applies only to server backups. Incremental mode accepts
 exactly one destination. `--storage` is required, and takes `local` for the
-Relay or a destination's UUID; pass one `--storage` value at most. A backup
+Relay or a destination's 12-character ID; pass one `--storage` value at most. A backup
 without `--name` is named `CLI backup`.
 
 ```sh
 kiln backups create server <instance-id> --storage local --name "Before update"
-kiln backups create server <instance-id> --storage <destination-uuid>
+kiln backups create server <instance-id> --storage <destination-id>
 kiln backups create server <instance-id> --mode full --storage local
 kiln backups create database <database-id> --storage local --name "Before migration"
 kiln backups create platform <relay-id> --storage local --name "Before Hearth update"

@@ -21,6 +21,7 @@ interface BackupStoragePublicRow extends RowDataPacket {
   endpoint: string
   force_path_style: boolean | number
   id: string
+  kind: "s3"
   last_error: string | null
   last_verified_at: number | null
   name: string
@@ -57,7 +58,13 @@ export interface BackupStorageRecord {
   enabled: boolean
   endpoint: string
   forcePathStyle: boolean
+  /**
+   * Its 12-character ID, from the instance directory, so it is never an
+   * instance's: a Relay's own disk is a destination under the Relay's ID.
+   */
   id: string
+  /** What kind of storage it is. Buckets are the only kind so far. */
+  kind: "s3"
   lastError: string | null
   lastVerifiedAt: string | null
   name: string
@@ -485,13 +492,13 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
   }
 )
 
-const backupStoragePublicSelect = `SELECT id, owner_user_id, name, endpoint,
+const backupStoragePublicSelect = `SELECT id, kind, owner_user_id, name, endpoint,
        region, bucket, object_prefix, force_path_style, allow_private_network,
        enabled, deleting,
        last_verified_at, last_error, created_at
   FROM ${databaseTable("backup_storage")}`
 
-const backupStorageSelect = `SELECT id, owner_user_id, name, endpoint, region,
+const backupStorageSelect = `SELECT id, kind, owner_user_id, name, endpoint, region,
        bucket, object_prefix, force_path_style, allow_private_network,
        access_key_id_ciphertext, secret_access_key_ciphertext, enabled, deleting,
        last_verified_at, last_error, created_at
@@ -507,6 +514,7 @@ function toRecord(row: BackupStoragePublicRow): BackupStorageRecord {
     endpoint: row.endpoint,
     forcePathStyle: Boolean(row.force_path_style),
     id: row.id,
+    kind: row.kind,
     lastError: row.last_error,
     lastVerifiedAt:
       row.last_verified_at === null

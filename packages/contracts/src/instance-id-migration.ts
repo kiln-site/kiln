@@ -38,6 +38,10 @@ export async function migratedInstanceId(
       : reference.kind === "server"
         ? [reference.kind, reference.relayFingerprint, reference.id]
         : [reference.kind, reference.id]
+  return hashedId(parts)
+}
+
+async function hashedId(parts: ReadonlyArray<string>): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode([NAMESPACE, ...parts].join("\u0000"))
@@ -45,6 +49,29 @@ export async function migratedInstanceId(
   return Array.from(new Uint8Array(digest).subarray(0, 6), (byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("")
+}
+
+/**
+ * A backup destination's old ID: a UUID, from before destinations took
+ * their IDs from the instance directory as instances do.
+ */
+export const LEGACY_BACKUP_DESTINATION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+
+export function isLegacyBackupDestinationId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    LEGACY_BACKUP_DESTINATION_ID_PATTERN.test(value)
+  )
+}
+
+/**
+ * The 12-character ID a backup destination's old one becomes: hashed as an
+ * instance's is, so Hearth and every Relay, which keeps the old one in the
+ * schedules and tasks it stored, arrive at the same ID on their own.
+ */
+export function migratedBackupDestinationId(legacyId: string): Promise<string> {
+  return hashedId(["destination", legacyId.toLowerCase()])
 }
 
 /** A game server's, App's, database's, or Tailscale network's old ID. */

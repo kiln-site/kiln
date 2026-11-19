@@ -1114,12 +1114,12 @@ const parseBackupIdEffect = Effect.fn("cli.backupId.parse")(function* (
 const parseBackupStorageEffect = Effect.fn("cli.backupStorage.parse")(
   function* (value: string | undefined) {
     if (value === "local") return null
-    const parsed = z.uuid().safeParse(value)
+    const parsed = instanceIdSchema.safeParse(value)
     if (!parsed.success) {
       return yield* commandError({
         code: "invalid_arguments",
         exitCode: 2,
-        message: "--storage must be local or a destination UUID.",
+        message: "--storage must be local or a destination ID.",
       })
     }
     return parsed.data

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import { Effect } from "effect"
@@ -7,6 +6,7 @@ import { z } from "zod"
 import {
   resticS3BucketSchema,
   resticS3RegionSchema,
+  instanceIdSchema,
 } from "@workspace/contracts"
 
 import {
@@ -27,6 +27,7 @@ import {
   verifyS3BackupCredential,
   type S3BackupCredential,
 } from "@/backups/destinations/s3"
+import { reserveInstanceId } from "@/effect/instance-ids"
 import { backupStorageKey, backupStorageSettingsKey } from "@/lib/backup-lanes"
 import { exclusive } from "@/operations/lanes"
 import {
@@ -36,7 +37,7 @@ import {
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 
-const backupStorageIdSchema = z.uuid()
+const backupStorageIdSchema = instanceIdSchema
 export const backupStorageInputSchema = z.strictObject({
   accessKeyId: z.string().trim().min(1).max(512).optional(),
   allowPrivateNetwork: z.boolean().default(false),
@@ -106,7 +107,13 @@ const saveDestination = operation<z.infer<typeof backupStorageInputSchema>>()({
           if (existing && existing.ownerUserId !== ownerUserId) {
             throw new Error("Backup destination ownership cannot be changed")
           }
-          return { existing, id: data.id ?? randomUUID(), ownerUserId }
+          // A new one takes its ID from the instance directory, as an
+          // instance does, so it is never an instance's or another's.
+          return {
+            existing,
+            id: data.id ?? (await reserveInstanceId("destination")),
+            ownerUserId,
+          }
         })
       )
     ),

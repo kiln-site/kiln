@@ -15,7 +15,12 @@ has one ID: 12 lowercase hexadecimal characters, such as `a7c39f204bd1`.
   `claimInstanceIdEffect`. Deleted instances keep their reservation, so an old
   reference never comes to mean a new instance. An
   [instance group](instances.md#instance-groups) takes its ID from the same
-  directory, so a group's ID is never an instance's.
+  directory, so a group's ID is never an instance's. So does a
+  [backup destination](backups.md#storage-destinations)
+  (`reserveInstanceIdEffect("destination")`): it is no instance, but a
+  Relay's own disk is a destination under the Relay's ID, so no other
+  destination may ever share an ID with a Relay. A Relay that turned up
+  with a destination's ID would be refused when it paired.
 - What kind of instance it is comes from the instance, never from the ID.
   Keys that mix kinds name the kind: `app:<id>`, `database:<id>`,
   `relay:<id>` (a Relay's host files), and a game server's bare ID.
@@ -31,6 +36,14 @@ The contracts are in `packages/contracts/src/instance-id.ts`
 Other records keep their own formats: Kiln volume IDs (40 hex characters),
 operations, backups, deployments, schedules and their steps (UUIDs), schedule
 runs (deterministic hashes), and users.
+
+Backup destinations had UUIDs before they took theirs from the directory.
+Hearth's migration `0092_backup_destination_ids` gives each the first 12 hex
+characters of a hash of its old ID (`migratedBackupDestinationId`), reserves
+it beside the old one, rewrites every record that names it, and encrypts the
+destination's keys again, which are bound to its ID. Each Relay computes the
+same ID for the schedules and backups it stored. Object paths in a bucket
+never held a destination's ID and stay as they are.
 
 ## The migration from the old IDs
 

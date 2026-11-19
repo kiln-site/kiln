@@ -571,7 +571,7 @@ describeMysql("Server migrations", () => {
           const move = yield* start(service, {
             chosen: {
               deleteSource: {
-                storageId: "22222222-2222-4222-8222-222222222222",
+                storageId: "d".repeat(12),
               },
             },
             mode: "migrate",

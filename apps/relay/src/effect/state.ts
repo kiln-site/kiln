@@ -33,6 +33,8 @@ import {
   backupTargetSchema,
   backupTaskInputSchema,
   backupTaskResultSchema,
+  isLegacyBackupDestinationId,
+  migratedBackupDestinationId,
   migratedDeployActions,
   migratedFileActions,
   migratedLimitActions,
@@ -1972,7 +1974,75 @@ const migrations = SqliteMigrator.fromRecord({
   "49_relay_database_action": moveCustomActions((actions) =>
     actions.filter((action) => action !== "relay.database.read")
   ),
+  // A backup destination took a 12-character ID in place of its UUID, one
+  // hashed from the other so the Relay arrives at it on its own. The
+  // schedules it stored name the destination each backup step goes to, and
+  // the backups it took or has yet to take name it for Hearth to catalog.
+  "50_backup_destination_ids": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const schedules = yield* sql<{ id: string; json: string }>`
+      SELECT schedule_id AS id, definition_json AS json FROM relay_schedules
+    `
+    for (const row of schedules) {
+      const moved = yield* withMigratedDestinationIds(row.json, (stored) =>
+        Predicate.isObject(stored) && Array.isArray(stored.actions)
+          ? (stored.actions as ReadonlyArray<unknown>).map((action) =>
+              Predicate.isObject(action) ? action.destination : null
+            )
+          : []
+      )
+      if (moved === null) continue
+      yield* sql`
+        UPDATE relay_schedules SET definition_json = ${moved}
+        WHERE schedule_id = ${row.id}
+      `
+    }
+    const tasks = yield* sql<{ id: string; json: string }>`
+      SELECT task_id AS id, input_json AS json FROM relay_backup_tasks
+      WHERE kind = 'create'
+    `
+    for (const row of tasks) {
+      const moved = yield* withMigratedDestinationIds(row.json, (stored) =>
+        Predicate.isObject(stored) ? [stored.catalog] : []
+      )
+      if (moved === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks SET input_json = ${moved}
+        WHERE task_id = ${row.id}
+      `
+    }
+  }),
 })
+
+// Stored JSON with each old destination ID that `holders` finds in it, as a
+// `storageId`, moved to its new one; or null when it holds none. Anything
+// unreadable is left as it is, for whatever reads it to settle.
+function withMigratedDestinationIds(
+  json: string,
+  holders: (stored: unknown) => ReadonlyArray<unknown>
+) {
+  return Effect.gen(function* () {
+    const stored = Result.getOrNull(
+      Result.try(() => JSON.parse(json) as unknown)
+    )
+    if (stored === null) return null
+    let changed = false
+    for (const holder of holders(stored)) {
+      if (
+        !Predicate.isObject(holder) ||
+        !isLegacyBackupDestinationId(holder.storageId)
+      ) {
+        continue
+      }
+      const legacy = holder.storageId
+      holder.storageId = yield* Effect.promise(() =>
+        migratedBackupDestinationId(legacy)
+      )
+      changed = true
+    }
+    return changed ? JSON.stringify(stored) : null
+  })
+}
 
 // Rewrites the actions of every client and invitation given actions of its
 // own, when an action is replaced by ones every instance takes, or dropped.

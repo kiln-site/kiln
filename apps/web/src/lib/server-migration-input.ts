@@ -14,7 +14,7 @@ export const serverMigrationOptionsSchema = z.object({
    * A full backup of the old server first: to an S3 destination, or the
    * Relay itself (null).
    */
-  backup: z.object({ storageId: z.uuid().nullable() }).nullable(),
+  backup: z.object({ storageId: instanceIdSchema.nullable() }).nullable(),
   /** The old server's people get the same access to the copy. */
   copyAccess: z.boolean(),
   /** The copy's activity includes the old server's history. */
@@ -32,7 +32,7 @@ export const serverMigrationOptionsSchema = z.object({
    * has finished: to an S3 destination, or the Relay itself (null).
    */
   deleteSource: z
-    .object({ storageId: z.uuid().nullable() })
+    .object({ storageId: instanceIdSchema.nullable() })
     .nullable()
     .default(null),
   /** The copy's limits, when they differ from the old server's. */

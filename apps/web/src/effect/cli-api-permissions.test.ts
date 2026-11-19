@@ -224,7 +224,7 @@ describe("CLI backup export boundary", () => {
     relayId,
     targetId: instanceId,
     targetKind: "instance",
-    storageId: "60a4d6e2-f17f-44e1-80d3-3ca75d589dc9",
+    storageId: "d".repeat(12),
     name: "Backup",
   }
   it("requires download before reserving an export to a personal bucket", async () => {

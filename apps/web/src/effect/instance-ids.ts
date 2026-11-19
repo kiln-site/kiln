@@ -18,10 +18,13 @@ import { runAppEffect } from "./runtime"
  */
 
 /**
- * What the directory reserves IDs for: every kind of instance, and a group
- * of them, which has an ID of its own that no Relay ever holds.
+ * What the directory reserves IDs for: every kind of instance; a group of
+ * them, which has an ID of its own that no Relay ever holds; and a backup
+ * destination, which is no instance but shares their IDs so that it is
+ * never one's, a Relay's least of all: a Relay's own disk is a destination
+ * under the Relay's ID.
  */
-export type DirectoryKind = InstanceIdKind | "group"
+export type DirectoryKind = InstanceIdKind | "group" | "destination"
 
 export const reserveInstanceIdEffect = Effect.fn("instanceIds.reserve")(
   function* (kind: DirectoryKind, requestKey: string | null = null) {

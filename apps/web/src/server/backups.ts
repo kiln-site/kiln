@@ -7,6 +7,7 @@ import {
   backupConsistencySchema,
   backupTargetSchema,
   relayIdSchema,
+  instanceIdSchema,
 } from "@workspace/contracts"
 
 import {
@@ -51,7 +52,7 @@ const backupRunInputSchema = z.strictObject({
   // For the game servers among them.
   mode: z.enum(["full", "incremental"]).optional(),
   name: z.string().trim().min(1).max(120),
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
+  storageIds: z.array(instanceIdSchema.nullable()).min(1).max(16),
   targets: z
     .array(
       z.strictObject({
@@ -97,7 +98,7 @@ const renameBackupInputSchema = z.strictObject({
 
 const copyBackupInputSchema = z.strictObject({
   backupId: z.uuid(),
-  storageId: z.uuid(),
+  storageId: instanceIdSchema,
 })
 
 const backupDownloadInputSchema = z.strictObject({
