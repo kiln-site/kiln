@@ -667,12 +667,18 @@ export const backupTaskInputSchema = z.discriminatedUnion("kind", [
   backupPruneTaskInputSchema.extend({ kind: z.literal("prune") }),
 ])
 
+/**
+ * What became of one copy as a create ended. `pending` is a copy for a
+ * bucket whose archive is taken and waits on the Relay to be sent
+ * (`backup.copy.settled` says how that went): the backup isn't stored
+ * there yet.
+ */
 const backupArtifactOutcomeSchema = z
   .object({
     artifactId: z.uuid(),
     error: z.string().max(4_096).nullable(),
     errorCode: backupFailureCodeWireSchema.nullable().optional(),
-    status: z.enum(["available", "failed"]),
+    status: z.enum(["available", "failed", "pending"]),
   })
   .strict()
 
@@ -1044,10 +1050,52 @@ export const backupStorageAccessRefusalSchema = z
   })
   .strict()
 
+/**
+ * Hearth answered and won't allow it yet, which asking again later may
+ * change: as an upload of a copy whose backup is being deleted, which is
+ * wanted again if the delete fails.
+ */
+export const backupStorageAccessDeferralSchema = z
+  .object({
+    reason: z.string().min(1).max(300),
+    status: z.literal("later"),
+  })
+  .strict()
+
 export const backupStorageAccessResponseSchema = z.discriminatedUnion(
   "status",
-  [backupStorageAccessGrantSchema, backupStorageAccessRefusalSchema]
+  [
+    backupStorageAccessGrantSchema,
+    backupStorageAccessDeferralSchema,
+    backupStorageAccessRefusalSchema,
+  ]
 )
+
+/**
+ * A Relay tells Hearth how sending a copy to its bucket ended
+ * (`backup.copy.settled`): the copy a create left `pending`. Sent until
+ * Hearth answers, so Hearth hears of each exactly once or more.
+ */
+export const backupCopySettledRequestSchema = z
+  .object({
+    artifactId: z.uuid(),
+    error: z.string().max(4_096).nullable().default(null),
+    errorCode: backupFailureCodeWireSchema.nullable().default(null),
+    status: z.enum(["available", "failed"]),
+  })
+  .strict()
+
+/**
+ * `recorded` once Hearth has it, however often it was told. `unknown` for
+ * a copy that isn't one of this Relay's, which it can stop telling of.
+ */
+export const backupCopySettledResponseSchema = z
+  .object({ status: z.enum(["recorded", "unknown"]) })
+  .strict()
+
+export type BackupCopySettledRequest = z.infer<
+  typeof backupCopySettledRequestSchema
+>
 
 export type BackupStorageAccessAction =
   (typeof backupStorageAccessActions)[number]

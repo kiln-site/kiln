@@ -31,6 +31,12 @@ export {
 
 export const laneKeys = {
   app: (id: string) => `app:${id}`,
+  /**
+   * One backup's archive as the Relay holds it for a bucket: sending it,
+   * and deleting the backup, which stops the sending first. Named by the
+   * backup the archive was made as, which a linked backup shares.
+   */
+  backupArchive: (id: string) => `backup-archive:${id}`,
   appFiles: (id: string) => `app:${id}/files`,
   appLifecycle: (id: string) => `app:${id}/lifecycle`,
   /** The Kiln volumes an App's configuration mounts, as Hearth last sent. */

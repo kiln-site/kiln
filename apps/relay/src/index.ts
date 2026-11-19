@@ -159,7 +159,10 @@ import { transferSpace } from "./transfers/peer/space.js"
 import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
-import { backupStorageAccessThrough } from "./backups/storage-access.js"
+import {
+  backupCopySettledThrough,
+  backupStorageAccessThrough,
+} from "./backups/storage-access.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -1052,6 +1055,14 @@ const backupManager = await runRelayEffect(
         only
       )
     ),
+    settled: backupCopySettledThrough((payload, timeoutMs, only) =>
+      controlSocket.requestClients(
+        "backup.copy.settled",
+        payload,
+        timeoutMs,
+        only
+      )
+    ),
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {
       const instance = (await docker.inspectInstances()).find(
@@ -1617,8 +1628,14 @@ const controlSocket = attachControlSocket({
   execute: executeControlRequest,
   // Which import each Hearth's protection of volumes counts is its current
   // connection's.
-  clientConnected: (clientId, connectionId) =>
-    volumes.clientConnected(clientId, connectionId),
+  clientConnected: (clientId, connectionId) => {
+    volumes.clientConnected(clientId, connectionId)
+    // Copies waiting for this Hearth to open their bucket have it to ask.
+    forkRelayEffect(
+      "relay.backups.hearthReachable",
+      backupManager.hearthReachable(clientId)
+    )
+  },
   identity: relayIdentity,
   journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
@@ -4174,6 +4191,7 @@ async function executeControlRequest(
       throw new Error(`${request.operation} is not available yet`)
     // Asked of Hearth, never of the Relay.
     case "backup.storage.access":
+    case "backup.copy.settled":
       throw new Error(`${request.operation} is answered by Hearth`)
   }
 }

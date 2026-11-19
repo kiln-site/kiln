@@ -79,6 +79,8 @@ type BackupAvailabilityState =
   | "deleting"
   | "failed"
   | "missing"
+  // Taken, and waiting on the Relay to be sent to its destination.
+  | "sending"
   | "working"
 type BackupTargetPresentation = {
   id: string
@@ -795,7 +797,7 @@ export const BackupAvailabilityTags = React.memo(
 )
 
 function BackupAvailabilityTag({ tag }: { tag: BackupAvailabilityTagView }) {
-  const working = tag.state === "working"
+  const working = tag.state === "working" || tag.state === "sending"
   const deleting = tag.state === "deleting"
   const summary = `${tag.name} · ${
     tag.uploadPercent === null
@@ -1453,7 +1455,12 @@ function artifactAvailabilityState(
   if (artifact?.error) return "failed"
   if (status === "failed") return "failed"
   if (status === "queued" || status === "running") {
-    return "working"
+    // The backup's task has ended with this copy still to be sent: the
+    // archive is on the Relay, and goes to the destination when Hearth
+    // and the Relay next reach each other.
+    return backup.taskKind === "create" && backup.taskStatus === "succeeded"
+      ? "sending"
+      : "working"
   }
   return "missing"
 }
@@ -1462,7 +1469,7 @@ function availabilityTagClassName(state: BackupAvailabilityState): string {
   if (state === "available") {
     return "border-emerald-500/30 bg-emerald-500/10 light:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
   }
-  if (state === "working") {
+  if (state === "working" || state === "sending") {
     return "border-sky-500/30 bg-sky-500/10 light:bg-sky-500/20 text-sky-700 dark:text-sky-300"
   }
   if (state === "deleting") {
@@ -1477,6 +1484,7 @@ function availabilityTagClassName(state: BackupAvailabilityState): string {
 function availabilityStateLabel(state: BackupAvailabilityState): string {
   if (state === "available") return "Available"
   if (state === "working") return "Backing up"
+  if (state === "sending") return "Sending"
   if (state === "deleting") return "Deleting"
   if (state === "cancelled") return "Cancelled"
   if (state === "failed") return "Failed"

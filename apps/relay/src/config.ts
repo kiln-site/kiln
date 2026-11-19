@@ -112,6 +112,12 @@ export interface RelayConfig {
   checksPublicRoute: boolean
   advertisedHost: string
   advertisedHostInferred: boolean
+  /**
+   * The most archives, by size, that wait on the Relay to be sent to
+   * buckets one Hearth opens. Past it a backup's copy for a bucket fails
+   * as it is taken, so a Hearth that stays away can't fill the disk.
+   */
+  backupOutboxBytes: number
   backupTimeoutMs: number
   brickCatalogUrl: string
   bootstrapToken: string | null
@@ -308,6 +314,7 @@ export function loadConfig(
     advertisedHost,
     advertisedHostInferred:
       !environment.KILN_RELAY_HOST?.trim() && !coolifyPublicOrigin,
+    backupOutboxBytes: backupOutboxBytes(environment),
     backupTimeoutMs:
       positiveIntegerEnvironment(environment, "KILN_BACKUP_TIMEOUT", 60) *
       60_000,
@@ -918,6 +925,20 @@ function sftpDevAuthentication(environment: NodeJS.ProcessEnv): boolean {
     throw new Error("Development SFTP authentication cannot run in production")
   }
   return enabled
+}
+
+const DEFAULT_BACKUP_OUTBOX_BYTES = 20 * 1024 ** 3
+
+function backupOutboxBytes(environment: NodeJS.ProcessEnv): number {
+  const value = environment.KILN_RELAY_BACKUP_OUTBOX?.trim()
+  if (!value) return DEFAULT_BACKUP_OUTBOX_BYTES
+  const bytes = Result.try(() => ramInBytes(value))
+  if (Result.isFailure(bytes) || bytes.success < 0) {
+    throw new Error(
+      `KILN_RELAY_BACKUP_OUTBOX must be a size like 20g, received ${value}`
+    )
+  }
+  return bytes.success
 }
 
 function reservedMemory(environment: NodeJS.ProcessEnv): number | null {

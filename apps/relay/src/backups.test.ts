@@ -34,7 +34,10 @@ import {
   restorePortableInstanceBackup,
 } from "./backup-restore.js"
 import { BackupManager } from "./backups.js"
-import { backupStorageAccessThrough } from "./backups/storage-access.js"
+import {
+  backupCopySettledThrough,
+  backupStorageAccessThrough,
+} from "./backups/storage-access.js"
 import { backupArchivePath } from "./backups/destinations/index.js"
 import { BrickCatalog, brickSnapshotDirectory } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -90,8 +93,9 @@ vi.mock("node:https", async (importOriginal) => {
   return { ...https, default: { ...https, request }, request }
 })
 
-// The Relay holds no keys to a bucket. For each copy it asks the Hearth
-// its task came from, and uses the one request that Hearth signs.
+// The Relay holds no keys to a bucket. A backup's task ends once its archive
+// is taken; each copy for a bucket waits in the spool, and is sent with the
+// one request the Hearth its task came from signs for it.
 describe("Relay backups in a bucket it holds no keys to", () => {
   const hearthId = "hearth-one"
   const copy = "30000000-0000-4000-8000-000000000003"
@@ -102,58 +106,98 @@ describe("Relay backups in a bucket it holds no keys to", () => {
     status: "granted" as const,
     url: `https://kiln-backups.s3.example.com/team/backup.zip?X-Amz-Signature=${method}`,
   })
-  // The Hearth these tasks came from, and what it answers each request.
-  const hearth = (answer: (action: string) => unknown) => {
+  const signsEverything = (action: string) =>
+    signed(
+      action === "upload" ? "PUT" : action === "download" ? "GET" : "DELETE"
+    )
+  // The Hearth these tasks came from: what it answers each request for
+  // access, and what it was told of copies sent. `away` is it not answering.
+  const hearth = (answer: (action: string) => unknown = signsEverything) => {
     const asked: Array<unknown> = []
+    const told: Array<unknown> = []
+    const state = {
+      answer,
+      away: false,
+      /** It signs requests, but what it is told of a copy doesn't arrive. */
+      deaf: false,
+    }
     return {
       asked,
       options: {
+        settled: backupCopySettledThrough(async (report, _timeout, only) => {
+          if (
+            state.away ||
+            state.deaf ||
+            !only({ id: hearthId, role: "full_access" })
+          ) {
+            return []
+          }
+          told.push(report)
+          return [{ payload: { status: "recorded" } }]
+        }),
         storage: backupStorageAccessThrough(async (request, _timeout, only) => {
-          if (!only({ id: hearthId, role: "full_access" })) return []
+          if (state.away || !only({ id: hearthId, role: "full_access" })) {
+            return []
+          }
           asked.push(request)
-          return [{ payload: answer(request.action) }]
+          return [{ payload: state.answer(request.action) }]
         }),
       },
+      state,
+      told,
     }
   }
+  const toBucket = (index: number) => ({
+    ...backupInput(index),
+    destination: { artifactId: copy, kind: "s3" as const },
+  })
+  const spooled = (config: RelayConfig) =>
+    resolve(config.dataDirectory, "backup-spool", `${copy}.zip`)
+  const world = (root: string, contents: string) =>
+    Effect.promise(() => writeFile(resolve(root, "world.txt"), contents))
 
   it.effect(
-    "sends, reads back and deletes an archive with one signed request each, asked of its task's Hearth",
+    "ends the backup once the archive is taken, then sends, reads back and deletes it with one signed request each",
     () =>
       withRelay("kiln-backup-bucket-", ({ config, root }) =>
         Effect.gen(function* () {
-          const file = resolve(root, "world.txt")
-          yield* Effect.promise(() => writeFile(file, "as backed up"))
+          yield* world(root, "as backed up")
           bucket.asked.length = 0
-          const { asked, options } = hearth((action) =>
-            signed(
-              action === "upload"
-                ? "PUT"
-                : action === "download"
-                  ? "GET"
-                  : "DELETE"
-            )
-          )
+          const { asked, options, told } = hearth()
           const manager = yield* backupManager(
             config,
             undefined,
             undefined,
             options
           )
-          const create = {
-            ...backupInput(31),
-            destination: { artifactId: copy, kind: "s3" as const },
-          }
-          const stored = yield* runTask(manager, create, hearthId)
-          assert.strictEqual(stored.status, "succeeded", stored.error ?? "")
-          const taken = archiveResult(stored)
-          // In the bucket, and not kept on the Relay.
-          assert.strictEqual(sha256(bucket.object), taken.checksumSha256)
+          const create = toBucket(31)
+          const taken = yield* runTask(manager, create, hearthId)
+          assert.strictEqual(taken.status, "succeeded", taken.error ?? "")
+          const archive = archiveResult(taken)
+          // Taken, and waiting to be sent: nothing has reached the bucket.
+          assert.deepStrictEqual(archive.artifacts, [
+            { artifactId: copy, error: null, status: "pending" },
+          ])
+          assert.deepStrictEqual(bucket.asked, [])
+          assert.isTrue(existsSync(spooled(config)))
+
+          yield* manager.sendSpooled()
+          assert.strictEqual(sha256(bucket.object), archive.checksumSha256)
+          assert.deepStrictEqual(told, [
+            {
+              artifactId: copy,
+              error: null,
+              errorCode: null,
+              status: "available",
+            },
+          ])
+          // Sent and told: the Relay keeps nothing of it.
+          assert.isFalse(existsSync(spooled(config)))
           assert.isFalse(
             existsSync(backupArchivePath(config, create.backupId))
           )
 
-          yield* Effect.promise(() => writeFile(file, "changed since"))
+          yield* world(root, "changed since")
           const restored = yield* runTask(
             manager,
             {
@@ -161,8 +205,8 @@ describe("Relay backups in a bucket it holds no keys to", () => {
               kind: "restore" as const,
               source: {
                 artifactId: copy,
-                bytes: taken.bytes,
-                checksumSha256: taken.checksumSha256,
+                bytes: archive.bytes,
+                checksumSha256: archive.checksumSha256,
                 kind: "remote" as const,
               },
               target: create.target,
@@ -172,7 +216,9 @@ describe("Relay backups in a bucket it holds no keys to", () => {
           )
           assert.strictEqual(restored.status, "succeeded", restored.error ?? "")
           assert.strictEqual(
-            yield* Effect.promise(() => readFile(file, "utf8")),
+            yield* Effect.promise(() =>
+              readFile(resolve(root, "world.txt"), "utf8")
+            ),
             "as backed up"
           )
 
@@ -205,43 +251,281 @@ describe("Relay backups in a bucket it holds no keys to", () => {
       )
   )
 
-  it.effect.each([
-    {
-      answer: () => ({ reason: "the copy is available", status: "refused" }),
-      says: "its Hearth refuses",
-      why: "the copy is available",
-    },
-    {
-      answer: () => null,
-      says: "its Hearth gives no answer",
-      why: "couldn't be reached",
-    },
-  ])(
-    "fails a backup to a bucket when $says, sending it nothing",
-    ({ answer, why }) =>
-      withRelay("kiln-backup-bucket-refused-", ({ config, root }) =>
+  // Hearth is away as the backup is taken, and the Relay restarts before it
+  // is back. What reaches the bucket is the archive as it was taken.
+  it.effect(
+    "keeps a copy across a restart while Hearth is away, and sends it as it was taken when Hearth is back",
+    () =>
+      withRelay("kiln-backup-spool-away-", ({ config, root }) =>
         Effect.gen(function* () {
-          yield* Effect.promise(() =>
-            writeFile(resolve(root, "world.txt"), "world")
-          )
+          yield* world(root, "as taken")
           bucket.asked.length = 0
+          const { options, state, told } = hearth()
+          state.away = true
+          const create = toBucket(34)
+          const first = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const taken = archiveResult(yield* runTask(first, create, hearthId))
+          yield* first.sendSpooled()
+          assert.deepStrictEqual(bucket.asked, [])
+
+          yield* world(root, "changed since")
+          const restarted = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          state.away = false
+          // Its turn comes as its Hearth connects, not a minute on.
+          yield* restarted.hearthReachable(hearthId)
+          yield* restarted.sendSpooled()
+
+          assert.strictEqual(sha256(bucket.object), taken.checksumSha256)
+          assert.deepStrictEqual(
+            told.map((report) => (report as { status: string }).status),
+            ["available"]
+          )
+          assert.isFalse(existsSync(spooled(config)))
+        })
+      )
+  )
+
+  it.effect(
+    "tells Hearth a copy failed when Hearth refuses it the bucket, and sends it nothing",
+    () =>
+      withRelay("kiln-backup-spool-refused-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* world(root, "world")
+          bucket.asked.length = 0
+          const { options, told } = hearth(() => ({
+            reason: "the backup destination is unavailable",
+            status: "refused",
+          }))
           const manager = yield* backupManager(
             config,
             undefined,
             undefined,
-            hearth(answer).options
+            options
           )
-          const task = yield* runTask(
+          yield* runTask(manager, toBucket(33), hearthId)
+          yield* manager.sendSpooled()
+
+          assert.deepStrictEqual(bucket.asked, [])
+          assert.lengthOf(told, 1)
+          assert.include(
+            (told[0] as { error: string }).error,
+            "the backup destination is unavailable"
+          )
+          assert.strictEqual((told[0] as { status: string }).status, "failed")
+          assert.isFalse(existsSync(spooled(config)))
+        })
+      )
+  )
+
+  it.effect("sends nothing of a backup deleted while its copy waits", () =>
+    withRelay("kiln-backup-spool-deleted-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* world(root, "world")
+        bucket.asked.length = 0
+        const { options, state, told } = hearth()
+        state.away = true
+        const manager = yield* backupManager(
+          config,
+          undefined,
+          undefined,
+          options
+        )
+        const create = toBucket(35)
+        yield* runTask(manager, create, hearthId)
+        state.away = false
+        yield* runTask(
+          manager,
+          {
+            backupId: create.backupId,
+            destination: { artifactId: copy, kind: "s3" as const },
+            kind: "delete" as const,
+            target: create.target,
+            taskId: "10000000-0000-4000-8000-000000000135",
+          },
+          hearthId
+        )
+        yield* manager.hearthReachable(hearthId)
+        yield* manager.sendSpooled()
+
+        // Only the delete reached the bucket; the copy was never sent.
+        assert.deepStrictEqual(
+          bucket.asked.map(({ method }) => method),
+          ["DELETE"]
+        )
+        assert.deepStrictEqual(told, [])
+        assert.isFalse(existsSync(spooled(config)))
+      })
+    )
+  )
+
+  // Hearth still has the copy as one to come, and only the spool can send
+  // it: a delete that couldn't remove it mustn't take it from there.
+  it.effect(
+    "still sends a waiting copy after a delete that couldn't ask Hearth for it",
+    () =>
+      withRelay("kiln-backup-spool-delete-failed-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* world(root, "world")
+          bucket.asked.length = 0
+          const { options, state, told } = hearth()
+          state.away = true
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const create = toBucket(36)
+          const taken = archiveResult(yield* runTask(manager, create, hearthId))
+          const deleted = yield* runTask(
             manager,
             {
-              ...backupInput(33),
+              backupId: create.backupId,
               destination: { artifactId: copy, kind: "s3" as const },
+              kind: "delete" as const,
+              target: create.target,
+              taskId: "10000000-0000-4000-8000-000000000136",
             },
             hearthId
           )
-          assert.strictEqual(task.status, "failed")
-          assert.include(task.error ?? "", why)
+          // The delete ended, saying it couldn't remove the bucket's copy.
+          assert.notStrictEqual(
+            (deleted.result as { artifacts?: Array<{ status: string }> })
+              .artifacts?.[0]?.status,
+            "deleted"
+          )
           assert.deepStrictEqual(bucket.asked, [])
+          assert.isTrue(existsSync(spooled(config)))
+
+          state.away = false
+          yield* manager.hearthReachable(hearthId)
+          yield* manager.sendSpooled()
+
+          assert.strictEqual(sha256(bucket.object), taken.checksumSha256)
+          assert.deepStrictEqual(
+            told.map((report) => (report as { status: string }).status),
+            ["available"]
+          )
+        })
+      )
+  )
+
+  // Hearth says not yet while it is deleting the copy's backup, which it
+  // may yet keep. Taken as a no, that would cost the only archive.
+  it.effect(
+    "keeps a copy Hearth won't take yet, and sends it once Hearth will",
+    () =>
+      withRelay("kiln-backup-spool-later-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* world(root, "world")
+          bucket.asked.length = 0
+          const { options, state, told } = hearth(() => ({
+            reason: "that backup is being deleted",
+            status: "later",
+          }))
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const taken = archiveResult(
+            yield* runTask(manager, toBucket(38), hearthId)
+          )
+          yield* manager.sendSpooled()
+          assert.deepStrictEqual(bucket.asked, [])
+          assert.deepStrictEqual(told, [])
+          assert.isTrue(existsSync(spooled(config)))
+
+          state.answer = signsEverything
+          yield* manager.hearthReachable(hearthId)
+          yield* manager.sendSpooled()
+          assert.strictEqual(sha256(bucket.object), taken.checksumSha256)
+          assert.deepStrictEqual(
+            told.map((report) => (report as { status: string }).status),
+            ["available"]
+          )
+        })
+      )
+  )
+
+  // Sent, and Hearth yet to hear of it: only the outcome waits. A stop
+  // between recording that and giving the archive up mustn't leave it
+  // holding room the spool's limit doesn't count.
+  it.effect(
+    "keeps no archive for a copy that is already sent, across a restart",
+    () =>
+      withRelay("kiln-backup-spool-settled-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* world(root, "world")
+          bucket.asked.length = 0
+          const { options, state, told } = hearth()
+          state.deaf = true
+          const first = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          yield* runTask(first, toBucket(39), hearthId)
+          yield* first.sendSpooled()
+          assert.deepStrictEqual(
+            bucket.asked.map(({ method }) => method),
+            ["PUT"]
+          )
+          assert.isFalse(existsSync(spooled(config)))
+          // As a stop left it: recorded as sent, its link still there.
+          yield* Effect.promise(() => writeFile(spooled(config), "left over"))
+
+          const restarted = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          assert.isFalse(existsSync(spooled(config)))
+
+          state.deaf = false
+          yield* restarted.hearthReachable(hearthId)
+          yield* restarted.sendSpooled()
+          assert.deepStrictEqual(
+            told.map((report) => (report as { status: string }).status),
+            ["available"]
+          )
+        })
+      )
+  )
+
+  // A Hearth that stays away mustn't fill the Relay's disk.
+  it.effect(
+    "fails a backup's copy for a bucket once its Hearth's waiting copies take the room they may",
+    () =>
+      withRelay("kiln-backup-spool-full-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* world(root, "world")
+          const { options, state } = hearth()
+          state.away = true
+          const manager = yield* backupManager(
+            { ...config, backupOutboxBytes: 16 },
+            undefined,
+            undefined,
+            options
+          )
+          const task = yield* runTask(manager, toBucket(36), hearthId)
+
+          assert.strictEqual(task.status, "failed")
+          assert.include(task.error ?? "", "waiting to be sent")
+          assert.isFalse(existsSync(spooled(config)))
         })
       )
   )
@@ -491,12 +775,12 @@ function backupManager(
   findInstance: () => Promise<RelayInstanceConfig | null> = async () =>
     testInstance(),
   lanes = new OperationLanes(),
-  hearth: Pick<
-    Parameters<typeof BackupManager.make>[0],
-    "storage"
-  > = noHearth
+  hearth: Partial<
+    Pick<Parameters<typeof BackupManager.make>[0], "settled" | "storage">
+  > = {}
 ) {
   return BackupManager.make({
+    ...noHearth,
     ...hearth,
     config,
     findInstance,

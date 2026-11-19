@@ -538,6 +538,25 @@ const RelayProvisioningJobRowSchema = Schema.Struct({
   updatedAt: Schema.Number,
 })
 
+/**
+ * A copy of a backup waiting in the spool to be sent to a bucket, or sent
+ * and waiting only for Hearth to hear of it.
+ */
+export interface SpooledBackupCopy {
+  /** The backup the archive was made as, which names its file. */
+  readonly archiveId: string
+  readonly attempts: number
+  readonly backupId: string
+  readonly bytes: number
+  /** The copy's ID, which Hearth knows it by. */
+  readonly copyId: string
+  readonly error: string | null
+  readonly errorCode: string | null
+  /** The Hearth client to ask, or null for one that named none. */
+  readonly hearth: string | null
+  readonly state: "waiting" | "stored" | "failed"
+}
+
 export class RelayStateStore extends Context.Service<
   RelayStateStore,
   {
@@ -754,6 +773,96 @@ export class RelayStateStore extends Context.Service<
     readonly backupTaskHearth: (
       taskId: string
     ) => Effect.Effect<string | null, RelayStateError>
+    /**
+     * Adds a copy to the spool, unless the copies waiting for the same
+     * Hearth already take `limitBytes`: one Hearth being away mustn't fill
+     * the disk, or take the room another's backups need. Answers whether
+     * it was added. Adding one already there changes nothing.
+     */
+    readonly spoolBackupCopy: (
+      copy: Pick<
+        SpooledBackupCopy,
+        "archiveId" | "backupId" | "bytes" | "copyId" | "hearth"
+      >,
+      now: number,
+      limitBytes: number
+    ) => Effect.Effect<boolean, RelayStateError>
+    /**
+     * The copies whose turn has come, oldest first. Only of a backup whose
+     * create has ended well: until then the archive isn't the backup's,
+     * and a create that fails or is cancelled takes its copies with it.
+     */
+    readonly dueSpooledBackupCopies: (
+      now: number
+    ) => Effect.Effect<ReadonlyArray<SpooledBackupCopy>, RelayStateError>
+    /** When the next copy is due, or null with nothing in the spool. */
+    readonly nextSpooledBackupCopyAt: () => Effect.Effect<
+      number | null,
+      RelayStateError
+    >
+    /**
+     * Leaves a backup's copies for no sooner than `nextAttemptAt`, as while
+     * the backup is being deleted. Answers which were moved.
+     */
+    readonly postponeSpooledBackupCopiesOf: (
+      backupId: string,
+      nextAttemptAt: number
+    ) => Effect.Effect<ReadonlyArray<string>, RelayStateError>
+    /** Leaves a copy for a later turn, which says nothing against it. */
+    readonly postponeSpooledBackupCopy: (
+      copyId: string,
+      nextAttemptAt: number
+    ) => Effect.Effect<void, RelayStateError>
+    /** Leaves a copy for a later turn, counting the attempt. */
+    readonly deferSpooledBackupCopy: (
+      copyId: string,
+      nextAttemptAt: number,
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Records how sending a copy ended. It stays until Hearth has heard
+     * (`removeSpooledBackupCopy`).
+     */
+    readonly settleSpooledBackupCopy: (
+      copyId: string,
+      outcome:
+        | { readonly state: "stored" }
+        | {
+            readonly state: "failed"
+            readonly error: string
+            readonly errorCode: string | null
+          },
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
+    readonly removeSpooledBackupCopy: (
+      copyId: string
+    ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Takes a backup's copies out of the spool, all but those named in
+     * `except`, as it is deleted, and answers with what they were.
+     */
+    readonly withdrawSpooledBackupCopies: (
+      backupId: string,
+      except?: ReadonlyArray<string>
+    ) => Effect.Effect<ReadonlyArray<SpooledBackupCopy>, RelayStateError>
+    /**
+     * Takes out the copies of backups whose create hasn't succeeded: one
+     * a restart put back in line takes its archive again.
+     */
+    readonly withdrawSpooledCopiesOfUnfinishedBackups: () => Effect.Effect<
+      void,
+      RelayStateError
+    >
+    /** Every copy in the spool, for a start to check against its files. */
+    readonly spooledBackupCopies: () => Effect.Effect<
+      ReadonlyArray<SpooledBackupCopy>,
+      RelayStateError
+    >
+    /** Brings the turn of a Hearth's copies forward, as it connects. */
+    readonly hastenSpooledBackupCopies: (
+      hearth: string,
+      now: number
+    ) => Effect.Effect<number, RelayStateError>
     readonly claimNextBackupTask: (
       now: number
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
@@ -2061,6 +2170,32 @@ const migrations = SqliteMigrator.fromRecord({
       `
     }
   }),
+  // Copies of backups waiting to be sent to a bucket: the spool. A backup
+  // task ends once its archive is taken; each copy for a bucket Hearth
+  // opens is a row here, which owns a hard link to the archive
+  // (`backup-spool/<copy>.zip`) and names the Hearth to ask. `stored` and
+  // `failed` rows are settled and wait only for Hearth to hear of it.
+  "52_backup_spool": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_backup_spool (
+      copy_id TEXT PRIMARY KEY NOT NULL,
+      backup_id TEXT NOT NULL,
+      archive_id TEXT NOT NULL,
+      client_id TEXT,
+      bytes INTEGER NOT NULL CHECK (bytes >= 0),
+      state TEXT NOT NULL CHECK (state IN ('waiting', 'stored', 'failed')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER NOT NULL,
+      error TEXT,
+      error_code TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT`
+    yield* sql`CREATE INDEX IF NOT EXISTS relay_backup_spool_due
+      ON relay_backup_spool (next_attempt_at, created_at)`
+    yield* sql`CREATE INDEX IF NOT EXISTS relay_backup_spool_backup
+      ON relay_backup_spool (backup_id)`
+  }),
 })
 
 // A stored create's or delete's input without the signed requests it held
@@ -3312,6 +3447,155 @@ const makeRelayStateStore = Effect.gen(function* () {
           WHERE task_id = ${taskId}
           LIMIT 1
         `.pipe(Effect.map((rows) => rows[0]?.hearth ?? null))
+      ),
+    spoolBackupCopy: (copy, now, limitBytes) =>
+      run(
+        "spool_backup_copy",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const [held] = yield* sql<{ bytes: number; present: number }>`
+              SELECT
+                COALESCE(SUM(CASE WHEN copy_id <> ${copy.copyId}
+                  AND state = 'waiting' THEN bytes END), 0) AS bytes,
+                COALESCE(SUM(copy_id = ${copy.copyId}), 0) AS present
+              FROM relay_backup_spool
+              WHERE client_id IS ${copy.hearth} OR copy_id = ${copy.copyId}
+            `
+            if ((held?.present ?? 0) > 0) return true
+            if ((held?.bytes ?? 0) + copy.bytes > limitBytes) return false
+            yield* sql`
+              INSERT INTO relay_backup_spool
+                (copy_id, backup_id, archive_id, client_id, bytes, state,
+                 next_attempt_at, created_at, updated_at)
+              VALUES (${copy.copyId}, ${copy.backupId}, ${copy.archiveId},
+                ${copy.hearth}, ${copy.bytes}, 'waiting', ${now}, ${now},
+                ${now})
+            `
+            return true
+          })
+        )
+      ),
+    dueSpooledBackupCopies: (now) =>
+      run(
+        "due_spooled_backup_copies",
+        sql<SpooledBackupCopy>`
+          SELECT copy_id AS copyId, backup_id AS backupId,
+            archive_id AS archiveId, client_id AS hearth, bytes, state,
+            attempts, error, error_code AS errorCode
+          FROM relay_backup_spool
+          WHERE next_attempt_at <= ${now}
+            AND EXISTS (
+              SELECT 1 FROM relay_backup_tasks AS made
+              WHERE made.backup_id = relay_backup_spool.backup_id
+                AND made.kind = 'create' AND made.status = 'succeeded'
+            )
+          ORDER BY next_attempt_at, created_at, copy_id
+        `
+      ),
+    nextSpooledBackupCopyAt: () =>
+      run(
+        "next_spooled_backup_copy_at",
+        sql<{ at: number | null }>`
+          SELECT MIN(next_attempt_at) AS at FROM relay_backup_spool
+          WHERE EXISTS (
+              SELECT 1 FROM relay_backup_tasks AS made
+              WHERE made.backup_id = relay_backup_spool.backup_id
+                AND made.kind = 'create' AND made.status = 'succeeded'
+            )
+        `.pipe(Effect.map((rows) => rows[0]?.at ?? null))
+      ),
+    postponeSpooledBackupCopiesOf: (backupId, nextAttemptAt) =>
+      run(
+        "postpone_spooled_backup_copies_of",
+        sql<{ copyId: string }>`
+          UPDATE relay_backup_spool SET next_attempt_at = ${nextAttemptAt}
+          WHERE backup_id = ${backupId} AND next_attempt_at < ${nextAttemptAt}
+          RETURNING copy_id AS copyId
+        `.pipe(Effect.map((rows) => rows.map(({ copyId }) => copyId)))
+      ),
+    postponeSpooledBackupCopy: (copyId, nextAttemptAt) =>
+      run(
+        "postpone_spooled_backup_copy",
+        sql`
+          UPDATE relay_backup_spool SET next_attempt_at = ${nextAttemptAt}
+          WHERE copy_id = ${copyId}
+        `.pipe(Effect.asVoid)
+      ),
+    deferSpooledBackupCopy: (copyId, nextAttemptAt, now) =>
+      run(
+        "defer_spooled_backup_copy",
+        sql`
+          UPDATE relay_backup_spool
+          SET attempts = attempts + 1, next_attempt_at = ${nextAttemptAt},
+              updated_at = ${now}
+          WHERE copy_id = ${copyId}
+        `.pipe(Effect.asVoid)
+      ),
+    settleSpooledBackupCopy: (copyId, outcome, now) =>
+      run(
+        "settle_spooled_backup_copy",
+        sql`
+          UPDATE relay_backup_spool
+          SET state = ${outcome.state},
+              error = ${outcome.state === "failed" ? outcome.error : null},
+              error_code = ${outcome.state === "failed" ? outcome.errorCode : null},
+              next_attempt_at = ${now}, updated_at = ${now}
+          WHERE copy_id = ${copyId} AND state = 'waiting'
+        `.pipe(Effect.asVoid)
+      ),
+    removeSpooledBackupCopy: (copyId) =>
+      run(
+        "remove_spooled_backup_copy",
+        sql`DELETE FROM relay_backup_spool WHERE copy_id = ${copyId}`.pipe(
+          Effect.asVoid
+        )
+      ),
+    withdrawSpooledBackupCopies: (backupId, except = []) =>
+      run(
+        "withdraw_spooled_backup_copies",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const kept = new Set(except)
+            const copies = (yield* sql<SpooledBackupCopy>`
+              SELECT copy_id AS copyId, backup_id AS backupId,
+            archive_id AS archiveId, client_id AS hearth, bytes, state,
+            attempts, error, error_code AS errorCode
+          FROM relay_backup_spool WHERE backup_id = ${backupId}
+            `).filter((copy) => !kept.has(copy.copyId))
+            for (const copy of copies) {
+              yield* sql`
+                DELETE FROM relay_backup_spool WHERE copy_id = ${copy.copyId}
+              `
+            }
+            return copies
+          })
+        )
+      ),
+    withdrawSpooledCopiesOfUnfinishedBackups: () =>
+      run(
+        "withdraw_spooled_copies_of_unfinished_backups",
+        sql`
+          DELETE FROM relay_backup_spool
+          WHERE backup_id NOT IN (
+            SELECT backup_id FROM relay_backup_tasks
+            WHERE kind = 'create' AND status = 'succeeded'
+          )
+        `.pipe(Effect.asVoid)
+      ),
+    spooledBackupCopies: () =>
+      run("spooled_backup_copies", sql<SpooledBackupCopy>`SELECT copy_id AS copyId, backup_id AS backupId,
+            archive_id AS archiveId, client_id AS hearth, bytes, state,
+            attempts, error, error_code AS errorCode
+          FROM relay_backup_spool`),
+    hastenSpooledBackupCopies: (hearth, now) =>
+      run(
+        "hasten_spooled_backup_copies",
+        sql<{ copyId: string }>`
+          UPDATE relay_backup_spool SET next_attempt_at = ${now}
+          WHERE next_attempt_at > ${now}
+            AND (client_id = ${hearth} OR client_id IS NULL)
+          RETURNING copy_id AS copyId
+        `.pipe(Effect.map((rows) => rows.length))
       ),
     enqueueBackupTask: (input, now, hearth = null) =>
       run(

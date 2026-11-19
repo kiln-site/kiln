@@ -219,6 +219,16 @@ export function backupTaskLocks(
   resolveInstance: InstanceResolver,
   resolveVolumeApps: VolumeAppsResolver
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {
+  // Deleting a backup takes its archive alone, which the spool holds while
+  // sending it. The delete withdraws the backup's copies from the spool
+  // before it asks, so what it waits for is only a send already stopping.
+  if (input.kind === "delete" && input.destination.kind !== "restic") {
+    return [
+      exclusive(
+        laneKeys.backupArchive(input.archive?.backupId ?? input.backupId)
+      ),
+    ]
+  }
   if (input.kind !== "create" && input.kind !== "restore") return []
   const { id, kind } = input.target
   const restore = input.kind === "restore"
@@ -630,6 +640,7 @@ export function controlRequestLocks(
     case "hearth.terminal.output":
     case "sftp.authorization.resolve":
     case "backup.storage.access":
+    case "backup.copy.settled":
       return null
 
     case "relay.proxy.write":

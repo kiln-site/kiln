@@ -186,8 +186,79 @@ with one signed request for one object, good for ten minutes, or a refusal
 A Relay asks the Hearth its task came from, and no other: it can be paired
 with several, and another's answer would send the backup where that one
 says. A task stored before the Relay kept which Hearth sent it is answered
-by any Hearth with full access to the Relay. With no answer the task fails;
-nothing waits for Hearth yet.
+by any Hearth with full access to the Relay. With no answer a restore or a
+delete fails. An upload waits, in the spool.
+
+### The spool
+
+A backup's task ends once its archive is taken. Each copy of it for a
+bucket Hearth opens goes to the Relay's spool (`relay_backup_spool`,
+`apps/relay/src/backups/spool.ts`), and the task's result calls that copy
+`pending`. One worker sends the spooled copies in turn: it asks the copy's
+Hearth for a signed upload, sends the archive, and tells Hearth how that
+ended (`backup.copy.settled`). Every such upload takes this path, whether
+Hearth is there or away, so being away is not a special case:
+
+- A copy is sent only once its backup's task has ended well. It is added
+  as the archive is stored, before that; a task that then fails or is
+  cancelled takes its copies with it, so nothing reaches a bucket for a
+  backup that isn't one.
+- With Hearth away a copy waits, and is asked for again a minute on, or as
+  its Hearth connects. Waiting counts nothing against it.
+- A bucket that fails the upload is tried five times, a minute apart and
+  then twice as long each time, before the copy fails.
+- A refusal from Hearth fails the copy at once.
+- A copy owns a hard link to its archive (`backup-spool/<copy>.zip`), so
+  deleting the Relay's own copy, or taking the backup again, can't remove
+  what is still to be sent. Its row is in SQLite, so a restart sends what
+  was waiting. A copy whose backup's task a restart put back in line
+  leaves the spool, and is added again when the archive is retaken.
+- One Hearth's waiting copies take at most `KILN_RELAY_BACKUP_OUTBOX` (a
+  size such as `20g`, the default). Past it a copy fails as it is taken,
+  so a Hearth that stays away can't fill the Relay's disk or take the room
+  another Hearth's backups need. A copy that is sent, or has failed, gives
+  up its link at once, and only its outcome waits for Hearth to hear it;
+  a link a stop left behind for such a copy is removed as the Relay
+  starts.
+- A copy is told to Hearth until Hearth answers, so a lost answer costs
+  nothing; a copy already recorded stays as it is.
+
+Until a copy is stored the backup isn't one. In Hearth its copy stays
+`running` and so does the backup, unless another copy, as one on the
+Relay's own disk, is already available. That is what restore, download,
+copying elsewhere, retention, the final backup before a deletion, and a
+game server's move all read, so none of them takes a backup that exists
+only in a spool for one that is stored. A backup with no copy stored and
+none waiting is failed.
+
+Deleting a backup stops one of its copies being sent and holds the rest
+back while the delete runs. Hearth signs no upload for a backup it is
+deleting, and answers "not yet" rather than no: the delete may fail and
+the backup be kept, so the Relay keeps the archive and asks again. A copy
+the delete removed leaves the spool. One it couldn't, as with Hearth away,
+stays and is sent once Hearth has the backup as kept: Hearth still has it
+as a copy to come, and nothing else would send it. For a backup that is
+gone Hearth's answer is no, and the copy fails. Hearth learns how the
+delete ended by reading the Relay's tasks, as the Relay connects; a read
+that fails then is tried again every few seconds while the Relay stays
+connected.
+
+A bucket's copy is deleted with one request, as it always was. If the
+bucket carries it out and its answer is lost, the copy is reported as not
+deleted and Hearth keeps listing it; deleting the backup again settles it,
+since deleting what is gone succeeds.
+
+A copy can be sent, or fail, before Hearth has read how its backup's task
+ended, which is what tells Hearth the archive's size and checksum. Each
+copy's outcome is recorded as it comes, and the backup's own status is
+set from them when the task's end is read: until then it can't be
+restored, whatever its copies say.
+
+Two things follow that differ from before. A schedule's run records its
+backup step as succeeded once the backup is taken; if sending it later
+fails, the backup shows that, and the run isn't corrected. And the
+percentage shown while an archive uploads is gone for these copies, whose
+task has ended by then: the destination's tag says the copy is being sent.
 
 Two kinds of backup still carry the destination's static keys. A scheduled
 backup is started by the Relay, which signs its upload itself. An

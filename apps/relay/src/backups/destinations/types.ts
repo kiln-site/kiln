@@ -50,7 +50,6 @@ export type BackupDestinationDriver<
     destination: Extract<FullBackupDeleteDestination, { kind: TKind }>
   }) => Effect.Effect<{ warnings: Array<string> }, unknown>
   saveFullBackup: (input: {
-    access: BackupStorageAccess
     backupId: string
     config: RelayConfig
     destination: Extract<FullBackupCreateDestination, { kind: TKind }>

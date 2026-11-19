@@ -159,63 +159,75 @@ export const s3BackupDestination = defineBackupDestination({
   kind: "s3",
   maximumFullBackupBytes: MAX_S3_SINGLE_PUT_BYTES,
   retainsFullBackupLocally: false,
-  saveFullBackup: ({
-    access,
-    backupId,
-    config,
-    destination,
-    onChunk,
-    result,
-    signal,
-  }) =>
+  saveFullBackup: ({ backupId, config, destination, onChunk, result, signal }) =>
     Effect.gen(function* () {
-      if (result.bytes > MAX_S3_SINGLE_PUT_BYTES) {
+      // A copy sent with the bucket's keys, as a schedule's is: the Relay
+      // signs for it. Any other waits in the spool for Hearth to open the
+      // bucket, and never comes here.
+      if (!("bucket" in destination)) {
         return yield* RelayBackupError.make({
-          code: "s3_single_put_too_large",
+          code: "backup_copy_unsigned",
           operation: "create.upload",
-          reason:
-            "S3 backups cannot exceed 5 GiB until multipart upload support is enabled",
+          reason: "The backup's copy came with nothing to sign its upload",
         })
       }
-      // A schedule's copy comes with the bucket's keys, and the Relay signs
-      // for it. Any other is Hearth's to open: asked for only now, with the
-      // archive ready, since what Hearth signs is good for minutes.
-      const request =
-        "bucket" in destination
-          ? {
-              allowPrivateNetwork: destination.allowPrivateNetwork,
-              ...(yield* Effect.try({
-                try: () =>
-                  signS3CredentialUpload(destination, result.checksumSha256),
-                catch: (cause) => cause,
-              })),
-            }
-          : yield* storageAccess(access, "upload", destination)
-      yield* Effect.tryPromise({
-        try: () =>
-          sendSignedBackupRequest({
-            allowPrivateNetwork: request.allowPrivateNetwork,
-            bodyPath: backupArchivePath(config, backupId),
-            headers: {
-              ...request.headers,
-              "content-length": String(result.bytes),
-            },
-            method: "PUT",
-            onBodyChunk: onChunk,
-            signal,
-            url: request.url,
-          }),
-        catch: (cause) =>
-          RelayBackupError.make({
-            code: "s3_upload_failed",
-            operation: "create.upload",
-            reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
-            cause,
-          }),
+      const request = yield* Effect.try({
+        try: () => signS3CredentialUpload(destination, result.checksumSha256),
+        catch: (cause) => cause,
+      })
+      yield* uploadSignedArchive({
+        allowPrivateNetwork: destination.allowPrivateNetwork,
+        bytes: result.bytes,
+        headers: request.headers,
+        onChunk,
+        path: backupArchivePath(config, backupId),
+        signal,
+        url: request.url,
       })
       return result
     }),
 })
+
+/** Sends an archive to a bucket with one signed request. */
+export function uploadSignedArchive(input: {
+  allowPrivateNetwork: boolean
+  bytes: number
+  headers: Readonly<Record<string, string>>
+  onChunk?: (bytes: number) => void
+  path: string
+  signal: AbortSignal
+  url: string
+}) {
+  if (input.bytes > MAX_S3_SINGLE_PUT_BYTES) {
+    return Effect.fail(
+      RelayBackupError.make({
+        code: "s3_single_put_too_large",
+        operation: "create.upload",
+        reason:
+          "S3 backups cannot exceed 5 GiB until multipart upload support is enabled",
+      })
+    )
+  }
+  return Effect.tryPromise({
+    try: () =>
+      sendSignedBackupRequest({
+        allowPrivateNetwork: input.allowPrivateNetwork,
+        bodyPath: input.path,
+        headers: { ...input.headers, "content-length": String(input.bytes) },
+        method: "PUT",
+        ...(input.onChunk ? { onBodyChunk: input.onChunk } : {}),
+        signal: input.signal,
+        url: input.url,
+      }),
+    catch: (cause) =>
+      RelayBackupError.make({
+        code: "s3_upload_failed",
+        operation: "create.upload",
+        reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
+        cause,
+      }),
+  })
+}
 
 export function signS3CredentialUpload(
   destination: BackupS3CredentialUploadDestination,

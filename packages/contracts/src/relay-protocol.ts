@@ -180,6 +180,8 @@ export const relayControlOperations = [
   "sftp.authorization.resolve",
   // The Relay asks Hearth for access to a backup's copy in a bucket.
   "backup.storage.access",
+  // The Relay tells Hearth how sending a backup's copy to its bucket went.
+  "backup.copy.settled",
   "operation.get",
   "relay.pause.write",
   "resource.freeze",
@@ -343,6 +345,7 @@ export function relayControlOperationChanges(
     case "hearth.terminal.output":
     case "sftp.authorization.resolve":
     case "backup.storage.access":
+    case "backup.copy.settled":
     case "operation.get":
       return false
     case "relay.pause.write":

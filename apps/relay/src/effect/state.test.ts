@@ -304,6 +304,70 @@ describe("Relay state", () => {
     })
   )
 
+  // A copy is added as its archive is stored, before the create has ended.
+  // Sent then, it would reach the bucket for a backup that goes on to fail.
+  stateTest(
+    "holds a spooled copy until its backup's create has ended well",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const input: BackupTaskInput = {
+          artifactKind: "archive",
+          backupId: "41100000-0000-4000-8000-000000000031",
+          destination: {
+            artifactId: "41100000-0000-4000-8000-000000000033",
+            kind: "s3",
+          },
+          exclude: [],
+          kind: "create",
+          maxBytes: null,
+          mode: "full",
+          reason: "manual",
+          target: { id: "instance-a", kind: "instance" },
+          taskId: "41100000-0000-4000-8000-000000000032",
+        }
+        yield* store.enqueueBackupTask(input, 530)
+        yield* store.claimNextBackupTask(540)
+        assert.isTrue(
+          yield* store.spoolBackupCopy(
+            {
+              archiveId: input.backupId,
+              backupId: input.backupId,
+              bytes: 12,
+              copyId: "41100000-0000-4000-8000-000000000033",
+              hearth: null,
+              },
+            545,
+            1_000
+          )
+        )
+        assert.deepStrictEqual(yield* store.dueSpooledBackupCopies(600), [])
+        assert.isNull(yield* store.nextSpooledBackupCopyAt())
+
+        assert.isTrue(
+          yield* store.completeBackupTask(
+            input.taskId,
+            {
+              artifacts: [
+                {
+                  artifactId: "41100000-0000-4000-8000-000000000033",
+                  error: null,
+                  status: "pending",
+                },
+              ],
+              bytes: 12,
+              checksumSha256: "a".repeat(64),
+              filename: "backup.zip",
+              warnings: [],
+            },
+            550
+          )
+        )
+        assert.lengthOf(yield* store.dueSpooledBackupCopies(600), 1)
+        assert.strictEqual(yield* store.nextSpooledBackupCopyAt(), 545)
+      })
+  )
+
   stateTest("never runs a create that arrives after its backup's delete", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore

@@ -24,20 +24,77 @@ import {
   publishBackupChanges,
 } from "@/lib/backup-realtime.server"
 import { prepareBackupTaskEffect } from "@/lib/backup-task-prepare"
-import { relayRpc } from "@/lib/relay-connection"
+import { relayConnected, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 
 const reconciliationTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 const relayTasksSchema = z.array(relayBackupTaskSchema)
 
-export async function reconcileBackupsAfterRelayConnect(
+export function reconcileBackupsAfterRelayConnect(
   relayId: string
 ): Promise<void> {
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === relayId
+  return runAppEffect(
+    "Backups.reconcileRelay",
+    reconcileAfterConnectEffect(relayId)
   )
-  if (relay) await reconcileRelayBackups(relay)
+}
+
+// The Relay as it is now, looked up each time: one that has moved is
+// reached where it is, and one disabled or removed is left alone.
+const reconcileAfterConnectEffect = (relayId: string) =>
+  Effect.gen(function* () {
+    const relay = (yield* promiseEffect(listPersistedRelays)).find(
+      (candidate) => candidate.enabled && candidate.id === relayId
+    )
+    if (!relay) return
+    yield* reconcileRelayBackupsEffect(relay)
+  }).pipe(
+    // A pass that fails anywhere, as when the Relay's tasks, or Hearth's
+    // own record of the Relay, can't be read just after it connects, is
+    // tried again. Nothing else reads its tasks for a Relay no schedule
+    // backs up, and until they are read a delete that failed there still
+    // looks under way, and a copy it sent has no size or checksum to be
+    // restored by.
+    Effect.tapError(() => Effect.sync(() => retryAfterConnect(relayId))),
+    Effect.tap(() => Effect.sync(() => connectRetryCounts.delete(relayId)))
+  )
+
+const connectRetries = new Map<string, ReturnType<typeof setTimeout>>()
+const connectRetryCounts = new Map<string, number>()
+const CONNECT_RETRY_MS = 5_000
+const CONNECT_RETRY_MAX_MS = 60_000
+
+// Tries a Relay's first pass again a little later, one try at a time and
+// further apart each time, for as long as the Relay stays connected. One
+// that has gone again starts over as it next connects.
+function retryAfterConnect(relayId: string): void {
+  if (connectRetries.has(relayId)) return
+  const tried = connectRetryCounts.get(relayId) ?? 0
+  connectRetryCounts.set(relayId, tried + 1)
+  const timer = setTimeout(
+    () => {
+      connectRetries.delete(relayId)
+      if (!relayConnected(relayId)) {
+        connectRetryCounts.delete(relayId)
+        return
+      }
+      void runAppEffect(
+        "Backups.reconcileRelay",
+        reconcileAfterConnectEffect(relayId).pipe(
+          Effect.catch((cause) =>
+            logException(cause, {
+              operation: "Backups.reconcileRelay",
+              attributes: { "relay.id": relayId },
+            })
+          )
+        )
+      )
+    },
+    Math.min(CONNECT_RETRY_MAX_MS, CONNECT_RETRY_MS * 2 ** Math.min(tried, 4))
+  )
+  timer.unref()
+  connectRetries.set(relayId, timer)
 }
 
 export function reconcileRelayBackups(

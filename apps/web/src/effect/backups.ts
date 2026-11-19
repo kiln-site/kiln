@@ -4,6 +4,7 @@ import { Clock, Effect, Result } from "effect"
 
 import type {
   BackupConsistency,
+  BackupCopySettledRequest,
   BackupCreateTaskInput,
   BackupDeleteTaskInput,
   BackupRestoreTaskInput,
@@ -1166,6 +1167,116 @@ const applyDeleteOutcome = Effect.fnUntraced(function* (
   )
 })
 
+/**
+ * A backup's status from its copies, once its archive is taken: available
+ * as soon as one copy is stored; still under way while none is and one
+ * waits on the Relay to be sent to its bucket; failed with neither. So a
+ * backup is never offered, counted or relied on before a copy exists.
+ */
+const backupStatusFromCopies = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  backupId: string
+) {
+  const [copies] = yield* transaction.queryRows<
+    RowDataPacket & { kept: number | string; unsent: number | string }
+  >(
+    `SELECT COALESCE(SUM(status = 'available'), 0) AS kept,
+            COALESCE(SUM(status IN ('queued', 'running')), 0) AS unsent
+       FROM ${databaseTable("backup_artifact")}
+      WHERE backup_id = ?`,
+    [backupId]
+  )
+  return Number(copies?.kept ?? 0) > 0
+    ? ("available" as const)
+    : Number(copies?.unsent ?? 0) > 0
+      ? ("running" as const)
+      : ("failed" as const)
+})
+
+/**
+ * Records how a Relay's sending of a copy to its bucket ended
+ * (`backup.copy.settled`): the copy its backup's task left waiting. Told
+ * until Hearth answers, so more than once at times: a copy already settled
+ * stays as it is. Answers `unknown` for a copy that isn't of a backup on
+ * that Relay, and otherwise the backup it changed, if it did.
+ */
+export const settleBackupCopyEffect = Effect.fn("backups.settleCopy")(
+  function* (relayId: string, report: BackupCopySettledRequest) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    return yield* database.transaction("backup_copy_settle", (transaction) =>
+      Effect.gen(function* () {
+        const [copy] = yield* transaction.queryRows<
+          RowDataPacket & {
+            backup_id: string
+            backup_status: string
+            bytes: number | string | null
+            checksum_sha256: string | null
+            status: string
+          }
+        >(
+          `SELECT artifact.status, backup.id AS backup_id,
+                  backup.status AS backup_status, backup.bytes,
+                  backup.checksum_sha256
+             FROM ${databaseTable("backup_artifact")} artifact
+             JOIN ${databaseTable("backup")} backup
+               ON backup.id = artifact.backup_id
+            WHERE artifact.id = ? AND backup.relay_id = ?
+            FOR UPDATE`,
+          [report.artifactId, relayId]
+        )
+        if (!copy) return { status: "unknown" as const }
+        if (copy.status !== "queued" && copy.status !== "running") {
+          return { status: "recorded" as const }
+        }
+        const stored = report.status === "available"
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("backup_artifact")}
+              SET status = ?, bytes = ?, checksum_sha256 = ?, error = ?,
+                  error_code = ?, completed_at = ?, updated_at = ?
+            WHERE id = ?`,
+          [
+            report.status,
+            stored ? copy.bytes : null,
+            stored ? copy.checksum_sha256 : null,
+            stored
+              ? null
+              : (report.error ?? "The copy could not be sent to its bucket"),
+            stored ? null : report.errorCode,
+            now,
+            now,
+            report.artifactId,
+          ]
+        )
+        // One being deleted, or deleted, isn't brought back by a copy
+        // that got there first. Nor does a copy's outcome settle a backup
+        // before Hearth has read how its task ended: its size and checksum
+        // come with that, without which it can't be restored, and its
+        // status is set then, from every copy's outcome by then. So one
+        // copy failing can't make a backup available on another's account
+        // before it can be restored.
+        if (
+          copy.backup_status !== "deleting" &&
+          copy.backup_status !== "deleted" &&
+          copy.checksum_sha256 !== null
+        ) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup")}
+                SET status = ?, updated_at = ?
+              WHERE id = ?`,
+            [
+              yield* backupStatusFromCopies(transaction, copy.backup_id),
+              now,
+              copy.backup_id,
+            ]
+          )
+        }
+        return { backupId: copy.backup_id, status: "recorded" as const }
+      })
+    )
+  }
+)
+
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
   function* (task: RelayBackupTask, relayId?: string) {
     const database = yield* Database
@@ -1430,6 +1541,20 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             )
           } else {
             for (const outcome of outcomes) {
+              // Taken, and waiting on the Relay to be sent to its bucket:
+              // it stays under way until the Relay says how that ended
+              // (`settleBackupCopyEffect`), which it may already have.
+              if (outcome.status === "pending") {
+                yield* transaction.execute(
+                  `UPDATE ${databaseTable("backup_artifact")}
+                      SET status = 'running', filename = ?, error = NULL,
+                          error_code = NULL, updated_at = ?
+                    WHERE id = ? AND backup_id = ?
+                      AND status IN ('queued', 'running')`,
+                  [filename, now, outcome.artifactId, task.backupId]
+                )
+                continue
+              }
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
                     SET status = ?, filename = ?,
@@ -1455,10 +1580,14 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
               )
             }
           }
-          const available = yield* transaction.queryRows<RowDataPacket>(
-            `SELECT id FROM ${databaseTable("backup_artifact")}
-              WHERE backup_id = ? AND status = 'available' LIMIT 1`,
-            [task.backupId]
+          // A copy the Relay sent before Hearth read the task's end was
+          // marked stored without the archive's size and checksum.
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup_artifact")}
+                SET filename = ?, bytes = ?, checksum_sha256 = ?
+              WHERE backup_id = ? AND status = 'available'
+                AND checksum_sha256 IS NULL AND ? IS NOT NULL`,
+            [filename, task.result.bytes, checksum, task.backupId, checksum]
           )
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup")}
@@ -1467,7 +1596,9 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                     completed_at = ?, updated_at = ?
               WHERE id = ?`,
             [
-              deleting ? "deleting" : available[0] ? "available" : "failed",
+              deleting
+                ? "deleting"
+                : yield* backupStatusFromCopies(transaction, task.backupId),
               filename,
               task.result.bytes,
               checksum,

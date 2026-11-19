@@ -283,8 +283,13 @@ lifecycle lock, which its build takes again when it runs:
   puts back rules a change has since replaced. A tunnel something else
   holds is skipped until the next check.
 
-Exports, prunes, and backup deletes touch only stored artifacts and take no
-lock.
+Exports and prunes touch only stored artifacts and take no lock. Sending a
+backup's archive from the spool to its bucket (`relay.backups.ship`, one of
+the Relay's own operations) takes `backup-archive:<id>` alone, named by the
+backup the archive was made as. So does deleting that backup, which first
+takes the backup's copies out of the spool and stops one being sent, so it
+waits only for a send already stopping. Neither touches the target's lanes:
+a server isn't held while its backup is uploaded.
 
 ### Crash recovery and the quota stop
 

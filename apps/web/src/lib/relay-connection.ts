@@ -48,6 +48,7 @@ import type {
   RelaySystemUpdate,
 } from "@workspace/contracts"
 import {
+  backupCopySettledRequestSchema,
   backupStorageAccessRequestSchema,
   hearthTerminalOutputSchema,
 } from "@workspace/contracts"
@@ -2089,6 +2090,29 @@ class RelayConnection {
         })
         const payload = yield* Effect.tryPromise({
           try: () => answerBackupStorageAccess(this.#relay.id, access),
+          catch: asError,
+        })
+        yield* sendSocketEffect(socket, {
+          id: randomUUID(),
+          payload,
+          replyTo: request.id,
+          type: "response",
+          v: 1,
+        })
+      })
+    }
+    if (request.operation === "backup.copy.settled") {
+      return Effect.gen({ self: this }, function* () {
+        const report = yield* Effect.try({
+          try: () => backupCopySettledRequestSchema.parse(request.payload),
+          catch: asError,
+        })
+        const { recordBackupCopySettled } = yield* Effect.tryPromise({
+          try: () => import("@/server/backup-storage-access.server"),
+          catch: asError,
+        })
+        const payload = yield* Effect.tryPromise({
+          try: () => recordBackupCopySettled(this.#relay.id, report),
           catch: asError,
         })
         yield* sendSocketEffect(socket, {

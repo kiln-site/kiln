@@ -36,7 +36,6 @@ import {
   type BackupFailureCode,
   type BackupResticCreateTaskResult,
   type BackupRestoreTaskInput,
-  type BackupStorageAccessRequest,
   type BackupTarget,
   type BackupUnfinishedRestore,
   type BackupTaskInput,
@@ -90,7 +89,12 @@ import {
 import { DockerEngine } from "./docker-engine.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { backupFailureCode } from "./backups/failure.js"
-import type { BackupStorageAccess } from "./backups/storage-access.js"
+import { BackupSpool } from "./backups/spool.js"
+import type {
+  BackupCopySettled,
+  BackupStorageAccess,
+  HearthStorageAccess,
+} from "./backups/storage-access.js"
 import {
   backupTaskAttributes,
   type BackupTaskOutcome,
@@ -196,15 +200,6 @@ export interface BackupVolumes {
   >
 }
 
-/**
- * Asks one Hearth client for access to a backup's copy in a bucket: the
- * one its task is for, or null for a task stored before that was kept.
- */
-type HearthStorageAccess = (
-  request: BackupStorageAccessRequest,
-  hearth: string | null
-) => ReturnType<BackupStorageAccess>
-
 export class BackupManager {
   readonly #config: RelayConfig
   readonly #findInstance: (
@@ -219,6 +214,7 @@ export class BackupManager {
   readonly #lanes: OperationLanes
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
+  readonly #spool: BackupSpool
   readonly #storage: HearthStorageAccess
   readonly #wake: Queue.Queue<void>
   readonly #activeCreates = new Map<string, AbortController>()
@@ -233,6 +229,7 @@ export class BackupManager {
     fences: TarRestoreFences
     lanes: OperationLanes
     restic: ResticDriver
+    spool: BackupSpool
     state: RelayStateStore["Service"]
     storage: HearthStorageAccess
     wake: Queue.Queue<void>
@@ -247,6 +244,7 @@ export class BackupManager {
     this.#engine = new DockerEngine(options.config.dockerSocket)
     this.#fences = options.fences
     this.#restic = options.restic
+    this.#spool = options.spool
     this.#state = options.state
     this.#storage = options.storage
     this.#wake = options.wake
@@ -268,6 +266,22 @@ export class BackupManager {
           })
         ),
         Effect.flatMap((hearth) => this.#storage(request, hearth))
+      )
+  }
+
+  // Adds a copy of a create's archive to the spool, for its task's Hearth.
+  #spoolFor(input: BackupCreateTaskInput): SpoolBackupCopy {
+    return (copy) =>
+      this.#state.backupTaskHearth(input.taskId).pipe(
+        Effect.flatMap((hearth) =>
+          this.#spool.add({
+            archiveId: input.backupId,
+            backupId: input.backupId,
+            bytes: copy.bytes,
+            copyId: copy.copyId,
+            hearth,
+          })
+        )
       )
   }
 
@@ -301,6 +315,8 @@ export class BackupManager {
      * Relay holds no keys to (`backupStorageAccessThrough`).
      */
     storage: HearthStorageAccess
+    /** Tells a copy's Hearth how sending it ended. */
+    settled: BackupCopySettled
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -329,6 +345,12 @@ export class BackupManager {
             "cache"
           ),
         }),
+        spool: yield* BackupSpool.make({
+          config: options.config,
+          lanes: options.lanes,
+          settled: options.settled,
+          storage: options.storage,
+        }),
         state,
         storage: options.storage,
         wake,
@@ -350,6 +372,7 @@ export class BackupManager {
       yield* manager.#recoverTarRestores()
       yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
+      yield* manager.#spool.recover()
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
       yield* Queue.offer(wake, undefined)
       return manager
@@ -447,6 +470,8 @@ export class BackupManager {
           Effect.forever
         )
       )
+      // Sends the copies waiting for a bucket, beside the tasks.
+      yield* Effect.forkChild(this.#spool.run())
       while (true) {
         yield* Queue.take(this.#wake)
         yield* this.#drain()
@@ -456,6 +481,16 @@ export class BackupManager {
 
   runPending() {
     return this.#drain()
+  }
+
+  /** Sends the spooled copies whose turn has come, once each. */
+  sendSpooled() {
+    return this.#spool.runPending()
+  }
+
+  /** Brings a Hearth's waiting copies forward, as it connects. */
+  hearthReachable(hearth: string) {
+    return this.#spool.hearthReachable(hearth)
   }
 
   /** Starts tasks that waited out a pause. */
@@ -484,6 +519,10 @@ export class BackupManager {
    */
   #runTask(task: RelayBackupTask, window: StoppedWindow | null) {
     return Effect.gen({ self: this }, function* () {
+      // A backup being deleted has nothing to send meanwhile: one of its
+      // copies being sent is stopped before the delete takes its turn, and
+      // they leave the spool once it has ended well.
+      if (task.kind === "delete") yield* this.#spool.hold(task.backupId)
       const controller = new AbortController()
       this.#activeCreates.set(task.taskId, controller)
       const current = yield* this.#state.getBackupTask(task.taskId)
@@ -630,6 +669,15 @@ export class BackupManager {
                   }).pipe(Effect.as({ outcome: "failed", failure }))
                 })
               )
+          ),
+          // A create's copies for a bucket are sent only once it has ended
+          // well, and leave the spool when it hasn't.
+          Effect.tap((ended) =>
+            ended === "paused" || task.kind !== "create"
+              ? Effect.void
+              : ended.outcome === "succeeded"
+                ? this.#spool.taken()
+                : this.#spool.withdraw(task.backupId).pipe(Effect.ignore)
           ),
           Effect.tap((ended) =>
             ended === "paused"
@@ -1028,7 +1076,7 @@ export class BackupManager {
         },
         progress,
         signal,
-        this.#accessFor(input.taskId)
+        this.#spoolFor(input)
       ).pipe(Effect.ensuring(Fiber.interrupt(progressFiber)))
     }).pipe(
       Effect.onError(() =>
@@ -1863,6 +1911,17 @@ export class BackupManager {
             "The backup task was no longer running when deletion completed"
           )
         }
+        // What waited to be sent of a copy that is gone leaves the spool,
+        // while the delete still holds the archive. A copy the delete
+        // couldn't remove, as with Hearth away, stays and is sent again:
+        // Hearth still has it as one to come, and nothing else would send
+        // it.
+        const kept = new Set(
+          (result.artifacts ?? []).flatMap((copy) =>
+            copy.status === "deleted" ? [] : [copy.artifactId]
+          )
+        )
+        yield* this.#spool.withdraw(task.backupId, kept)
         return
       }
       const input = task.input
@@ -1957,7 +2016,7 @@ export class BackupManager {
               created,
               progress,
               createSignal,
-              this.#accessFor(input.taskId)
+              this.#spoolFor(input)
             )
           ),
           Effect.onError(() =>
@@ -2076,7 +2135,7 @@ export class BackupManager {
               created,
               progress,
               createSignal,
-              this.#accessFor(input.taskId)
+              this.#spoolFor(input)
             )
           ),
           Effect.onError(() =>
@@ -2282,7 +2341,7 @@ export class BackupManager {
             archived,
             progress,
             createSignal,
-            this.#accessFor(input.taskId)
+            this.#spoolFor(input)
           )
         ),
         Effect.onError(() =>
@@ -2556,13 +2615,28 @@ async function instanceBackupManifest(
   }
 }
 
+/**
+ * Keeps a copy of an archive for the spool to send to a bucket the Relay
+ * holds no keys to. Answers `full` when the spool has no room for it.
+ */
+type SpoolBackupCopy = (copy: {
+  readonly bytes: number
+  readonly copyId: string
+}) => Effect.Effect<"spooled" | "full", unknown>
+
+/**
+ * Sees a taken archive to each of its destinations. The Relay's own disk
+ * has it already. A bucket whose keys came with the task is sent it now.
+ * Any other bucket is Hearth's to open: its copy goes to the spool
+ * (`pending`), and the task ends without waiting for it to be sent.
+ */
 function storeCreatedBackup(
   config: RelayConfig,
   input: BackupCreateTaskInput,
   result: BackupArchiveCreateTaskResult,
   progress: BackupProgress,
   signal: AbortSignal,
-  access: BackupStorageAccess
+  spool: SpoolBackupCopy
 ) {
   return Effect.gen(function* () {
     progress.phase = "uploading"
@@ -2572,14 +2646,55 @@ function storeCreatedBackup(
     progress.completed = 0
     progress.total = result.bytes
     const outcomes: NonNullable<BackupArchiveCreateTaskResult["artifacts"]> = []
-    let available = 0
+    // Stored, or on their way there.
+    let kept = 0
     let lastFailure: unknown = null
     let lastUploadedArtifactId: string | null = null
+    const onChunk = (bytes: number) => {
+      progress.completed = Math.min(progress.total, progress.completed + bytes)
+    }
     for (const destination of destinations) {
       signal.throwIfAborted()
       if (destination.kind === "restic") continue
       progress.completed = 0
       progress.currentArtifactId = destination.artifactId ?? null
+      if (destination.kind === "s3" && !("bucket" in destination)) {
+        const copyId = destination.artifactId
+        const spooled = yield* Effect.result(
+          copyId
+            ? spool({ bytes: result.bytes, copyId })
+            : Effect.fail(
+                RelayBackupError.make({
+                  code: "backup_copy_unnamed",
+                  operation: "create.spool",
+                  reason:
+                    "The task doesn't say which stored copy of the backup it means",
+                })
+              )
+        )
+        if (Result.isSuccess(spooled) && spooled.success === "spooled") {
+          kept += 1
+          outcomes.push({ artifactId: copyId!, error: null, status: "pending" })
+          continue
+        }
+        lastFailure = Result.isFailure(spooled)
+          ? spooled.failure
+          : RelayBackupError.make({
+              code: "outbox_full",
+              operation: "create.spool",
+              reason:
+                "The Relay already holds as many backups waiting to be sent to their destinations as it may",
+            })
+        if (copyId) {
+          outcomes.push({
+            artifactId: copyId,
+            error: backupErrorMessage(lastFailure),
+            errorCode: backupFailureCode(lastFailure),
+            status: "failed",
+          })
+        }
+        continue
+      }
       const uploaded = yield* Effect.result(
         destination.kind === "s3"
           ? uploadBackupArtifact(
@@ -2587,31 +2702,19 @@ function storeCreatedBackup(
               { ...input, destination },
               result,
               signal,
-              (bytes) => {
-                progress.completed = Math.min(
-                  progress.total,
-                  progress.completed + bytes
-                )
-              },
-              access
+              onChunk
             )
           : backupDestinationFor("local").saveFullBackup({
-              access,
               backupId: input.backupId,
               config,
               destination,
-              onChunk: (bytes) => {
-                progress.completed = Math.min(
-                  progress.total,
-                  progress.completed + bytes
-                )
-              },
+              onChunk,
               result,
               signal,
             })
       )
       if (Result.isSuccess(uploaded)) {
-        available += 1
+        kept += 1
         progress.completed = progress.total
         lastUploadedArtifactId = destination.artifactId ?? null
         if (destination.artifactId) {
@@ -2631,6 +2734,7 @@ function storeCreatedBackup(
       }
       if (Result.isFailure(uploaded)) lastFailure = uploaded.failure
     }
+    // The spool keeps a link of its own to what it has yet to send.
     if (
       !destinations.some(
         (destination) =>
@@ -2642,7 +2746,7 @@ function storeCreatedBackup(
         rm(backupArchivePath(config, input.backupId), { force: true })
       ).pipe(Effect.ignore)
     }
-    if (available === 0) {
+    if (kept === 0) {
       // Says why, so the task is classified by the destination's failure.
       return yield* RelayBackupError.make({
         code: "backup_storage_failed",
@@ -2655,8 +2759,15 @@ function storeCreatedBackup(
     progress.phase = "finalizing"
     progress.currentArtifactId = lastUploadedArtifactId
     yield* Effect.annotateCurrentSpan({
-      "backup.artifacts.stored": available,
-      "backup.artifacts.failed": outcomes.length - available,
+      "backup.artifacts.stored": outcomes.filter(
+        ({ status }) => status === "available"
+      ).length,
+      "backup.artifacts.pending": outcomes.filter(
+        ({ status }) => status === "pending"
+      ).length,
+      "backup.artifacts.failed": outcomes.filter(
+        ({ status }) => status === "failed"
+      ).length,
     })
     return { ...result, artifacts: outcomes }
   }).pipe(
@@ -2676,12 +2787,10 @@ function uploadBackupArtifact(
   },
   result: BackupArchiveCreateTaskResult,
   signal: AbortSignal,
-  onChunk: (bytes: number) => void,
-  access: BackupStorageAccess
+  onChunk: (bytes: number) => void
 ) {
   return backupDestinationFor("s3")
     .saveFullBackup({
-      access,
       backupId: input.backupId,
       config,
       destination: input.destination,

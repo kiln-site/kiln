@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Effect } from "effect"
 
 import type {
+  BackupCopySettledRequest,
   BackupStorageAccessRequest,
   BackupStorageAccessResponse,
 } from "@workspace/contracts"
@@ -10,8 +11,11 @@ import {
   loadBackupStorageCredentialEffect,
   signS3BackupAccess,
 } from "@/backups/destinations/s3"
+import { settleBackupCopyEffect } from "@/effect/backups"
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
+import { requestBackupRetention } from "@/lib/backup-maintenance.server"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { databaseTable } from "@/lib/database-config"
 
 type CopyRow = RowDataPacket & {
@@ -24,6 +28,10 @@ type CopyRow = RowDataPacket & {
 
 function refused(reason: string): BackupStorageAccessResponse {
   return { reason, status: "refused" }
+}
+
+function later(reason: string): BackupStorageAccessResponse {
+  return { reason, status: "later" }
 }
 
 /**
@@ -79,6 +87,16 @@ export const grantBackupStorageAccessEffect = Effect.fn(
     ) {
       return refused(`the copy is ${copy.artifact_status}`)
     }
+    // Nothing is to land in the bucket for a backup that is gone. One
+    // still being deleted may yet be kept, if its delete fails, and its
+    // copy is wanted then: the Relay asks again, and keeps the archive
+    // until how the delete ended is known.
+    if (copy.backup_status === "deleted") {
+      return refused("that backup was deleted")
+    }
+    if (copy.backup_status === "deleting") {
+      return later("that backup is being deleted")
+    }
   } else if (request.action === "download") {
     if (copy.artifact_status !== "available") {
       return refused(`the copy is ${copy.artifact_status}`)
@@ -105,6 +123,26 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   }
   return yield* signS3BackupAccess(storage, copy.object_key, request.action)
 })
+
+/**
+ * Records what a Relay says of a copy it sent, or couldn't
+ * (`backup.copy.settled`), for the Relay a control connection is.
+ */
+export async function recordBackupCopySettled(
+  relayId: string,
+  report: BackupCopySettledRequest
+): Promise<{ status: "recorded" | "unknown" }> {
+  const settled = await runAppEffect(
+    "Backups.settleCopy",
+    settleBackupCopyEffect(relayId, report)
+  )
+  if ("backupId" in settled && settled.backupId) {
+    publishBackupChange(relayId, settled.backupId)
+    // A stored backup can push its target past its retention.
+    if (report.status === "available") requestBackupRetention()
+  }
+  return { status: settled.status }
+}
 
 /** Answers `backup.storage.access` for the Relay a control connection is. */
 export function answerBackupStorageAccess(
