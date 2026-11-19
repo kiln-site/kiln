@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit } from "effect"
+import { Effect } from "effect"
 
 import {
   backupStorageAccessThrough,
@@ -12,51 +12,113 @@ const request = {
   backupId: "00000000-0000-4000-8000-000000000001",
   taskId: "10000000-0000-4000-8000-000000000001",
 }
-const grant = {
+const grantTo = (url: string) => ({
   allowPrivateNetwork: false,
   headers: { "content-type": "application/zip" },
   method: "PUT" as const,
   status: "granted" as const,
-  url: "https://s3.example.com/kiln-backups/one.zip?X-Amz-Signature=abc",
-}
+  url,
+})
 const refusal = { reason: "Hearth knows no such task", status: "refused" }
 
-// A Relay can be paired with more than one Hearth, and a task doesn't say
-// which sent it.
+// The Hearths connected to a Relay, and what each would answer if asked.
+const connected = (
+  sessions: ReadonlyArray<{ id: string; role: string; says: unknown }>
+) =>
+  backupStorageAccessThrough(async (_payload, _timeoutMs, only) =>
+    sessions.filter(only).map(({ says }) => ({ payload: says }))
+  )
+
+// A Relay can be paired with more than one Hearth, and any of them answers
+// when asked. Only the one a task came from may say where its backup goes.
 describe("Relay backup storage access", () => {
-  it.effect("takes the grant of the Hearth that knows the task over another's refusal", () =>
-    Effect.gen(function* () {
-      const access = backupStorageAccessThrough(async () => [
-        { payload: refusal },
-        { payload: grant },
-      ])
-      assert.deepStrictEqual(yield* access(request), grant)
-    })
-  )
+  const owner = {
+    id: "hearth-owner",
+    role: "full_access",
+    says: grantTo("https://bucket.example.com/owner?X-Amz-Signature=a"),
+  }
+  const other = (role: string, says: unknown) => ({
+    id: "hearth-other",
+    role,
+    says,
+  })
 
-  it.effect("fails for good when every Hearth that answered refused", () =>
-    Effect.gen(function* () {
-      const refused = yield* Effect.exit(
-        backupStorageAccessThrough(async () => [{ payload: refusal }])(request)
-      )
-      assert.isTrue(Exit.isFailure(refused))
-      assert.isFalse(
-        Exit.isFailure(refused) && isHearthUnreachable(refused.cause)
-      )
-      assert.include(String(Exit.isFailure(refused) && refused.cause), refusal.reason)
-    })
-  )
-
-  // What a held backup waits out: no Hearth connected, or one that couldn't
-  // answer, or answered with something that isn't an answer.
   it.effect.each([
-    { answers: [], case: "no Hearth is connected" },
-    { answers: [{ payload: { status: "granted" } }], case: "a Hearth answers nonsense" },
-  ])("says Hearth couldn't be reached when $case", ({ answers }) =>
+    { peer: "one that may only read", role: "read_only" },
+    { peer: "one with full access", role: "full_access" },
+  ])(
+    "takes the task's own Hearth's answer, never that of $peer",
+    ({ role }) =>
+      Effect.gen(function* () {
+        const elsewhere = grantTo(
+          "https://collector.example.com/stolen?X-Amz-Signature=b"
+        )
+        const access = connected([other(role, elsewhere), owner])
+
+        assert.deepStrictEqual(yield* access(request, owner.id), owner.says)
+      })
+  )
+
+  it.effect(
+    "waits for its own Hearth when only another is connected, whatever that one says",
+    () =>
+      Effect.gen(function* () {
+        for (const says of [refusal, grantTo("https://collector.example.com/x")]) {
+          const failure = yield* Effect.flip(
+            connected([other("full_access", says)])(request, owner.id)
+          )
+          assert.isTrue(isHearthUnreachable(failure))
+        }
+      })
+  )
+
+  it.effect("fails for good when its own Hearth refuses", () =>
     Effect.gen(function* () {
       const failure = yield* Effect.flip(
-        backupStorageAccessThrough(async () => answers)(request)
+        connected([{ ...owner, says: refusal }])(request, owner.id)
       )
+      assert.isFalse(isHearthUnreachable(failure))
+      assert.include(failure.reason, refusal.reason)
+    })
+  )
+
+  // A task stored before a task kept its Hearth.
+  it.effect(
+    "lets a Hearth with full access answer for a task that names none, and no other",
+    () =>
+      Effect.gen(function* () {
+        const access = connected([
+          other("read_only", grantTo("https://collector.example.com/x")),
+          { ...owner, role: "custom" },
+        ])
+        assert.isTrue(
+          isHearthUnreachable(yield* Effect.flip(access(request, null)))
+        )
+        assert.deepStrictEqual(
+          yield* connected([owner])(request, null),
+          owner.says
+        )
+      })
+  )
+
+  // What a held backup waits out: no Hearth connected, one that can't say
+  // yet, or one that couldn't answer or answered with something that isn't
+  // an answer.
+  it.effect.each([
+    { answers: [], case: "its Hearth isn't connected" },
+    {
+      answers: [
+        { ...owner, says: { reason: "a schedule is owed", status: "later" } },
+      ],
+      case: "its Hearth says to ask later",
+    },
+    {
+      answers: [{ ...owner, says: { status: "granted" } }],
+      case: "its Hearth answers nonsense",
+    },
+  ])("holds the backup to ask again when $case", ({ answers }) =>
+    Effect.gen(function* () {
+      const failure = yield* Effect.flip(connected(answers)(request, owner.id))
       assert.isTrue(isHearthUnreachable(failure))
     })
   )
@@ -66,7 +128,7 @@ describe("Relay backup storage access", () => {
       const failure = yield* Effect.flip(
         backupStorageAccessThrough(() =>
           Promise.reject(new Error("control socket closed"))
-        )(request)
+        )(request, owner.id)
       )
       assert.isTrue(isHearthUnreachable(failure))
     })

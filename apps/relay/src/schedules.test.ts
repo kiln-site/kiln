@@ -452,8 +452,8 @@ describe("Relay scheduled App backups", () => {
     const { enqueueBackup: succeed, tasks } = queue()
     const gone = "The volume no longer exists on this Relay"
     const { schedules } = await manager({
-      enqueueBackup: async (input) => {
-        const task = await succeed(input)
+      enqueueBackup: async (input, hearth) => {
+        const task = await succeed(input, hearth)
         return input.kind === "create" && input.target.id === uploads
           ? { ...task, error: gone, status: "failed" }
           : task

@@ -90,8 +90,9 @@ describe("Relay backup task inputs", () => {
   })
 
   // A Relay keeps the tasks it stored. One from when Hearth sent a bucket's
-  // keys, a path in it or a signed URL with a copy is still read, and none
-  // of that is kept: the copy is all a task names now.
+  // keys or a signed URL with a copy is still read, and neither is kept.
+  // The path stays: it is where a Relay of that time uploaded the backup,
+  // which Hearth must hear to find it.
   it("reads a bucket's copy as an older Hearth sent it, keeping no key or URL", () => {
     const artifactId = "33333333-3333-4333-8333-333333333333"
     const stored = (destination: object) => ({
@@ -131,11 +132,15 @@ describe("Relay backup task inputs", () => {
       })
     )
 
-    for (const input of [scheduled, signed]) {
-      expect(input).toMatchObject({ destination: { artifactId, kind: "s3" } })
-      expect(JSON.stringify(input)).not.toMatch(
-        /AKIAEXAMPLE|s3-secret|X-Amz-Signature|team\/backups/u
-      )
-    }
+    expect(scheduled.destination).toEqual({
+      artifactId,
+      kind: "s3",
+      objectKey: "team/backups/scheduled.zip",
+    })
+    expect(signed.destination).toEqual({
+      artifactId,
+      kind: "s3",
+      objectKey: "team/backups/manual.zip",
+    })
   })
 })

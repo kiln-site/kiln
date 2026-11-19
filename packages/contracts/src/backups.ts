@@ -293,12 +293,16 @@ export const backupS3CredentialSchema = z
  * for access to it when it's ready to send, read or delete it
  * (`backup.storage.access`).
  *
- * A Relay keeps the tasks it stored, and Hearth once sent a signed URL, an
- * object key or the bucket's keys with a copy: those are read and dropped.
+ * A Relay keeps the tasks it stored, and Hearth once sent a signed URL or
+ * the bucket's keys with a copy: those are read and dropped. A schedule's
+ * backup carried the object key the Relay built for it, which Hearth still
+ * reads for one that Relay sent before Hearth chose every path
+ * (`objectKey`); nothing sends one now.
  */
 export const backupS3DestinationSchema = z.object({
   artifactId: z.uuid().optional(),
   kind: z.literal("s3"),
+  objectKey: z.string().min(1).max(1_024).optional(),
 })
 
 const resticLocalRepositoryLocationSchema = z
@@ -333,15 +337,6 @@ export const backupResticDestinationSchema = z
   })
   .strict()
 
-/**
- * The step of a schedule that took a backup. Hearth lets a scheduled backup
- * into a bucket only when a schedule it sent that Relay has this step send
- * backups there: the Relay ran it on its own, so nothing else says it may.
- */
-export const backupScheduleStepSchema = z
-  .object({ actionId: z.string().min(1).max(120), id: z.uuid() })
-  .strict()
-
 const backupArchiveDestinationSchema = z.discriminatedUnion("kind", [
   backupLocalDestinationSchema,
   backupS3DestinationSchema,
@@ -359,8 +354,6 @@ const backupCreateTaskInputObjectSchema = z
         batchId: z.uuid().optional(),
         // The repository an incremental scheduled backup goes to.
         repositoryId: z.uuid().optional(),
-        // The schedule's step that took it (`backupScheduleStepSchema`).
-        schedule: backupScheduleStepSchema.optional(),
         storageId: z.uuid().nullable(),
       })
       .strict()
@@ -1073,8 +1066,6 @@ export const backupStorageAccessRequestSchema = z
     action: z.enum(backupStorageAccessActions),
     artifactId: z.uuid(),
     backupId: backupIdSchema,
-    /** For a backup a schedule took, the step that took it. */
-    schedule: backupScheduleStepSchema.optional(),
     taskId: backupTaskIdSchema,
   })
   .strict()
@@ -1101,9 +1092,25 @@ export const backupStorageAccessRefusalSchema = z
   })
   .strict()
 
+/**
+ * Hearth answered and can't say yet: what decides it is still on its way
+ * to the Relay, such as a schedule Hearth hasn't heard it holds. The Relay
+ * asks again later, as it does when Hearth can't be reached.
+ */
+export const backupStorageAccessDeferralSchema = z
+  .object({
+    reason: z.string().min(1).max(300),
+    status: z.literal("later"),
+  })
+  .strict()
+
 export const backupStorageAccessResponseSchema = z.discriminatedUnion(
   "status",
-  [backupStorageAccessGrantSchema, backupStorageAccessRefusalSchema]
+  [
+    backupStorageAccessGrantSchema,
+    backupStorageAccessRefusalSchema,
+    backupStorageAccessDeferralSchema,
+  ]
 )
 
 export type BackupStorageAccessAction =

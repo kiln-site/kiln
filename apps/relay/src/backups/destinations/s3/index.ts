@@ -11,7 +11,6 @@ import {
   resticS3RegionSchema,
   type BackupS3Destination,
   type BackupStorageAccessAction,
-  type BackupStorageAccessRequest,
   type ResticRepositoryLocation,
 } from "@workspace/contracts"
 
@@ -123,7 +122,6 @@ function storageAccess(input: {
   action: BackupStorageAccessAction
   backupId: string
   destination: BackupS3Destination
-  schedule?: BackupStorageAccessRequest["schedule"]
   taskId: string
 }) {
   const artifactId = input.destination.artifactId
@@ -138,7 +136,6 @@ function storageAccess(input: {
     action: input.action,
     artifactId,
     backupId: input.backupId,
-    ...(input.schedule ? { schedule: input.schedule } : {}),
     taskId: input.taskId,
   })
 }
@@ -181,7 +178,6 @@ export const s3BackupDestination = defineBackupDestination({
     destination,
     onChunk,
     result,
-    schedule,
     signal,
     taskId,
   }) =>
@@ -201,7 +197,6 @@ export const s3BackupDestination = defineBackupDestination({
         action: "upload",
         backupId,
         destination,
-        schedule,
         taskId,
       })
       yield* Effect.tryPromise({

@@ -22,37 +22,48 @@ export type BackupStorageAccess = (
   request: BackupStorageAccessRequest
 ) => Effect.Effect<BackupStorageAccessGrant, RelayBackupError>
 
-/** Whether a task stopped only because no Hearth could be asked. */
+/** Whether a task stopped only because its Hearth couldn't be asked. */
 export function isHearthUnreachable(cause: unknown): boolean {
   return cause instanceof RelayBackupError && cause.code === HEARTH_UNREACHABLE
 }
 
 /**
- * Asks every Hearth this Relay is connected to, since a task doesn't say
- * which one sent it: the one that knows the task grants it, and any other
- * refuses. `ask` answers with what each connected Hearth said, leaving out
- * those that failed or took too long.
+ * Asks the Hearth a task is for, and no other: a Relay can be paired with
+ * several, and another one's answer would send a backup where that one
+ * says, or end it while its own Hearth is only away. `hearth` is the client
+ * the task came from, or null for a task stored before that was kept, which
+ * any Hearth with full access to the Relay may answer for. `ask` asks the
+ * connections of the clients `only` takes, and answers with what each
+ * said, leaving out those that failed or took too long.
  */
 export function backupStorageAccessThrough(
   ask: (
     payload: BackupStorageAccessRequest,
-    timeoutMs: number
+    timeoutMs: number,
+    only: (client: { readonly id: string; readonly role: string }) => boolean
   ) => Promise<ReadonlyArray<{ readonly payload: unknown }>>
-): BackupStorageAccess {
-  return Effect.fn("Backups.storageAccess")(function* (request) {
+) {
+  return Effect.fn("Backups.storageAccess")(function* (
+    request: BackupStorageAccessRequest,
+    hearth: string | null
+  ) {
     yield* Effect.annotateCurrentSpan({
       "backup.id": request.backupId,
       "backup.storage.action": request.action,
       "backup.task.id": request.taskId,
     })
     const answers = yield* Effect.tryPromise({
-      try: () => ask(request, STORAGE_ACCESS_TIMEOUT_MS),
+      try: () =>
+        ask(request, STORAGE_ACCESS_TIMEOUT_MS, (client) =>
+          hearth === null ? client.role === "full_access" : client.id === hearth
+        ),
       catch: (cause) => hearthUnreachable(request, cause),
     })
     let refusal: string | null = null
     for (const answer of answers) {
       const parsed = backupStorageAccessResponseSchema.safeParse(answer.payload)
-      if (!parsed.success) continue
+      // A Hearth that can't say yet is asked again, as one that's away is.
+      if (!parsed.success || parsed.data.status === "later") continue
       if (parsed.data.status === "granted") return parsed.data
       refusal ??= parsed.data.reason
     }
@@ -65,7 +76,10 @@ export function backupStorageAccessThrough(
   })
 }
 
-function hearthUnreachable(request: BackupStorageAccessRequest, cause?: unknown) {
+function hearthUnreachable(
+  request: BackupStorageAccessRequest,
+  cause?: unknown
+) {
   return RelayBackupError.make({
     code: HEARTH_UNREACHABLE,
     operation: `${request.action}.access`,

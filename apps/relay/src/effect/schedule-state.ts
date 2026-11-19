@@ -251,7 +251,13 @@ export function makeRelayScheduleState(sql: SqlClient) {
     // such as a destination being disabled, and an older send arriving late
     // mustn't undo that. A stale apply or remove acknowledges what this
     // Relay already holds instead of failing.
-    apply: (definition: RelayScheduleProjection, nextRunAt: number | null) =>
+    // `hearth` is the Hearth client that sent it: the one asked for access
+    // to a bucket when a backup the schedule takes needs it.
+    apply: (
+      definition: RelayScheduleProjection,
+      nextRunAt: number | null,
+      hearth: string | null = null
+    ) =>
       run(
         "apply",
         sql.withTransaction(
@@ -279,10 +285,11 @@ export function makeRelayScheduleState(sql: SqlClient) {
                 storedGeneration(current[0])
               )
             }
-            yield* sql`INSERT INTO relay_schedules (schedule_id, revision, enabled, next_run_at, definition_json)
-        VALUES (${definition.id}, ${definition.revision}, ${definition.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)})
+            yield* sql`INSERT INTO relay_schedules (schedule_id, revision, enabled, next_run_at, definition_json, client_id)
+        VALUES (${definition.id}, ${definition.revision}, ${definition.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)}, ${hearth})
         ON CONFLICT(schedule_id) DO UPDATE SET revision = excluded.revision, enabled = excluded.enabled,
-          next_run_at = excluded.next_run_at, definition_json = excluded.definition_json`
+          next_run_at = excluded.next_run_at, definition_json = excluded.definition_json,
+          client_id = COALESCE(excluded.client_id, relay_schedules.client_id)`
             yield* sql`DELETE FROM relay_schedule_tombstones WHERE schedule_id = ${definition.id}`
             return deployment(
               definition.id,
@@ -292,6 +299,15 @@ export function makeRelayScheduleState(sql: SqlClient) {
             )
           })
         )
+      ),
+    /** The Hearth client that sent a schedule, or null when that wasn't kept. */
+    hearth: (scheduleId: string) =>
+      run(
+        "hearth",
+        sql<{ hearth: string | null }>`
+          SELECT client_id AS hearth FROM relay_schedules
+          WHERE schedule_id = ${scheduleId}
+        `.pipe(Effect.map((rows) => rows[0]?.hearth ?? null))
       ),
     remove: (input: { scheduleId: string; revision: number }) =>
       run(

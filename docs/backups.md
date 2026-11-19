@@ -173,14 +173,35 @@ object, good for ten minutes, or a refusal
 - the copy belongs to the task's backup;
 - the access is the kind the task needs: a create uploads, a restore
   downloads, a delete deletes;
+- the task it waits on has ended as Hearth would need before sending it: a
+  restore's safety backup succeeded;
 - the copy isn't stored yet, for an upload, or is, for a download;
+- a restore asks for the copy Hearth would name: the Relay's own when it has
+  one, or else the first stored;
 - the destination can still be used that way: enabled and not being deleted
   for an upload, and one being deleted still gives up what a restore reads.
 
-A scheduled backup is started by the Relay, not Hearth, so its upload also
-has to name the step of a schedule Hearth sent that Relay whose backups go
-to that destination, one the schedule's owner may use. A signed upload can
-be sent again until it expires, replacing the object (#989).
+A scheduled backup is started by the Relay, not Hearth, so its upload needs
+more: a schedule that Relay acknowledged holding whose backups of that
+target go to that destination. Hearth records those with each schedule's
+deployment as the Relay acknowledges exactly the version it was sent
+(`acknowledged_backups`), leaving out any backup it refused in that version.
+A schedule Hearth only means to send allows nothing. While Hearth still
+owes the Relay a schedule the answer is neither yes nor no but `later`, and
+the Relay keeps the archive and asks again, as it does when Hearth is away.
+
+The Relay chooses a scheduled backup's IDs and says which destination it is
+for. Hearth catalogs one whole or not at all: IDs that are already another
+backup's, copy's or task's catalog nothing, and a Relay's report changes
+only tasks of its own backups, of the kind it reports.
+
+A Relay asks the Hearth its task came from, and no other. A Relay can be
+paired with several, and another's answer would send the backup where that
+one says. A task or schedule stored before the Relay kept which Hearth sent
+it is answered by any Hearth with full access to the Relay.
+
+A signed upload can be sent again until it expires, replacing the object
+(#989).
 
 Incremental restic repositories cannot be driven this way yet, so the Relay
 receives the destination's static keys inside the durable task input (see
@@ -347,13 +368,15 @@ operator to send.
 A Relay runs its schedules on its own, so scheduled backups go on while
 Hearth is away. One that goes to a bucket needs Hearth to open it. It is
 still taken on time: the Relay keeps the archive it took and sets the task
-aside (`heldForHearth`), and the schedule goes on to its next step. When a
-Hearth connects, held tasks take their turn again, Hearth catalogs them and
-chooses where they go, and each archive is sent as it was taken. Until then
-the backup exists only on the Relay. A Relay holds at most
-`KILN_RELAY_BACKUP_OUTBOX` of such archives at once (a size such as `20g`,
-the default); a backup past that fails as one with nowhere to go, and what
-is already held stays. Cancelling a held backup drops its archive. Hearth
+aside (`heldForHearth`), and the schedule goes on to its next step. When
+the Hearth that sent the schedule connects, its held tasks take their turn
+again, Hearth catalogs them and chooses where they go, and each archive is
+sent as it was taken. Until then the backup exists only on the Relay, which
+keeps the archive until the task has ended: stored, failed or cancelled. A
+Relay holds at most `KILN_RELAY_BACKUP_OUTBOX` of such archives at once (a
+size such as `20g`, the default), counting each until its task ends; a
+backup past that fails as one with nowhere to go, and what is already held
+stays. Cancelling a held backup drops its archive. Hearth
 decides whether each one may run as it decides a
 manual backup's reservation, and puts the answer in the schedule it sends
 the Relay, per backup step and target: not while the target is being

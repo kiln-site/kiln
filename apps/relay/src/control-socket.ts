@@ -175,10 +175,16 @@ export interface ControlSocketServer {
   /** How full the control sessions are, across every Hearth session. */
   readonly capacity: () => ControlCapacity
   readonly close: () => Promise<void>
+  /**
+   * Asks every connected Hearth session, or only those of the clients
+   * `only` takes, and answers with what each said, leaving out those that
+   * failed or took too long.
+   */
   readonly requestClients: (
     operation: RelayControlOperation,
     payload: unknown,
-    timeoutMs?: number
+    timeoutMs?: number,
+    only?: (client: RelayClientGrant) => boolean
   ) => Promise<ReadonlyArray<{ clientId: string; payload: unknown }>>
   readonly refreshClient: (clientId: string) => void
   readonly revokeClient: (clientId: string) => void
@@ -333,10 +339,13 @@ export function attachControlSocket(
           }).pipe(Effect.timeoutOption(OUTCOME_WRITE_DRAIN))
         })
       ),
-    requestClients: (operation, payload, timeoutMs = 5_000) =>
+    requestClients: (operation, payload, timeoutMs = 5_000, only) =>
       Effect.runPromise(
         Effect.forEach(
-          [...reverseRequesters.entries()],
+          [...reverseRequesters.entries()].filter(([socket]) => {
+            const client = authenticatedSockets.get(socket)
+            return !only || (client !== undefined && only(client))
+          }),
           ([socket, request]) =>
             Effect.tryPromise({
               try: () => request(operation, payload, timeoutMs),

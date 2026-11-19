@@ -36,6 +36,7 @@ import {
   type BackupFailureCode,
   type BackupResticCreateTaskResult,
   type BackupRestoreTaskInput,
+  type BackupStorageAccessRequest,
   type BackupTarget,
   type BackupUnfinishedRestore,
   type BackupTaskInput,
@@ -228,7 +229,7 @@ export class BackupManager {
     lanes: OperationLanes
     restic: ResticDriver
     state: RelayStateStore["Service"]
-    storage: BackupStorageAccess
+    storage: HearthStorageAccess
     wake: Queue.Queue<void>
   }) {
     this.#config = options.config
@@ -242,7 +243,19 @@ export class BackupManager {
     this.#fences = options.fences
     this.#restic = options.restic
     this.#state = options.state
-    this.#storage = options.storage
+    // Only the Hearth a task is for is asked on its behalf.
+    this.#storage = (request) =>
+      options.state.backupTaskHearth(request.taskId).pipe(
+        Effect.mapError((cause) =>
+          RelayBackupError.make({
+            code: "backup_task_unreadable",
+            operation: `${request.action}.access`,
+            reason: "The backup task's record could not be read",
+            cause,
+          })
+        ),
+        Effect.flatMap((hearth) => options.storage(request, hearth))
+      )
     this.#wake = options.wake
   }
 
@@ -264,10 +277,10 @@ export class BackupManager {
      * work on. Without them, they're read now and the lanes told.
      */
     fences?: TarRestoreFences
-    /** Whether a Hearth is connected now, for tasks waiting on one. */
-    hearthConnected: () => boolean
-    /** Asks Hearth for access to a backup's copy in a bucket. */
-    storage: BackupStorageAccess
+    /** The Hearth clients connected now, for the tasks waiting on each. */
+    connectedHearths: () => ReadonlyArray<string>
+    /** Asks a task's Hearth for access to a backup's copy in a bucket. */
+    storage: HearthStorageAccess
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -317,6 +330,10 @@ export class BackupManager {
       yield* manager.#recoverTarRestores()
       yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
+      // The archives of held backups that ended as the Relay last stopped.
+      for (const ended of yield* state.endedBackupsHoldingArchives()) {
+        yield* manager.#dropEndedHeldArchive(ended.taskId)
+      }
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
       yield* Effect.forkChild(
         Effect.sleep(EXPORT_SWEEP_INTERVAL).pipe(
@@ -326,16 +343,18 @@ export class BackupManager {
           Effect.forever
         )
       )
-      // A task held for Hearth takes its turn again as one connects
+      // A task held for Hearth takes its turn again as its Hearth connects
       // (`hearthReachable`). This is for one whose Hearth stayed connected
       // and couldn't answer, as while its database was away.
       yield* Effect.forkChild(
         Effect.sleep(HELD_FOR_HEARTH_RETRY).pipe(
           Effect.andThen(
             Effect.suspend(() =>
-              options.hearthConnected()
-                ? manager.hearthReachable()
-                : Effect.void
+              Effect.forEach(
+                options.connectedHearths(),
+                (hearth) => manager.hearthReachable(hearth),
+                { discard: true }
+              )
             )
           ),
           Effect.catch((cause) =>
@@ -350,21 +369,30 @@ export class BackupManager {
   }
 
   /**
-   * Lets the tasks set aside until Hearth could be reached take their turn
-   * again. Called as a Hearth connects.
+   * Lets the tasks set aside until a Hearth could be reached take their
+   * turn again. Called as that Hearth connects.
    */
-  hearthReachable() {
+  hearthReachable(hearth: string) {
     return Effect.gen({ self: this }, function* () {
       const released = yield* this.#state.releaseBackupTasksHeldForHearth(
-        Date.now()
+        Date.now(),
+        hearth
       )
       if (released > 0) yield* Queue.offer(this.#wake, undefined)
     })
   }
 
-  enqueue(input: BackupTaskInput) {
+  /**
+   * `hearth` is the Hearth client that sent the task, or that sent the
+   * schedule that takes it: the one it asks for access to a bucket.
+   */
+  enqueue(input: BackupTaskInput, hearth: string | null = null) {
     return Effect.gen({ self: this }, function* () {
-      const task = yield* this.#state.enqueueBackupTask(input, Date.now())
+      const task = yield* this.#state.enqueueBackupTask(
+        input,
+        Date.now(),
+        hearth
+      )
       yield* Queue.offer(this.#wake, undefined)
       return task
     })
@@ -384,17 +412,10 @@ export class BackupManager {
 
   cancel(taskId: string) {
     return Effect.gen({ self: this }, function* () {
-      const held = (yield* this.#state.heldBackupArchive(taskId))
-        ? yield* this.#state.getBackupTask(taskId)
-        : null
       const cancelled = yield* this.#state.cancelBackupTask(taskId, Date.now())
       if (cancelled) this.#activeCreates.get(taskId)?.abort()
       // The archive it was holding for Hearth has nowhere to go now.
-      if (cancelled && held) {
-        yield* promiseEffect(() =>
-          rm(backupArchivePath(this.#config, held.backupId), { force: true })
-        ).pipe(Effect.ignore)
-      }
+      yield* this.#dropEndedHeldArchive(taskId)
       return yield* this.#state.getBackupTask(taskId)
     })
   }
@@ -653,6 +674,11 @@ export class BackupManager {
           ),
           Effect.ensuring(
             timeoutFiber ? Fiber.interrupt(timeoutFiber) : Effect.void
+          ),
+          Effect.ensuring(
+            task.kind === "create"
+              ? this.#dropEndedHeldArchive(task.taskId).pipe(Effect.ignore)
+              : Effect.void
           ),
           Effect.ensuring(
             controller
@@ -2262,20 +2288,31 @@ export class BackupManager {
   /**
    * Ends a create whose archive is taken. Stored, it completes. With a
    * destination only Hearth can open and no Hearth to ask, it's set aside
-   * holding its archive, which is sent as it was taken once one connects:
-   * a scheduled backup is still taken on time while Hearth is away. Past
-   * what the Relay may hold that way, it ends as any backup that couldn't
-   * be stored does.
+   * holding its archive, which is sent as it was taken once its Hearth
+   * connects: a scheduled backup is still taken on time while Hearth is
+   * away. Past what the Relay may hold that way, it ends as any backup that
+   * couldn't be stored does.
+   *
+   * `holding` says the task already holds its archive (`#sendHeldArchive`).
+   * That one is left alone here: a restart finds the task held and sends
+   * the same archive again, so it goes only once the task's end is
+   * recorded (`#dropEndedHeldArchive`). Any other is dropped before its
+   * end is, since a restart takes it again.
    */
   #settleCreate(
     task: RelayBackupTask,
     input: BackupCreateTaskInput,
-    stored: StoredBackup
+    stored: StoredBackup,
+    holding = false
   ) {
     return Effect.gen({ self: this }, function* () {
-      const discard = promiseEffect(() =>
-        rm(backupArchivePath(this.#config, input.backupId), { force: true })
-      ).pipe(Effect.ignore)
+      const discard = holding
+        ? Effect.void
+        : promiseEffect(() =>
+            rm(backupArchivePath(this.#config, input.backupId), {
+              force: true,
+            })
+          ).pipe(Effect.ignore)
       if (stored.awaitingHearth) {
         const held = yield* this.#state.holdBackupTaskForHearth(
           task.taskId,
@@ -2355,9 +2392,6 @@ export class BackupManager {
         Effect.orElseSucceed(() => null)
       )
       if (size !== held.bytes) {
-        yield* promiseEffect(() => rm(archive, { force: true })).pipe(
-          Effect.ignore
-        )
         return yield* backupFailure(
           "held_archive_missing",
           "create.store",
@@ -2391,6 +2425,8 @@ export class BackupManager {
           Effect.forever
         )
       )
+      // Whatever stops this, the archive stays for the task's end to decide
+      // (`#dropEndedHeldArchive`): a Relay stopped mid-send sends it again.
       const stored = yield* storeCreatedBackup(
         this.#config,
         input,
@@ -2398,13 +2434,38 @@ export class BackupManager {
         progress,
         signal,
         this.#storage
-      ).pipe(
-        Effect.onError(() =>
-          promiseEffect(() => rm(archive, { force: true })).pipe(Effect.ignore)
-        ),
-        Effect.ensuring(Fiber.interrupt(progressFiber))
-      )
-      return yield* this.#settleCreate(task, input, stored)
+      ).pipe(Effect.ensuring(Fiber.interrupt(progressFiber)))
+      return yield* this.#settleCreate(task, input, stored, true)
+    })
+  }
+
+  /**
+   * Removes the archive a create held for Hearth, once the task has ended
+   * and that is recorded: before then a restart would find the task held
+   * with nothing to send. A backup that succeeded onto the Relay's own disk
+   * too keeps the file, which is that copy.
+   */
+  #dropEndedHeldArchive(taskId: string) {
+    return Effect.gen({ self: this }, function* () {
+      if (!(yield* this.#state.heldBackupArchive(taskId))) return
+      const task = yield* this.#state.getBackupTask(taskId)
+      if (
+        !task ||
+        task.input.kind !== "create" ||
+        task.status === "queued" ||
+        task.status === "running"
+      ) {
+        return
+      }
+      if (
+        task.status !== "succeeded" ||
+        !retainsArchiveLocally(task.input)
+      ) {
+        yield* promiseEffect(() =>
+          rm(backupArchivePath(this.#config, task.backupId), { force: true })
+        )
+      }
+      yield* this.#state.forgetHeldBackupArchive(taskId)
     })
   }
 
@@ -2676,6 +2737,15 @@ async function instanceBackupManifest(
  * to ask; the archive is still on the Relay then, for `#settleCreate` to
  * hold or discard.
  */
+/**
+ * Asks one Hearth client for access to a backup's copy in a bucket: the one
+ * its task is for, or null for a task stored before that was kept.
+ */
+type HearthStorageAccess = (
+  request: BackupStorageAccessRequest,
+  hearth: string | null
+) => ReturnType<BackupStorageAccess>
+
 type StoredBackup = {
   /** The archive as it was taken, before any destination had it. */
   archive: BackupArchiveCreateTaskResult
@@ -2812,7 +2882,6 @@ function uploadBackupArtifact(
       destination: input.destination,
       onChunk,
       result,
-      schedule: input.catalog?.schedule,
       signal,
       taskId: input.taskId,
     })

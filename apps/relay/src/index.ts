@@ -1042,10 +1042,17 @@ const backupManager = await runRelayEffect(
     fences: restoreFences,
     // The control socket starts after the backups it serves; by a task's
     // turn it's there.
-    hearthConnected: () => controlSocket.sessions.size > 0,
+    connectedHearths: () => [
+      ...new Set([...controlSocket.sessions.values()].map(({ id }) => id)),
+    ],
     lanes,
-    storage: backupStorageAccessThrough((payload, timeoutMs) =>
-      controlSocket.requestClients("backup.storage.access", payload, timeoutMs)
+    storage: backupStorageAccessThrough((payload, timeoutMs, only) =>
+      controlSocket.requestClients(
+        "backup.storage.access",
+        payload,
+        timeoutMs,
+        only
+      )
     ),
     volumes,
     findInstance: (instanceId) => docker.findInstance(instanceId),
@@ -1168,10 +1175,10 @@ const containerCommands = new ContainerCommands({
   lanes,
 })
 const scheduleManager = await ScheduleManager.make({
-  enqueueBackup: (input) =>
+  enqueueBackup: (input, hearth) =>
     runRelayEffect(
       "relay.schedules.backup.enqueue",
-      backupManager.enqueue(input)
+      backupManager.enqueue(input, hearth)
     ),
   findInstance: (instanceId) => docker.findInstance(instanceId),
   findVolume: (volumeId) =>
@@ -1615,8 +1622,11 @@ const controlSocket = attachControlSocket({
   // connection's.
   clientConnected: (clientId, connectionId) => {
     volumes.clientConnected(clientId, connectionId)
-    // Backups held for a Hearth to store them have one to ask now.
-    forkRelayEffect("relay.backups.hearthReachable", backupManager.hearthReachable())
+    // Backups held for this Hearth to store them have it to ask now.
+    forkRelayEffect(
+      "relay.backups.hearthReachable",
+      backupManager.hearthReachable(clientId)
+    )
   },
   identity: relayIdentity,
   journalId: startup.journalId,
@@ -3280,7 +3290,7 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.backups.enqueue",
         backupManager
-          .enqueue(backupTaskInputSchema.parse(request.payload))
+          .enqueue(backupTaskInputSchema.parse(request.payload), client.id)
           .pipe(Effect.map(sendBackupTask))
       )
     case "backup.task.cancel":
@@ -3374,7 +3384,8 @@ async function executeControlRequest(
     }
     case "schedule.apply":
       return scheduleManager.apply(
-        relayScheduleProjectionSchema.parse(request.payload)
+        relayScheduleProjectionSchema.parse(request.payload),
+        client.id
       )
     case "schedule.run":
       return scheduleManager.runNow({

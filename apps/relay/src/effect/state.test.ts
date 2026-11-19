@@ -235,6 +235,73 @@ describe("Relay state", () => {
       })
   )
 
+  // A stopped batch's archives are all taken in one window. A member that
+  // holds its archive for Hearth was taken in an earlier one, so a window
+  // opened after a restart mustn't count it as taken now.
+  stateTest(
+    "keeps a batch member that holds its archive out of the batch's next window",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const batch = {
+          id: "42200000-0000-4000-8000-000000000001",
+          size: 2,
+        }
+        const member = (index: number): BackupTaskInput => ({
+          artifactKind: "tar_archive",
+          backupId: `42200000-0000-4000-8000-00000000001${index}`,
+          batch,
+          consistency: "stopped",
+          destination: {
+            artifactId: `42200000-0000-4000-8000-00000000003${index}`,
+            kind: "s3",
+          },
+          exclude: [],
+          kind: "create",
+          maxBytes: null,
+          mode: "full",
+          reason: "scheduled",
+          target: { id: `${index}`.repeat(40), kind: "volume" },
+          taskId: `42200000-0000-4000-8000-00000000002${index}`,
+        })
+        const [held, interrupted] = [member(1), member(2)]
+        yield* store.enqueueBackupTask(held, 100, "hearth-one")
+        yield* store.enqueueBackupTask(interrupted, 101, "hearth-one")
+        yield* store.claimNextBackupTask(110)
+        assert.strictEqual(
+          yield* store.holdBackupTaskForHearth(
+            held.taskId,
+            {
+              bytes: 10,
+              checksumSha256: "a".repeat(64),
+              filename: "volume.tar.gz",
+              warnings: [],
+            },
+            120,
+            1_000
+          ),
+          "held"
+        )
+        // Its Hearth is back, and its sibling is still waiting its turn.
+        assert.strictEqual(
+          yield* store.releaseBackupTasksHeldForHearth(130, "hearth-one"),
+          1
+        )
+
+        assert.deepStrictEqual(
+          (yield* store.claimBatchBackupTasks(batch.id, 140)).map(
+            ({ taskId }) => taskId
+          ),
+          [interrupted.taskId]
+        )
+        // It still takes its own turn, to send what it holds.
+        assert.strictEqual(
+          (yield* store.claimNextBackupTask(150))?.taskId,
+          held.taskId
+        )
+      })
+  )
+
   stateTest("scrubs S3 keys from terminal journal rows", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore
@@ -397,6 +464,78 @@ describe("Relay state", () => {
                 yield* store.listCarriedPrimaryRoutes(),
                 []
               )
+            })
+          )
+        })
+      )
+  )
+
+  // A restore waiting its turn when the Relay updated carried a signed URL
+  // and no name for the copy it reads, so it can't ask Hearth for access.
+  it.effect(
+    "has Hearth send again a restore from a bucket that was waiting when the Relay updated",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, RelayStateStore>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const restore = (index: number, source: object) => ({
+            backupId: `43300000-0000-4000-8000-00000000001${index}`,
+            kind: "restore",
+            source: {
+              bytes: 10,
+              checksumSha256: "a".repeat(64),
+              ...source,
+            },
+            target: { id: "instance-a", kind: "instance" },
+            taskId: `43300000-0000-4000-8000-00000000002${index}`,
+          })
+          // As an older Hearth sent it, and as this one does.
+          const signed = restore(1, {
+            allowPrivateNetwork: false,
+            downloadUrl: "https://s3.example.com/kiln/a.zip?X-Amz-Signature=a",
+            headers: {},
+            kind: "remote",
+          })
+          const named = restore(2, {
+            artifactId: "43300000-0000-4000-8000-000000000032",
+            kind: "remote",
+          })
+          yield* Effect.gen(function* () {
+            yield* Effect.void.pipe(
+              Effect.provide(makeRelayStateLayer(filename))
+            )
+            const sql = yield* SqlClient.SqlClient
+            for (const [at, input] of [signed, named].entries()) {
+              yield* sql`
+                INSERT INTO relay_backup_tasks
+                  (task_id, backup_id, kind, status, input_json, created_at,
+                   updated_at)
+                VALUES (${input.taskId}, ${input.backupId}, 'restore',
+                  'queued', ${JSON.stringify(input)}, ${at}, ${at})
+              `
+            }
+            yield* sql`
+              DELETE FROM effect_sql_migrations WHERE migration_id >= 52
+            `
+          }).pipe(Effect.provide(SqliteClient.layer({ filename })))
+
+          yield* open(
+            Effect.gen(function* () {
+              const store = yield* RelayStateStore
+              assert.isTrue(
+                (yield* store.getBackupTask(signed.taskId))
+                  ?.inputRefreshRequired
+              )
+              // The one Hearth hasn't sent again yet waits; the other runs.
+              assert.strictEqual(
+                (yield* store.claimNextBackupTask(100))?.taskId,
+                named.taskId
+              )
+              assert.isNull(yield* store.claimNextBackupTask(101))
             })
           )
         })

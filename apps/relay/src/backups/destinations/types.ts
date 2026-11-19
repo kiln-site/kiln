@@ -4,7 +4,6 @@ import type {
   BackupArchiveCreateTaskResult,
   BackupCreateTaskInput,
   BackupDeleteTaskInput,
-  BackupStorageAccessRequest,
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "../../config.js"
@@ -57,8 +56,6 @@ export type BackupDestinationDriver<
     destination: Extract<FullBackupCreateDestination, { kind: TKind }>
     onChunk: (bytes: number) => void
     result: BackupArchiveCreateTaskResult
-    /** The schedule's step that took it, when one did. */
-    schedule?: BackupStorageAccessRequest["schedule"]
     signal: AbortSignal
     taskId: string
   }) => Effect.Effect<BackupArchiveCreateTaskResult, unknown>

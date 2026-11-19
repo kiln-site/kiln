@@ -20,6 +20,7 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   deployScheduleToRelay,
   insertSchedule,
+  jsonValue,
   redeployUnacknowledgedSchedules,
   stopScheduleDeliveries,
   upsertDeployment,
@@ -301,6 +302,16 @@ describeMysql("Scheduled backups, checked before they run", () => {
             /access-key|secret-key/u
           )
 
+          // What the Relay acknowledged holding, which is all Hearth signs
+          // a scheduled backup's upload for.
+          const held = Effect.map(
+            selectRows<{ acknowledged_backups: unknown }>(
+              "schedule_deployment"
+            ),
+            ([deployment]) => jsonValue(deployment?.acknowledged_backups)
+          )
+          const heldBefore = yield* held
+
           const failed = yield* Effect.flip(
             deleteBackupStorageEffect(storageId)
           )
@@ -308,6 +319,11 @@ describeMysql("Scheduled backups, checked before they run", () => {
             "schedule_deployment"
           )
           yield* Effect.promise(redeployUnacknowledgedSchedules)
+
+          assert.deepStrictEqual(heldBefore, [
+            { storageId, targetId: capped, targetKind: "instance" },
+          ])
+          assert.deepStrictEqual(yield* held, [])
 
           assert.isNull(before?.refusal ?? null)
           assert.strictEqual(failed._tag, "BackupStorageError")

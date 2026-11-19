@@ -4,8 +4,13 @@ import type { SqlClient } from "effect/sql"
 import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import { encryptWithKeyring, parseSecretKeyring } from "../../keyring.mjs"
-import type { BackupStorageAccessRequest } from "@workspace/contracts"
+import {
+  relayBackupTaskSchema,
+  type BackupStorageAccessRequest,
+} from "@workspace/contracts"
 
+import { backupObjectKey } from "@/backups/destinations/s3/client"
+import { reconcileBackupTaskEffect } from "@/effect/backups"
 import { Database } from "@/effect/database"
 import { grantBackupStorageAccessEffect } from "@/server/backup-storage-access.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -15,6 +20,7 @@ import {
   insertRelay,
   insertRows,
   insertUser,
+  selectRows,
 } from "@/test/seed"
 
 const secrets = `1:${"x".repeat(32)}`
@@ -25,8 +31,8 @@ const storageId = "22222222-2222-4222-8222-222222222222"
 const otherStorageId = "22222222-2222-4222-8222-22222222222f"
 const artifactId = "33333333-3333-4333-8333-333333333333"
 const taskId = "44444444-4444-4444-8444-444444444444"
+const safetyTaskId = "44444444-4444-4444-8444-44444444444f"
 const scheduleId = "55555555-5555-4555-8555-555555555555"
-const actionId = "66666666-6666-4666-8666-666666666666"
 const objectKey = `team/kiln/install/${relayId}/instance/instance-one/${backupId}/backup.zip`
 const seededAt = Date.UTC(2026, 0, 1)
 
@@ -52,7 +58,7 @@ const seed = (
     artifact?: string
     backup?: Record<string, string>
     storage?: Record<string, boolean | string>
-    task?: { kind?: string; status?: string }
+    task?: { dependsOn?: string; kind?: string; status?: string }
   } = {}
 ) =>
   Effect.gen(function* () {
@@ -77,18 +83,38 @@ const seed = (
       created_at: seededAt,
       updated_at: seededAt,
     })
+    if (options.task?.dependsOn) {
+      yield* insertRows("backup_task", {
+        id: safetyTaskId,
+        backup_id: backupId,
+        task_kind: "create",
+        status: options.task.dependsOn,
+        created_at: seededAt,
+        updated_at: seededAt,
+      })
+    }
     yield* insertRows("backup_task", {
       id: taskId,
       backup_id: backupId,
       task_kind: options.task?.kind ?? "create",
       status: options.task?.status ?? "queued",
+      depends_on_task_id: options.task?.dependsOn ? safetyTaskId : null,
       created_at: seededAt,
       updated_at: seededAt,
     })
   })
 
-// A schedule Hearth sent `deployedTo`, whose step backs up to `storage`.
-const seedSchedule = (deployedTo: string, storage: string) =>
+// A schedule on `deployedTo`, and the backups to buckets in the version of
+// it that Relay last acknowledged: null when it has acknowledged none.
+const seedSchedule = (
+  deployedTo: string,
+  held: ReadonlyArray<{
+    storageId: string
+    targetId: string
+    targetKind: string
+  }> | null,
+  status: "applied" | "pending" = "applied"
+) =>
   Effect.gen(function* () {
     yield* insertUser("owner")
     yield* insertRows("schedule", {
@@ -99,27 +125,66 @@ const seedSchedule = (deployedTo: string, storage: string) =>
       created_at: seededAt,
       updated_at: seededAt,
     })
-    yield* insertRows("schedule_action", {
-      id: actionId,
-      schedule_id: scheduleId,
-      position: 0,
-      action_type: "backup",
-      action_config: JSON.stringify({
-        destination: { kind: "storage", storageId: storage },
-        id: actionId,
-        mode: "full",
-        name: "Scheduled backup",
-        type: "backup",
-      }),
-      created_at: seededAt,
-    })
     yield* insertRows("schedule_deployment", {
       schedule_id: scheduleId,
       relay_id: deployedTo,
       desired_revision: 1,
+      desired_generation: 1,
+      acknowledged_revision: held ? 1 : null,
+      acknowledged_generation: held ? 1 : null,
+      acknowledged_backups: held ? JSON.stringify(held) : null,
+      status,
       created_at: seededAt,
       updated_at: seededAt,
     })
+  })
+
+const here = {
+  storageId,
+  targetId: "instance-one",
+  targetKind: "instance",
+}
+
+// A backup a schedule started, as its Relay reports it: the Relay chose
+// its IDs and says which destination it is for.
+const scheduledTask = (
+  ids: { artifactId: string; backupId: string; taskId: string },
+  stored?: { objectKey: string }
+) =>
+  relayBackupTaskSchema.parse({
+    backupId: ids.backupId,
+    bytesCompleted: 0,
+    bytesTotal: null,
+    createdAt: seededAt,
+    error: null,
+    finishedAt: stored ? seededAt + 1 : null,
+    input: {
+      artifactKind: "archive",
+      backupId: ids.backupId,
+      catalog: { name: "Nightly", storageId },
+      destination: { artifactId: ids.artifactId, kind: "s3", ...stored },
+      exclude: [],
+      kind: "create",
+      maxBytes: null,
+      mode: "full",
+      reason: "scheduled",
+      target: { id: "instance-one", kind: "instance" },
+      taskId: ids.taskId,
+    },
+    inputRefreshRequired: false,
+    kind: "create",
+    result: stored
+      ? {
+          bytes: 12,
+          checksumSha256: "a".repeat(64),
+          filename: "backup.zip",
+          warnings: [],
+        }
+      : null,
+    startedAt: seededAt,
+    status: stored ? "succeeded" : "running",
+    taskId: ids.taskId,
+    updatedAt: seededAt + 1,
   })
 
 const ask = (
@@ -263,67 +328,196 @@ describeMysql("backup storage access", () => {
       })
     )
 
-    // The Relay starts a scheduled backup on its own, so only a schedule
-    // Hearth sent it says the backup may go to that bucket.
+    it.effect(
+      "lets a restore read only the copy Hearth would name, once what it waits on succeeded",
+      () =>
+        Effect.gen(function* () {
+          const restoring = {
+            artifact: "available",
+            backup: { status: "available" },
+          }
+          // Its safety backup hasn't finished.
+          yield* seed({
+            ...restoring,
+            task: { dependsOn: "running", kind: "restore" },
+          })
+          const early = yield* ask({ action: "download" })
+
+          yield* seed({
+            ...restoring,
+            task: { dependsOn: "succeeded", kind: "restore" },
+          })
+          const ready = yield* ask({ action: "download" })
+          // The Relay has a copy of its own, which the restore reads.
+          yield* insertRows("backup_artifact", {
+            id: "33333333-3333-4333-8333-33333333333e",
+            backup_id: backupId,
+            destination_key: "local",
+            storage_id: null,
+            status: "available",
+            created_at: seededAt + 1,
+            updated_at: seededAt + 1,
+          })
+          const local = yield* ask({ action: "download" })
+
+          assert.strictEqual(early.status, "refused")
+          assert.strictEqual(ready.status, "granted")
+          assert.strictEqual(local.status, "refused")
+        })
+    )
+
+    // The Relay starts a scheduled backup on its own, so only a schedule it
+    // acknowledged holding says the backup may go to that bucket.
     it.effect.each([
       {
-        case: "it names the step of a schedule Hearth sent it that backs up there",
+        case: "a schedule it acknowledged backs that up there",
         deployedTo: relayId,
         expected: "granted",
-        schedule: { actionId, id: scheduleId },
-        storage: storageId,
+        held: [here],
       },
       {
-        case: "it names no schedule",
-        deployedTo: relayId,
-        expected: "refused",
-        schedule: undefined,
-        storage: storageId,
-      },
-      {
-        case: "the schedule was sent to another Relay",
+        case: "the schedule is another Relay's",
         deployedTo: otherRelayId,
         expected: "refused",
-        schedule: { actionId, id: scheduleId },
-        storage: storageId,
+        held: [here],
       },
       {
-        case: "the schedule's step backs up somewhere else",
+        case: "its schedule backs up somewhere else",
         deployedTo: relayId,
         expected: "refused",
-        schedule: { actionId, id: scheduleId },
-        storage: otherStorageId,
+        held: [{ ...here, storageId: otherStorageId }],
+      },
+      {
+        case: "its schedule backs up something else there",
+        deployedTo: relayId,
+        expected: "refused",
+        held: [{ ...here, targetId: "instance-two" }],
+      },
+      {
+        case: "Hearth refused that backup in the schedule it sent",
+        deployedTo: relayId,
+        expected: "refused",
+        held: [],
       },
     ])(
       "answers a scheduled backup's upload $expected when $case",
-      ({ deployedTo, expected, schedule, storage }) =>
+      ({ deployedTo, expected, held }) =>
         Effect.gen(function* () {
           yield* seed({ backup: { reason: "scheduled" } })
           yield* insertStorage(otherStorageId)
-          yield* seedSchedule(deployedTo, storage)
+          yield* seedSchedule(deployedTo, held)
 
-          const answer = yield* ask(schedule ? { schedule } : {})
+          const answer = yield* ask()
 
           assert.strictEqual(answer.status, expected)
         })
     )
 
-    it.effect(
-      "refuses a schedule's backup to someone else's personal destination",
-      () =>
+    // A schedule Hearth means to send is no leave yet: the Relay asks again
+    // once it has it, rather than the backup ending or going ahead.
+    it.effect.each([
+      { case: "hasn't acknowledged at all", held: null },
+      { case: "acknowledged before it backed up there", held: [] },
+    ])(
+      "tells a scheduled backup's upload to ask later while the Relay $case a schedule Hearth owes it",
+      ({ held }) =>
         Effect.gen(function* () {
           yield* seed({ backup: { reason: "scheduled" } })
-          yield* seedSchedule(relayId, storageId)
-          yield* insertUser("someone-else")
-          const database = yield* Database
-          yield* database.execute(
-            "test.personal_storage",
-            "UPDATE kiln_backup_storage SET owner_user_id = 'someone-else'"
-          )
+          yield* seedSchedule(relayId, held, "pending")
 
-          const answer = yield* ask({ schedule: { actionId, id: scheduleId } })
+          const answer = yield* ask()
+
+          assert.strictEqual(answer.status, "later")
+        })
+    )
+
+    // The Relay chooses a scheduled backup's IDs. Naming a backup Hearth
+    // made by hand must not get it that backup's bucket.
+    it.effect(
+      "catalogs nothing for a scheduled backup that names a backup Hearth already has",
+      () =>
+        Effect.gen(function* () {
+          // A backup made by hand, stored, in a bucket no schedule uses.
+          yield* seed({
+            artifact: "available",
+            backup: { status: "available" },
+            task: { status: "succeeded" },
+          })
+          const services = yield* Effect.context<Database>()
+          const claimed = {
+            artifactId: "33333333-3333-4333-8333-33333333333d",
+            taskId: "44444444-4444-4444-8444-44444444444d",
+          }
+          const catalog = reconcileBackupTaskEffect(
+            scheduledTask({ ...claimed, backupId }),
+            relayId
+          ).pipe(Effect.asVoid, Effect.provideContext(services))
+
+          const answer = yield* ask(claimed, relayId, catalog)
 
           assert.strictEqual(answer.status, "refused")
+          const tasks = yield* selectRows<{ id: string }>("backup_task")
+          const copies = yield* selectRows<{ id: string }>("backup_artifact")
+          assert.deepStrictEqual(
+            tasks.map((task) => task.id),
+            [taskId]
+          )
+          assert.deepStrictEqual(
+            copies.map((copy) => copy.id),
+            [artifactId]
+          )
+        })
+    )
+
+    // A Relay from before this one held the bucket's keys and may have
+    // uploaded a backup Hearth hadn't cataloged, under the folder the
+    // destination had then. Only that folder is taken on its word.
+    it.effect(
+      "files an older Relay's upload where it says only when the rest of the path is Hearth's own",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertStorage(storageId, { object_prefix: "team" })
+          const uploaded = (index: string, objectKey: (own: string) => string) =>
+            Effect.gen(function* () {
+              const ids = {
+                artifactId: `33333333-3333-4333-8333-3333333333a${index}`,
+                backupId: `11111111-1111-4111-8111-1111111111a${index}`,
+                taskId: `44444444-4444-4444-8444-4444444444a${index}`,
+              }
+              const own = backupObjectKey({
+                artifactKind: "archive",
+                backupId: ids.backupId,
+                installationId: "kiln-test",
+                objectPrefix: "",
+                relayId,
+                targetId: "instance-one",
+                targetKind: "instance",
+              })
+              yield* reconcileBackupTaskEffect(
+                scheduledTask(ids, { objectKey: objectKey(own) }),
+                relayId
+              )
+              const copies = yield* selectRows<{
+                id: string
+                object_key: string
+              }>("backup_artifact")
+              return {
+                filed: copies.find((copy) => copy.id === ids.artifactId)
+                  ?.object_key,
+                own,
+              }
+            })
+
+          const moved = yield* uploaded("1", (own) => `old-folder/${own}`)
+          const elsewhere = yield* uploaded(
+            "2",
+            () => `team/kiln/kiln-test/${otherRelayId}/instance/x/y/backup.zip`
+          )
+
+          assert.strictEqual(moved.filed, `old-folder/${moved.own}`)
+          assert.strictEqual(elsewhere.filed, `team/${elsewhere.own}`)
         })
     )
 

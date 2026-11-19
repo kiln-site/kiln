@@ -79,7 +79,11 @@ class ScheduledBackupWaitError extends Data.TaggedError(
 }> {}
 
 export interface ScheduleManagerOptions {
-  readonly enqueueBackup: (input: BackupTaskInput) => Promise<RelayBackupTask>
+  /** `hearth` is the Hearth client the schedule that takes it came from. */
+  readonly enqueueBackup: (
+    input: BackupTaskInput,
+    hearth: string | null
+  ) => Promise<RelayBackupTask>
   readonly findInstance: (instanceId: string) => Promise<object | null>
   readonly findVolume: (volumeId: string) => Promise<object | null>
   readonly forkEffect?: (
@@ -182,14 +186,15 @@ export class ScheduleManager {
     this.#occurrenceFibers.clear()
   }
 
-  apply(projection: RelayScheduleProjection) {
+  /** `hearth` is the Hearth client that sent it. */
+  apply(projection: RelayScheduleProjection, hearth: string | null = null) {
     const input = relayScheduleProjectionSchema.parse(projection)
     const nextRunAt = input.enabled
       ? nextScheduleOccurrence(input.cron, Date.now()).getTime()
       : null
     return this.#serialized(async () => {
       const applied = await Effect.runPromise(
-        this.#options.state.apply(input, nextRunAt)
+        this.#options.state.apply(input, nextRunAt, hearth)
       )
       this.#nextRunAt = undefined
       return applied
@@ -917,7 +922,10 @@ export class ScheduleManager {
         return
       }
       const input = this.#targetBackup(schedule, action, target, scheduledAt)
-      const queued = await this.#options.enqueueBackup(input)
+      const queued = await this.#options.enqueueBackup(
+        input,
+        await this.#hearth(schedule)
+      )
       await Effect.runPromise(
         this.#waitForBackup(queued),
         signal ? { signal } : undefined
@@ -990,7 +998,6 @@ export class ScheduleManager {
         ...(action.mode === "incremental" && execution?.repositoryId
           ? { repositoryId: execution.repositoryId }
           : {}),
-        schedule: { actionId: action.id, id: schedule.id },
         storageId:
           action.destination.kind === "storage"
             ? action.destination.storageId
@@ -1127,7 +1134,6 @@ export class ScheduleManager {
             scheduleName: schedule.name,
             timestamp: scheduledAt,
           }),
-          schedule: { actionId: action.id, id: schedule.id },
           storageId:
             action.destination.kind === "storage"
               ? action.destination.storageId
@@ -1163,8 +1169,11 @@ export class ScheduleManager {
     // window starts only once its whole batch has arrived. Each target of
     // a batch queues the same tasks, by the same IDs: the first makes
     // them, and the others, now or after a restart, find them there.
+    const hearth = await this.#hearth(schedule)
     const queued = await Promise.all(
-      [...volumes, ...dumps].map((input) => this.#options.enqueueBackup(input))
+      [...volumes, ...dumps].map((input) =>
+        this.#options.enqueueBackup(input, hearth)
+      )
     )
     // Each target answers for its own: one of another's that fails, as of
     // a volume that is gone, fails that target's step and not this one's.
@@ -1183,6 +1192,11 @@ export class ScheduleManager {
       ),
       signal ? { signal } : undefined
     )
+  }
+
+  // The Hearth a schedule's backups ask for access to a bucket.
+  #hearth(schedule: RelayScheduleProjection) {
+    return Effect.runPromise(this.#options.state.hearth(schedule.id))
   }
 
   #waitForBackup(initial: RelayBackupTask) {

@@ -15,12 +15,19 @@ import { Database } from "@/effect/database"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
+import { holdsScheduleBackup } from "@/server/schedule-acknowledged-backups"
 
 type AccessRow = RowDataPacket & {
+  artifact_created_at_ms: number | string
   artifact_status: string
   backup_reason: string
+  backup_status: string
+  dependency_status: string | null
+  depends_on_task_id: string | null
   object_key: string | null
   storage_id: string | null
+  target_id: string
+  target_kind: string
   task_kind: string
   task_status: string
 }
@@ -45,9 +52,16 @@ function refused(reason: string): BackupStorageAccessResponse {
  * Relay reaches one, and what it checks is all that stands between a Relay
  * and another's backups: the task is that Relay's and still under way, the
  * copy belongs to the task's backup, the access is the kind the task needs,
- * and the destination can still be used that way. A backup a schedule took
- * was started by the Relay, not Hearth, so it also has to name a schedule
- * Hearth sent that Relay whose step sends backups to that destination.
+ * and the destination can still be used that way. A task Hearth started is
+ * held to what Hearth would send it for: a restore reads only the copy
+ * Hearth would name, a local one first, and nothing runs ahead of the task
+ * it waits on.
+ *
+ * A backup a schedule took was started by the Relay, not Hearth, so its
+ * upload also needs a schedule the Relay acknowledged holding whose backups
+ * of that target go to that destination (`acknowledged_backups`). While
+ * Hearth still owes that Relay a schedule the answer is "later": the one
+ * that allows it may be on its way.
  *
  * `catalogRelayTasks` reads in the Relay's tasks: a scheduled backup taken
  * while Hearth was away asks for access before Hearth has heard of it.
@@ -69,9 +83,16 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   const find = database.queryRows<AccessRow>(
     "backup_storage_access",
     `SELECT task.task_kind, task.status AS task_status,
-            backup.reason AS backup_reason,
+            task.depends_on_task_id,
+            (SELECT dependency.status
+               FROM ${databaseTable("backup_task")} dependency
+              WHERE dependency.id = task.depends_on_task_id
+            ) AS dependency_status,
+            backup.reason AS backup_reason, backup.status AS backup_status,
+            backup.target_kind, backup.target_id,
             artifact.status AS artifact_status, artifact.storage_id,
-            artifact.object_key
+            artifact.object_key,
+            artifact.created_at AS artifact_created_at_ms
        FROM ${databaseTable("backup_task")} task
        JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
        JOIN ${databaseTable("backup_artifact")} artifact
@@ -93,6 +114,20 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   if (row.task_status !== "queued" && row.task_status !== "running") {
     return refused("the task has ended")
   }
+  // As Hearth sends them (`listDispatchableBackupTasksEffect`): a restore
+  // follows its safety backup only once that succeeded, and a delete
+  // follows the create it waits on however that ended.
+  if (
+    row.depends_on_task_id !== null &&
+    row.dependency_status !== "succeeded" &&
+    !(
+      request.action === "delete" &&
+      (row.dependency_status === "failed" ||
+        row.dependency_status === "cancelled")
+    )
+  ) {
+    return refused("the task it waits on hasn't ended")
+  }
   if (!row.storage_id || !row.object_key) {
     return refused("that copy isn't kept in a bucket")
   }
@@ -101,44 +136,27 @@ export const grantBackupStorageAccessEffect = Effect.fn(
     request.action === "upload"
       ? row.artifact_status === "queued" || row.artifact_status === "running"
       : request.action === "download"
-        ? row.artifact_status === "available"
-        : row.artifact_status !== "deleted"
+        ? row.artifact_status === "available" &&
+          row.backup_status === "available"
+        : row.artifact_status !== "deleted" && row.backup_status === "deleting"
   if (!usable) {
     return refused(`the copy is ${row.artifact_status}`)
   }
-  if (request.action === "upload" && row.backup_reason === "scheduled") {
-    const admitted = request.schedule
-      ? yield* database.queryRows<RowDataPacket>(
-          "backup_storage_access_schedule",
-          `SELECT 1
-             FROM ${databaseTable("schedule")} schedule
-             JOIN ${databaseTable("schedule_deployment")} deployment
-               ON deployment.schedule_id = schedule.id
-              AND deployment.relay_id = ?
-             JOIN ${databaseTable("schedule_action")} action
-               ON action.schedule_id = schedule.id AND action.id = ?
-              AND action.action_type = 'backup'
-             JOIN ${databaseTable("backup_storage")} storage
-               ON storage.id = ?
-            WHERE schedule.id = ? AND schedule.deleted_at IS NULL
-              AND JSON_UNQUOTE(
-                    JSON_EXTRACT(action.action_config, '$.destination.storageId')
-                  ) = storage.id
-              AND (storage.owner_user_id IS NULL
-                   OR storage.owner_user_id = schedule.created_by)
-            LIMIT 1`,
-          [
-            relayId,
-            request.schedule.actionId,
-            row.storage_id,
-            request.schedule.id,
-          ]
-        )
-      : []
-    if (admitted.length === 0) {
-      return refused(
-        "no schedule Hearth sent this Relay backs up to that destination"
-      )
+  if (request.action === "download") {
+    // A restore reads the copy Hearth names for it: the Relay's own when it
+    // has one, or else the first stored.
+    const preferred = yield* database.queryRows<RowDataPacket>(
+      "backup_storage_access_restore_copy",
+      `SELECT 1
+         FROM ${databaseTable("backup_artifact")} other
+        WHERE other.backup_id = ? AND other.id <> ?
+          AND other.status = 'available'
+          AND (other.storage_id IS NULL OR other.created_at < ?)
+        LIMIT 1`,
+      [request.backupId, request.artifactId, row.artifact_created_at_ms]
+    )
+    if (preferred.length > 0) {
+      return refused("the restore reads another copy of the backup")
     }
   }
   const storage = yield* loadBackupStorageCredentialEffect(row.storage_id)
@@ -151,6 +169,39 @@ export const grantBackupStorageAccessEffect = Effect.fn(
     (request.action !== "download" && storage.deleting)
   ) {
     return refused("the backup destination is unavailable")
+  }
+  if (request.action === "upload" && row.backup_reason === "scheduled") {
+    const deployments = yield* database.queryRows<
+      RowDataPacket & { acknowledged_backups: unknown; owed: number }
+    >(
+      "backup_storage_access_schedules",
+      `SELECT deployment.acknowledged_backups,
+              (deployment.status <> 'applied'
+                OR COALESCE(deployment.acknowledged_revision, 0)
+                     < deployment.desired_revision
+                OR COALESCE(deployment.acknowledged_generation, 0)
+                     < deployment.desired_generation
+                OR deployment.acknowledged_backups IS NULL) AS owed
+         FROM ${databaseTable("schedule_deployment")} deployment
+         JOIN ${databaseTable("schedule")} schedule
+           ON schedule.id = deployment.schedule_id
+        WHERE deployment.relay_id = ? AND schedule.deleted_at IS NULL`,
+      [relayId]
+    )
+    const held = deployments.some((deployment) =>
+      holdsScheduleBackup(deployment.acknowledged_backups, {
+        storageId: storage.id,
+        targetId: row.target_id,
+        targetKind: row.target_kind,
+      })
+    )
+    if (!held) {
+      const reason =
+        "no schedule this Relay holds backs that up to that destination"
+      return deployments.some((deployment) => Number(deployment.owed) === 1)
+        ? ({ reason, status: "later" } satisfies BackupStorageAccessResponse)
+        : refused(reason)
+    }
   }
   return yield* signS3BackupAccess(storage, row.object_key, request.action)
 })

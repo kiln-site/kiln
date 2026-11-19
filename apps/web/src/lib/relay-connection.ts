@@ -2479,6 +2479,27 @@ class RelayConnection {
           )
         )
       )
+      // What Hearth owes this Relay of its schedules goes now, not at the
+      // next sweep: a backup it took on its own waits to be stored until
+      // it has acknowledged the schedule that allows it.
+      forkAppEffect(
+        "schedules.deliverOnConnect",
+        Effect.tryPromise({
+          try: async () => {
+            const { deliverPendingSchedules } =
+              await import("@/server/schedule-deployment.server")
+            deliverPendingSchedules()
+          },
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Sending owed schedules on connect failed", {
+              cause,
+              relayId: this.#relay.id,
+            })
+          )
+        )
+      )
       forkAppEffect(
         "addresses.attachManualOnConnect",
         Effect.tryPromise({

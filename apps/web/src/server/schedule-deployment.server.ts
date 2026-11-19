@@ -36,6 +36,7 @@ import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
+import { acknowledgedScheduleBackups } from "@/server/schedule-acknowledged-backups"
 import {
   readRelayVolumes,
   scheduledAppTargets,
@@ -338,6 +339,14 @@ export async function deployScheduleToRelay(
         // generation Hearth has issued: an answer for an older send, or one
         // overtaken by a change since, leaves it owed.
         const acknowledgedGeneration = result.acknowledgedGeneration ?? 0
+        // What the Relay now holds is this send only when it acknowledged
+        // exactly it: then its backups to buckets are the ones Hearth signs
+        // uploads for. Set before the acknowledged generation below, which
+        // it is compared with, so an older send's answer arriving late
+        // never replaces a newer one's.
+        const holdsThisSend =
+          result.acknowledgedRevision === schedule.revision &&
+          acknowledgedGeneration === generation
         await databasePool.execute(
           `UPDATE ${databaseTable("schedule_deployment")}
           SET status = IF(? >= desired_revision AND ? >= desired_generation,
@@ -345,6 +354,9 @@ export async function deployScheduleToRelay(
               next_run_at = IF(? >= desired_revision, ?, next_run_at),
               last_error = IF(? >= desired_revision AND ? >= desired_generation,
                 NULL, last_error),
+              acknowledged_backups = IF(
+                ? AND ? >= COALESCE(acknowledged_generation, 0),
+                ?, acknowledged_backups),
               acknowledged_revision = GREATEST(
                 COALESCE(acknowledged_revision, 0), ?),
               acknowledged_generation = GREATEST(
@@ -358,6 +370,9 @@ export async function deployScheduleToRelay(
             result.nextRunAt,
             result.acknowledgedRevision,
             acknowledgedGeneration,
+            holdsThisSend,
+            generation,
+            JSON.stringify(acknowledgedScheduleBackups(projection.actions)),
             result.acknowledgedRevision,
             acknowledgedGeneration,
             Date.now(),
@@ -992,7 +1007,8 @@ export async function redeployUnacknowledgedSchedules(): Promise<void> {
          OR COALESCE(deployment.acknowledged_revision, 0)
               < deployment.desired_revision
          OR COALESCE(deployment.acknowledged_generation, 0)
-              < deployment.desired_generation`
+              < deployment.desired_generation
+         OR deployment.acknowledged_backups IS NULL`
   )
   if (rows.length === 0) return
   const [schedules, relays] = await Promise.all([

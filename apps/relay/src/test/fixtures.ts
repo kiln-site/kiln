@@ -8,7 +8,7 @@ import type { RelayConfig, RelayInstanceConfig } from "../config"
  * answers when it asks for access to a bucket.
  */
 export const noHearth = {
-  hearthConnected: () => false,
+  connectedHearths: () => [],
   storage: backupStorageAccessThrough(async () => []),
 }
 

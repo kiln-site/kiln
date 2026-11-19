@@ -1052,29 +1052,55 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
         )
       : []
   const storage = storageRows[0]
+  const keyUnder = (objectPrefix: string) =>
+    backupObjectKey({
+      artifactKind: input.artifactKind,
+      backupId: input.backupId,
+      installationId: kilnInstallationId(),
+      objectPrefix,
+      relayId,
+      // Kiln's own are filed under the installation, as its schedule's
+      // folder was.
+      targetId:
+        input.target.kind === "platform"
+          ? kilnInstallationId()
+          : input.target.id,
+      targetKind: input.target.kind,
+    })
+  // One an older Relay already uploaded, with the keys it then held, is
+  // where that Relay put it: under the folder the destination had then,
+  // which may have changed since. Its word is taken for that folder alone,
+  // and only for a backup that's stored; the rest of the path is Hearth's.
+  const uploadedTo =
+    input.destination.kind === "s3" && task.status === "succeeded"
+      ? input.destination.objectKey
+      : undefined
   const objectKey = storage
-    ? backupObjectKey({
-        artifactKind: input.artifactKind,
-        backupId: input.backupId,
-        installationId: kilnInstallationId(),
-        objectPrefix: storage.object_prefix,
-        relayId,
-        // Kiln's own are filed under the installation, as its schedule's
-        // folder was.
-        targetId:
-          input.target.kind === "platform"
-            ? kilnInstallationId()
-            : input.target.id,
-        targetKind: input.target.kind,
-      })
+    ? uploadedTo !== undefined &&
+      (uploadedTo === keyUnder("") || uploadedTo.endsWith(`/${keyUnder("")}`))
+      ? uploadedTo
+      : keyUnder(storage.object_prefix)
     : null
   // A bucket that's gone has nowhere for it to go.
   const unstorable = input.destination.kind === "s3" && !storage
   const failed = orphaned || unstorable
 
+  // Cataloged whole or not at all. The Relay chose these IDs, and one that
+  // is already another backup's, copy's or task's would otherwise tie what
+  // this Relay asks for to a backup Hearth made for something else.
+  const taken = yield* transaction.queryRows<RowDataPacket>(
+    `SELECT 1 FROM ${databaseTable("backup")} WHERE id = ?
+      UNION ALL
+     SELECT 1 FROM ${databaseTable("backup_artifact")} WHERE id = ?
+      UNION ALL
+     SELECT 1 FROM ${databaseTable("backup_task")} WHERE id = ?
+      LIMIT 1`,
+    [input.backupId, artifactId, input.taskId]
+  )
+  if (taken.length > 0) return
   // An App's scheduled backups are cataloged as one batch, live or stopped,
   // as its manual ones are.
-  yield* transaction.execute(
+  const cataloged = yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup")}
       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
        backup_mode, reason, status, name, object_key, repository_id,
@@ -1103,8 +1129,10 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       now,
     ]
   )
+  // Lost to another cataloging of the same task, which has it all.
+  if (cataloged.affectedRows === 0) return
   yield* transaction.execute(
-    `INSERT IGNORE INTO ${databaseTable("backup_artifact")}
+    `INSERT INTO ${databaseTable("backup_artifact")}
       (id, backup_id, destination_key, storage_id, status, object_key,
        created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1120,7 +1148,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     ]
   )
   yield* transaction.execute(
-    `INSERT IGNORE INTO ${databaseTable("backup_task")}
+    `INSERT INTO ${databaseTable("backup_task")}
       (id, backup_id, task_kind, status, reserved_bytes, requested_by,
        error, created_at, updated_at)
      VALUES (?, ?, 'create', ?, ?, NULL, ?, ?, ?)`,
@@ -1186,6 +1214,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     let changed = false
+    // A Relay speaks for its own backups' tasks only, and for the kind of
+    // task each is: its report of another's, or of a restore as a create,
+    // is no word on it.
+    const scope = relayId ?? null
     yield* database.transaction("backup_reconcile", (transaction) =>
       Effect.gen(function* () {
         const knownTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
@@ -1195,9 +1227,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   task.relay_updated_at_ms
              FROM ${databaseTable("backup_task")} task
              JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
-            WHERE task.id = ? AND task.backup_id = ?
+            WHERE task.id = ? AND task.backup_id = ? AND task.task_kind = ?
+              AND (? IS NULL OR backup.relay_id = ?)
             FOR UPDATE`,
-          [task.taskId, task.backupId]
+          [task.taskId, task.backupId, task.kind, scope, scope]
         )
         let knownTask = knownTasks[0]
         if (!knownTask && relayId) {
@@ -1210,9 +1243,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                       task.relay_updated_at_ms
                  FROM ${databaseTable("backup_task")} task
                  JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
-                WHERE task.id = ? AND task.backup_id = ?
+                WHERE task.id = ? AND task.backup_id = ? AND task.task_kind = ?
+                  AND backup.relay_id = ?
                 FOR UPDATE`,
-            [task.taskId, task.backupId]
+            [task.taskId, task.backupId, task.kind, relayId]
           )
           knownTask = adoptedTasks[0]
         }

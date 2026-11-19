@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, type Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, type Scope } from "effect"
 import { vi } from "vite-plus/test"
 import ZipStream from "zip-stream"
 
@@ -55,6 +55,9 @@ const bucket = vi.hoisted(() => ({
     url: string
   }>,
   object: Buffer.alloc(0),
+  // Told as an upload has arrived whole; while it answers false the bucket
+  // never answers that upload, as when the Relay is stopped mid-send.
+  received: (): boolean => true,
 }))
 
 vi.mock("node:https", async (importOriginal) => {
@@ -78,7 +81,10 @@ vi.mock("node:https", async (importOriginal) => {
       },
     })
     body.once("finish", () => {
-      if (options.method === "PUT") bucket.object = Buffer.concat(sent)
+      if (options.method === "PUT") {
+        if (!bucket.received()) return
+        bucket.object = Buffer.concat(sent)
+      }
       const response = Object.assign(new PassThrough(), { statusCode: 200 })
       respond(response)
       response.end(options.method === "GET" ? bucket.object : undefined)
@@ -106,7 +112,7 @@ describe("Relay archive restores", () => {
           }
           const asked: Array<unknown> = []
           const manager = yield* backupManager(config, undefined, undefined, {
-            hearthConnected: () => true,
+            connectedHearths: () => [],
             storage: backupStorageAccessThrough(async (request) => {
               asked.push(request)
               return [{ payload: grant }]
@@ -334,26 +340,40 @@ describe("Relay archive restores", () => {
   )
 })
 
-// A bucket is opened only by asking Hearth, so a backup taken while none can
-// be asked keeps its archive on the Relay until one can.
+// A bucket is opened only by asking the Hearth a backup is for, so one taken
+// while that Hearth can't be asked keeps its archive on the Relay until it
+// can.
 describe("Relay backups held for Hearth", () => {
+  const hearthId = "hearth-one"
   const localCopy = "30000000-0000-4000-8000-000000000001"
   const bucketCopy = "30000000-0000-4000-8000-000000000002"
   const toBucket = (index: number) => ({
     ...backupInput(index),
     destination: { artifactId: bucketCopy, kind: "s3" as const },
   })
+  const upload = (name: string) => ({
+    allowPrivateNetwork: false,
+    headers: { "content-type": "application/zip" },
+    method: "PUT",
+    status: "granted",
+    url: `https://kiln-backups.s3.example.com/team/${name}.zip?X-Amz-Signature=abc`,
+  })
 
-  // No Hearth to ask until `answers` is told what one says.
+  // The Hearth these backups are for: away until `answers` is told what it
+  // says.
   function hearthAwayThenBack() {
-    let said: ReadonlyArray<{ payload: unknown }> = []
+    let said: unknown = null
     return {
       answers: (payload: unknown) => {
-        said = [{ payload }]
+        said = payload
       },
       hearth: {
-        hearthConnected: () => said.length > 0,
-        storage: backupStorageAccessThrough(async () => said),
+        connectedHearths: () => (said === null ? [] : [hearthId]),
+        storage: backupStorageAccessThrough(async (_payload, _timeout, only) =>
+          said !== null && only({ id: hearthId, role: "full_access" })
+            ? [{ payload: said }]
+            : []
+        ),
       },
     }
   }
@@ -374,7 +394,8 @@ describe("Relay backups held for Hearth", () => {
           }
           const held = yield* runTask(
             yield* backupManager(config, undefined, undefined, hearth),
-            input
+            input,
+            hearthId
           )
           assert.strictEqual(held.status, "queued")
           assert.isTrue(held.heldForHearth)
@@ -397,17 +418,9 @@ describe("Relay backups held for Hearth", () => {
 
           // Hearth is back and signs the upload: the bucket gets the
           // archive of what was there when the backup was taken.
-          const upload =
-            "https://kiln-backups.s3.example.com/team/held.zip?X-Amz-Signature=abc"
           bucket.asked.length = 0
-          answers({
-            allowPrivateNetwork: false,
-            headers: { "content-type": "application/zip" },
-            method: "PUT",
-            status: "granted",
-            url: upload,
-          })
-          yield* restarted.hearthReachable()
+          answers(upload("held"))
+          yield* restarted.hearthReachable(hearthId)
           yield* restarted.runPending()
           const stored = yield* restarted.get(input.taskId)
           assert.strictEqual(stored?.status, "succeeded", stored?.error ?? "")
@@ -426,9 +439,137 @@ describe("Relay backups held for Hearth", () => {
           )
           assert.deepStrictEqual(
             bucket.asked.map(({ method, url }) => ({ method, url })),
-            [{ method: "PUT", url: upload }]
+            [{ method: "PUT", url: upload("held").url }]
           )
           assert.strictEqual(sha256(bucket.object), taken)
+          // The Relay's own disk is one of the backup's copies.
+          assert.isTrue(existsSync(archive))
+        })
+      )
+  )
+
+  // The archive is in the bucket and the Relay stops before it has said
+  // so. What it finds on starting is a held backup, to send again: with
+  // the archive gone by then it could only fail a backup that was stored.
+  it.effect(
+    "sends a held archive again when the Relay stopped after sending it, before recording that",
+    () =>
+      withRelay("kiln-backup-held-crash-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const { answers, hearth } = hearthAwayThenBack()
+          const input = toBucket(25)
+          yield* runTask(
+            yield* backupManager(config, undefined, undefined, hearth),
+            input,
+            hearthId
+          )
+          const archive = backupArchivePath(config, input.backupId)
+          const taken = sha256(yield* Effect.promise(() => readFile(archive)))
+          const store = yield* RelayStateStore
+          yield* store.releaseBackupTasksHeldForHearth(Date.now(), hearthId)
+          assert.strictEqual(
+            (yield* store.claimNextBackupTask(Date.now()))?.taskId,
+            input.taskId
+          )
+
+          answers(upload("crash"))
+          const restarted = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            hearth
+          )
+          yield* restarted.runPending()
+
+          const stored = yield* restarted.get(input.taskId)
+          assert.strictEqual(stored?.status, "succeeded", stored?.error ?? "")
+          assert.strictEqual(sha256(bucket.object), taken)
+          // In the bucket and recorded, so the Relay keeps none of it.
+          assert.isFalse(existsSync(archive))
+          assert.isNull(yield* store.heldBackupArchive(input.taskId))
+        })
+      )
+  )
+
+  it.effect(
+    "keeps a held archive when the Relay is stopped while sending it, and sends it once it's back",
+    () =>
+      withRelay("kiln-backup-held-stopped-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const { answers, hearth } = hearthAwayThenBack()
+          const input = toBucket(29)
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            hearth
+          )
+          yield* runTask(manager, input, hearthId)
+          const archive = backupArchivePath(config, input.backupId)
+          const taken = sha256(yield* Effect.promise(() => readFile(archive)))
+
+          // The bucket has the whole upload and the Relay is stopped before
+          // it hears so.
+          const arrived = yield* Deferred.make<void>()
+          bucket.received = () => {
+            Deferred.doneUnsafe(arrived, Effect.void)
+            return false
+          }
+          answers(upload("stopped"))
+          yield* manager.hearthReachable(hearthId)
+          const sending = yield* Effect.forkChild(manager.runPending())
+          yield* Deferred.await(arrived)
+          yield* Fiber.interrupt(sending)
+          assert.isTrue(existsSync(archive))
+
+          bucket.received = () => true
+          const restarted = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            hearth
+          )
+          yield* restarted.runPending()
+          const stored = yield* restarted.get(input.taskId)
+          assert.strictEqual(stored?.status, "succeeded", stored?.error ?? "")
+          assert.strictEqual(sha256(bucket.object), taken)
+          assert.isFalse(existsSync(archive))
+        })
+      )
+  )
+
+  it.effect(
+    "asks only the Hearth a backup is for, and stays held while another is the one connected",
+    () =>
+      withRelay("kiln-backup-held-other-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const { answers, hearth } = hearthAwayThenBack()
+          // `hearth-one` is connected and would sign anything.
+          answers(upload("elsewhere"))
+          bucket.asked.length = 0
+          const input = toBucket(28)
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            hearth
+          )
+          const held = yield* runTask(manager, input, "hearth-two")
+          assert.isTrue(held.heldForHearth)
+
+          yield* manager.hearthReachable(hearthId)
+          yield* manager.runPending()
+          assert.isTrue((yield* manager.get(input.taskId))?.heldForHearth)
+          assert.deepStrictEqual(bucket.asked, [])
         })
       )
   )
@@ -449,12 +590,54 @@ describe("Relay backups held for Hearth", () => {
               undefined,
               hearthAwayThenBack().hearth
             ),
-            input
+            input,
+            hearthId
           )
           assert.strictEqual(task.status, "failed")
           assert.isFalse(task.heldForHearth)
           assert.include(task.error ?? "", "already holds as many backups")
           assert.isFalse(existsSync(backupArchivePath(config, input.backupId)))
+        })
+      )
+  )
+
+  // Its Hearth connected and still couldn't answer, so the held backup had
+  // its turn and is held again. Its archive never left the Relay: it counts
+  // against what the Relay may hold throughout, and isn't the one refused.
+  it.effect(
+    "counts a held archive until its backup ends, and never refuses the one already held",
+    () =>
+      withRelay("kiln-backup-held-count-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const { hearth } = hearthAwayThenBack()
+          const first = toBucket(26)
+          yield* runTask(
+            yield* backupManager(config, undefined, undefined, hearth),
+            first,
+            hearthId
+          )
+          const held = yield* Effect.promise(() =>
+            readFile(backupArchivePath(config, first.backupId))
+          )
+          // Room for the one it holds, not for another like it.
+          const manager = yield* backupManager(
+            { ...config, backupOutboxBytes: held.byteLength + 16 },
+            undefined,
+            undefined,
+            hearth
+          )
+          yield* manager.hearthReachable(hearthId)
+          const second = toBucket(27)
+          const refused = yield* runTask(manager, second, hearthId)
+
+          assert.isTrue((yield* manager.get(first.taskId))?.heldForHearth)
+          assert.isTrue(existsSync(backupArchivePath(config, first.backupId)))
+          assert.strictEqual(refused.status, "failed")
+          assert.include(refused.error ?? "", "already holds as many backups")
+          assert.isFalse(existsSync(backupArchivePath(config, second.backupId)))
         })
       )
   )
@@ -475,7 +658,7 @@ describe("Relay backups held for Hearth", () => {
             undefined,
             hearth
           )
-          assert.isTrue((yield* runTask(manager, input)).heldForHearth)
+          assert.isTrue((yield* runTask(manager, input, hearthId)).heldForHearth)
           const archive = backupArchivePath(config, input.backupId)
           assert.isTrue(existsSync(archive))
 
@@ -484,19 +667,21 @@ describe("Relay backups held for Hearth", () => {
             "cancelled"
           )
           assert.isFalse(existsSync(archive))
-          answers({ reason: "the task has ended", status: "refused" })
-          yield* manager.hearthReachable()
+          bucket.asked.length = 0
+          answers(upload("cancelled"))
+          yield* manager.hearthReachable(hearthId)
           yield* manager.runPending()
           assert.strictEqual(
             (yield* manager.get(input.taskId))?.status,
             "cancelled"
           )
+          assert.deepStrictEqual(bucket.asked, [])
         })
       )
   )
 
   it.effect(
-    "fails a backup Hearth refuses a bucket to, without holding it",
+    "fails a backup its Hearth refuses a bucket to, without holding it",
     () =>
       withRelay("kiln-backup-refused-", ({ config, root }) =>
         Effect.gen(function* () {
@@ -508,7 +693,8 @@ describe("Relay backups held for Hearth", () => {
           const input = toBucket(24)
           const task = yield* runTask(
             yield* backupManager(config, undefined, undefined, hearth),
-            input
+            input,
+            hearthId
           )
           assert.strictEqual(task.status, "failed")
           assert.isFalse(task.heldForHearth)
@@ -552,7 +738,7 @@ function backupManager(
   lanes = new OperationLanes(),
   hearth: Pick<
     Parameters<typeof BackupManager.make>[0],
-    "hearthConnected" | "storage"
+    "connectedHearths" | "storage"
   > = noHearth
 ) {
   return BackupManager.make({
@@ -564,9 +750,13 @@ function backupManager(
   })
 }
 
-function runTask(manager: BackupManager, input: BackupTaskInput) {
+function runTask(
+  manager: BackupManager,
+  input: BackupTaskInput,
+  hearth: string | null = null
+) {
   return Effect.gen(function* () {
-    yield* manager.enqueue(input)
+    yield* manager.enqueue(input, hearth)
     yield* manager.runPending()
     const task = yield* manager.get(input.taskId)
     assert.isNotNull(task)
