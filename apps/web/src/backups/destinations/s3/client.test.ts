@@ -7,7 +7,7 @@ import {
   isSafeResticObjectPrefix,
   resticPrefixSegment,
   resticRepositoryObjectPrefix,
-  signS3BackupUpload,
+  signS3BackupAccess,
 } from "./client"
 
 describe("S3 backup storage", () => {
@@ -85,7 +85,7 @@ describe("signed S3 uploads", () => {
   // would be of an empty body, and buckets that check it refuse the upload.
   it("carry no checksum of a body Hearth never saw", async () => {
     const upload = await Effect.runPromise(
-      signS3BackupUpload(
+      signS3BackupAccess(
         {
           accessKeyId: "AKIAEXAMPLE",
           allowPrivateNetwork: true,
@@ -96,10 +96,11 @@ describe("signed S3 uploads", () => {
           region: "us-east-1",
           secretAccessKey: "s3-secret",
         },
-        "team/backup.zip"
+        "team/backup.zip",
+        "upload"
       )
     )
-    const signed = [...new URL(upload.uploadUrl).searchParams.keys()]
+    const signed = [...new URL(upload.url).searchParams.keys()]
     expect(signed).toContain("X-Amz-Signature")
     expect(signed.filter((name) => /checksum/iu.test(name))).toEqual([])
   })

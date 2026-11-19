@@ -738,10 +738,22 @@ export class RelayStateStore extends Context.Service<
     readonly getMetadata: (
       key: string
     ) => Effect.Effect<string | null, RelayStateError>
+    /**
+     * `hearth` is the Hearth client that sent the task: the one it asks for
+     * access to a bucket's copy.
+     */
     readonly enqueueBackupTask: (
       input: BackupTaskInput,
-      now: number
+      now: number,
+      hearth?: string | null
     ) => Effect.Effect<RelayBackupTask, RelayStateError>
+    /**
+     * The Hearth client a task came from, or null for one stored before
+     * that was kept.
+     */
+    readonly backupTaskHearth: (
+      taskId: string
+    ) => Effect.Effect<string | null, RelayStateError>
     readonly claimNextBackupTask: (
       now: number
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
@@ -2012,7 +2024,75 @@ const migrations = SqliteMigrator.fromRecord({
       `
     }
   }),
+  // A task says which Hearth client sent it, the one it asks for access to
+  // a bucket's copy. Tasks waiting from before Hearth kept every signed
+  // request to itself were stored with one: a create or delete keeps the
+  // copy's name and asks; a restore didn't name the copy it reads, so
+  // Hearth sends it again (`input_refresh_required`), naming one. A copy
+  // sent with the bucket's keys, as a schedule's is, keeps them.
+  "51_backup_task_hearth": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{ name: string }>`
+      SELECT name FROM pragma_table_info('relay_backup_tasks')
+    `
+    if (!columns.some((column) => column.name === "client_id")) {
+      yield* sql`ALTER TABLE relay_backup_tasks ADD COLUMN client_id TEXT`
+    }
+    yield* sql`
+      UPDATE relay_backup_tasks
+      SET input_refresh_required = 1
+      WHERE kind = 'restore' AND status = 'queued'
+        -- One that can't be read is failed as it's claimed, alone.
+        AND CASE WHEN json_valid(input_json)
+              THEN json_extract(input_json, '$.source.kind') = 'remote'
+                AND json_extract(input_json, '$.source.artifactId') IS NULL
+            END
+    `
+    const waiting = yield* sql<{ id: string; json: string }>`
+      SELECT task_id AS id, input_json AS json FROM relay_backup_tasks
+      WHERE status IN ('queued', 'running') AND kind IN ('create', 'delete')
+    `
+    for (const row of waiting) {
+      const kept = withoutSignedBucketRequests(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks SET input_json = ${kept}
+        WHERE task_id = ${row.id}
+      `
+    }
+  }),
 })
+
+// A stored create's or delete's input without the signed requests it held
+// for a bucket's copies, or null for one that held none.
+function withoutSignedBucketRequests(inputJson: string): string | null {
+  const input = Result.getOrNull(
+    Result.try(() => JSON.parse(inputJson) as unknown)
+  )
+  if (!Predicate.isObject(input)) return null
+  let changed = false
+  const named = (copy: unknown) => {
+    if (
+      !Predicate.isObject(copy) ||
+      copy.kind !== "s3" ||
+      // Sent with the bucket's keys: the Relay signs for itself.
+      "bucket" in copy ||
+      !("uploadUrl" in copy || "deleteUrl" in copy)
+    ) {
+      return copy
+    }
+    changed = true
+    return {
+      ...(copy.artifactId === undefined ? {} : { artifactId: copy.artifactId }),
+      kind: "s3",
+    }
+  }
+  if ("destination" in input) input.destination = named(input.destination)
+  if (Array.isArray(input.replicas)) {
+    input.replicas = (input.replicas as ReadonlyArray<unknown>).map(named)
+  }
+  return changed ? JSON.stringify(input) : null
+}
 
 // Stored JSON with each old destination ID that `holders` finds in it, as a
 // `storageId`, moved to its new one; or null when it holds none. Anything
@@ -3223,7 +3303,17 @@ const makeRelayStateStore = Effect.gen(function* () {
           )
         `.pipe(Effect.asVoid)
       ),
-    enqueueBackupTask: (input, now) =>
+    backupTaskHearth: (taskId) =>
+      run(
+        "backup_task_hearth",
+        sql<{ hearth: string | null }>`
+          SELECT client_id AS hearth
+          FROM relay_backup_tasks
+          WHERE task_id = ${taskId}
+          LIMIT 1
+        `.pipe(Effect.map((rows) => rows[0]?.hearth ?? null))
+      ),
+    enqueueBackupTask: (input, now, hearth = null) =>
       run(
         "enqueue_backup_task",
         sql.withTransaction(
@@ -3245,6 +3335,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   UPDATE relay_backup_tasks
                   SET input_json = ${JSON.stringify(input)},
                       input_refresh_required = 0,
+                      client_id = COALESCE(${hearth}, client_id),
                       error = NULL,
                       error_code = NULL,
                       phase = NULL,
@@ -3282,7 +3373,8 @@ const makeRelayStateStore = Effect.gen(function* () {
                 error,
                 finished_at,
                 created_at,
-                updated_at
+                updated_at,
+                client_id
               ) VALUES (
                 ${input.taskId},
                 ${input.backupId},
@@ -3292,7 +3384,8 @@ const makeRelayStateStore = Effect.gen(function* () {
                 ${deleted ? "The backup was deleted before this create arrived" : null},
                 ${deleted ? now : null},
                 ${now},
-                ${now}
+                ${now},
+                ${hearth}
               )
             `
             if (input.kind === "export") {

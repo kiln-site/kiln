@@ -1052,8 +1052,12 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       : []
   const repositoryId = repositoryRows[0]?.id ?? null
   const orphaned = input.mode === "incremental" && !repositoryId
+  // A schedule's copy in a bucket is sent with the bucket's keys and a
+  // path, which the Relay reports back.
   const objectKey =
-    input.destination.kind === "s3" ? input.destination.objectKey : null
+    input.destination.kind === "s3" && "objectKey" in input.destination
+      ? input.destination.objectKey
+      : null
 
   // An App's scheduled backups are cataloged as one batch, live or stopped,
   // as its manual ones are.

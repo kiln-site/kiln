@@ -12,6 +12,7 @@ import { insertBackup, insertBackupStorage, insertRows } from "@/test/seed"
 
 const secrets = `1:${"x".repeat(32)}`
 const backupId = "11111111-1111-4111-8111-111111111111"
+const relayId = "relay-one"
 const storageId = "22222222-2222-4222-8222-222222222222"
 const artifactId = "33333333-3333-4333-8333-333333333333"
 const taskId = "44444444-4444-4444-8444-444444444444"
@@ -90,7 +91,10 @@ describeMysql("restic backup dispatch", () => {
         Effect.gen(function* () {
           yield* seedResticBackup({ enabled: true })
 
-          const prepared = yield* prepareBackupTaskEffect(incrementalCreate)
+          const prepared = yield* prepareBackupTaskEffect(
+            incrementalCreate,
+            relayId
+          )
 
           assert.strictEqual(prepared.kind, "create")
           if (
@@ -132,7 +136,7 @@ describeMysql("restic backup dispatch", () => {
           storageId: null,
           target: { id: "instance-one", kind: "instance" },
           taskId,
-        })
+        }, relayId)
 
         // The Relay parses tasks strictly, so stray fields fail the restore.
         assert.deepStrictEqual(backupTaskInputSchema.parse(prepared), {

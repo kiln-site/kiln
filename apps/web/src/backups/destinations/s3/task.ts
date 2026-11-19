@@ -6,53 +6,40 @@ import {
   invalidBackupDestination,
   type BackupDestinationTaskDriver,
 } from "../types"
-import {
-  signS3BackupDelete,
-  signS3BackupRestore,
-  signS3BackupUpload,
-} from "./client"
 import { loadBackupStorageCredentialEffect } from "./storage"
 
+// A task names the copy and nothing in the bucket: no key, path or signed
+// request. The Relay asks for access as it is ready to use the copy
+// (`grantBackupStorageAccessEffect`), which is when Hearth decides. These
+// check only that the task is worth sending.
 export const s3BackupDestinationTaskDriver = {
   kind: "s3",
   prepareFullCreate: (input) =>
     Effect.gen(function* () {
-      if (!input.objectKey) {
-        return yield* invalidBackupDestination(
-          "An S3 backup is missing its remote object key"
-        )
-      }
-      const storage = yield* availableStorage(input.storageId, true)
+      yield* storedCopy(input, true)
       return {
-        ...(yield* signS3BackupUpload(storage, input.objectKey)),
         artifactId: input.artifactId,
+        destinationId: input.storageId ?? undefined,
+        kind: "s3" as const,
       }
     }),
   prepareFullDelete: (input) =>
     Effect.gen(function* () {
-      if (!input.objectKey) {
-        return yield* invalidBackupDestination(
-          "An S3 backup is missing its remote object key"
-        )
-      }
-      const storage = yield* availableStorage(input.storageId, false)
+      yield* storedCopy(input, false)
       return {
-        ...(yield* signS3BackupDelete(storage, input.objectKey)),
         artifactId: input.artifactId,
+        destinationId: input.storageId ?? undefined,
+        kind: "s3" as const,
       }
     }),
   prepareFullRestore: (input) =>
     Effect.gen(function* () {
-      if (!input.objectKey) {
-        return yield* invalidBackupDestination(
-          "An S3 backup is missing its remote object key"
-        )
-      }
-      const storage = yield* availableStorage(input.storageId, false, true)
+      yield* storedCopy(input, false, true)
       return {
-        ...(yield* signS3BackupRestore(storage, input.objectKey)),
+        artifactId: input.artifactId,
         bytes: input.bytes,
         checksumSha256: input.checksumSha256,
+        kind: "remote" as const,
       }
     }),
   prepareResticRepository: (input) =>
@@ -79,6 +66,19 @@ export const s3BackupDestinationTaskDriver = {
       } satisfies ResticRepositoryLocation
     }),
 } satisfies BackupDestinationTaskDriver<"s3">
+
+const storedCopy = Effect.fnUntraced(function* (
+  input: { objectKey: string | null; storageId: string | null },
+  requireEnabled: boolean,
+  allowDeleting = false
+) {
+  if (!input.objectKey) {
+    return yield* invalidBackupDestination(
+      "An S3 backup is missing its remote object key"
+    )
+  }
+  return yield* availableStorage(input.storageId, requireEnabled, allowDeleting)
+})
 
 const availableStorage = Effect.fnUntraced(function* (
   storageId: string | null,

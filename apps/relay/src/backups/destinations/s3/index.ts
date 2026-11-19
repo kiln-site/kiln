@@ -10,7 +10,9 @@ import {
   resticRepositoryPrefixSchema,
   resticS3BucketSchema,
   resticS3RegionSchema,
+  type BackupS3CopyDestination,
   type BackupS3CredentialUploadDestination,
+  type BackupStorageAccessAction,
   type ResticRepositoryLocation,
 } from "@workspace/contracts"
 
@@ -20,6 +22,7 @@ import {
   secureRemoteLookup,
 } from "../../../source-policy.js"
 import { backupArchivePath } from "../local/index.js"
+import type { BackupStorageAccess } from "../../storage-access.js"
 import {
   defineBackupDestination,
   type ResticS3DriverLocation,
@@ -115,73 +118,103 @@ export function resticS3EndpointPort(endpoint: string): number {
   return parsed.port ? Number(parsed.port) : 443
 }
 
+// One signed request for a copy the Relay holds no keys to, from Hearth.
+function storageAccess(
+  access: BackupStorageAccess,
+  action: BackupStorageAccessAction,
+  destination: BackupS3CopyDestination
+) {
+  if (!destination.artifactId) {
+    return RelayBackupError.make({
+      code: "backup_copy_unnamed",
+      operation: `${action}.access`,
+      reason: "The task doesn't say which stored copy of the backup it means",
+    })
+  }
+  return access({ action, artifactId: destination.artifactId })
+}
+
 export const s3BackupDestination = defineBackupDestination({
-  deleteFullBackup: ({ destination }) =>
-    Effect.tryPromise({
-      try: () =>
-        sendSignedBackupRequest({
-          allowPrivateNetwork: destination.allowPrivateNetwork,
-          headers: destination.headers,
-          method: "DELETE",
-          url: destination.deleteUrl,
-        }),
-      catch: (cause) =>
-        RelayBackupError.make({
-          code: "s3_delete_failed",
-          operation: "delete.remote",
-          reason: `The backup archive could not be deleted from S3 storage: ${errorMessage(cause)}`,
-          cause,
-        }),
-    }).pipe(Effect.as({ warnings: [] })),
+  deleteFullBackup: ({ access, destination }) =>
+    Effect.gen(function* () {
+      const grant = yield* storageAccess(access, "delete", destination)
+      yield* Effect.tryPromise({
+        try: () =>
+          sendSignedBackupRequest({
+            allowPrivateNetwork: grant.allowPrivateNetwork,
+            headers: grant.headers,
+            method: "DELETE",
+            url: grant.url,
+          }),
+        catch: (cause) =>
+          RelayBackupError.make({
+            code: "s3_delete_failed",
+            operation: "delete.remote",
+            reason: `The backup archive could not be deleted from S3 storage: ${errorMessage(cause)}`,
+            cause,
+          }),
+      })
+      return { warnings: [] }
+    }),
   kind: "s3",
   maximumFullBackupBytes: MAX_S3_SINGLE_PUT_BYTES,
   retainsFullBackupLocally: false,
   saveFullBackup: ({
+    access,
     backupId,
     config,
     destination,
     onChunk,
     result,
     signal,
-  }) => {
-    if (result.bytes > MAX_S3_SINGLE_PUT_BYTES) {
-      return RelayBackupError.make({
-        code: "s3_single_put_too_large",
-        operation: "create.upload",
-        reason:
-          "S3 backups cannot exceed 5 GiB until multipart upload support is enabled",
-      })
-    }
-    const request =
-      "uploadUrl" in destination
-        ? {
-            headers: destination.headers,
-            url: destination.uploadUrl,
-          }
-        : signS3CredentialUpload(destination, result.checksumSha256)
-    return Effect.tryPromise({
-      try: () =>
-        sendSignedBackupRequest({
-          allowPrivateNetwork: destination.allowPrivateNetwork,
-          bodyPath: backupArchivePath(config, backupId),
-          headers: {
-            ...request.headers,
-            "content-length": String(result.bytes),
-          },
-          method: "PUT",
-          onBodyChunk: onChunk,
-          signal,
-          url: request.url,
-        }),
-      catch: (cause) =>
-        RelayBackupError.make({
-          code: "s3_upload_failed",
+  }) =>
+    Effect.gen(function* () {
+      if (result.bytes > MAX_S3_SINGLE_PUT_BYTES) {
+        return yield* RelayBackupError.make({
+          code: "s3_single_put_too_large",
           operation: "create.upload",
-          reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
-          cause,
-        }),
-    }).pipe(Effect.as(result))
-  },
+          reason:
+            "S3 backups cannot exceed 5 GiB until multipart upload support is enabled",
+        })
+      }
+      // A schedule's copy comes with the bucket's keys, and the Relay signs
+      // for it. Any other is Hearth's to open: asked for only now, with the
+      // archive ready, since what Hearth signs is good for minutes.
+      const request =
+        "bucket" in destination
+          ? {
+              allowPrivateNetwork: destination.allowPrivateNetwork,
+              ...(yield* Effect.try({
+                try: () =>
+                  signS3CredentialUpload(destination, result.checksumSha256),
+                catch: (cause) => cause,
+              })),
+            }
+          : yield* storageAccess(access, "upload", destination)
+      yield* Effect.tryPromise({
+        try: () =>
+          sendSignedBackupRequest({
+            allowPrivateNetwork: request.allowPrivateNetwork,
+            bodyPath: backupArchivePath(config, backupId),
+            headers: {
+              ...request.headers,
+              "content-length": String(result.bytes),
+            },
+            method: "PUT",
+            onBodyChunk: onChunk,
+            signal,
+            url: request.url,
+          }),
+        catch: (cause) =>
+          RelayBackupError.make({
+            code: "s3_upload_failed",
+            operation: "create.upload",
+            reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
+            cause,
+          }),
+      })
+      return result
+    }),
 })
 
 export function signS3CredentialUpload(

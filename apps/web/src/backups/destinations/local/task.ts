@@ -13,7 +13,11 @@ export const localBackupDestinationTaskDriver = {
         "A local backup cannot have a remote object key"
       )
     }
-    return Effect.succeed({ artifactId: input.artifactId, kind: "local" })
+    return Effect.succeed({
+      artifactId: input.artifactId,
+      destinationId: input.relayId,
+      kind: "local",
+    })
   },
   prepareFullDelete: (input) => {
     if (input.storageId !== null || input.objectKey !== null) {
@@ -21,7 +25,11 @@ export const localBackupDestinationTaskDriver = {
         "A local backup cannot have a remote object key"
       )
     }
-    return Effect.succeed({ artifactId: input.artifactId, kind: "local" })
+    return Effect.succeed({
+      artifactId: input.artifactId,
+      destinationId: input.relayId,
+      kind: "local",
+    })
   },
   prepareFullRestore: (input) => {
     if (input.storageId !== null || input.objectKey !== null) {

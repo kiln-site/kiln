@@ -36,6 +36,7 @@ import {
   type BackupFailureCode,
   type BackupResticCreateTaskResult,
   type BackupRestoreTaskInput,
+  type BackupStorageAccessRequest,
   type BackupTarget,
   type BackupUnfinishedRestore,
   type BackupTaskInput,
@@ -89,6 +90,7 @@ import {
 import { DockerEngine } from "./docker-engine.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { backupFailureCode } from "./backups/failure.js"
+import type { BackupStorageAccess } from "./backups/storage-access.js"
 import {
   backupTaskAttributes,
   type BackupTaskOutcome,
@@ -111,6 +113,7 @@ import {
   restorePortableInstanceBackup,
   settleRestoreJournal,
   type RestoreInstallGate,
+  type RestoreArchiveAccess,
 } from "./backup-restore.js"
 import {
   createResticDriver,
@@ -193,6 +196,15 @@ export interface BackupVolumes {
   >
 }
 
+/**
+ * Asks one Hearth client for access to a backup's copy in a bucket: the
+ * one its task is for, or null for a task stored before that was kept.
+ */
+type HearthStorageAccess = (
+  request: BackupStorageAccessRequest,
+  hearth: string | null
+) => ReturnType<BackupStorageAccess>
+
 export class BackupManager {
   readonly #config: RelayConfig
   readonly #findInstance: (
@@ -207,6 +219,7 @@ export class BackupManager {
   readonly #lanes: OperationLanes
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
+  readonly #storage: HearthStorageAccess
   readonly #wake: Queue.Queue<void>
   readonly #activeCreates = new Map<string, AbortController>()
 
@@ -221,6 +234,7 @@ export class BackupManager {
     lanes: OperationLanes
     restic: ResticDriver
     state: RelayStateStore["Service"]
+    storage: HearthStorageAccess
     wake: Queue.Queue<void>
   }) {
     this.#config = options.config
@@ -234,7 +248,34 @@ export class BackupManager {
     this.#fences = options.fences
     this.#restic = options.restic
     this.#state = options.state
+    this.#storage = options.storage
     this.#wake = options.wake
+  }
+
+  /**
+   * Access to a bucket's copy for one task, asked of the Hearth the task
+   * came from and no other.
+   */
+  #accessFor(taskId: string): BackupStorageAccess {
+    return (request) =>
+      this.#state.backupTaskHearth(taskId).pipe(
+        Effect.mapError((cause) =>
+          RelayBackupError.make({
+            code: "backup_task_unreadable",
+            operation: `${request.action}.access`,
+            reason: "The backup task's record could not be read",
+            cause,
+          })
+        ),
+        Effect.flatMap((hearth) => this.#storage(request, hearth))
+      )
+  }
+
+  // What a restore asks of Hearth for an archive kept only in a bucket.
+  #restoreAccess(taskId: string): RestoreArchiveAccess {
+    const access = this.#accessFor(taskId)
+    return (artifactId) =>
+      Effect.runPromise(access({ action: "download", artifactId }))
   }
 
   static make(options: {
@@ -255,6 +296,11 @@ export class BackupManager {
      * work on. Without them, they're read now and the lanes told.
      */
     fences?: TarRestoreFences
+    /**
+     * Asks one Hearth client for access to a backup's copy in a bucket the
+     * Relay holds no keys to (`backupStorageAccessThrough`).
+     */
+    storage: HearthStorageAccess
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -284,6 +330,7 @@ export class BackupManager {
           ),
         }),
         state,
+        storage: options.storage,
         wake,
       })
       const recovered = yield* Effect.tryPromise(() =>
@@ -309,9 +356,17 @@ export class BackupManager {
     })
   }
 
-  enqueue(input: BackupTaskInput) {
+  /**
+   * `hearth` is the Hearth client that sent the task: the one it asks for
+   * access to a bucket's copy.
+   */
+  enqueue(input: BackupTaskInput, hearth: string | null = null) {
     return Effect.gen({ self: this }, function* () {
-      const task = yield* this.#state.enqueueBackupTask(input, Date.now())
+      const task = yield* this.#state.enqueueBackupTask(
+        input,
+        Date.now(),
+        hearth
+      )
       yield* Queue.offer(this.#wake, undefined)
       return task
     })
@@ -972,7 +1027,8 @@ export class BackupManager {
           ),
         },
         progress,
-        signal
+        signal,
+        this.#accessFor(input.taskId)
       ).pipe(Effect.ensuring(Fiber.interrupt(progressFiber)))
     }).pipe(
       Effect.onError(() =>
@@ -1020,7 +1076,8 @@ export class BackupManager {
           const archive = await materializeBackupArtifact(
             this.#config,
             input,
-            temporary
+            temporary,
+            this.#restoreAccess(input.taskId)
           )
           return restoreTarBackup({
             archive,
@@ -1617,7 +1674,12 @@ export class BackupManager {
           )
           const artifact = yield* Effect.tryPromise({
             try: () =>
-              materializeBackupArtifact(this.#config, input, temporary),
+              materializeBackupArtifact(
+                this.#config,
+                input,
+                temporary,
+                this.#restoreAccess(input.taskId)
+              ),
             catch: (cause) =>
               RelayBackupError.make({
                 code: "database_restore_download_failed",
@@ -1722,7 +1784,8 @@ export class BackupManager {
                   this.#config,
                   { ...input, kind: "restore" },
                   instance,
-                  beginInstall
+                  beginInstall,
+                  this.#restoreAccess(input.taskId)
                 ),
               catch: (cause) =>
                 cause instanceof RelayBackupError
@@ -1775,6 +1838,7 @@ export class BackupManager {
                 result: yield* deleteBackupArtifacts(
                   this.#config,
                   task.input,
+                  this.#accessFor(task.taskId),
                   (currentArtifactId, progress) =>
                     this.#state.updateBackupTaskOperationProgress(
                       task.taskId,
@@ -1892,7 +1956,8 @@ export class BackupManager {
               input,
               created,
               progress,
-              createSignal
+              createSignal,
+              this.#accessFor(input.taskId)
             )
           ),
           Effect.onError(() =>
@@ -2010,7 +2075,8 @@ export class BackupManager {
               input,
               created,
               progress,
-              createSignal
+              createSignal,
+              this.#accessFor(input.taskId)
             )
           ),
           Effect.onError(() =>
@@ -2215,7 +2281,8 @@ export class BackupManager {
             input,
             archived,
             progress,
-            createSignal
+            createSignal,
+            this.#accessFor(input.taskId)
           )
         ),
         Effect.onError(() =>
@@ -2494,7 +2561,8 @@ function storeCreatedBackup(
   input: BackupCreateTaskInput,
   result: BackupArchiveCreateTaskResult,
   progress: BackupProgress,
-  signal: AbortSignal
+  signal: AbortSignal,
+  access: BackupStorageAccess
 ) {
   return Effect.gen(function* () {
     progress.phase = "uploading"
@@ -2524,9 +2592,11 @@ function storeCreatedBackup(
                   progress.total,
                   progress.completed + bytes
                 )
-              }
+              },
+              access
             )
           : backupDestinationFor("local").saveFullBackup({
+              access,
               backupId: input.backupId,
               config,
               destination,
@@ -2606,10 +2676,12 @@ function uploadBackupArtifact(
   },
   result: BackupArchiveCreateTaskResult,
   signal: AbortSignal,
-  onChunk: (bytes: number) => void
+  onChunk: (bytes: number) => void,
+  access: BackupStorageAccess
 ) {
   return backupDestinationFor("s3")
     .saveFullBackup({
+      access,
       backupId: input.backupId,
       config,
       destination: input.destination,
@@ -2631,6 +2703,7 @@ function uploadBackupArtifact(
 function deleteBackupArtifacts(
   config: RelayConfig,
   input: BackupDeleteTaskInput & { kind: "delete" },
+  access: BackupStorageAccess,
   updateProgress: (
     currentArtifactId: string | null,
     result: BackupOperationTaskResult
@@ -2654,7 +2727,7 @@ function deleteBackupArtifacts(
         )
       }
       const deleted = yield* Effect.result(
-        deleteBackupArtifact(config, { ...input, destination })
+        deleteBackupArtifact(config, { ...input, destination }, access)
       )
       if (!destination.artifactId) {
         if (Result.isFailure(deleted)) {
@@ -2698,7 +2771,8 @@ function deleteBackupArtifacts(
 
 function deleteBackupArtifact(
   config: RelayConfig,
-  input: BackupDeleteTaskInput & { kind: "delete" }
+  input: BackupDeleteTaskInput & { kind: "delete" },
+  access: BackupStorageAccess
 ) {
   if (input.destination.kind === "restic") {
     return Effect.succeed({ warnings: [] })
@@ -2708,11 +2782,13 @@ function deleteBackupArtifact(
   const backupId = input.archive?.backupId ?? input.backupId
   return destination.kind === "local"
     ? backupDestinationFor("local").deleteFullBackup({
+        access,
         backupId,
         config,
         destination,
       })
     : backupDestinationFor("s3").deleteFullBackup({
+        access,
         backupId,
         config,
         destination,

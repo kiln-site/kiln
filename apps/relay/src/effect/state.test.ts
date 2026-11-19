@@ -600,6 +600,115 @@ describe("Relay state from before destinations took 12-character IDs", () => {
   )
 })
 
+describe("Relay tasks stored with signed requests for a bucket", () => {
+  it.effect(
+    "keeps only the copy's name for a waiting backup, the keys a schedule's came with, and has Hearth send a waiting restore again",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, RelayStateStore | SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(
+              Effect.provide(makeRelayStateLayer(filename)),
+              Effect.provide(SqliteClient.layer({ filename }))
+            )
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const artifactId = "43600000-0000-4000-8000-000000000031"
+          const task = (index: number, kind: string, rest: object) => ({
+            backupId: `43600000-0000-4000-8000-00000000001${index}`,
+            kind,
+            target: { id: "instance-a", kind: "instance" },
+            taskId: `43600000-0000-4000-8000-00000000002${index}`,
+            ...rest,
+          })
+          const signed = task(1, "create", {
+            destination: {
+              allowPrivateNetwork: false,
+              artifactId,
+              headers: { "content-type": "application/zip" },
+              kind: "s3",
+              objectKey: "team/a.zip",
+              uploadUrl: "https://s3.example.com/a.zip?X-Amz-Signature=a",
+            },
+          })
+          const withKeys = {
+            accessKeyId: "AKIAEXAMPLE",
+            bucket: "kiln-backups",
+            endpoint: "https://s3.example.com",
+            kind: "s3",
+            objectKey: "team/b.zip",
+            region: "us-east-1",
+            secretAccessKey: "s3-secret",
+          }
+          const scheduled = task(2, "create", { destination: withKeys })
+          const restore = task(3, "restore", {
+            source: {
+              bytes: 10,
+              checksumSha256: "a".repeat(64),
+              downloadUrl: "https://s3.example.com/a.zip?X-Amz-Signature=a",
+              kind: "remote",
+            },
+          })
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              for (const [at, input] of [signed, scheduled, restore].entries()) {
+                yield* sql`
+                  INSERT INTO relay_backup_tasks
+                    (task_id, backup_id, kind, status, input_json, created_at,
+                     updated_at)
+                  VALUES (${input.taskId}, ${input.backupId}, ${input.kind},
+                    'queued', ${JSON.stringify(input)}, ${at}, ${at})
+                `
+              }
+              // One whose record can't be read doesn't keep the Relay from
+              // starting.
+              yield* sql`
+                INSERT INTO relay_backup_tasks
+                  (task_id, backup_id, kind, status, input_json, created_at,
+                   updated_at)
+                VALUES ('43600000-0000-4000-8000-000000000029',
+                  '43600000-0000-4000-8000-000000000019', 'restore', 'queued',
+                  '{"source":', 9, 9)
+              `
+              yield* sql`
+                DELETE FROM effect_sql_migrations WHERE migration_id >= 51
+              `
+            })
+          )
+
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              const stored = (taskId: string) =>
+                Effect.map(
+                  sql<{ json: string }>`
+                    SELECT input_json AS json FROM relay_backup_tasks
+                    WHERE task_id = ${taskId}
+                  `,
+                  (rows) =>
+                    (JSON.parse(rows[0]!.json) as { destination: unknown })
+                      .destination
+                )
+              assert.deepStrictEqual(yield* stored(signed.taskId), {
+                artifactId,
+                kind: "s3",
+              })
+              assert.deepStrictEqual(yield* stored(scheduled.taskId), withKeys)
+              const store = yield* RelayStateStore
+              assert.isTrue(
+                (yield* store.getBackupTask(restore.taskId))
+                  ?.inputRefreshRequired
+              )
+            })
+          )
+        })
+      )
+  )
+})
+
 /** Gives each test its own SQLite file so tests never share rows or run order. */
 function stateTest(
   name: string,

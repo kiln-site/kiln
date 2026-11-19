@@ -159,6 +159,7 @@ import { transferSpace } from "./transfers/peer/space.js"
 import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
+import { backupStorageAccessThrough } from "./backups/storage-access.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -1041,6 +1042,16 @@ const backupManager = await runRelayEffect(
     fences: restoreFences,
     lanes,
     volumes,
+    // The control socket starts after the backups it serves; by a task's
+    // turn it's there.
+    storage: backupStorageAccessThrough((payload, timeoutMs, only) =>
+      controlSocket.requestClients(
+        "backup.storage.access",
+        payload,
+        timeoutMs,
+        only
+      )
+    ),
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {
       const instance = (await docker.inspectInstances()).find(
@@ -3270,7 +3281,7 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.backups.enqueue",
         backupManager
-          .enqueue(backupTaskInputSchema.parse(request.payload))
+          .enqueue(backupTaskInputSchema.parse(request.payload), client.id)
           .pipe(Effect.map(sendBackupTask))
       )
     case "backup.task.cancel":
@@ -4161,6 +4172,9 @@ async function executeControlRequest(
     }
     case "sftp.authorization.resolve":
       throw new Error(`${request.operation} is not available yet`)
+    // Asked of Hearth, never of the Relay.
+    case "backup.storage.access":
+      throw new Error(`${request.operation} is answered by Hearth`)
   }
 }
 

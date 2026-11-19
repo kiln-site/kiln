@@ -75,6 +75,11 @@ export type FullBackupRestoreSource = Exclude<
 export type StoredBackupDestination = {
   artifactId: string
   objectKey: string | null
+  /**
+   * The Relay the backup is on. Its own disk is a destination under its
+   * ID, which a copy kept there (`storageId` null) is sent with.
+   */
+  relayId: string
   storageId: string | null
 }
 

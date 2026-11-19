@@ -230,9 +230,16 @@ export type BackupUnfinishedRestore = z.infer<
   typeof backupUnfinishedRestoreSchema
 >
 
+/**
+ * A copy on the Relay's own disk. The Relay's disk is a destination under
+ * the Relay's ID, which a task Hearth sends names (`destinationId`): a
+ * Relay keeps no copy meant for another's disk. One stored before tasks
+ * named it says nothing, and is the Relay's own.
+ */
 export const backupLocalDestinationSchema = z
   .object({
     artifactId: z.uuid().optional(),
+    destinationId: instanceIdSchema.optional(),
     kind: z.literal("local"),
   })
   .strict()
@@ -303,17 +310,25 @@ export const backupS3CredentialSchema = z
   })
   .strict()
 
-const backupS3PresignedUploadDestinationSchema = z
-  .object({
-    allowPrivateNetwork: z.boolean().default(false),
-    artifactId: z.uuid().optional(),
-    headers: z.record(z.string(), z.string()).default({}),
-    kind: z.literal("s3"),
-    objectKey: backupObjectKeySchema,
-    uploadUrl: backupHttpsUrlSchema,
-  })
-  .strict()
+/**
+ * A copy in a bucket that the Relay holds nothing of. Hearth keeps the
+ * bucket's keys and chooses its paths, so a task names only the copy, and
+ * the Relay asks Hearth for access as it is ready to send, read or delete
+ * it (`backup.storage.access`).
+ *
+ * Read loosely: a Relay keeps the tasks it stored, and Hearth once sent a
+ * signed URL and a path with one. Those are read and dropped.
+ */
+export const backupS3CopyDestinationSchema = z.object({
+  artifactId: z.uuid().optional(),
+  destinationId: instanceIdSchema.optional(),
+  kind: z.literal("s3"),
+})
 
+/**
+ * A scheduled backup's copy in a bucket, sent with the bucket's keys: the
+ * Relay starts those on its own and signs their uploads itself.
+ */
 export const backupS3CredentialUploadDestinationSchema =
   backupS3CredentialSchema
     .partial({ accessKeyId: true, secretAccessKey: true })
@@ -324,9 +339,11 @@ export const backupS3CredentialUploadDestinationSchema =
     })
     .strict()
 
+// The one with keys first: it is strict, so a copy that names none falls
+// through to the other.
 export const backupS3UploadDestinationSchema = z.union([
-  backupS3PresignedUploadDestinationSchema,
   backupS3CredentialUploadDestinationSchema,
+  backupS3CopyDestinationSchema,
 ])
 
 const resticLocalRepositoryLocationSchema = z
@@ -503,16 +520,15 @@ export const backupLocalSourceSchema = z
   })
   .strict()
 
-export const backupRemoteSourceSchema = z
-  .object({
-    allowPrivateNetwork: z.boolean().default(false),
-    bytes: z.number().int().nonnegative(),
-    checksumSha256: backupChecksumSha256Schema,
-    downloadUrl: backupHttpsUrlSchema,
-    headers: z.record(z.string(), z.string()).default({}),
-    kind: z.literal("remote"),
-  })
-  .strict()
+// An archive in a bucket, read with access the Relay asks Hearth for
+// (`backupS3CopyDestinationSchema`). Read loosely, as that is: the signed
+// URL an older Hearth sent with one is dropped.
+export const backupRemoteSourceSchema = z.object({
+  artifactId: z.uuid().optional(),
+  bytes: z.number().int().nonnegative(),
+  checksumSha256: backupChecksumSha256Schema,
+  kind: z.literal("remote"),
+})
 
 export const backupResticSourceSchema = z
   .object({
@@ -560,18 +576,13 @@ export const backupRestoreTaskInputSchema = z
   })
   .strict()
 
-export const backupS3DeleteDestinationSchema =
-  backupS3PresignedUploadDestinationSchema.omit({ uploadUrl: true }).extend({
-    deleteUrl: backupHttpsUrlSchema,
-  })
-
 export const backupDeleteTaskInputSchema = z
   .object({
     archive: backupArchiveIdentitySchema.optional(),
     backupId: backupIdSchema,
     destination: z.discriminatedUnion("kind", [
       backupLocalDestinationSchema,
-      backupS3DeleteDestinationSchema,
+      backupS3CopyDestinationSchema,
       backupResticDestinationSchema.extend({
         createTaskId: backupTaskIdSchema.optional(),
         snapshotId: resticSnapshotIdSchema.optional(),
@@ -581,7 +592,7 @@ export const backupDeleteTaskInputSchema = z
       .array(
         z.discriminatedUnion("kind", [
           backupLocalDestinationSchema,
-          backupS3DeleteDestinationSchema,
+          backupS3CopyDestinationSchema,
         ])
       )
       .max(15)
@@ -991,6 +1002,67 @@ export const relayBackupTaskSchema = z
       })
     }
   })
+
+/**
+ * What a Relay may ask to do with a copy in a bucket.
+ */
+export const backupStorageAccessActions = [
+  "upload",
+  "download",
+  "delete",
+] as const
+
+/**
+ * A Relay asks Hearth for access to one copy of a backup in a bucket
+ * (`backup.storage.access`), as it is ready to use it. It names the copy
+ * and nothing in the bucket: Hearth knows which Relay asks from the
+ * connection, and decides from what it knows of the copy.
+ */
+export const backupStorageAccessRequestSchema = z
+  .object({
+    action: z.enum(backupStorageAccessActions),
+    artifactId: z.uuid(),
+  })
+  .strict()
+
+/** One signed request for one object, good for minutes. */
+export const backupStorageAccessGrantSchema = z
+  .object({
+    allowPrivateNetwork: z.boolean(),
+    headers: z.record(z.string(), z.string()),
+    method: z.enum(["PUT", "GET", "DELETE"]),
+    status: z.literal("granted"),
+    url: backupHttpsUrlSchema,
+  })
+  .strict()
+
+/** Hearth answered and won't allow it, which asking again can't change. */
+export const backupStorageAccessRefusalSchema = z
+  .object({
+    reason: z.string().min(1).max(300),
+    status: z.literal("refused"),
+  })
+  .strict()
+
+export const backupStorageAccessResponseSchema = z.discriminatedUnion(
+  "status",
+  [backupStorageAccessGrantSchema, backupStorageAccessRefusalSchema]
+)
+
+export type BackupStorageAccessAction =
+  (typeof backupStorageAccessActions)[number]
+export type BackupStorageAccessRequest = z.infer<
+  typeof backupStorageAccessRequestSchema
+>
+export type BackupStorageAccessGrant = z.infer<
+  typeof backupStorageAccessGrantSchema
+>
+export type BackupStorageAccessResponse = z.infer<
+  typeof backupStorageAccessResponseSchema
+>
+export type BackupS3CopyDestination = z.infer<
+  typeof backupS3CopyDestinationSchema
+>
 
 export type BackupArtifactKind = z.infer<typeof backupArtifactKindSchema>
 export type BackupConsistency = z.infer<typeof backupConsistencySchema>

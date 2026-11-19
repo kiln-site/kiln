@@ -115,4 +115,48 @@ describe("Relay backup task inputs", () => {
 
     expect(JSON.stringify(redacted)).not.toMatch(/AKIAEXAMPLE|s3-secret/u)
   })
+
+  // A Relay keeps the tasks it stored. One from when Hearth sent a signed
+  // URL with a bucket's copy is still read, as a copy to ask Hearth for;
+  // one sent with the bucket's keys, as a schedule's is, keeps them.
+  it("reads a bucket's copy stored with a signed URL as one to ask for, and one with keys as it is", () => {
+    const artifactId = "33333333-3333-4333-8333-333333333333"
+    const stored = (destination: object) =>
+      backupTaskInputSchema.parse({
+        artifactKind: "archive",
+        backupId,
+        destination,
+        exclude: [],
+        kind: "create",
+        maxBytes: null,
+        mode: "full",
+        reason: "manual",
+        target,
+        taskId,
+      })
+    const keys = {
+      accessKeyId: "AKIAEXAMPLE",
+      allowPrivateNetwork: false,
+      artifactId,
+      bucket: "kiln-backups",
+      endpoint: "https://s3.example.com",
+      forcePathStyle: false,
+      kind: "s3",
+      objectKey: "team/backups/scheduled.zip",
+      region: "us-east-1",
+      secretAccessKey: "s3-secret",
+    }
+
+    expect(
+      stored({
+        allowPrivateNetwork: false,
+        artifactId,
+        headers: { "content-type": "application/zip" },
+        kind: "s3",
+        objectKey: "team/backups/manual.zip",
+        uploadUrl: "https://s3.example.com/manual.zip?X-Amz-Signature=abc",
+      })
+    ).toHaveProperty("destination", { artifactId, kind: "s3" })
+    expect(stored(keys)).toHaveProperty("destination", keys)
+  })
 })
