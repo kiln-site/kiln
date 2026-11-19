@@ -81,6 +81,7 @@ import type { BackupAction } from "@/lib/backup-target-permissions"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { signLocalBackupDownload } from "@/backups/destinations/local"
 import { signS3BackupDownload } from "@/backups/destinations/s3"
+import { backupDestinationUse } from "@/backups/destinations/use"
 import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
@@ -1382,19 +1383,15 @@ const validateCliBackupStorage = Effect.fn("cli.api.backups.storage.authorize")(
       loadBackupStorageEffect(input.storageId),
       "Hearth could not load the backup destination."
     )
-    if (
-      !storage ||
-      !storage.enabled ||
-      storage.deleting ||
-      (input.targetKind === "platform"
-        ? storage.ownerUserId !== null
-        : storage.ownerUserId !== null &&
-          storage.ownerUserId !== principal.user.id)
-    ) {
+    const use = backupDestinationUse(storage, {
+      platformTarget: input.targetKind === "platform",
+      userId: principal.user.id,
+    })
+    if (use === "unavailable" || use === "platform_only") {
       return yield* forbidden("The backup destination is unavailable.")
     }
     // A user-controlled destination exports backup contents outside Kiln.
-    if (storage.ownerUserId !== null && input.targetKind !== "platform") {
+    if (use === "personal" && input.targetKind !== "platform") {
       yield* requireRelayPermissionEffect({
         user: principal.user,
         relayId: input.relayId,
