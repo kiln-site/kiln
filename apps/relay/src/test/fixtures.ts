@@ -1,5 +1,20 @@
+import type { RestoreArchiveAccess } from "../backup-restore"
+import { backupStorageAccessThrough } from "../backups/storage-access"
 import { loadConfig } from "../config"
 import type { RelayConfig, RelayInstanceConfig } from "../config"
+
+/**
+ * A Relay no Hearth is connected to, as a backup manager finds it: nothing
+ * answers when it asks for access to a bucket.
+ */
+export const noHearth = {
+  hearthConnected: () => false,
+  storage: backupStorageAccessThrough(async () => []),
+}
+
+/** For a restore from the Relay's own disk, which asks for no bucket. */
+export const noBucket: RestoreArchiveAccess = () =>
+  Promise.reject(new Error("This restore reads no bucket"))
 
 /** A Relay config loaded the same way production loads it, rooted at `dataDirectory`. */
 export function testRelayConfig(

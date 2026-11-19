@@ -6,13 +6,11 @@ import {
   invalidBackupDestination,
   type BackupDestinationTaskDriver,
 } from "../types"
-import {
-  signS3BackupDelete,
-  signS3BackupRestore,
-  signS3BackupUpload,
-} from "./client"
 import { loadBackupStorageCredentialEffect } from "./storage"
 
+// A task names a bucket's copy and nothing else. The Relay asks Hearth for
+// access to it when it's ready to use it (`grantBackupStorageAccessEffect`),
+// so a task made now is refused now when its destination can't be used.
 export const s3BackupDestinationTaskDriver = {
   kind: "s3",
   prepareFullCreate: (input) =>
@@ -22,11 +20,8 @@ export const s3BackupDestinationTaskDriver = {
           "An S3 backup is missing its remote object key"
         )
       }
-      const storage = yield* availableStorage(input.storageId, true)
-      return {
-        ...(yield* signS3BackupUpload(storage, input.objectKey)),
-        artifactId: input.artifactId,
-      }
+      yield* availableStorage(input.storageId, true)
+      return { artifactId: input.artifactId, kind: "s3" as const }
     }),
   prepareFullDelete: (input) =>
     Effect.gen(function* () {
@@ -35,11 +30,8 @@ export const s3BackupDestinationTaskDriver = {
           "An S3 backup is missing its remote object key"
         )
       }
-      const storage = yield* availableStorage(input.storageId, false)
-      return {
-        ...(yield* signS3BackupDelete(storage, input.objectKey)),
-        artifactId: input.artifactId,
-      }
+      yield* availableStorage(input.storageId, false)
+      return { artifactId: input.artifactId, kind: "s3" as const }
     }),
   prepareFullRestore: (input) =>
     Effect.gen(function* () {
@@ -48,11 +40,12 @@ export const s3BackupDestinationTaskDriver = {
           "An S3 backup is missing its remote object key"
         )
       }
-      const storage = yield* availableStorage(input.storageId, false, true)
+      yield* availableStorage(input.storageId, false, true)
       return {
-        ...(yield* signS3BackupRestore(storage, input.objectKey)),
+        artifactId: input.artifactId,
         bytes: input.bytes,
         checksumSha256: input.checksumSha256,
+        kind: "remote" as const,
       }
     }),
   prepareResticRepository: (input) =>

@@ -117,6 +117,69 @@ describeMysql("restic backup dispatch", () => {
         })
     )
 
+    // Hearth keeps a bucket's keys and paths. A task names the copy, and
+    // the Relay asks for access to it when it's ready to use it.
+    it.effect(
+      "names a bucket's copy to send, read or delete, with no key, path or signed URL",
+      () =>
+        Effect.gen(function* () {
+          yield* seedResticBackup({ enabled: true })
+          const objectKey = "team/kiln/kiln.dev/relay-one/instance/one/a.zip"
+          const copy = { artifactId, objectKey, storageId }
+          const task = {
+            backupId,
+            target: { id: "instance-one", kind: "instance" as const },
+            taskId,
+          }
+
+          const create = yield* prepareBackupTaskEffect({
+            ...task,
+            artifactKind: "archive",
+            artifacts: [copy],
+            exclude: [],
+            kind: "create",
+            maxBytes: null,
+            mode: "full",
+            reason: "manual",
+          })
+          const remove = yield* prepareBackupTaskEffect({
+            ...task,
+            artifacts: [copy],
+            kind: "delete",
+          })
+          const restore = yield* prepareBackupTaskEffect({
+            ...task,
+            ...copy,
+            bytes: 1_024,
+            checksumSha256: "a".repeat(64),
+            kind: "restore",
+          })
+
+          assert.deepStrictEqual(
+            create.kind === "create" && create.destination,
+            { artifactId, kind: "s3" }
+          )
+          assert.deepStrictEqual(
+            remove.kind === "delete" && remove.destination,
+            { artifactId, kind: "s3" }
+          )
+          assert.deepStrictEqual(restore.kind === "restore" && restore.source, {
+            artifactId,
+            bytes: 1_024,
+            checksumSha256: "a".repeat(64),
+            kind: "remote",
+          })
+          for (const sent of [create, remove, restore]) {
+            assert.notMatch(
+              JSON.stringify(sent),
+              /AKIAEXAMPLE|s3-secret|X-Amz|team\/kiln/u
+            )
+            // What the Relay will read it back as.
+            assert.deepStrictEqual(backupTaskInputSchema.parse(sent), sent)
+          }
+        })
+    )
+
     it.effect("prepares a full archive restore the Relay accepts", () =>
       Effect.gen(function* () {
         yield* resetDatabase

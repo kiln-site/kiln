@@ -1,4 +1,3 @@
-import { createHash, createHmac } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { request as httpsRequest } from "node:https"
 import { isIP } from "node:net"
@@ -10,7 +9,9 @@ import {
   resticRepositoryPrefixSchema,
   resticS3BucketSchema,
   resticS3RegionSchema,
-  type BackupS3CredentialUploadDestination,
+  type BackupS3Destination,
+  type BackupStorageAccessAction,
+  type BackupStorageAccessRequest,
   type ResticRepositoryLocation,
 } from "@workspace/contracts"
 
@@ -20,6 +21,7 @@ import {
   secureRemoteLookup,
 } from "../../../source-policy.js"
 import { backupArchivePath } from "../local/index.js"
+import type { BackupStorageAccess } from "../../storage-access.js"
 import {
   defineBackupDestination,
   type ResticS3DriverLocation,
@@ -115,172 +117,121 @@ export function resticS3EndpointPort(endpoint: string): number {
   return parsed.port ? Number(parsed.port) : 443
 }
 
+// One signed request for this task's copy, from Hearth.
+function storageAccess(input: {
+  access: BackupStorageAccess
+  action: BackupStorageAccessAction
+  backupId: string
+  destination: BackupS3Destination
+  schedule?: BackupStorageAccessRequest["schedule"]
+  taskId: string
+}) {
+  const artifactId = input.destination.artifactId
+  if (!artifactId) {
+    return RelayBackupError.make({
+      code: "backup_copy_unnamed",
+      operation: `${input.action}.access`,
+      reason: "The task doesn't say which stored copy of the backup it means",
+    })
+  }
+  return input.access({
+    action: input.action,
+    artifactId,
+    backupId: input.backupId,
+    ...(input.schedule ? { schedule: input.schedule } : {}),
+    taskId: input.taskId,
+  })
+}
+
 export const s3BackupDestination = defineBackupDestination({
-  deleteFullBackup: ({ destination }) =>
-    Effect.tryPromise({
-      try: () =>
-        sendSignedBackupRequest({
-          allowPrivateNetwork: destination.allowPrivateNetwork,
-          headers: destination.headers,
-          method: "DELETE",
-          url: destination.deleteUrl,
-        }),
-      catch: (cause) =>
-        RelayBackupError.make({
-          code: "s3_delete_failed",
-          operation: "delete.remote",
-          reason: `The backup archive could not be deleted from S3 storage: ${errorMessage(cause)}`,
-          cause,
-        }),
-    }).pipe(Effect.as({ warnings: [] })),
+  deleteFullBackup: ({ access, backupId, destination, taskId }) =>
+    Effect.gen(function* () {
+      const grant = yield* storageAccess({
+        access,
+        action: "delete",
+        backupId,
+        destination,
+        taskId,
+      })
+      yield* Effect.tryPromise({
+        try: () =>
+          sendSignedBackupRequest({
+            allowPrivateNetwork: grant.allowPrivateNetwork,
+            headers: grant.headers,
+            method: "DELETE",
+            url: grant.url,
+          }),
+        catch: (cause) =>
+          RelayBackupError.make({
+            code: "s3_delete_failed",
+            operation: "delete.remote",
+            reason: `The backup archive could not be deleted from S3 storage: ${errorMessage(cause)}`,
+            cause,
+          }),
+      })
+      return { warnings: [] }
+    }),
   kind: "s3",
   maximumFullBackupBytes: MAX_S3_SINGLE_PUT_BYTES,
   retainsFullBackupLocally: false,
   saveFullBackup: ({
+    access,
     backupId,
     config,
     destination,
     onChunk,
     result,
+    schedule,
     signal,
-  }) => {
-    if (result.bytes > MAX_S3_SINGLE_PUT_BYTES) {
-      return RelayBackupError.make({
-        code: "s3_single_put_too_large",
-        operation: "create.upload",
-        reason:
-          "S3 backups cannot exceed 5 GiB until multipart upload support is enabled",
-      })
-    }
-    const request =
-      "uploadUrl" in destination
-        ? {
-            headers: destination.headers,
-            url: destination.uploadUrl,
-          }
-        : signS3CredentialUpload(destination, result.checksumSha256)
-    return Effect.tryPromise({
-      try: () =>
-        sendSignedBackupRequest({
-          allowPrivateNetwork: destination.allowPrivateNetwork,
-          bodyPath: backupArchivePath(config, backupId),
-          headers: {
-            ...request.headers,
-            "content-length": String(result.bytes),
-          },
-          method: "PUT",
-          onBodyChunk: onChunk,
-          signal,
-          url: request.url,
-        }),
-      catch: (cause) =>
-        RelayBackupError.make({
-          code: "s3_upload_failed",
+    taskId,
+  }) =>
+    Effect.gen(function* () {
+      if (result.bytes > MAX_S3_SINGLE_PUT_BYTES) {
+        return yield* RelayBackupError.make({
+          code: "s3_single_put_too_large",
           operation: "create.upload",
-          reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
-          cause,
-        }),
-    }).pipe(Effect.as(result))
-  },
+          reason:
+            "S3 backups cannot exceed 5 GiB until multipart upload support is enabled",
+        })
+      }
+      // Asked for only now, with the archive ready to send: the request is
+      // good for minutes, and an archive can take longer than that to make.
+      const grant = yield* storageAccess({
+        access,
+        action: "upload",
+        backupId,
+        destination,
+        schedule,
+        taskId,
+      })
+      yield* Effect.tryPromise({
+        try: () =>
+          sendSignedBackupRequest({
+            allowPrivateNetwork: grant.allowPrivateNetwork,
+            bodyPath: backupArchivePath(config, backupId),
+            headers: {
+              ...grant.headers,
+              "content-length": String(result.bytes),
+            },
+            method: "PUT",
+            onBodyChunk: onChunk,
+            signal,
+            url: grant.url,
+          }),
+        catch: (cause) =>
+          RelayBackupError.make({
+            code: "s3_upload_failed",
+            operation: "create.upload",
+            reason: `The backup archive could not be uploaded to S3 storage: ${errorMessage(cause)}`,
+            cause,
+          }),
+      })
+      return result
+    }),
 })
-
-export function signS3CredentialUpload(
-  destination: BackupS3CredentialUploadDestination,
-  payloadSha256: string,
-  now = new Date()
-): { headers: Record<string, string>; url: string } {
-  if (!destination.accessKeyId || !destination.secretAccessKey) {
-    throw RelayBackupError.make({
-      code: "s3_credentials_missing",
-      operation: "create.upload",
-      reason: "The scheduled S3 credentials were not provided to Relay",
-    })
-  }
-  const url = s3ObjectUrl(destination)
-  const amzDate = now
-    .toISOString()
-    .replaceAll(/[:-]/gu, "")
-    .replace(/\.\d{3}Z$/u, "Z")
-  const date = amzDate.slice(0, 8)
-  const headers = {
-    "content-type": "application/zip",
-    host: url.host,
-    "x-amz-content-sha256": payloadSha256,
-    "x-amz-date": amzDate,
-  }
-  const signedHeaders = Object.keys(headers).join(";")
-  const canonicalHeaders = Object.entries(headers)
-    .map(([key, value]) => `${key}:${value}\n`)
-    .join("")
-  const canonicalRequest = [
-    "PUT",
-    url.pathname,
-    "",
-    canonicalHeaders,
-    signedHeaders,
-    payloadSha256,
-  ].join("\n")
-  const scope = `${date}/${destination.region}/s3/aws4_request`
-  const stringToSign = [
-    "AWS4-HMAC-SHA256",
-    amzDate,
-    scope,
-    sha256Hex(canonicalRequest),
-  ].join("\n")
-  const dateKey = hmac(`AWS4${destination.secretAccessKey}`, date)
-  const regionKey = hmac(dateKey, destination.region)
-  const serviceKey = hmac(regionKey, "s3")
-  const signingKey = hmac(serviceKey, "aws4_request")
-  const signature = createHmac("sha256", signingKey)
-    .update(stringToSign)
-    .digest("hex")
-  return {
-    headers: {
-      Authorization: `AWS4-HMAC-SHA256 Credential=${destination.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-      "content-type": headers["content-type"],
-      "x-amz-content-sha256": headers["x-amz-content-sha256"],
-      "x-amz-date": headers["x-amz-date"],
-    },
-    url: url.toString(),
-  }
-}
-
-function s3ObjectUrl(destination: BackupS3CredentialUploadDestination): URL {
-  const url = new URL(destination.endpoint)
-  const virtualHosted =
-    !destination.forcePathStyle &&
-    isIP(url.hostname.replace(/^\[|\]$/gu, "")) === 0 &&
-    /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/u.test(destination.bucket)
-  const objectPath = destination.objectKey
-    .split("/")
-    .map(encodeS3PathSegment)
-    .join("/")
-  if (virtualHosted) {
-    url.hostname = `${destination.bucket}.${url.hostname}`
-    url.pathname = `/${objectPath}`
-  } else {
-    url.pathname = `/${encodeS3PathSegment(destination.bucket)}/${objectPath}`
-  }
-  return url
-}
-
-function encodeS3PathSegment(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/gu,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-  )
-}
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
-}
-
-function sha256Hex(value: string): string {
-  return createHash("sha256").update(value).digest("hex")
-}
-
-function hmac(key: string | Buffer, value: string): Buffer {
-  return createHmac("sha256", key).update(value).digest()
 }
 
 /**

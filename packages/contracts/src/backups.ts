@@ -15,20 +15,6 @@ const hasUnsafeControlCharacter = (value: string) =>
     return codePoint !== undefined && (codePoint < 32 || codePoint === 127)
   })
 
-export const backupObjectKeySchema = z
-  .string()
-  .min(1)
-  .max(1_024)
-  .refine((value) => !value.startsWith("/"), {
-    message: "Backup object keys must be relative",
-  })
-  .refine((value) => !value.split("/").includes(".."), {
-    message: "Backup object keys cannot traverse parent directories",
-  })
-  .refine((value) => !hasUnsafeControlCharacter(value), {
-    message: "Backup object keys cannot contain control characters",
-  })
-
 export const backupIdSchema = z.uuid()
 export const backupTaskIdSchema = z.uuid()
 
@@ -301,31 +287,19 @@ export const backupS3CredentialSchema = z
   })
   .strict()
 
-const backupS3PresignedUploadDestinationSchema = z
-  .object({
-    allowPrivateNetwork: z.boolean().default(false),
-    artifactId: z.uuid().optional(),
-    headers: z.record(z.string(), z.string()).default({}),
-    kind: z.literal("s3"),
-    objectKey: backupObjectKeySchema,
-    uploadUrl: backupHttpsUrlSchema,
-  })
-  .strict()
-
-export const backupS3CredentialUploadDestinationSchema =
-  backupS3CredentialSchema
-    .partial({ accessKeyId: true, secretAccessKey: true })
-    .safeExtend({
-      artifactId: z.uuid().optional(),
-      kind: z.literal("s3"),
-      objectKey: backupObjectKeySchema,
-    })
-    .strict()
-
-export const backupS3UploadDestinationSchema = z.union([
-  backupS3PresignedUploadDestinationSchema,
-  backupS3CredentialUploadDestinationSchema,
-])
+/**
+ * A copy of an archive in a bucket. Hearth holds the bucket's keys and
+ * chooses its paths, so a task names only the copy: the Relay asks Hearth
+ * for access to it when it's ready to send, read or delete it
+ * (`backup.storage.access`).
+ *
+ * A Relay keeps the tasks it stored, and Hearth once sent a signed URL, an
+ * object key or the bucket's keys with a copy: those are read and dropped.
+ */
+export const backupS3DestinationSchema = z.object({
+  artifactId: z.uuid().optional(),
+  kind: z.literal("s3"),
+})
 
 const resticLocalRepositoryLocationSchema = z
   .object({
@@ -359,9 +333,18 @@ export const backupResticDestinationSchema = z
   })
   .strict()
 
-const backupArchiveDestinationSchema = z.union([
+/**
+ * The step of a schedule that took a backup. Hearth lets a scheduled backup
+ * into a bucket only when a schedule it sent that Relay has this step send
+ * backups there: the Relay ran it on its own, so nothing else says it may.
+ */
+export const backupScheduleStepSchema = z
+  .object({ actionId: z.string().min(1).max(120), id: z.uuid() })
+  .strict()
+
+const backupArchiveDestinationSchema = z.discriminatedUnion("kind", [
   backupLocalDestinationSchema,
-  backupS3UploadDestinationSchema,
+  backupS3DestinationSchema,
 ])
 
 const backupCreateTaskInputObjectSchema = z
@@ -376,6 +359,8 @@ const backupCreateTaskInputObjectSchema = z
         batchId: z.uuid().optional(),
         // The repository an incremental scheduled backup goes to.
         repositoryId: z.uuid().optional(),
+        // The schedule's step that took it (`backupScheduleStepSchema`).
+        schedule: backupScheduleStepSchema.optional(),
         storageId: z.uuid().nullable(),
       })
       .strict()
@@ -395,9 +380,9 @@ const backupCreateTaskInputObjectSchema = z
     appCoverage: z.unknown().optional(),
     // Absent is live.
     consistency: backupConsistencySchema.optional(),
-    destination: z.union([
+    destination: z.discriminatedUnion("kind", [
       backupLocalDestinationSchema,
-      backupS3UploadDestinationSchema,
+      backupS3DestinationSchema,
       backupResticDestinationSchema,
     ]),
     exclude: z.array(z.string().min(1).max(1_024)).max(1_000),
@@ -501,16 +486,15 @@ export const backupLocalSourceSchema = z
   })
   .strict()
 
-export const backupRemoteSourceSchema = z
-  .object({
-    allowPrivateNetwork: z.boolean().default(false),
-    bytes: z.number().int().nonnegative(),
-    checksumSha256: backupChecksumSha256Schema,
-    downloadUrl: backupHttpsUrlSchema,
-    headers: z.record(z.string(), z.string()).default({}),
-    kind: z.literal("remote"),
-  })
-  .strict()
+// An archive in a bucket, read with access the Relay asks Hearth for
+// (`backupS3DestinationSchema`). The signed URL an older Hearth sent with
+// one is read and dropped.
+export const backupRemoteSourceSchema = z.object({
+  artifactId: z.uuid().optional(),
+  bytes: z.number().int().nonnegative(),
+  checksumSha256: backupChecksumSha256Schema,
+  kind: z.literal("remote"),
+})
 
 export const backupResticSourceSchema = z
   .object({
@@ -558,18 +542,13 @@ export const backupRestoreTaskInputSchema = z
   })
   .strict()
 
-export const backupS3DeleteDestinationSchema =
-  backupS3PresignedUploadDestinationSchema.omit({ uploadUrl: true }).extend({
-    deleteUrl: backupHttpsUrlSchema,
-  })
-
 export const backupDeleteTaskInputSchema = z
   .object({
     archive: backupArchiveIdentitySchema.optional(),
     backupId: backupIdSchema,
     destination: z.discriminatedUnion("kind", [
       backupLocalDestinationSchema,
-      backupS3DeleteDestinationSchema,
+      backupS3DestinationSchema,
       backupResticDestinationSchema.extend({
         createTaskId: backupTaskIdSchema.optional(),
         snapshotId: resticSnapshotIdSchema.optional(),
@@ -579,7 +558,7 @@ export const backupDeleteTaskInputSchema = z
       .array(
         z.discriminatedUnion("kind", [
           backupLocalDestinationSchema,
-          backupS3DeleteDestinationSchema,
+          backupS3DestinationSchema,
         ])
       )
       .max(15)
@@ -926,6 +905,11 @@ export const relayBackupTaskSchema = z
     error: z.string().max(4_096).nullable(),
     errorCode: backupFailureCodeWireSchema.nullable().default(null),
     finishedAt: z.number().int().nonnegative().nullable(),
+    /**
+     * A create whose archive is taken and held on the Relay until Hearth
+     * can be reached to store it: a queued task that has done its part.
+     */
+    heldForHearth: z.boolean().default(false),
     input: backupTaskInputSchema,
     inputRefreshRequired: z.boolean(),
     kind: backupTaskKindSchema,
@@ -1010,9 +994,7 @@ export type BackupExportTaskResult = z.infer<
   typeof backupExportTaskResultSchema
 >
 export type BackupMode = z.infer<typeof backupModeSchema>
-export type BackupS3CredentialUploadDestination = z.infer<
-  typeof backupS3CredentialUploadDestinationSchema
->
+export type BackupS3Destination = z.infer<typeof backupS3DestinationSchema>
 export type BackupPruneTaskInput = z.infer<typeof backupPruneTaskInputSchema>
 export type ResticRepositoryLocation = z.infer<
   typeof resticRepositoryLocationSchema
@@ -1073,6 +1055,68 @@ export function isBackupOperationTaskResult(
 ): result is z.infer<typeof backupOperationTaskResultSchema> {
   return !("bytes" in result)
 }
+
+/**
+ * What a Relay asks Hearth for when a task needs a copy in a bucket
+ * (`backup.storage.access`): one signed request for that copy, good for a
+ * few minutes. Hearth finds the object from its own catalog, so nothing a
+ * Relay sends names a bucket or a path.
+ */
+export const backupStorageAccessActions = [
+  "upload",
+  "download",
+  "delete",
+] as const
+
+export const backupStorageAccessRequestSchema = z
+  .object({
+    action: z.enum(backupStorageAccessActions),
+    artifactId: z.uuid(),
+    backupId: backupIdSchema,
+    /** For a backup a schedule took, the step that took it. */
+    schedule: backupScheduleStepSchema.optional(),
+    taskId: backupTaskIdSchema,
+  })
+  .strict()
+
+export const backupStorageAccessGrantSchema = z
+  .object({
+    allowPrivateNetwork: z.boolean(),
+    headers: z.record(z.string(), z.string()),
+    method: z.enum(["PUT", "GET", "DELETE"]),
+    status: z.literal("granted"),
+    url: backupHttpsUrlSchema,
+  })
+  .strict()
+
+/**
+ * Hearth answered and won't allow it, which waiting can't change: the task
+ * isn't this Relay's, the copy is already stored, or its destination is
+ * gone. A Hearth that can't be reached gives no answer at all.
+ */
+export const backupStorageAccessRefusalSchema = z
+  .object({
+    reason: z.string().min(1).max(300),
+    status: z.literal("refused"),
+  })
+  .strict()
+
+export const backupStorageAccessResponseSchema = z.discriminatedUnion(
+  "status",
+  [backupStorageAccessGrantSchema, backupStorageAccessRefusalSchema]
+)
+
+export type BackupStorageAccessAction =
+  (typeof backupStorageAccessActions)[number]
+export type BackupStorageAccessRequest = z.infer<
+  typeof backupStorageAccessRequestSchema
+>
+export type BackupStorageAccessGrant = z.infer<
+  typeof backupStorageAccessGrantSchema
+>
+export type BackupStorageAccessResponse = z.infer<
+  typeof backupStorageAccessResponseSchema
+>
 
 const BACKUP_SECRET_KEYS = new Set([
   "accessKeyId",

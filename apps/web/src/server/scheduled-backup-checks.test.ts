@@ -293,6 +293,13 @@ describeMysql("Scheduled backups, checked before they run", () => {
             backupSchedule({ kind: "storage", storageId }, [capped])
           )
           const before = executions()[capped]
+          // The schedule names the bucket's kind and nothing in it: Hearth
+          // keeps its keys and its paths, and signs each upload when asked.
+          assert.deepStrictEqual(before?.destination, { kind: "s3" })
+          assert.notMatch(
+            JSON.stringify(relay.applied.at(-1)),
+            /access-key|secret-key/u
+          )
 
           const failed = yield* Effect.flip(
             deleteBackupStorageEffect(storageId)

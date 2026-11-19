@@ -159,6 +159,7 @@ import { transferSpace } from "./transfers/peer/space.js"
 import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
+import { backupStorageAccessThrough } from "./backups/storage-access.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -1039,7 +1040,13 @@ const backupManager = await runRelayEffect(
     config,
     databases,
     fences: restoreFences,
+    // The control socket starts after the backups it serves; by a task's
+    // turn it's there.
+    hearthConnected: () => controlSocket.sessions.size > 0,
     lanes,
+    storage: backupStorageAccessThrough((payload, timeoutMs) =>
+      controlSocket.requestClients("backup.storage.access", payload, timeoutMs)
+    ),
     volumes,
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {
@@ -1606,8 +1613,11 @@ const controlSocket = attachControlSocket({
   execute: executeControlRequest,
   // Which import each Hearth's protection of volumes counts is its current
   // connection's.
-  clientConnected: (clientId, connectionId) =>
-    volumes.clientConnected(clientId, connectionId),
+  clientConnected: (clientId, connectionId) => {
+    volumes.clientConnected(clientId, connectionId)
+    // Backups held for a Hearth to store them have one to ask now.
+    forkRelayEffect("relay.backups.hearthReachable", backupManager.hearthReachable())
+  },
   identity: relayIdentity,
   journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
@@ -4161,6 +4171,9 @@ async function executeControlRequest(
     }
     case "sftp.authorization.resolve":
       throw new Error(`${request.operation} is not available yet`)
+    // Asked of Hearth, never of the Relay.
+    case "backup.storage.access":
+      throw new Error(`${request.operation} is answered by Hearth`)
   }
 }
 

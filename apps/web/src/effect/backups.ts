@@ -1039,8 +1039,38 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       : []
   const repositoryId = repositoryRows[0]?.id ?? null
   const orphaned = input.mode === "incremental" && !repositoryId
-  const objectKey =
-    input.destination.kind === "s3" ? input.destination.objectKey : null
+  // Hearth chooses where a bucket's copy goes, as it does for a backup it
+  // started: the Relay names the destination and never a path in it.
+  const storageRows =
+    input.destination.kind === "s3" && catalog.storageId
+      ? yield* transaction.queryRows<RowDataPacket & { object_prefix: string }>(
+          `SELECT object_prefix
+             FROM ${databaseTable("backup_storage")}
+            WHERE id = ?
+            LIMIT 1`,
+          [catalog.storageId]
+        )
+      : []
+  const storage = storageRows[0]
+  const objectKey = storage
+    ? backupObjectKey({
+        artifactKind: input.artifactKind,
+        backupId: input.backupId,
+        installationId: kilnInstallationId(),
+        objectPrefix: storage.object_prefix,
+        relayId,
+        // Kiln's own are filed under the installation, as its schedule's
+        // folder was.
+        targetId:
+          input.target.kind === "platform"
+            ? kilnInstallationId()
+            : input.target.id,
+        targetKind: input.target.kind,
+      })
+    : null
+  // A bucket that's gone has nowhere for it to go.
+  const unstorable = input.destination.kind === "s3" && !storage
+  const failed = orphaned || unstorable
 
   // An App's scheduled backups are cataloged as one batch, live or stopped,
   // as its manual ones are.
@@ -1059,7 +1089,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       catalog.storageId,
       input.artifactKind,
       input.mode,
-      orphaned ? "failed" : "queued",
+      failed ? "failed" : "queued",
       catalog.name,
       objectKey,
       repositoryId,
@@ -1083,7 +1113,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       input.backupId,
       input.mode === "incremental" ? "restic" : (catalog.storageId ?? "local"),
       catalog.storageId,
-      orphaned ? "failed" : "queued",
+      failed ? "failed" : "queued",
       objectKey,
       task.createdAt,
       now,
@@ -1097,11 +1127,13 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     [
       input.taskId,
       input.backupId,
-      orphaned ? "failed" : "queued",
+      failed ? "failed" : "queued",
       input.maxBytes,
       orphaned
         ? "Its repository was gone when it finished, so it can't be restored"
-        : null,
+        : unstorable
+          ? "Its backup destination was gone, so it had nowhere to go"
+          : null,
       task.createdAt,
       now,
     ]

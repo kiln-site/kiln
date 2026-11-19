@@ -26,6 +26,7 @@ import { DockerEngine } from "./docker-engine.js"
 import { adoptProvenHearth } from "./installation.js"
 import { provenHearthContainer } from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
+import { noHearth } from "./test/fixtures.js"
 import { relayHarness } from "./test/relay.js"
 
 const testDirectory = mkdtempSync(join(tmpdir(), "kiln-platform-backup-"))
@@ -207,6 +208,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
           stop: async () => {},
           volumes: async () => [],
         },
+        ...noHearth,
         config: harness.config,
         fences: await TarRestoreFences.load(harness.config),
         findInstance: async () => null,

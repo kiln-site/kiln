@@ -178,6 +178,7 @@ export const relayControlOperations = [
   "instance.network.databases.remove",
   "hearth.terminal.output",
   "sftp.authorization.resolve",
+  "backup.storage.access",
   "operation.get",
   "relay.pause.write",
   "resource.freeze",
@@ -340,6 +341,7 @@ export function relayControlOperationChanges(
     case "relay.desktop.detach":
     case "hearth.terminal.output":
     case "sftp.authorization.resolve":
+    case "backup.storage.access":
     case "operation.get":
       return false
     case "relay.pause.write":

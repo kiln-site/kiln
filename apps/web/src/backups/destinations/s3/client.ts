@@ -21,13 +21,18 @@ import { Effect, Result, Schedule } from "effect"
 import {
   backupArtifactFilename,
   type BackupArtifactKind,
+  type BackupStorageAccessAction,
+  type BackupStorageAccessGrant,
   type BackupTargetKind,
 } from "@workspace/contracts"
 
 import { BackupStorageError } from "@/effect/errors"
 
 const CONNECTION_TEST_PREFIX = "kiln/connection-tests"
-const PRESIGNED_UPLOAD_SECONDS = 7 * 24 * 60 * 60
+// How long a Relay has to start the request Hearth signed for it. The
+// transfer may run on past it: a bucket checks a signature as the request
+// arrives.
+const STORAGE_ACCESS_SECONDS = 10 * 60
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 30_000
 const BACKUP_TRANSFER_IDLE_TIMEOUT_MS = 60_000
 const S3_DELETE_PAGE_SIZE = 1_000
@@ -155,7 +160,7 @@ export function backupObjectKey(input: {
   ].join("/")
 }
 
-export function backupObjectKeyPrefix(input: {
+function backupObjectKeyPrefix(input: {
   installationId: string
   objectPrefix: string
   relayId: string
@@ -412,55 +417,44 @@ export function withS3BackupObject<TResult, TError, TRequirements>(
   )
 }
 
-export function signS3BackupUpload(
+/**
+ * Signs the one request a Relay asked for (`backup.storage.access`): to
+ * send, read or delete a single object. The bucket's keys stay in Hearth,
+ * and the request is good for `STORAGE_ACCESS_SECONDS`.
+ */
+export function signS3BackupAccess(
   credential: S3BackupCredential,
-  objectKey: string
+  objectKey: string,
+  action: BackupStorageAccessAction
 ) {
+  const object = { Bucket: credential.bucket, Key: objectKey }
   return withS3Client(credential, (client) =>
-    s3Request("storage.signUpload", () =>
+    s3Request(`storage.sign.${action}`, () =>
       getSignedUrl(
         client,
-        new PutObjectCommand({
-          Bucket: credential.bucket,
-          ContentType: "application/zip",
-          Key: objectKey,
-        }),
-        { expiresIn: PRESIGNED_UPLOAD_SECONDS }
+        action === "upload"
+          ? new PutObjectCommand({ ...object, ContentType: "application/zip" })
+          : action === "download"
+            ? new GetObjectCommand(object)
+            : new DeleteObjectCommand(object),
+        { expiresIn: STORAGE_ACCESS_SECONDS }
       )
     ).pipe(
-      Effect.map((uploadUrl) => ({
-        allowPrivateNetwork: credential.allowPrivateNetwork,
-        headers: { "content-type": "application/zip" },
-        kind: "s3" as const,
-        objectKey,
-        uploadUrl,
-      }))
-    )
-  )
-}
-
-export function signS3BackupDelete(
-  credential: S3BackupCredential,
-  objectKey: string
-) {
-  return withS3Client(credential, (client) =>
-    s3Request("storage.signDelete", () =>
-      getSignedUrl(
-        client,
-        new DeleteObjectCommand({
-          Bucket: credential.bucket,
-          Key: objectKey,
-        }),
-        { expiresIn: PRESIGNED_UPLOAD_SECONDS }
+      Effect.map(
+        (url): BackupStorageAccessGrant => ({
+          allowPrivateNetwork: credential.allowPrivateNetwork,
+          headers:
+            action === "upload" ? { "content-type": "application/zip" } : {},
+          method:
+            action === "upload"
+              ? "PUT"
+              : action === "download"
+                ? "GET"
+                : "DELETE",
+          status: "granted",
+          url,
+        })
       )
-    ).pipe(
-      Effect.map((deleteUrl) => ({
-        allowPrivateNetwork: credential.allowPrivateNetwork,
-        deleteUrl,
-        headers: {},
-        kind: "s3" as const,
-        objectKey,
-      }))
     )
   )
 }
@@ -488,31 +482,6 @@ export function signS3BackupDownload(
           Date.now() + expiresInSeconds * 1_000
         ).toISOString(),
         url,
-      }))
-    )
-  )
-}
-
-export function signS3BackupRestore(
-  credential: S3BackupCredential,
-  objectKey: string
-) {
-  return withS3Client(credential, (client) =>
-    s3Request("storage.signRestore", () =>
-      getSignedUrl(
-        client,
-        new GetObjectCommand({
-          Bucket: credential.bucket,
-          Key: objectKey,
-        }),
-        { expiresIn: PRESIGNED_UPLOAD_SECONDS }
-      )
-    ).pipe(
-      Effect.map((downloadUrl) => ({
-        allowPrivateNetwork: credential.allowPrivateNetwork,
-        downloadUrl,
-        headers: {},
-        kind: "remote" as const,
       }))
     )
   )
@@ -575,6 +544,11 @@ function makeS3Client(
     forcePathStyle: credential.forcePathStyle,
     region: credential.region,
     requestHandler,
+    // A signed upload has no body to sum yet. Left to its default, the SDK
+    // signs the checksum of an empty one into the URL, and a bucket that
+    // checks it refuses the archive sent there.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   })
 }
 

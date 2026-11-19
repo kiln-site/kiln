@@ -404,6 +404,109 @@ describe("Relay state", () => {
   )
 
   it.effect(
+    "drops the bucket keys a stored schedule carried for its full backups, and keeps the rest of it",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const repository = {
+            accessKeyId: "AKIAREPOSITORY",
+            bucket: "kiln-backups",
+            kind: "s3",
+            secretAccessKey: "repository-secret",
+          }
+          // As a Hearth sent it while a schedule carried a bucket's keys.
+          const stored = {
+            actions: [
+              { id: "wait", type: "wait" },
+              {
+                executions: [
+                  {
+                    destination: {
+                      accessKeyId: "AKIAARCHIVE",
+                      bucket: "kiln-backups",
+                      endpoint: "https://s3.example.com",
+                      kind: "s3",
+                      objectKeyPrefix: "team/kiln/install/relay/instance/one",
+                      region: "us-east-1",
+                      secretAccessKey: "archive-secret",
+                    },
+                    mode: "full",
+                    targetId: "one",
+                    targetKind: "instance",
+                  },
+                  {
+                    destination: { kind: "local" },
+                    mode: "full",
+                    targetId: "two",
+                    targetKind: "instance",
+                  },
+                  {
+                    destination: {
+                      kind: "restic",
+                      repository,
+                      repositoryPassword: "repository-password",
+                    },
+                    mode: "incremental",
+                    targetId: "three",
+                    targetKind: "instance",
+                  },
+                ],
+                id: "backup",
+                type: "backup",
+              },
+            ],
+            id: "schedule-1",
+            name: "Nightly",
+          }
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`
+                INSERT INTO relay_schedules
+                  (schedule_id, revision, enabled, next_run_at, definition_json)
+                VALUES ('schedule-1', 1, 1, NULL, ${JSON.stringify(stored)})
+              `
+              yield* sql`
+                DELETE FROM effect_sql_migrations WHERE migration_id >= 51
+              `
+            })
+          )
+
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const [row] = yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{ definition_json: string }>`
+                SELECT definition_json FROM relay_schedules
+              `
+            })
+          )
+          assert.notMatch(
+            row?.definition_json ?? "",
+            /AKIAARCHIVE|archive-secret|objectKeyPrefix/u
+          )
+          const [bucket, local, incremental] = (
+            JSON.parse(row?.definition_json ?? "{}") as typeof stored
+          ).actions[1]!.executions!
+          assert.deepStrictEqual(bucket?.destination, { kind: "s3" })
+          assert.deepStrictEqual(local, stored.actions[1]!.executions![1])
+          // An incremental backup's repository still reaches the bucket with
+          // them.
+          assert.deepStrictEqual(
+            incremental,
+            stored.actions[1]!.executions![2]
+          )
+        })
+      )
+  )
+
+  it.effect(
     "keeps what a client or invitation could do to an App's files, to a database's and an App's power, to deploy an App or change its limits, and to open its shell, as the actions every instance takes, and drops reading the Relay's own state",
     () =>
       withTemporaryDirectory((directory) =>

@@ -89,21 +89,15 @@ describe("Relay backup task inputs", () => {
     ).toEqual({ nested: { value: 1 } })
   })
 
-  it("strips S3 keys from full-upload task input", () => {
-    const redacted = redactBackupTaskInput({
+  // A Relay keeps the tasks it stored. One from when Hearth sent a bucket's
+  // keys, a path in it or a signed URL with a copy is still read, and none
+  // of that is kept: the copy is all a task names now.
+  it("reads a bucket's copy as an older Hearth sent it, keeping no key or URL", () => {
+    const artifactId = "33333333-3333-4333-8333-333333333333"
+    const stored = (destination: object) => ({
       artifactKind: "archive",
       backupId,
-      destination: {
-        accessKeyId: "AKIAEXAMPLE",
-        allowPrivateNetwork: false,
-        bucket: "kiln-backups",
-        endpoint: "https://s3.example.com",
-        forcePathStyle: false,
-        kind: "s3",
-        objectKey: "team/backups/scheduled.zip",
-        region: "us-east-1",
-        secretAccessKey: "s3-secret",
-      },
+      destination,
       exclude: [],
       kind: "create",
       maxBytes: null,
@@ -112,7 +106,36 @@ describe("Relay backup task inputs", () => {
       target,
       taskId,
     })
+    const scheduled = backupTaskInputSchema.parse(
+      stored({
+        accessKeyId: "AKIAEXAMPLE",
+        allowPrivateNetwork: false,
+        artifactId,
+        bucket: "kiln-backups",
+        endpoint: "https://s3.example.com",
+        forcePathStyle: false,
+        kind: "s3",
+        objectKey: "team/backups/scheduled.zip",
+        region: "us-east-1",
+        secretAccessKey: "s3-secret",
+      })
+    )
+    const signed = backupTaskInputSchema.parse(
+      stored({
+        allowPrivateNetwork: false,
+        artifactId,
+        headers: { "content-type": "application/zip" },
+        kind: "s3",
+        objectKey: "team/backups/manual.zip",
+        uploadUrl: "https://s3.example.com/kiln-backups/manual.zip?X-Amz-Signature=abc",
+      })
+    )
 
-    expect(JSON.stringify(redacted)).not.toMatch(/AKIAEXAMPLE|s3-secret/u)
+    for (const input of [scheduled, signed]) {
+      expect(input).toMatchObject({ destination: { artifactId, kind: "s3" } })
+      expect(JSON.stringify(input)).not.toMatch(
+        /AKIAEXAMPLE|s3-secret|X-Amz-Signature|team\/backups/u
+      )
+    }
   })
 })

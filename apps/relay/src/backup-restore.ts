@@ -23,6 +23,7 @@ import {
   backupArchiveManifestSchema,
   type BackupArchiveManifest,
   type BackupRestoreTaskInput,
+  type BackupStorageAccessGrant,
 } from "@workspace/contracts"
 
 import {
@@ -64,7 +65,8 @@ export async function restorePortableInstanceBackup(
   config: RelayConfig,
   input: BackupRestoreTaskInput & { kind: "restore" },
   instance: RelayInstanceConfig,
-  beginInstall: RestoreInstallGate
+  beginInstall: RestoreInstallGate,
+  access: RestoreArchiveAccess
 ): Promise<{ warnings: Array<string> }> {
   const prepared = await prepareInstanceRestoreStaging(
     config,
@@ -79,7 +81,8 @@ export async function restorePortableInstanceBackup(
         const archive = await materializeBackupArtifact(
           config,
           input,
-          prepared.paths.archive
+          prepared.paths.archive,
+          access
         )
         warnings = await extractBackupArchive(
           config,
@@ -394,10 +397,19 @@ async function readManifest(zip: ZipFile, entry: Entry) {
   )
 }
 
+/**
+ * Asks Hearth for the signed request that reads an archive from a bucket,
+ * by the copy's ID (`BackupStorageAccess`).
+ */
+export type RestoreArchiveAccess = (
+  artifactId: string
+) => Promise<BackupStorageAccessGrant>
+
 export async function materializeBackupArtifact(
   config: RelayConfig,
   input: BackupRestoreTaskInput,
-  destination: string
+  destination: string,
+  access: RestoreArchiveAccess
 ): Promise<string> {
   await mkdir(restoreDirectoryPath(config), { mode: 0o700, recursive: true })
   if (input.source.kind === "restic") {
@@ -410,7 +422,7 @@ export async function materializeBackupArtifact(
   const artifact =
     input.source.kind === "local"
       ? backupArchivePath(config, input.archive?.backupId ?? input.backupId)
-      : await downloadRestoreArtifact(destination, input)
+      : await downloadRestoreArtifact(destination, input, access)
   await verifyBackupArtifact(
     artifact,
     input.source.bytes,
@@ -421,17 +433,26 @@ export async function materializeBackupArtifact(
 
 async function downloadRestoreArtifact(
   destination: string,
-  input: BackupRestoreTaskInput
+  input: BackupRestoreTaskInput,
+  access: RestoreArchiveAccess
 ): Promise<string> {
   const source = input.source
   if (source.kind !== "remote") return destination
-  const url = new URL(source.downloadUrl)
+  if (!source.artifactId) {
+    throw restoreError(
+      "restore_source_unnamed",
+      "restore.materialize",
+      "The restore doesn't say which stored copy of the backup to read"
+    )
+  }
+  const grant = await access(source.artifactId)
+  const url = new URL(grant.url)
   if (url.protocol !== "https:" || url.username || url.password) {
     throw new Error("Signed backup URLs must use HTTPS")
   }
   const literal = url.hostname.replace(/^\[|\]$/gu, "")
   if (
-    !source.allowPrivateNetwork &&
+    !grant.allowPrivateNetwork &&
     isIP(literal) !== 0 &&
     !isPublicRemoteAddress(literal)
   ) {
@@ -443,8 +464,8 @@ async function downloadRestoreArtifact(
     const request = httpsRequest(
       url,
       {
-        headers: source.headers,
-        lookup: source.allowPrivateNetwork ? undefined : secureRemoteLookup,
+        headers: grant.headers,
+        lookup: grant.allowPrivateNetwork ? undefined : secureRemoteLookup,
         method: "GET",
       },
       (response) => {

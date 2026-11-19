@@ -21,10 +21,7 @@ import {
 } from "@workspace/contracts/schedules"
 
 import { prepareResticRepositoryLocation } from "@/backups/destinations"
-import {
-  backupObjectKeyPrefix,
-  loadBackupStorageCredentialEffect,
-} from "@/backups/destinations/s3"
+import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import {
   ensureBackupRepositoryEffect,
   scheduledBackupAdmissionEffect,
@@ -609,7 +606,7 @@ async function scheduledBackupExecution(
   if (action.mode === "full") {
     return {
       ...execution,
-      destination: await scheduledFullBackupDestination(action, target),
+      destination: await scheduledFullBackupDestination(action),
       maxBytes: admission.maxBytes,
       refusal: null,
       repositoryId: null,
@@ -677,39 +674,23 @@ interface BackupMember {
   readonly relayId: string
 }
 
+// A bucket's is named by the step alone: Hearth keeps its keys and chooses
+// its paths, and the Relay asks for access as each backup is ready to send
+// (`grantBackupStorageAccessEffect`).
 async function scheduledFullBackupDestination(
-  action: Extract<ScheduleAction, { type: "backup" }>,
-  target: BackupMember
+  action: Extract<ScheduleAction, { type: "backup" }>
 ) {
   if (action.destination.kind === "local") {
     return { kind: "local" as const }
   }
   const storage = await runAppEffect(
-    "schedules.loadBackupStorageCredential",
-    loadBackupStorageCredentialEffect(action.destination.storageId)
+    "schedules.loadBackupStorage",
+    loadBackupStorageEffect(action.destination.storageId)
   )
   if (!storage || !storage.enabled || storage.deleting) {
     throw new Error("Backup destination is unavailable")
   }
-  const installationId = kilnInstallationId()
-  const targetKind = target.kind === "relay" ? "platform" : target.kind
-  return {
-    accessKeyId: storage.accessKeyId,
-    allowPrivateNetwork: storage.allowPrivateNetwork,
-    bucket: storage.bucket,
-    endpoint: storage.endpoint,
-    forcePathStyle: storage.forcePathStyle,
-    kind: "s3" as const,
-    objectKeyPrefix: backupObjectKeyPrefix({
-      installationId,
-      objectPrefix: storage.objectPrefix,
-      relayId: target.relayId,
-      targetId: targetKind === "platform" ? installationId : target.id,
-      targetKind,
-    }),
-    region: storage.region,
-    secretAccessKey: storage.secretAccessKey,
-  }
+  return { kind: "s3" as const }
 }
 
 async function scheduledResticDestination(

@@ -4,9 +4,11 @@ import type {
   BackupArchiveCreateTaskResult,
   BackupCreateTaskInput,
   BackupDeleteTaskInput,
+  BackupStorageAccessRequest,
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "../../config.js"
+import type { BackupStorageAccess } from "../storage-access.js"
 
 export type FullBackupCreateDestination = Exclude<
   BackupCreateTaskInput["destination"],
@@ -42,17 +44,23 @@ export type BackupDestinationDriver<
   maximumFullBackupBytes: number | null
   retainsFullBackupLocally: boolean
   deleteFullBackup: (input: {
+    access: BackupStorageAccess
     backupId: string
     config: RelayConfig
     destination: Extract<FullBackupDeleteDestination, { kind: TKind }>
+    taskId: string
   }) => Effect.Effect<{ warnings: Array<string> }, unknown>
   saveFullBackup: (input: {
+    access: BackupStorageAccess
     backupId: string
     config: RelayConfig
     destination: Extract<FullBackupCreateDestination, { kind: TKind }>
     onChunk: (bytes: number) => void
     result: BackupArchiveCreateTaskResult
+    /** The schedule's step that took it, when one did. */
+    schedule?: BackupStorageAccessRequest["schedule"]
     signal: AbortSignal
+    taskId: string
   }) => Effect.Effect<BackupArchiveCreateTaskResult, unknown>
 }
 

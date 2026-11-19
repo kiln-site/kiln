@@ -203,6 +203,19 @@ admitted after it is granted until the lookup settles.
 
 Browser console input is admitted the same way when its frame arrives.
 
+### Requests the Relay sends
+
+A few requests go the other way, from the Relay to Hearth, on the same
+connection: a terminal's output (`hearth.terminal.output`), an SFTP sign-in
+to check (`sftp.authorization.resolve`), and access to a backup's copy in a
+bucket (`backup.storage.access`). They change nothing on the Relay, so they
+take no lane and no lock (`controlRequestLocks` answers `null`), and Hearth
+may not send them. Hearth knows which Relay asks from the connection, never
+from what the request says, and each handler checks for itself what that
+Relay may be told. With no Hearth connected they fail at once; work that
+needs an answer, as a backup waiting to be stored does, waits for one to
+connect.
+
 ### Checking the client again
 
 A Hearth client can lose a request's grant while the request waits its

@@ -6,7 +6,6 @@ import type { Fiber } from "effect"
 import { z } from "zod"
 
 import {
-  backupArtifactFilename,
   type BackupTaskInput,
   type RelayBackupTask,
 } from "@workspace/contracts"
@@ -974,9 +973,7 @@ export class ScheduleManager {
             : ("platform_bundle" as const)
     const destination = scheduledBackupDestination(
       deployedDestination,
-      backupId,
-      artifactId,
-      artifactKind
+      artifactId
     )
     return {
       artifactKind,
@@ -993,6 +990,7 @@ export class ScheduleManager {
         ...(action.mode === "incremental" && execution?.repositoryId
           ? { repositoryId: execution.repositoryId }
           : {}),
+        schedule: { actionId: action.id, id: schedule.id },
         storageId:
           action.destination.kind === "storage"
             ? action.destination.storageId
@@ -1129,6 +1127,7 @@ export class ScheduleManager {
             scheduleName: schedule.name,
             timestamp: scheduledAt,
           }),
+          schedule: { actionId: action.id, id: schedule.id },
           storageId:
             action.destination.kind === "storage"
               ? action.destination.storageId
@@ -1139,9 +1138,7 @@ export class ScheduleManager {
         ...batch,
         destination: scheduledBackupDestination(
           execution.destination!,
-          backupId,
-          scheduleDeterministicUuid("artifact", backupId),
-          "tar_archive"
+          scheduleDeterministicUuid("artifact", backupId)
         ),
         exclude: [],
         kind: "create",
@@ -1192,7 +1189,12 @@ export class ScheduleManager {
     const getBackup = this.#options.getBackup
     const poll = Effect.gen(function* () {
       let task: RelayBackupTask | null = initial
-      while (task.status === "queued" || task.status === "running") {
+      while (
+        (task.status === "queued" || task.status === "running") &&
+        // Taken, and holding its archive until Hearth can be reached to
+        // store it: the step it's part of doesn't wait for that.
+        !task.heldForHearth
+      ) {
         yield* Effect.sleep(`${scheduledBackupPollIntervalMs} millis`)
         task = yield* Effect.tryPromise({
           try: () => getBackup(initial.taskId),
@@ -1210,6 +1212,7 @@ export class ScheduleManager {
           })
         }
       }
+      if (task.heldForHearth) return
       if (task.status !== "succeeded") {
         return yield* new ScheduledBackupWaitError({
           message: task.error ?? `Scheduled backup ${task.status}`,
@@ -1532,8 +1535,9 @@ function backupRefusal(
   return executions.find((execution) => execution?.refusal)?.refusal ?? null
 }
 
-// Where a scheduled backup goes: its local or S3 destination, with the
-// artifact's identity and, on S3, its object key.
+// Where a scheduled backup goes, naming the copy it makes there. A
+// bucket's is asked of Hearth as the backup is ready to send
+// (`BackupStorageAccess`): the schedule holds no key to it and no path in it.
 function scheduledBackupDestination(
   deployed: NonNullable<
     Extract<
@@ -1541,22 +1545,9 @@ function scheduledBackupDestination(
       { type: "backup" }
     >["executions"][number]["destination"]
   >,
-  backupId: string,
-  artifactId: string,
-  artifactKind: Extract<BackupTaskInput, { kind: "create" }>["artifactKind"]
+  artifactId: string
 ) {
   return deployed.kind === "s3"
-    ? {
-        accessKeyId: deployed.accessKeyId,
-        allowPrivateNetwork: deployed.allowPrivateNetwork,
-        artifactId,
-        bucket: deployed.bucket,
-        endpoint: deployed.endpoint,
-        forcePathStyle: deployed.forcePathStyle,
-        kind: "s3" as const,
-        objectKey: `${deployed.objectKeyPrefix}/${backupId}/${backupArtifactFilename(backupId, artifactKind)}`,
-        region: deployed.region,
-        secretAccessKey: deployed.secretAccessKey,
-      }
+    ? { artifactId, kind: "s3" as const }
     : { ...deployed, artifactId }
 }

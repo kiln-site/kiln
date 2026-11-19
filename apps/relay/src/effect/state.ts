@@ -13,6 +13,7 @@ import {
 } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import type {
+  BackupArchiveCreateTaskResult,
   BackupFailureCode,
   BackupTaskInput,
   BackupTaskPhase,
@@ -30,6 +31,7 @@ import type {
 } from "@workspace/contracts"
 import {
   BACKUP_EXPORT_TTL_MIN_MS,
+  backupArchiveCreateTaskResultSchema,
   backupTargetSchema,
   backupTaskInputSchema,
   backupTaskResultSchema,
@@ -505,6 +507,7 @@ const RelayBackupTaskRowSchema = Schema.Struct({
   currentPath: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),
   errorCode: Schema.NullOr(Schema.String),
+  awaitingHearth: Schema.Number,
   finishedAt: Schema.NullOr(Schema.Number),
   inputRefreshRequired: Schema.Number,
   inputJson: Schema.String,
@@ -748,6 +751,27 @@ export class RelayStateStore extends Context.Service<
       taskId: string,
       now: number
     ) => Effect.Effect<boolean, RelayStateError>
+    /**
+     * Sets a running create aside until Hearth can be reached, which storing
+     * its archive needs. It keeps the archive it took (`archive`), so that's
+     * sent as it was taken, not taken again; `limitBytes` is the most such
+     * archives the Relay holds at once. Answers `full` past that, and `gone`
+     * when the task is no longer running.
+     */
+    readonly holdBackupTaskForHearth: (
+      taskId: string,
+      archive: BackupArchiveCreateTaskResult,
+      now: number,
+      limitBytes: number
+    ) => Effect.Effect<"held" | "full" | "gone", RelayStateError>
+    /** The archive a create holds or held for Hearth, or null for none. */
+    readonly heldBackupArchive: (
+      taskId: string
+    ) => Effect.Effect<BackupArchiveCreateTaskResult | null, RelayStateError>
+    /** Lets every held task take its turn again; answers how many. */
+    readonly releaseBackupTasksHeldForHearth: (
+      now: number
+    ) => Effect.Effect<number, RelayStateError>
     readonly getBackupTask: (
       taskId: string
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
@@ -1972,7 +1996,78 @@ const migrations = SqliteMigrator.fromRecord({
   "49_relay_database_action": moveCustomActions((actions) =>
     actions.filter((action) => action !== "relay.database.read")
   ),
+  // A task set aside until Hearth can be reached, and the archive a create
+  // took before then (`holdBackupTaskForHearth`).
+  "50_backup_task_awaiting_hearth": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = new Set(
+      (yield* sql<{ name: string }>`
+        SELECT name FROM pragma_table_info('relay_backup_tasks')
+      `).map(({ name }) => name)
+    )
+    if (!columns.has("awaiting_hearth")) {
+      yield* sql`
+        ALTER TABLE relay_backup_tasks
+        ADD COLUMN awaiting_hearth INTEGER NOT NULL DEFAULT 0
+          CHECK (awaiting_hearth IN (0, 1))
+      `
+    }
+    if (!columns.has("staged_result_json")) {
+      yield* sql`
+        ALTER TABLE relay_backup_tasks
+        ADD COLUMN staged_result_json TEXT
+      `
+    }
+  }),
+  // A schedule Hearth sent before it kept every bucket's keys to itself
+  // carried them, with a folder to write to, for each full backup that goes
+  // to a bucket. Hearth signs each of those now, so the Relay keeps neither.
+  "51_schedule_bucket_keys": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<{ definition_json: string; schedule_id: string }>`
+      SELECT schedule_id, definition_json FROM relay_schedules
+    `
+    for (const row of rows) {
+      const kept = withoutScheduleBucketKeys(row.definition_json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_schedules SET definition_json = ${kept}
+        WHERE schedule_id = ${row.schedule_id}
+      `
+    }
+  }),
 })
+
+// A stored schedule without what it held of the buckets its full backups go
+// to, or null for one that held nothing of them.
+function withoutScheduleBucketKeys(definitionJson: string): string | null {
+  const definition = Result.getOrNull(
+    Result.try(() => JSON.parse(definitionJson) as unknown)
+  )
+  if (!Predicate.isObject(definition) || !Array.isArray(definition.actions)) {
+    return null
+  }
+  let changed = false
+  for (const action of definition.actions as ReadonlyArray<unknown>) {
+    if (!Predicate.isObject(action) || !Array.isArray(action.executions)) {
+      continue
+    }
+    for (const execution of action.executions as ReadonlyArray<unknown>) {
+      if (!Predicate.isObject(execution)) continue
+      const destination = execution.destination
+      if (
+        !Predicate.isObject(destination) ||
+        destination.kind !== "s3" ||
+        Object.keys(destination).length === 1
+      ) {
+        continue
+      }
+      execution.destination = { kind: "s3" }
+      changed = true
+    }
+  }
+  return changed ? JSON.stringify(definition) : null
+}
 
 // Rewrites the actions of every client and invitation given actions of its
 // own, when an action is replaced by ones every instance takes, or dropped.
@@ -2255,6 +2350,7 @@ const makeRelayStateStore = Effect.gen(function* () {
         error: row.error,
         errorCode: row.errorCode,
         finishedAt: row.finishedAt,
+        heldForHearth: row.awaitingHearth === 1 && row.status === "queued",
         input,
         inputRefreshRequired: row.inputRefreshRequired === 1,
         kind: row.kind,
@@ -2282,6 +2378,7 @@ const makeRelayStateStore = Effect.gen(function* () {
             status,
             input_json AS inputJson,
             input_refresh_required AS inputRefreshRequired,
+            awaiting_hearth AS awaitingHearth,
             result_json AS resultJson,
             bytes_completed AS bytesCompleted,
             bytes_total AS bytesTotal,
@@ -2307,6 +2404,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               status,
               input_json AS inputJson,
               input_refresh_required AS inputRefreshRequired,
+            awaiting_hearth AS awaitingHearth,
               result_json AS resultJson,
               bytes_completed AS bytesCompleted,
               bytes_total AS bytesTotal,
@@ -2330,6 +2428,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               status,
               input_json AS inputJson,
               input_refresh_required AS inputRefreshRequired,
+            awaiting_hearth AS awaitingHearth,
               result_json AS resultJson,
               bytes_completed AS bytesCompleted,
               bytes_total AS bytesTotal,
@@ -3245,6 +3344,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                 SELECT task_id AS taskId, input_json AS inputJson
                 FROM relay_backup_tasks
                 WHERE status = 'queued' AND input_refresh_required = 0
+                  AND awaiting_hearth = 0
                   -- A prune waits while deletes are queued, so a batch of
                   -- them shares one; other work keeps its place in line.
                   AND (
@@ -3255,6 +3355,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                       WHERE deletion.kind = 'delete'
                         AND deletion.status = 'queued'
                         AND deletion.input_refresh_required = 0
+                        AND deletion.awaiting_hearth = 0
                     )
                   )
                 ORDER BY created_at ASC, task_id ASC
@@ -3298,6 +3399,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                 WHERE task_id = ${row.taskId}
                   AND status = 'queued'
                   AND input_refresh_required = 0
+                  AND awaiting_hearth = 0
               `
               return (yield* backupTasks({ taskId: row.taskId }))[0] ?? null
             }
@@ -3313,6 +3415,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               SELECT task_id AS taskId
               FROM relay_backup_tasks
               WHERE status = 'queued' AND input_refresh_required = 0
+                AND awaiting_hearth = 0
                 AND kind = 'create'
                 AND json_extract(input_json, '$.batch.id') = ${batchId}
               ORDER BY created_at ASC, task_id ASC
@@ -3366,6 +3469,69 @@ const makeRelayStateStore = Effect.gen(function* () {
           WHERE task_id = ${taskId} AND status = 'running'
           RETURNING task_id AS taskId
         `.pipe(Effect.map((rows) => rows.length > 0))
+      ),
+    holdBackupTaskForHearth: (taskId, archive, now, limitBytes) =>
+      run(
+        "hold_backup_task_for_hearth",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<{ held: number }>`
+              SELECT COALESCE(
+                SUM(json_extract(staged_result_json, '$.bytes')), 0
+              ) AS held
+              FROM relay_backup_tasks
+              WHERE status = 'queued' AND awaiting_hearth = 1
+                AND staged_result_json IS NOT NULL
+                AND task_id <> ${taskId}
+            `
+            if ((rows[0]?.held ?? 0) + archive.bytes > limitBytes) {
+              return "full" as const
+            }
+            const held = yield* sql<{ taskId: string }>`
+              UPDATE relay_backup_tasks
+              SET status = 'queued',
+                  awaiting_hearth = 1,
+                  staged_result_json = ${JSON.stringify(archive)},
+                  started_at = NULL,
+                  phase = NULL,
+                  current_artifact_id = NULL,
+                  current_path = NULL,
+                  updated_at = ${now}
+              WHERE task_id = ${taskId} AND status = 'running'
+              RETURNING task_id AS taskId
+            `
+            return held.length > 0 ? ("held" as const) : ("gone" as const)
+          })
+        )
+      ),
+    heldBackupArchive: (taskId) =>
+      run(
+        "held_backup_archive",
+        sql<{ staged: string | null }>`
+          SELECT staged_result_json AS staged
+          FROM relay_backup_tasks
+          WHERE task_id = ${taskId}
+          LIMIT 1
+        `.pipe(
+          Effect.map((rows) => {
+            const staged = rows[0]?.staged
+            if (!staged) return null
+            const parsed = backupArchiveCreateTaskResultSchema.safeParse(
+              Result.getOrNull(Result.try(() => JSON.parse(staged) as unknown))
+            )
+            return parsed.success ? parsed.data : null
+          })
+        )
+      ),
+    releaseBackupTasksHeldForHearth: (now) =>
+      run(
+        "release_backup_tasks_held_for_hearth",
+        sql<{ taskId: string }>`
+          UPDATE relay_backup_tasks
+          SET awaiting_hearth = 0, updated_at = ${now}
+          WHERE status = 'queued' AND awaiting_hearth = 1
+          RETURNING task_id AS taskId
+        `.pipe(Effect.map((rows) => rows.length))
       ),
     getBackupTask: (taskId) =>
       run(
@@ -3474,6 +3640,8 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET status = 'cancelled',
                   input_json = ${scrubBackupTaskInputJson(rows[0].inputJson)},
                   result_json = NULL,
+                  awaiting_hearth = 0,
+                  staged_result_json = NULL,
                   current_artifact_id = NULL,
                   error = ${reason.slice(0, 2_048)},
                   error_code = ${errorCode},
@@ -3505,6 +3673,8 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET status = 'succeeded',
                   input_json = ${scrubBackupTaskInputJson(rows[0].inputJson)},
                   result_json = ${JSON.stringify(result)},
+                  awaiting_hearth = 0,
+                  staged_result_json = NULL,
                   bytes_completed = ${bytes},
                   bytes_total = ${bytes},
                   error = NULL,
@@ -3586,6 +3756,8 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET status = 'failed',
                   input_json = ${scrubBackupTaskInputJson(rows[0].inputJson)},
                   result_json = NULL,
+                  awaiting_hearth = 0,
+                  staged_result_json = NULL,
                   current_artifact_id = NULL,
                   error = ${error.slice(0, 4_096)},
                   error_code = ${errorCode},
@@ -5027,6 +5199,7 @@ function fallbackFailedBackupTask(
     currentPath: null,
     error: row.error ?? UNPARSEABLE_BACKUP_TASK_ERROR,
     finishedAt: row.finishedAt ?? row.updatedAt,
+    heldForHearth: false,
     input,
     inputRefreshRequired: false,
     kind: row.kind,
