@@ -21,13 +21,17 @@ import { Effect, Result, Schedule } from "effect"
 import {
   backupArtifactFilename,
   type BackupArtifactKind,
+  type BackupStorageAccessAction,
+  type BackupStorageAccessGrant,
   type BackupTargetKind,
 } from "@workspace/contracts"
 
 import { BackupStorageError } from "@/effect/errors"
 
 const CONNECTION_TEST_PREFIX = "kiln/connection-tests"
-const PRESIGNED_UPLOAD_SECONDS = 7 * 24 * 60 * 60
+// How long a Relay has to start the one request Hearth signed for it. It
+// asks as it is ready, so minutes are plenty.
+const STORAGE_ACCESS_SECONDS = 10 * 60
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 30_000
 const BACKUP_TRANSFER_IDLE_TIMEOUT_MS = 60_000
 const S3_DELETE_PAGE_SIZE = 1_000
@@ -412,55 +416,45 @@ export function withS3BackupObject<TResult, TError, TRequirements>(
   )
 }
 
-export function signS3BackupUpload(
+/**
+ * One signed request for one of a backup's objects, for a Relay that asked
+ * for access to it (`grantBackupStorageAccessEffect`). The Relay holds no
+ * keys, so this request is all it can do with the bucket: one object, one
+ * method, for `STORAGE_ACCESS_SECONDS`.
+ */
+export function signS3BackupAccess(
   credential: S3BackupCredential,
-  objectKey: string
+  objectKey: string,
+  action: BackupStorageAccessAction
 ) {
+  const object = { Bucket: credential.bucket, Key: objectKey }
   return withS3Client(credential, (client) =>
-    s3Request("storage.signUpload", () =>
+    s3Request(`storage.sign.${action}`, () =>
       getSignedUrl(
         client,
-        new PutObjectCommand({
-          Bucket: credential.bucket,
-          ContentType: "application/zip",
-          Key: objectKey,
-        }),
-        { expiresIn: PRESIGNED_UPLOAD_SECONDS }
+        action === "upload"
+          ? new PutObjectCommand({ ...object, ContentType: "application/zip" })
+          : action === "download"
+            ? new GetObjectCommand(object)
+            : new DeleteObjectCommand(object),
+        { expiresIn: STORAGE_ACCESS_SECONDS }
       )
     ).pipe(
-      Effect.map((uploadUrl) => ({
-        allowPrivateNetwork: credential.allowPrivateNetwork,
-        headers: { "content-type": "application/zip" },
-        kind: "s3" as const,
-        objectKey,
-        uploadUrl,
-      }))
-    )
-  )
-}
-
-export function signS3BackupDelete(
-  credential: S3BackupCredential,
-  objectKey: string
-) {
-  return withS3Client(credential, (client) =>
-    s3Request("storage.signDelete", () =>
-      getSignedUrl(
-        client,
-        new DeleteObjectCommand({
-          Bucket: credential.bucket,
-          Key: objectKey,
-        }),
-        { expiresIn: PRESIGNED_UPLOAD_SECONDS }
+      Effect.map(
+        (url): BackupStorageAccessGrant => ({
+          allowPrivateNetwork: credential.allowPrivateNetwork,
+          headers:
+            action === "upload" ? { "content-type": "application/zip" } : {},
+          method:
+            action === "upload"
+              ? "PUT"
+              : action === "download"
+                ? "GET"
+                : "DELETE",
+          status: "granted",
+          url,
+        })
       )
-    ).pipe(
-      Effect.map((deleteUrl) => ({
-        allowPrivateNetwork: credential.allowPrivateNetwork,
-        deleteUrl,
-        headers: {},
-        kind: "s3" as const,
-        objectKey,
-      }))
     )
   )
 }
@@ -488,31 +482,6 @@ export function signS3BackupDownload(
           Date.now() + expiresInSeconds * 1_000
         ).toISOString(),
         url,
-      }))
-    )
-  )
-}
-
-export function signS3BackupRestore(
-  credential: S3BackupCredential,
-  objectKey: string
-) {
-  return withS3Client(credential, (client) =>
-    s3Request("storage.signRestore", () =>
-      getSignedUrl(
-        client,
-        new GetObjectCommand({
-          Bucket: credential.bucket,
-          Key: objectKey,
-        }),
-        { expiresIn: PRESIGNED_UPLOAD_SECONDS }
-      )
-    ).pipe(
-      Effect.map((downloadUrl) => ({
-        allowPrivateNetwork: credential.allowPrivateNetwork,
-        downloadUrl,
-        headers: {},
-        kind: "remote" as const,
       }))
     )
   )

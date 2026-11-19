@@ -24,6 +24,7 @@ import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayStateStore } from "./effect/state.js"
 import { fakeDocker } from "./test/docker.js"
+import { noHearth } from "./test/fixtures.js"
 import {
   relayHarness,
   TEST_NAMESPACE,
@@ -110,6 +111,7 @@ function backups(
       isInstanceStopped: async () => true,
       lanes: harness.lanes,
       volumes,
+      ...noHearth,
     }).pipe(Effect.provideService(RelayStateStore, harness.state))
   )
 }

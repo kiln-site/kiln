@@ -45,7 +45,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 import { restorePortableInstanceBackup } from "./backup-restore.js"
 import { BackupManager } from "./backups.js"
 import { makeRelayStateLayer } from "./effect/state.js"
-import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import {
+  noBucket,
+  noHearth,
+  testInstance,
+  testRelayConfig,
+} from "./test/fixtures.js"
 import { OperationLanes } from "./operation-lanes.js"
 
 const testDirectory = mkdtempSync(
@@ -67,6 +72,7 @@ describe("Relay backup restore cleanup", () => {
       yield* Effect.promise(() => writeFile(resolve(root, "server.txt"), "old"))
       const create = backupInput()
       const manager = yield* BackupManager.make({
+        ...noHearth,
         config,
         findInstance: async () => instance,
         isInstanceStopped: async () => true,
@@ -103,7 +109,8 @@ describe("Relay backup restore cleanup", () => {
               config,
               restore,
               instance,
-              () => undefined
+              () => undefined,
+              noBucket
             ),
           catch: (cause) => cause,
         })

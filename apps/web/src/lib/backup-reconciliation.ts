@@ -261,7 +261,7 @@ const dispatchBackupTaskEffect = Effect.fnUntraced(function* (
   subject?: string
 ) {
   yield* Effect.annotateCurrentSpan(dispatchAttributes(relay, input))
-  const relayInput = yield* prepareBackupTaskEffect(input).pipe(
+  const relayInput = yield* prepareBackupTaskEffect(input, relay.id).pipe(
     // What Hearth's own records lack stays lacking: the task is settled
     // rather than tried on every pass. The error still reaches the caller.
     Effect.tapError((cause) =>

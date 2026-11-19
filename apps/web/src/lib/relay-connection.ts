@@ -47,7 +47,10 @@ import type {
   RelaySnapshotDelta,
   RelaySystemUpdate,
 } from "@workspace/contracts"
-import { hearthTerminalOutputSchema } from "@workspace/contracts"
+import {
+  backupStorageAccessRequestSchema,
+  hearthTerminalOutputSchema,
+} from "@workspace/contracts"
 
 import {
   hearthDialUrl,
@@ -2067,6 +2070,30 @@ class RelayConnection {
         yield* sendSocketEffect(socket, {
           id: randomUUID(),
           payload: deliverTerminalOutput(this.#relay.id, output),
+          replyTo: request.id,
+          type: "response",
+          v: 1,
+        })
+      })
+    }
+    if (request.operation === "backup.storage.access") {
+      // Which Relay asks is the connection's own, never what it says.
+      return Effect.gen({ self: this }, function* () {
+        const access = yield* Effect.try({
+          try: () => backupStorageAccessRequestSchema.parse(request.payload),
+          catch: asError,
+        })
+        const { answerBackupStorageAccess } = yield* Effect.tryPromise({
+          try: () => import("@/server/backup-storage-access.server"),
+          catch: asError,
+        })
+        const payload = yield* Effect.tryPromise({
+          try: () => answerBackupStorageAccess(this.#relay.id, access),
+          catch: asError,
+        })
+        yield* sendSocketEffect(socket, {
+          id: randomUUID(),
+          payload,
           replyTo: request.id,
           type: "response",
           v: 1,

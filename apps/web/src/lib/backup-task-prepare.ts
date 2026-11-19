@@ -14,8 +14,12 @@ import {
   type BackupDispatch,
 } from "@/effect/backups"
 
+/**
+ * What Hearth sends a Relay for a task. `relayId` is the Relay it goes to,
+ * whose own disk is the destination of the copies kept there.
+ */
 export const prepareBackupTaskEffect = Effect.fn("backups.prepareTask")(
-  function* (input: BackupDispatch) {
+  function* (input: BackupDispatch, relayId: string) {
     if (input.kind === "export") {
       const repository = yield* resticRepositoryForBackup(input.backupId)
       const { repositoryPassword: _, ...task } = input
@@ -91,8 +95,14 @@ export const prepareBackupTaskEffect = Effect.fn("backups.prepareTask")(
       for (const artifact of input.artifacts) {
         destinations.push(
           input.kind === "create"
-            ? yield* prepareFullBackupCreateDestination(artifact)
-            : yield* prepareFullBackupDeleteDestination(artifact)
+            ? yield* prepareFullBackupCreateDestination({
+                ...artifact,
+                relayId,
+              })
+            : yield* prepareFullBackupDeleteDestination({
+                ...artifact,
+                relayId,
+              })
         )
       }
       const [destination, ...replicas] = destinations
@@ -149,6 +159,7 @@ export const prepareBackupTaskEffect = Effect.fn("backups.prepareTask")(
         bytes: input.bytes,
         checksumSha256: input.checksumSha256,
         objectKey: input.objectKey,
+        relayId,
         storageId: input.storageId,
       }),
     } satisfies BackupTaskInput

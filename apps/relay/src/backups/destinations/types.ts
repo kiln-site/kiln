@@ -7,6 +7,7 @@ import type {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "../../config.js"
+import type { BackupStorageAccess } from "../storage-access.js"
 
 export type FullBackupCreateDestination = Exclude<
   BackupCreateTaskInput["destination"],
@@ -42,11 +43,14 @@ export type BackupDestinationDriver<
   maximumFullBackupBytes: number | null
   retainsFullBackupLocally: boolean
   deleteFullBackup: (input: {
+    /** Asks Hearth for access to a copy the Relay holds no keys to. */
+    access: BackupStorageAccess
     backupId: string
     config: RelayConfig
     destination: Extract<FullBackupDeleteDestination, { kind: TKind }>
   }) => Effect.Effect<{ warnings: Array<string> }, unknown>
   saveFullBackup: (input: {
+    access: BackupStorageAccess
     backupId: string
     config: RelayConfig
     destination: Extract<FullBackupCreateDestination, { kind: TKind }>
