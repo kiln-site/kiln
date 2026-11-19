@@ -232,7 +232,11 @@ export class ScheduleManager {
         )
       )
       if ("error" in occurrence) throw new Error(occurrence.error)
-      this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
+      this.#launchOccurrence(
+        occurrence.definition,
+        occurrence.scheduledAt,
+        occurrence.hearth
+      )
       return occurrence.run
     })
   }
@@ -282,7 +286,8 @@ export class ScheduleManager {
           if (occurrence.run.status === "running")
             this.#launchOccurrence(
               occurrence.definition,
-              occurrence.scheduledAt
+              occurrence.scheduledAt,
+              occurrence.hearth
             )
         }
         if (due.failure) return this.#claimFailed(due.failure.cause)
@@ -292,9 +297,20 @@ export class ScheduleManager {
     })
   }
 
-  #launchOccurrence(definition: RelayScheduleProjection, scheduledAt: number) {
+  /**
+   * `hearth` is the Hearth client that sent the schedule, as the occurrence
+   * was claimed. Its backups ask that one for access to a bucket, whatever
+   * becomes of the schedule while the occurrence runs: one removed during a
+   * wait step still has its backup step to run.
+   */
+  #launchOccurrence(
+    definition: RelayScheduleProjection,
+    scheduledAt: number,
+    hearth: string | null
+  ) {
     const effect = Effect.tryPromise({
-      try: (signal) => this.#executeOccurrence(definition, scheduledAt, signal),
+      try: (signal) =>
+        this.#executeOccurrence(definition, scheduledAt, hearth, signal),
       catch: (cause) => cause,
     }).pipe(
       Effect.catch((cause) =>
@@ -322,6 +338,7 @@ export class ScheduleManager {
   async #executeOccurrence(
     schedule: RelayScheduleProjection,
     scheduledAt: number,
+    hearth: string | null,
     signal?: AbortSignal
   ) {
     const startedAt = Date.now()
@@ -517,6 +534,7 @@ export class ScheduleManager {
                     sequenceFailure,
                     recordProgress,
                     together,
+                    hearth,
                     signal
                   )
                 ),
@@ -595,6 +613,7 @@ export class ScheduleManager {
     sequenceFailure: string | null,
     recordProgress: (required: boolean) => Promise<boolean>,
     together: StoppedTogether | null,
+    hearth: string | null,
     signal?: AbortSignal
   ) {
     if (state.activeKey === null) return
@@ -773,6 +792,7 @@ export class ScheduleManager {
                 scheduledAt,
                 state.powerIntent,
                 together,
+                hearth,
                 signal
               )
             )
@@ -868,6 +888,7 @@ export class ScheduleManager {
     scheduledAt: number,
     powerIntent: string,
     together: StoppedTogether | null,
+    hearth: string | null,
     signal?: AbortSignal
   ): Promise<ContainerCommandResult | undefined> {
     if (action.type === "console_command") {
@@ -917,15 +938,13 @@ export class ScheduleManager {
           target,
           together,
           scheduledAt,
+          hearth,
           signal
         )
         return
       }
       const input = this.#targetBackup(schedule, action, target, scheduledAt)
-      const queued = await this.#options.enqueueBackup(
-        input,
-        await this.#hearth(schedule)
-      )
+      const queued = await this.#options.enqueueBackup(input, hearth)
       await Effect.runPromise(
         this.#waitForBackup(queued),
         signal ? { signal } : undefined
@@ -1049,6 +1068,7 @@ export class ScheduleManager {
     target: ScheduleTarget,
     together: StoppedTogether | null,
     scheduledAt: number,
+    hearth: string | null,
     signal?: AbortSignal
   ) {
     const whole =
@@ -1169,7 +1189,6 @@ export class ScheduleManager {
     // window starts only once its whole batch has arrived. Each target of
     // a batch queues the same tasks, by the same IDs: the first makes
     // them, and the others, now or after a restart, find them there.
-    const hearth = await this.#hearth(schedule)
     const queued = await Promise.all(
       [...volumes, ...dumps].map((input) =>
         this.#options.enqueueBackup(input, hearth)
@@ -1192,11 +1211,6 @@ export class ScheduleManager {
       ),
       signal ? { signal } : undefined
     )
-  }
-
-  // The Hearth a schedule's backups ask for access to a bucket.
-  #hearth(schedule: RelayScheduleProjection) {
-    return Effect.runPromise(this.#options.state.hearth(schedule.id))
   }
 
   #waitForBackup(initial: RelayBackupTask) {

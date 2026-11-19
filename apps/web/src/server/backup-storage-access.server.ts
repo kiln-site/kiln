@@ -144,16 +144,25 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   }
   if (request.action === "download") {
     // A restore reads the copy Hearth names for it: the Relay's own when it
-    // has one, or else the first stored.
+    // has one, or else the first stored, by ID among those reserved
+    // together (`listDispatchableBackupTasksEffect` orders them the same).
     const preferred = yield* database.queryRows<RowDataPacket>(
       "backup_storage_access_restore_copy",
       `SELECT 1
          FROM ${databaseTable("backup_artifact")} other
         WHERE other.backup_id = ? AND other.id <> ?
           AND other.status = 'available'
-          AND (other.storage_id IS NULL OR other.created_at < ?)
+          AND (other.storage_id IS NULL
+            OR other.created_at < ?
+            OR (other.created_at = ? AND other.id < ?))
         LIMIT 1`,
-      [request.backupId, request.artifactId, row.artifact_created_at_ms]
+      [
+        request.backupId,
+        request.artifactId,
+        row.artifact_created_at_ms,
+        row.artifact_created_at_ms,
+        request.artifactId,
+      ]
     )
     if (preferred.length > 0) {
       return refused("the restore reads another copy of the backup")

@@ -36,6 +36,11 @@ interface ScheduleRow {
   definition_json: string
 }
 
+// A schedule as an occurrence of it starts, with the Hearth that sent it.
+interface DueScheduleRow extends ScheduleRow {
+  client_id: string | null
+}
+
 interface RunRow {
   run_id: string
   schedule_id: string
@@ -50,6 +55,13 @@ interface RunRow {
 
 export interface ScheduleOccurrence {
   readonly definition: RelayScheduleProjection
+  /**
+   * The Hearth client that sent the schedule, as the occurrence began: its
+   * backups ask that Hearth for access to a bucket, even when the schedule
+   * is replaced or removed before they are taken. Null for a schedule
+   * stored before that was kept.
+   */
+  readonly hearth: string | null
   readonly run: ScheduleRun
   readonly scheduledAt: number
 }
@@ -154,7 +166,7 @@ export function makeRelayScheduleState(sql: SqlClient) {
     )
   `.pipe(Effect.asVoid)
   const claim = (
-    row: ScheduleRow,
+    row: DueScheduleRow,
     occurrence: { definition: RelayScheduleProjection; nextRunAt: number },
     now: number,
     bootAt: number,
@@ -186,7 +198,12 @@ export function makeRelayScheduleState(sql: SqlClient) {
       `
       yield* sql`UPDATE relay_schedules SET next_run_at = ${occurrence.nextRunAt} WHERE schedule_id = ${row.schedule_id}`
       return inserted.length
-        ? { definition: occurrence.definition, run: record, scheduledAt }
+        ? {
+            definition: occurrence.definition,
+            hearth: row.client_id,
+            run: record,
+            scheduledAt,
+          }
         : null
     })
 
@@ -300,15 +317,6 @@ export function makeRelayScheduleState(sql: SqlClient) {
           })
         )
       ),
-    /** The Hearth client that sent a schedule, or null when that wasn't kept. */
-    hearth: (scheduleId: string) =>
-      run(
-        "hearth",
-        sql<{ hearth: string | null }>`
-          SELECT client_id AS hearth FROM relay_schedules
-          WHERE schedule_id = ${scheduleId}
-        `.pipe(Effect.map((rows) => rows[0]?.hearth ?? null))
-      ),
     remove: (input: { scheduleId: string; revision: number }) =>
       run(
         "remove",
@@ -339,8 +347,8 @@ export function makeRelayScheduleState(sql: SqlClient) {
       run(
         "claim_due",
         Effect.gen(function* () {
-          const rows = yield* sql<ScheduleRow>`
-            SELECT schedule_id, revision, next_run_at, definition_json
+          const rows = yield* sql<DueScheduleRow>`
+            SELECT schedule_id, revision, next_run_at, definition_json, client_id
             FROM relay_schedules WHERE enabled = 1 AND next_run_at <= ${now}
             ORDER BY next_run_at, schedule_id LIMIT ${limit}`
           const occurrences: Array<ScheduleOccurrence> = []
@@ -410,8 +418,8 @@ export function makeRelayScheduleState(sql: SqlClient) {
         "run_now",
         sql.withTransaction(
           Effect.gen(function* () {
-            const rows = yield* sql<ScheduleRow>`
-              SELECT schedule_id, revision, next_run_at, definition_json
+            const rows = yield* sql<DueScheduleRow>`
+              SELECT schedule_id, revision, next_run_at, definition_json, client_id
               FROM relay_schedules WHERE schedule_id = ${input.scheduleId}`
             const row = rows[0]
             if (!row) {
@@ -440,7 +448,12 @@ export function makeRelayScheduleState(sql: SqlClient) {
               targetRuns: [],
             })
             yield* writeRun(record)
-            return { definition, run: record, scheduledAt }
+            return {
+              definition,
+              hearth: row.client_id,
+              run: record,
+              scheduledAt,
+            }
           })
         )
       ),

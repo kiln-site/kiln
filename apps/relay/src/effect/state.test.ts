@@ -543,6 +543,100 @@ describe("Relay state", () => {
   )
 
   it.effect(
+    "drops the bucket keys a waiting backup was stored with, and keeps a restic repository's",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const keys = {
+            accessKeyId: "AKIAEXAMPLE",
+            allowPrivateNetwork: false,
+            bucket: "kiln-backups",
+            endpoint: "https://s3.example.com",
+            forcePathStyle: false,
+            region: "us-east-1",
+            secretAccessKey: "s3-secret",
+          }
+          const create = (index: number, destination: object) => ({
+            artifactKind: "archive",
+            backupId: `43500000-0000-4000-8000-00000000001${index}`,
+            destination,
+            exclude: [],
+            kind: "create",
+            maxBytes: null,
+            mode: "full",
+            reason: "scheduled",
+            target: { id: "instance-a", kind: "instance" },
+            taskId: `43500000-0000-4000-8000-00000000002${index}`,
+          })
+          const artifactId = "43500000-0000-4000-8000-000000000031"
+          const archive = create(1, {
+            ...keys,
+            artifactId,
+            kind: "s3",
+            objectKey: "team/kiln/a.zip",
+          })
+          const snapshot = {
+            ...create(2, {
+              kind: "restic",
+              repository: { ...keys, kind: "s3", prefix: "team/restic/a" },
+              repositoryPassword: "repository-password",
+            }),
+            artifactKind: "restic_snapshot",
+            mode: "incremental",
+          }
+          const stored = (taskId: string) =>
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              const rows = yield* sql<{ input_json: string }>`
+                SELECT input_json FROM relay_backup_tasks
+                WHERE task_id = ${taskId}
+              `
+              return JSON.parse(rows[0]!.input_json) as {
+                destination: unknown
+              }
+            })
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              for (const [at, input] of [archive, snapshot].entries()) {
+                yield* sql`
+                  INSERT INTO relay_backup_tasks
+                    (task_id, backup_id, kind, status, input_json, created_at,
+                     updated_at)
+                  VALUES (${input.taskId}, ${input.backupId}, 'create',
+                    'queued', ${JSON.stringify(input)}, ${at}, ${at})
+                `
+              }
+              yield* sql`
+                DELETE FROM effect_sql_migrations WHERE migration_id >= 53
+              `
+            })
+          )
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+
+          yield* open(
+            Effect.gen(function* () {
+              assert.deepStrictEqual((yield* stored(archive.taskId)).destination, {
+                artifactId,
+                kind: "s3",
+              })
+              assert.deepStrictEqual(
+                (yield* stored(snapshot.taskId)).destination,
+                snapshot.destination
+              )
+            })
+          )
+        })
+      )
+  )
+
+  it.effect(
     "drops the bucket keys a stored schedule carried for its full backups, and keeps the rest of it",
     () =>
       withTemporaryDirectory((directory) =>

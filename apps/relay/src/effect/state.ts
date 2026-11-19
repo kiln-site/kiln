@@ -2088,7 +2088,62 @@ const migrations = SqliteMigrator.fromRecord({
         AND json_extract(input_json, '$.source.artifactId') IS NULL
     `
   }),
+  // A task waiting its turn from before Hearth kept every bucket's keys to
+  // itself was stored with what it was sent of the bucket its archive goes
+  // to: the keys of a scheduled backup's, or a signed URL. It asks Hearth
+  // for access now, so it keeps the copy's name and nothing else. A task
+  // that ended was scrubbed of keys as it did, and keeps the path it
+  // uploaded to, which Hearth reads to find an upload it hasn't cataloged.
+  "53_backup_task_bucket_access": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<{ input_json: string; task_id: string }>`
+      SELECT task_id, input_json FROM relay_backup_tasks
+      WHERE status IN ('queued', 'running')
+        AND kind IN ('create', 'delete', 'restore')
+    `
+    for (const row of rows) {
+      const kept = withoutTaskBucketAccess(row.input_json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks SET input_json = ${kept}
+        WHERE task_id = ${row.task_id}
+      `
+    }
+  }),
 })
+
+// A stored task's input without what it held of the bucket a full archive
+// is in, or null for one that held nothing of it. A restic repository is
+// left as it is: the Relay still holds its keys.
+function withoutTaskBucketAccess(inputJson: string): string | null {
+  const input = Result.getOrNull(
+    Result.try(() => JSON.parse(inputJson) as unknown)
+  )
+  if (!Predicate.isObject(input)) return null
+  let changed = false
+  const named = (copy: unknown, kind: string, keep: ReadonlyArray<string>) => {
+    if (!Predicate.isObject(copy) || copy.kind !== kind) return copy
+    const kept = Object.fromEntries(
+      Object.entries(copy).filter(([key]) => keep.includes(key))
+    )
+    if (Object.keys(kept).length !== Object.keys(copy).length) changed = true
+    return kept
+  }
+  const archive = (copy: unknown) => named(copy, "s3", ["artifactId", "kind"])
+  if ("destination" in input) input.destination = archive(input.destination)
+  if (Array.isArray(input.replicas)) {
+    input.replicas = (input.replicas as ReadonlyArray<unknown>).map(archive)
+  }
+  if ("source" in input) {
+    input.source = named(input.source, "remote", [
+      "artifactId",
+      "bytes",
+      "checksumSha256",
+      "kind",
+    ])
+  }
+  return changed ? JSON.stringify(input) : null
+}
 
 // A stored schedule without what it held of the buckets its full backups go
 // to, or null for one that held nothing of them.

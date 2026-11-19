@@ -132,12 +132,12 @@ describe("Relay backup task inputs", () => {
       })
     )
 
-    expect(scheduled.destination).toEqual({
+    expect(scheduled).toHaveProperty("destination", {
       artifactId,
       kind: "s3",
       objectKey: "team/backups/scheduled.zip",
     })
-    expect(signed.destination).toEqual({
+    expect(signed).toHaveProperty("destination", {
       artifactId,
       kind: "s3",
       objectKey: "team/backups/manual.zip",

@@ -10,8 +10,10 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { setImmediate as yieldToEventLoop } from "node:timers/promises"
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, type Scope } from "effect"
+import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 import ZipStream from "zip-stream"
 
@@ -676,6 +678,56 @@ describe("Relay backups held for Hearth", () => {
             "cancelled"
           )
           assert.deepStrictEqual(bucket.asked, [])
+        })
+      )
+  )
+
+  // Its Hearth is connected and can't say yet, as while it still owes the
+  // Relay the schedule that allows the backup. Nothing reconnects when it
+  // can, so the worker has to ask again on its own.
+  it.effect(
+    "asks again by itself, a minute on, when its connected Hearth said to ask later",
+    () =>
+      withRelay("kiln-backup-later-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const { answers, hearth } = hearthAwayThenBack()
+          answers({ reason: "a schedule is owed", status: "later" })
+          const input = toBucket(28)
+          // Made in a fiber of its own that then ends, as the Relay makes
+          // it when it starts: a timer forked there would end with it.
+          const manager = yield* Fiber.join(
+            yield* Effect.forkChild(
+              backupManager(config, undefined, undefined, hearth)
+            )
+          )
+          const worker = yield* Effect.forkChild(manager.run())
+          // The worker runs on its own: its file and bucket work takes
+          // turns of the event loop, not time.
+          const settled = (done: (task: RelayBackupTask) => boolean) =>
+            Effect.gen(function* () {
+              while (true) {
+                const task = yield* manager.get(input.taskId)
+                if (task && done(task)) return task
+                yield* Effect.promise(() => yieldToEventLoop())
+              }
+            })
+          yield* manager.enqueue(input, hearthId)
+          yield* settled((task) => task.heldForHearth)
+
+          bucket.asked.length = 0
+          answers(upload("later"))
+          yield* TestClock.adjust("1 minute")
+          const stored = yield* settled((task) => task.finishedAt !== null)
+          yield* Fiber.interrupt(worker)
+
+          assert.strictEqual(stored.status, "succeeded", stored.error ?? "")
+          assert.deepStrictEqual(
+            bucket.asked.map(({ method }) => method),
+            ["PUT"]
+          )
         })
       )
   )

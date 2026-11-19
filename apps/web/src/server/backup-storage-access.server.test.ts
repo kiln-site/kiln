@@ -348,6 +348,22 @@ describeMysql("backup storage access", () => {
             task: { dependsOn: "succeeded", kind: "restore" },
           })
           const ready = yield* ask({ action: "download" })
+          // A second bucket holds a copy reserved at the same moment. Hearth
+          // names one of the two for a restore, the same one each time.
+          const twin = "33333333-3333-4333-8333-33333333333f"
+          yield* insertStorage(otherStorageId)
+          yield* insertRows("backup_artifact", {
+            id: twin,
+            backup_id: backupId,
+            destination_key: otherStorageId,
+            storage_id: otherStorageId,
+            status: "available",
+            object_key: `other/${objectKey}`,
+            created_at: seededAt,
+            updated_at: seededAt,
+          })
+          const named = yield* ask({ action: "download" })
+          const other = yield* ask({ action: "download", artifactId: twin })
           // The Relay has a copy of its own, which the restore reads.
           yield* insertRows("backup_artifact", {
             id: "33333333-3333-4333-8333-33333333333e",
@@ -362,6 +378,8 @@ describeMysql("backup storage access", () => {
 
           assert.strictEqual(early.status, "refused")
           assert.strictEqual(ready.status, "granted")
+          assert.strictEqual(named.status, "granted")
+          assert.strictEqual(other.status, "refused")
           assert.strictEqual(local.status, "refused")
         })
     )
@@ -471,9 +489,10 @@ describeMysql("backup storage access", () => {
 
     // A Relay from before this one held the bucket's keys and may have
     // uploaded a backup Hearth hadn't cataloged, under the folder the
-    // destination had then. Only that folder is taken on its word.
+    // destination had then. Only that folder is taken on its word: an
+    // upload anywhere else isn't cataloged as stored where it isn't.
     it.effect(
-      "files an older Relay's upload where it says only when the rest of the path is Hearth's own",
+      "files an older Relay's upload where it says when the rest of the path is Hearth's own, and as failed otherwise",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -502,12 +521,10 @@ describeMysql("backup storage access", () => {
               const copies = yield* selectRows<{
                 id: string
                 object_key: string
+                status: string
               }>("backup_artifact")
-              return {
-                filed: copies.find((copy) => copy.id === ids.artifactId)
-                  ?.object_key,
-                own,
-              }
+              const copy = copies.find(({ id }) => id === ids.artifactId)
+              return { filed: copy?.object_key, own, status: copy?.status }
             })
 
           const moved = yield* uploaded("1", (own) => `old-folder/${own}`)
@@ -517,7 +534,37 @@ describeMysql("backup storage access", () => {
           )
 
           assert.strictEqual(moved.filed, `old-folder/${moved.own}`)
-          assert.strictEqual(elsewhere.filed, `team/${elsewhere.own}`)
+          assert.strictEqual(moved.status, "available")
+          assert.strictEqual(elsewhere.status, "failed")
+        })
+    )
+
+    // The destination was deleted while the Relay held the archive, away
+    // from Hearth. The backup is still cataloged, as one that failed.
+    it.effect(
+      "catalogs a scheduled backup whose destination is gone as failed, and signs nothing for it",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          const services = yield* Effect.context<Database>()
+          const ids = { artifactId, backupId, taskId }
+          const catalog = reconcileBackupTaskEffect(
+            scheduledTask(ids),
+            relayId
+          ).pipe(Effect.asVoid, Effect.provideContext(services))
+
+          const answer = yield* ask({}, relayId, catalog)
+
+          const [backup] = yield* selectRows<{
+            status: string
+            storage_id: string | null
+          }>("backup")
+          const [task] = yield* selectRows<{ status: string }>("backup_task")
+          assert.strictEqual(backup?.status, "failed")
+          assert.isNull(backup?.storage_id)
+          assert.strictEqual(task?.status, "failed")
+          assert.strictEqual(answer.status, "refused")
         })
     )
 

@@ -188,17 +188,31 @@ deployment as the Relay acknowledges exactly the version it was sent
 (`acknowledged_backups`), leaving out any backup it refused in that version.
 A schedule Hearth only means to send allows nothing. While Hearth still
 owes the Relay a schedule the answer is neither yes nor no but `later`, and
-the Relay keeps the archive and asks again, as it does when Hearth is away.
+the Relay keeps the archive and asks again a minute later, as it does when
+Hearth is away.
 
 The Relay chooses a scheduled backup's IDs and says which destination it is
 for. Hearth catalogs one whole or not at all: IDs that are already another
 backup's, copy's or task's catalog nothing, and a Relay's report changes
-only tasks of its own backups, of the kind it reports.
+only tasks of its own backups, of the kind it reports. One whose
+destination was deleted meanwhile is cataloged as failed, naming no
+destination, and stays failed whatever the Relay reports of it.
 
 A Relay asks the Hearth its task came from, and no other. A Relay can be
 paired with several, and another's answer would send the backup where that
-one says. A task or schedule stored before the Relay kept which Hearth sent
-it is answered by any Hearth with full access to the Relay.
+one says. A scheduled backup asks the Hearth that sent its schedule, as
+that stood when the run began, even when the schedule is removed before
+the run reaches its backup. A task or schedule stored before the Relay kept
+which Hearth sent it is answered by any Hearth with full access to the
+Relay.
+
+A Relay from before this kept the bucket's keys, and may have uploaded a
+scheduled backup that Hearth hasn't cataloged yet. Hearth files that one
+where the Relay says it put it, as long as everything after the
+destination's folder is the path Hearth computes; otherwise it is cataloged
+as failed, since nothing is known to be at the path Hearth would choose.
+Tasks still waiting on such a Relay lose the keys and signed URLs they
+were stored with when it updates.
 
 A signed upload can be sent again until it expires, replacing the object
 (#989).

@@ -359,6 +359,68 @@ describe("Relay schedule commands in containers", () => {
 // An App is backed up by its volumes. Apps that use the same volume are
 // backed up together: asked for once for each App, the volume would be one
 // backup made twice, or one App's backup said done without it.
+// A Relay can be paired with more than one Hearth, and only the one that
+// sent a schedule may say where its backups go.
+describe("Relay scheduled backups to a bucket", () => {
+  it("asks the Hearth that sent the schedule, even once the schedule is removed mid-run", async () => {
+    const asked: Array<string | null> = []
+    const { schedules } = await manager({
+      enqueueBackup: async (input, hearth) => {
+        asked.push(hearth)
+        return {
+          backupId: input.backupId,
+          input,
+          status: "succeeded",
+          taskId: input.taskId,
+        } as unknown as RelayBackupTask
+      },
+      findInstance: async () => ({}),
+    })
+    await schedules.apply(
+      {
+        ...projection,
+        actions: [
+          {
+            duration: 1,
+            id: "0d6f6f0a-6a59-4f0e-9d53-0f7a3f1f8a11",
+            type: "wait",
+            unit: "minutes",
+          },
+          {
+            destination: {
+              kind: "storage",
+              storageId: "7b0c2f1e-5d4a-4c3b-9a2e-1f0d9c8b7a65",
+            },
+            executions: [
+              {
+                destination: { kind: "s3" },
+                mode: "full",
+                targetId: "server-a",
+                targetKind: "instance",
+              },
+            ],
+            id: "c5a1b9d2-3e4f-4a6b-8c7d-9e0f1a2b3c4d",
+            mode: "full",
+            name: "Nightly",
+            type: "backup",
+          },
+        ],
+      },
+      "hearth-one"
+    )
+
+    await runNow(schedules)
+    // Removed while the run waits out its first step.
+    await schedules.remove({
+      revision: projection.revision,
+      scheduleId: projection.id,
+    })
+
+    await advanceUntil(() => expect(asked).toHaveLength(1), minuteMs)
+    expect(asked).toEqual(["hearth-one"])
+  })
+})
+
 describe("Relay scheduled App backups", () => {
   const [site, blog] = ["a".repeat(12), "b".repeat(12)] as [string, string]
   const [media, uploads] = ["1".repeat(40), "2".repeat(40)] as [string, string]

@@ -214,12 +214,14 @@ export class BackupManager {
   readonly #lanes: OperationLanes
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
+  readonly #connectedHearths: () => ReadonlyArray<string>
   readonly #storage: BackupStorageAccess
   readonly #wake: Queue.Queue<void>
   readonly #activeCreates = new Map<string, AbortController>()
 
   private constructor(options: {
     config: RelayConfig
+    connectedHearths: () => ReadonlyArray<string>
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases: DatabaseDriver | null
@@ -233,6 +235,7 @@ export class BackupManager {
     wake: Queue.Queue<void>
   }) {
     this.#config = options.config
+    this.#connectedHearths = options.connectedHearths
     this.#lanes = options.lanes
     this.#findInstance = options.findInstance
     this.#isInstanceStopped = options.isInstanceStopped
@@ -295,6 +298,7 @@ export class BackupManager {
       }
       const manager = new BackupManager({
         config: options.config,
+        connectedHearths: options.connectedHearths,
         findInstance: options.findInstance,
         isInstanceStopped: options.isInstanceStopped,
         databases: options.databases ?? null,
@@ -335,34 +339,6 @@ export class BackupManager {
         yield* manager.#dropEndedHeldArchive(ended.taskId)
       }
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
-      yield* Effect.forkChild(
-        Effect.sleep(EXPORT_SWEEP_INTERVAL).pipe(
-          Effect.andThen(
-            promiseEffect(() => sweepExpiredBackupExports(options.config))
-          ),
-          Effect.forever
-        )
-      )
-      // A task held for Hearth takes its turn again as its Hearth connects
-      // (`hearthReachable`). This is for one whose Hearth stayed connected
-      // and couldn't answer, as while its database was away.
-      yield* Effect.forkChild(
-        Effect.sleep(HELD_FOR_HEARTH_RETRY).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              Effect.forEach(
-                options.connectedHearths(),
-                (hearth) => manager.hearthReachable(hearth),
-                { discard: true }
-              )
-            )
-          ),
-          Effect.catch((cause) =>
-            Effect.logWarning("Held backups could not be released", cause)
-          ),
-          Effect.forever
-        )
-      )
       yield* Queue.offer(wake, undefined)
       return manager
     })
@@ -457,8 +433,42 @@ export class BackupManager {
     )
   }
 
+  /**
+   * The worker: runs tasks as they are queued, for as long as the Relay
+   * runs. What it does on a timer is forked here, not as the manager is
+   * made: a fiber forked there ends when making it does.
+   */
   run() {
     return Effect.gen({ self: this }, function* () {
+      yield* Effect.forkChild(
+        Effect.sleep(EXPORT_SWEEP_INTERVAL).pipe(
+          Effect.andThen(
+            promiseEffect(() => sweepExpiredBackupExports(this.#config))
+          ),
+          Effect.forever
+        )
+      )
+      // A task held for Hearth takes its turn again as its Hearth connects
+      // (`hearthReachable`). This is for one whose Hearth stayed connected
+      // and couldn't answer yet: its database was away, or it still owed
+      // the Relay the schedule that allows the backup.
+      yield* Effect.forkChild(
+        Effect.sleep(HELD_FOR_HEARTH_RETRY).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              Effect.forEach(
+                this.#connectedHearths(),
+                (hearth) => this.hearthReachable(hearth),
+                { discard: true }
+              )
+            )
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("Held backups could not be released", cause)
+          ),
+          Effect.forever
+        )
+      )
       while (true) {
         yield* Queue.take(this.#wake)
         yield* this.#drain()

@@ -1042,7 +1042,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   // Hearth chooses where a bucket's copy goes, as it does for a backup it
   // started: the Relay names the destination and never a path in it.
   const storageRows =
-    input.destination.kind === "s3" && catalog.storageId
+    catalog.storageId
       ? yield* transaction.queryRows<RowDataPacket & { object_prefix: string }>(
           `SELECT object_prefix
              FROM ${databaseTable("backup_storage")}
@@ -1075,15 +1075,26 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     input.destination.kind === "s3" && task.status === "succeeded"
       ? input.destination.objectKey
       : undefined
-  const objectKey = storage
-    ? uploadedTo !== undefined &&
-      (uploadedTo === keyUnder("") || uploadedTo.endsWith(`/${keyUnder("")}`))
-      ? uploadedTo
-      : keyUnder(storage.object_prefix)
-    : null
-  // A bucket that's gone has nowhere for it to go.
+  const uploadedWhereHearthWould =
+    uploadedTo !== undefined &&
+    (uploadedTo === keyUnder("") || uploadedTo.endsWith(`/${keyUnder("")}`))
+  const objectKey =
+    storage && input.destination.kind === "s3"
+      ? uploadedWhereHearthWould
+        ? uploadedTo
+        : keyUnder(storage.object_prefix)
+      : null
+  // A bucket that's gone has nowhere for it to go. It was deleted since
+  // the Relay was told of it, so the backup is cataloged without it: a
+  // record can't name a destination that no longer exists.
   const unstorable = input.destination.kind === "s3" && !storage
-  const failed = orphaned || unstorable
+  const storageId = storage ? catalog.storageId : null
+  // Uploaded somewhere Hearth can't tell is this backup's own path, as
+  // when the installation's ID changed since. Nothing is known to be at
+  // the path Hearth would choose, so it isn't cataloged as stored there.
+  const unplaced =
+    !unstorable && uploadedTo !== undefined && !uploadedWhereHearthWould
+  const failed = orphaned || unstorable || unplaced
 
   // Cataloged whole or not at all. The Relay chose these IDs, and one that
   // is already another backup's, copy's or task's would otherwise tie what
@@ -1112,7 +1123,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       relayId,
       input.target.kind,
       input.target.id,
-      catalog.storageId,
+      storageId,
       input.artifactKind,
       input.mode,
       failed ? "failed" : "queued",
@@ -1139,8 +1150,9 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     [
       artifactId,
       input.backupId,
+      // Which destination it was for stays, even one that's gone.
       input.mode === "incremental" ? "restic" : (catalog.storageId ?? "local"),
-      catalog.storageId,
+      storageId,
       failed ? "failed" : "queued",
       objectKey,
       task.createdAt,
@@ -1161,7 +1173,9 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
         ? "Its repository was gone when it finished, so it can't be restored"
         : unstorable
           ? "Its backup destination was gone, so it had nowhere to go"
-          : null,
+          : unplaced
+            ? "An older Relay stored it at a path Hearth can't confirm is this backup's own"
+            : null,
       task.createdAt,
       now,
     ]
@@ -1259,6 +1273,18 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           knownTask.reason === "scheduled" &&
           knownTask.backup_mode === "incremental" &&
           !knownTask.repository_id
+        ) {
+          return
+        }
+        // As does any scheduled backup Hearth failed as it cataloged it,
+        // which is the only failure it records before a Relay's report:
+        // its destination was gone, or it was stored where Hearth can't
+        // find it.
+        if (
+          knownTask.task_kind === "create" &&
+          knownTask.reason === "scheduled" &&
+          knownTask.status === "failed" &&
+          knownTask.relay_updated_at_ms === null
         ) {
           return
         }
@@ -2293,7 +2319,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
        FROM ${databaseTable("backup_artifact")} artifact
        JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
       WHERE backup.relay_id = ? AND artifact.status <> 'deleted'
-      ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+      ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC, artifact.id ASC`,
     [relayId]
   )
   const artifactsByBackup = new Map<string, Array<BackupArtifactRow>>()
@@ -2531,7 +2557,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             artifact.error_code
                    FROM ${databaseTable("backup_artifact")} artifact
                   WHERE artifact.backup_id = ? AND artifact.status = 'available'
-                  ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC
+                  ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC, artifact.id ASC
                   FOR UPDATE`,
                 [input.backupId]
               )
@@ -2928,7 +2954,7 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
                   artifact.error_code
              FROM ${databaseTable("backup_artifact")} artifact
             WHERE artifact.backup_id = ? AND artifact.status <> 'deleted'
-            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC, artifact.id ASC`,
           [input.backupId]
         )
         return {
@@ -4484,7 +4510,7 @@ export const linkInstanceBackupsEffect = Effect.fn("backups.link")(
                   artifact.error_code
              FROM ${databaseTable("backup_artifact")} artifact
             WHERE artifact.backup_id = ? AND artifact.status = 'available'
-            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC, artifact.id ASC`,
             [backup.id]
           )).filter((artifact) => sameRelay || artifact.storage_id !== null)
           const primary = artifacts[0]
