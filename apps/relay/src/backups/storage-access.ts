@@ -60,14 +60,19 @@ export function backupStorageAccessThrough(
       catch: (cause) => hearthUnreachable(request, cause),
     })
     let refusal: string | null = null
+    let later = false
     for (const answer of answers) {
       const parsed = backupStorageAccessResponseSchema.safeParse(answer.payload)
-      // A Hearth that can't say yet is asked again, as one that's away is.
-      if (!parsed.success || parsed.data.status === "later") continue
+      if (!parsed.success) continue
       if (parsed.data.status === "granted") return parsed.data
-      refusal ??= parsed.data.reason
+      if (parsed.data.status === "later") later = true
+      else refusal ??= parsed.data.reason
     }
-    if (refusal === null) return yield* hearthUnreachable(request)
+    // A Hearth that can't say yet is asked again, as one that's away is.
+    // It outweighs another's refusal: of the Hearths that may answer for a
+    // task that names none, the one it isn't for knows nothing of it, and
+    // the one it is for may only be catching up.
+    if (later || refusal === null) return yield* hearthUnreachable(request)
     return yield* RelayBackupError.make({
       code: "storage_access_refused",
       operation: `${request.action}.access`,

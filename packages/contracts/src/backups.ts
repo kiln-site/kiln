@@ -899,8 +899,9 @@ export const relayBackupTaskSchema = z
     errorCode: backupFailureCodeWireSchema.nullable().default(null),
     finishedAt: z.number().int().nonnegative().nullable(),
     /**
-     * A create whose archive is taken and held on the Relay until Hearth
-     * can be reached to store it: a queued task that has done its part.
+     * A queued task set aside until Hearth can be reached, which a bucket's
+     * copy needs: a create whose archive is taken and held on the Relay,
+     * having done its part, or a delete that couldn't ask.
      */
     heldForHearth: z.boolean().default(false),
     input: backupTaskInputSchema,

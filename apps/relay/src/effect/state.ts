@@ -776,6 +776,16 @@ export class RelayStateStore extends Context.Service<
       limitBytes: number
     ) => Effect.Effect<"held" | "full" | "gone", RelayStateError>
     /**
+     * Sets a running delete aside until Hearth can be reached, which
+     * deleting a bucket's copy needs. It runs again from the start: a copy
+     * it already deleted is deleted again, which changes nothing. Answers
+     * false when the task is no longer running.
+     */
+    readonly setBackupDeleteAsideForHearth: (
+      taskId: string,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
+    /**
      * The archive a create holds for Hearth, or null for none. It's kept
      * past the task's end, until `forgetHeldBackupArchive` says the file
      * was dealt with.
@@ -2084,8 +2094,11 @@ const migrations = SqliteMigrator.fromRecord({
       UPDATE relay_backup_tasks
       SET input_refresh_required = 1
       WHERE kind = 'restore' AND status = 'queued'
-        AND json_extract(input_json, '$.source.kind') = 'remote'
-        AND json_extract(input_json, '$.source.artifactId') IS NULL
+        -- One that can't be read is failed as it's claimed, alone.
+        AND CASE WHEN json_valid(input_json)
+              THEN json_extract(input_json, '$.source.kind') = 'remote'
+                AND json_extract(input_json, '$.source.artifactId') IS NULL
+            END
     `
   }),
   // A task waiting its turn from before Hearth kept every bucket's keys to
@@ -3631,6 +3644,23 @@ const makeRelayStateStore = Effect.gen(function* () {
             return held.length > 0 ? ("held" as const) : ("gone" as const)
           })
         )
+      ),
+    setBackupDeleteAsideForHearth: (taskId, now) =>
+      run(
+        "set_backup_delete_aside_for_hearth",
+        sql<{ taskId: string }>`
+          UPDATE relay_backup_tasks
+          SET status = 'queued',
+              awaiting_hearth = 1,
+              started_at = NULL,
+              phase = NULL,
+              current_artifact_id = NULL,
+              current_path = NULL,
+              result_json = NULL,
+              updated_at = ${now}
+          WHERE task_id = ${taskId} AND status = 'running' AND kind = 'delete'
+          RETURNING task_id AS taskId
+        `.pipe(Effect.map((rows) => rows.length > 0))
       ),
     heldBackupArchive: (taskId) =>
       run(

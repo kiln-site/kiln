@@ -1890,8 +1890,26 @@ export class BackupManager {
                       progress,
                       nextDeleteUpdatedAt()
                     )
+                ).pipe(
+                  Effect.catchIf(isHearthUnreachable, () =>
+                    Effect.succeed("unasked" as const)
+                  )
                 ),
               }
+        if (result === "unasked") {
+          // Set aside as a held create is, to take its turn again when its
+          // Hearth connects or the retry comes round.
+          const waiting = yield* this.#state.setBackupDeleteAsideForHearth(
+            task.taskId,
+            nextDeleteUpdatedAt()
+          )
+          if (waiting) return "held" as const
+          return yield* backupFailure(
+            "task_state_changed",
+            "delete.wait",
+            "The backup task was no longer running when it had to wait for Hearth"
+          )
+        }
         // The forgotten snapshot's data goes in one prune shared with the
         // repository's other deletes; see `scheduleBackupPrune`.
         const completed = yield* this.#state.completeBackupTask(
@@ -2326,7 +2344,15 @@ export class BackupManager {
       if (stored.awaitingHearth) {
         const held = yield* this.#state.holdBackupTaskForHearth(
           task.taskId,
-          stored.archive,
+          // With the copies already stored, so those aren't sent again or
+          // forgotten: a destination disabled by the time Hearth is back
+          // would otherwise be reported as never having got it.
+          {
+            ...stored.archive,
+            artifacts: (stored.result.artifacts ?? []).filter(
+              (copy) => copy.status === "available"
+            ),
+          },
           Date.now(),
           this.#config.backupOutboxBytes
         )
@@ -2793,9 +2819,24 @@ function storeCreatedBackup(
     let awaitingHearth = false
     let lastFailure: unknown = null
     let lastUploadedArtifactId: string | null = null
+    // The copies a held archive already reached, before Hearth went away.
+    const alreadyStored = new Set(
+      (result.artifacts ?? [])
+        .filter((copy) => copy.status === "available")
+        .map((copy) => copy.artifactId)
+    )
     for (const destination of destinations) {
       signal.throwIfAborted()
       if (destination.kind === "restic") continue
+      if (destination.artifactId && alreadyStored.has(destination.artifactId)) {
+        available += 1
+        outcomes.push({
+          artifactId: destination.artifactId,
+          error: null,
+          status: "available",
+        })
+        continue
+      }
       progress.completed = 0
       progress.currentArtifactId = destination.artifactId ?? null
       const onChunk = (bytes: number) => {
@@ -2935,6 +2976,13 @@ function deleteBackupArtifacts(
       const deleted = yield* Effect.result(
         deleteBackupArtifact(config, { ...input, destination }, access)
       )
+      // Not an answer on the copy: it may be gone already, deleted by a run
+      // of this task a restart cut off, and saying it wasn't would leave
+      // Hearth listing a backup that isn't there. The task waits and runs
+      // again (`#execute`).
+      if (Result.isFailure(deleted) && isHearthUnreachable(deleted.failure)) {
+        return yield* Effect.fail(deleted.failure)
+      }
       if (!destination.artifactId) {
         if (Result.isFailure(deleted)) {
           return yield* backupFailure(

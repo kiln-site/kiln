@@ -732,6 +732,120 @@ describe("Relay backups held for Hearth", () => {
       )
   )
 
+  // One bucket has the archive when Hearth goes away before the other can
+  // be asked for. By the time Hearth is back the first is turned off, and
+  // would be refused: what it already holds still counts.
+  it.effect(
+    "keeps the copies a held backup already stored, and sends only the rest when Hearth is back",
+    () =>
+      withRelay("kiln-backup-held-partial-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const first = "30000000-0000-4000-8000-000000000011"
+          const second = "30000000-0000-4000-8000-000000000012"
+          const says = new Map<string, unknown>([[first, upload("first")]])
+          const asked: Array<string> = []
+          const hearth = {
+            connectedHearths: () => [hearthId],
+            storage: backupStorageAccessThrough(async (payload) => {
+              asked.push(payload.artifactId)
+              const answer = says.get(payload.artifactId)
+              return answer === undefined ? [] : [{ payload: answer }]
+            }),
+          }
+          const input = {
+            ...backupInput(29),
+            destination: { artifactId: first, kind: "s3" as const },
+            replicas: [{ artifactId: second, kind: "s3" as const }],
+          }
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            hearth
+          )
+          const held = yield* runTask(manager, input, hearthId)
+          assert.isTrue(held.heldForHearth)
+
+          asked.length = 0
+          says.set(first, { reason: "it is disabled", status: "refused" })
+          says.set(second, upload("second"))
+          yield* manager.hearthReachable(hearthId)
+          yield* manager.runPending()
+
+          const stored = yield* manager.get(input.taskId)
+          assert.strictEqual(stored?.status, "succeeded", stored?.error ?? "")
+          assert.deepStrictEqual(
+            archiveResult(stored!).artifacts?.map(({ artifactId, status }) => ({
+              artifactId,
+              status,
+            })),
+            [
+              { artifactId: first, status: "available" },
+              { artifactId: second, status: "available" },
+            ]
+          )
+          assert.deepStrictEqual(asked, [second])
+        })
+      )
+  )
+
+  // The bucket has dropped the object and the Relay stops before it says
+  // so. It starts again with Hearth not yet connected. Recording the copy
+  // as not deleted then would leave Hearth listing a backup that's gone.
+  it.effect(
+    "leaves a delete waiting while Hearth can't be asked, and deletes once it can",
+    () =>
+      withRelay("kiln-backup-delete-wait-", ({ config }) =>
+        Effect.gen(function* () {
+          const { answers, hearth } = hearthAwayThenBack()
+          const input = {
+            backupId: "00000000-0000-4000-8000-000000000030",
+            destination: { artifactId: bucketCopy, kind: "s3" as const },
+            kind: "delete" as const,
+            target: backupInput(30).target,
+            taskId: "10000000-0000-4000-8000-000000000030",
+          }
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            hearth
+          )
+          const waiting = yield* runTask(manager, input, hearthId)
+          assert.strictEqual(waiting.status, "queued")
+          assert.isTrue(waiting.heldForHearth)
+          assert.isNull(waiting.result)
+
+          bucket.asked.length = 0
+          answers({
+            allowPrivateNetwork: false,
+            headers: {},
+            method: "DELETE",
+            status: "granted",
+            url: "https://kiln-backups.s3.example.com/team/gone.zip?X-Amz-Signature=abc",
+          })
+          yield* manager.hearthReachable(hearthId)
+          yield* manager.runPending()
+
+          const deleted = yield* manager.get(input.taskId)
+          assert.strictEqual(deleted?.status, "succeeded", deleted?.error ?? "")
+          assert.deepStrictEqual(
+            deleted?.result && "artifacts" in deleted.result
+              ? deleted.result.artifacts
+              : null,
+            [{ artifactId: bucketCopy, error: null, status: "deleted" }]
+          )
+          assert.deepStrictEqual(
+            bucket.asked.map(({ method }) => method),
+            ["DELETE"]
+          )
+        })
+      )
+  )
+
   it.effect(
     "fails a backup its Hearth refuses a bucket to, without holding it",
     () =>

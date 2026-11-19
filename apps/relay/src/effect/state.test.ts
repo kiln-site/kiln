@@ -518,6 +518,16 @@ describe("Relay state", () => {
                   'queued', ${JSON.stringify(input)}, ${at}, ${at})
               `
             }
+            // One whose record can't be read doesn't keep the Relay from
+            // starting.
+            yield* sql`
+              INSERT INTO relay_backup_tasks
+                (task_id, backup_id, kind, status, input_json, created_at,
+                 updated_at)
+              VALUES ('43300000-0000-4000-8000-000000000029',
+                '43300000-0000-4000-8000-000000000019', 'restore', 'queued',
+                '{"source":', 9, 9)
+            `
             yield* sql`
               DELETE FROM effect_sql_migrations WHERE migration_id >= 52
             `

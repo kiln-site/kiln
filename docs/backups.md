@@ -214,6 +214,22 @@ as failed, since nothing is known to be at the path Hearth would choose.
 Tasks still waiting on such a Relay lose the keys and signed URLs they
 were stored with when it updates.
 
+What Hearth can't be asked is not taken as an answer. A delete of a
+bucket's copy that can't ask is set aside (`heldForHearth`) and runs again
+when its Hearth connects, or a minute on: the copy may already be gone,
+deleted by a run a restart cut off, and recording it as not deleted would
+leave Hearth listing a backup that isn't there. A restore that can't ask
+fails, before it has changed anything.
+
+Two limits follow from Hearth deciding as it is asked:
+
+- A scheduled backup still running, or held, when its schedule is removed
+  or stops backing that target up to that destination is refused, and
+  fails. Removing the schedule takes back its leave.
+- A restore is refused when, since Hearth sent it, a copy Hearth would name
+  ahead of the one it was sent for became available. It changes nothing,
+  and running it again reads that copy.
+
 A signed upload can be sent again until it expires, replacing the object
 (#989).
 
@@ -390,7 +406,9 @@ keeps the archive until the task has ended: stored, failed or cancelled. A
 Relay holds at most `KILN_RELAY_BACKUP_OUTBOX` of such archives at once (a
 size such as `20g`, the default), counting each until its task ends; a
 backup past that fails as one with nowhere to go, and what is already held
-stays. Cancelling a held backup drops its archive. Hearth
+stays. Cancelling a held backup drops its archive. A backup that goes to
+several destinations is held with the copies it already stored recorded,
+so only the rest are sent when Hearth is back. Hearth
 decides whether each one may run as it decides a
 manual backup's reservation, and puts the answer in the schedule it sends
 the Relay, per backup step and target: not while the target is being

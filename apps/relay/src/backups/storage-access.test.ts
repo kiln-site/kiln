@@ -101,6 +101,22 @@ describe("Relay backup storage access", () => {
       })
   )
 
+  // The Hearth such a task is for may still be catching up after an
+  // update, while another, which never heard of the task, refuses it.
+  it.effect(
+    "waits when one Hearth says to ask later, though another refuses a task that names none",
+    () =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(
+          connected([
+            other("full_access", refusal),
+            { ...owner, says: { reason: "a schedule is owed", status: "later" } },
+          ])(request, null)
+        )
+        assert.isTrue(isHearthUnreachable(failure))
+      })
+  )
+
   // What a held backup waits out: no Hearth connected, one that can't say
   // yet, or one that couldn't answer or answered with something that isn't
   // an answer.
