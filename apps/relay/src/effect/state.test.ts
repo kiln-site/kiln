@@ -263,7 +263,7 @@ describe("Relay state", () => {
       })
   )
 
-  stateTest("scrubs S3 keys from terminal journal rows", () =>
+  stateTest("scrubs a repository's password from terminal journal rows", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore
       const input: BackupTaskInput = {
@@ -271,17 +271,7 @@ describe("Relay state", () => {
         backupId: "41100000-0000-4000-8000-000000000001",
         destination: {
           kind: "restic",
-          repository: {
-            accessKeyId: "AKIAEXAMPLE",
-            allowPrivateNetwork: true,
-            bucket: "kiln-backups",
-            endpoint: "https://s3.example.com",
-            forcePathStyle: true,
-            kind: "s3",
-            region: "us-east-1",
-            repositoryPrefix: "team/repo",
-            secretAccessKey: "s3-secret",
-          },
+          repository: { kind: "s3" },
           repositoryPassword: "repo-secret",
         },
         exclude: [],
@@ -314,18 +304,6 @@ describe("Relay state", () => {
       assert.isDefined(destination)
       if (!destination) return
       assert.strictEqual(destination.repositoryPassword, undefined)
-      assert.strictEqual(
-        destination.repository?.kind === "s3"
-          ? destination.repository.accessKeyId
-          : "present",
-        undefined
-      )
-      assert.strictEqual(
-        destination.repository?.kind === "s3"
-          ? destination.repository.secretAccessKey
-          : "present",
-        undefined
-      )
     })
   )
 
@@ -740,7 +718,7 @@ describe("Relay state from before destinations took 12-character IDs", () => {
 
 describe("Relay tasks stored with signed requests for a bucket", () => {
   it.effect(
-    "drops the bucket keys a stored schedule carried for its full backups, and keeps the rest of it",
+    "drops the bucket keys a stored schedule carried for its backups, and keeps the rest of it",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -789,6 +767,7 @@ describe("Relay tasks stored with signed requests for a bucket", () => {
                       repositoryPassword: "repository-password",
                     },
                     mode: "incremental",
+                    repositoryId: "43600000-0000-4000-8000-000000000041",
                     targetId: "three",
                     targetKind: "instance",
                   },
@@ -825,19 +804,26 @@ describe("Relay tasks stored with signed requests for a bucket", () => {
           )
           assert.notMatch(
             row?.definition_json ?? "",
-            /AKIAARCHIVE|archive-secret|objectKeyPrefix/u
+            /AKIA|-secret|objectKeyPrefix|kiln-backups/u
           )
           const [bucket, local, incremental] = (
             JSON.parse(row?.definition_json ?? "{}") as typeof stored
           ).actions[1]!.executions!
           assert.deepStrictEqual(bucket?.destination, { kind: "s3" })
           assert.deepStrictEqual(local, stored.actions[1]!.executions![1])
-          // An incremental backup's repository still reaches the bucket with
-          // them.
-          assert.deepStrictEqual(
-            incremental,
-            stored.actions[1]!.executions![2]
-          )
+          // An incremental backup keeps its repository's name and password,
+          // which is no key to the bucket.
+          assert.deepStrictEqual(incremental as unknown, {
+            ...stored.actions[1]!.executions![2],
+            destination: {
+              kind: "restic",
+              repository: {
+                kind: "s3",
+                repositoryId: "43600000-0000-4000-8000-000000000041",
+              },
+              repositoryPassword: "repository-password",
+            },
+          })
         })
       )
   )
@@ -892,10 +878,32 @@ describe("Relay tasks stored with signed requests for a bucket", () => {
               kind: "remote",
             },
           })
+          // An incremental backup's repository came with the bucket's keys
+          // and its folder there.
+          const repository = { ...withKeys, repositoryPrefix: "team/repo" }
+          const repositoryId = "43600000-0000-4000-8000-000000000041"
+          const snapshot = task(4, "create", {
+            catalog: { name: "Nightly", repositoryId, storageId: null },
+            destination: {
+              kind: "restic",
+              repository,
+              repositoryPassword: "repository-password",
+            },
+          })
+          const prune = task(5, "prune", {
+            repository,
+            repositoryPassword: "repository-password",
+          })
           yield* open(
             Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient
-              for (const [at, input] of [signed, scheduled, restore].entries()) {
+              for (const [at, input] of [
+                signed,
+                scheduled,
+                restore,
+                snapshot,
+                prune,
+              ].entries()) {
                 yield* sql`
                   INSERT INTO relay_backup_tasks
                     (task_id, backup_id, kind, status, input_json, created_at,
@@ -940,6 +948,22 @@ describe("Relay tasks stored with signed requests for a bucket", () => {
               assert.deepStrictEqual(yield* stored(scheduled.taskId), {
                 kind: "s3",
               })
+              // What's left of a repository names it, where the task did,
+              // and keeps the password that is no key to the bucket.
+              assert.deepStrictEqual(yield* stored(snapshot.taskId), {
+                kind: "restic",
+                repository: { kind: "s3", repositoryId },
+                repositoryPassword: "repository-password",
+              })
+              const [pruned] = yield* sql<{ json: string }>`
+                SELECT input_json AS json FROM relay_backup_tasks
+                WHERE task_id = ${prune.taskId}
+              `
+              assert.deepStrictEqual(
+                (JSON.parse(pruned!.json) as { repository: unknown })
+                  .repository,
+                { kind: "s3" }
+              )
               const store = yield* RelayStateStore
               assert.isTrue(
                 (yield* store.getBackupTask(restore.taskId))

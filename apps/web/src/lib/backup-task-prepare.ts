@@ -174,6 +174,7 @@ const resticRepositoryForBackup = Effect.fnUntraced(function* (
   return {
     location: yield* prepareResticRepositoryLocation({
       objectPrefix: repository.objectPrefix,
+      repositoryId: repository.id,
       requireEnabled: options?.requireEnabled ?? false,
       storageId: repository.storageId,
     }),

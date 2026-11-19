@@ -259,57 +259,6 @@ export const resticS3RegionSchema = z
       "S3 regions must contain only lowercase letters, digits, and hyphens",
   })
 
-export const resticRepositoryPrefixSchema = z
-  .string()
-  .min(1)
-  .max(1_024)
-  .regex(/^[A-Za-z0-9._/-]+$/u, {
-    message:
-      "Restic repository prefixes can contain only letters, digits, dots, underscores, slashes, and hyphens",
-  })
-  .refine((value) => !value.startsWith("/"), {
-    message: "Backup object keys must be relative",
-  })
-  .refine((value) => !value.split("/").includes(".."), {
-    message: "Backup object keys cannot traverse parent directories",
-  })
-  .refine((value) => !hasUnsafeControlCharacter(value), {
-    message: "Backup object keys cannot contain control characters",
-  })
-
-const resticS3EndpointSchema = backupHttpsUrlSchema.refine(
-  (value) => {
-    const endpoint = new URL(value)
-    const port = endpoint.port ? Number(endpoint.port) : 443
-    return (
-      !endpoint.username &&
-      !endpoint.password &&
-      !endpoint.search &&
-      !endpoint.hash &&
-      (endpoint.pathname === "/" || endpoint.pathname === "") &&
-      Number.isSafeInteger(port) &&
-      port >= 1 &&
-      port <= 65_535
-    )
-  },
-  {
-    message:
-      "Restic S3 endpoints must be an HTTPS origin without credentials, a path, query, or fragment",
-  }
-)
-
-export const backupS3CredentialSchema = z
-  .object({
-    accessKeyId: z.string().min(1).max(512),
-    allowPrivateNetwork: z.boolean().default(false),
-    bucket: resticS3BucketSchema,
-    endpoint: resticS3EndpointSchema,
-    forcePathStyle: z.boolean().default(false),
-    region: resticS3RegionSchema,
-    secretAccessKey: z.string().min(1).max(2_048),
-  })
-  .strict()
-
 /**
  * A copy in a bucket that the Relay holds nothing of. Hearth keeps the
  * bucket's keys and chooses its paths, so a task names only the copy, and
@@ -337,13 +286,21 @@ const resticLocalRepositoryLocationSchema = z
   })
   .strict()
 
-const resticS3RepositoryLocationObjectSchema = backupS3CredentialSchema
-  .partial({ accessKeyId: true, secretAccessKey: true })
-  .safeExtend({
-    kind: z.literal("s3"),
-    repositoryPrefix: resticRepositoryPrefixSchema,
-  })
-  .strict()
+/**
+ * A restic repository in a bucket. The Relay holds nothing of the bucket:
+ * restic talks to a translator on the Relay, which asks Hearth for one
+ * signed request at a time (`backup.repository.access`). Hearth finds the
+ * repository from the task that asks; `repositoryId` names it for the
+ * Relay's own bookkeeping, as one prune per repository.
+ *
+ * Read loosely: a Relay keeps the tasks and schedules it stored, and Hearth
+ * once sent the bucket's keys and the repository's folder with these.
+ * Those are read and dropped.
+ */
+const resticS3RepositoryLocationObjectSchema = z.object({
+  kind: z.literal("s3"),
+  repositoryId: z.uuid().optional(),
+})
 
 export const resticRepositoryLocationSchema = z.discriminatedUnion("kind", [
   resticLocalRepositoryLocationSchema,
@@ -1040,6 +997,91 @@ export const backupStorageAccessResponseSchema = z.discriminatedUnion(
   "status",
   [backupStorageAccessGrantSchema, backupStorageAccessRefusalSchema]
 )
+
+/** The folders of a restic repository, and its one `config` file. */
+export const resticRepositoryObjectTypes = [
+  "config",
+  "keys",
+  "locks",
+  "snapshots",
+  "index",
+  "data",
+] as const
+
+/**
+ * A Relay asks Hearth for what restic needs of a repository in a bucket
+ * (`backup.repository.access`): one signed request to read, write or
+ * delete one of its files, or one page of a folder's listing, which Hearth
+ * reads from the bucket itself. It names the task that needs it, and
+ * nothing of the bucket: Hearth finds the repository from the task, which
+ * must be one it knows and still open, and decides by its kind what it
+ * may do there. A prune is a task the Relay starts itself, so it is
+ * offered to Hearth first (`backup.task.offer`), as a schedule's backup is.
+ */
+export const backupRepositoryAccessRequestSchema = z
+  .object({
+    /** Where a listing goes on from, as its last page said. */
+    continuationToken: z.string().min(1).max(2_048).optional(),
+    method: z.enum(["GET", "HEAD", "PUT", "DELETE", "LIST"]),
+    /** A file's name: restic names every file by a SHA-256. */
+    name: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    taskId: backupTaskIdSchema,
+    type: z.enum(resticRepositoryObjectTypes),
+  })
+  .strict()
+
+export const backupRepositoryAccessGrantSchema = z
+  .object({
+    allowPrivateNetwork: z.boolean(),
+    headers: z.record(z.string(), z.string()),
+    method: z.enum(["GET", "HEAD", "PUT", "DELETE"]),
+    status: z.literal("granted"),
+    url: backupHttpsUrlSchema,
+  })
+  .strict()
+
+/** One page of a folder: its files, and where the next page starts. */
+export const backupRepositoryListingSchema = z
+  .object({
+    files: z
+      .array(
+        z
+          .object({
+            name: z.string().regex(/^[a-f0-9]{64}$/u),
+            size: z.number().int().nonnegative(),
+          })
+          .strict()
+      )
+      .max(1_000),
+    next: z.string().min(1).max(2_048).nullable(),
+    status: z.literal("listed"),
+  })
+  .strict()
+
+export const backupRepositoryAccessResponseSchema = z.discriminatedUnion(
+  "status",
+  [
+    backupRepositoryAccessGrantSchema,
+    backupRepositoryListingSchema,
+    backupStorageAccessRefusalSchema,
+  ]
+)
+
+export type BackupRepositoryAccessRequest = z.infer<
+  typeof backupRepositoryAccessRequestSchema
+>
+export type BackupRepositoryAccessGrant = z.infer<
+  typeof backupRepositoryAccessGrantSchema
+>
+export type BackupRepositoryListing = z.infer<
+  typeof backupRepositoryListingSchema
+>
+export type BackupRepositoryAccessResponse = z.infer<
+  typeof backupRepositoryAccessResponseSchema
+>
 
 /**
  * Hearth's answer to a backup a Relay started on its own, as a schedule's

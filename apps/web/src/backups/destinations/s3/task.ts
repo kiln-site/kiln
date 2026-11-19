@@ -10,9 +10,10 @@ import {
 import { deleteS3BackupObject, s3Failure } from "./client"
 import { loadBackupStorageCredentialEffect } from "./storage"
 
-// A task names the copy and nothing in the bucket: no key, path or signed
-// request. The Relay asks for access as it is ready to use the copy
-// (`grantBackupStorageAccessEffect`), which is when Hearth decides. These
+// A task names the copy, or the restic repository, and nothing in the
+// bucket: no key, path or signed request. The Relay asks for access as it
+// is ready to use one (`grantBackupStorageAccessEffect`,
+// `grantBackupRepositoryAccessEffect`), which is when Hearth decides. These
 // check only that the task is worth sending.
 export const s3BackupDestinationTaskDriver = {
   kind: "s3",
@@ -66,20 +67,10 @@ export const s3BackupDestinationTaskDriver = {
           "The restic repository is unavailable"
         )
       }
-      const storage = yield* availableStorage(
-        input.storageId,
-        input.requireEnabled
-      )
+      yield* availableStorage(input.storageId, input.requireEnabled)
       return {
-        accessKeyId: storage.accessKeyId,
-        allowPrivateNetwork: storage.allowPrivateNetwork,
-        bucket: storage.bucket,
-        endpoint: storage.endpoint,
-        forcePathStyle: storage.forcePathStyle,
         kind: "s3",
-        region: storage.region,
-        repositoryPrefix: input.objectPrefix,
-        secretAccessKey: storage.secretAccessKey,
+        repositoryId: input.repositoryId,
       } satisfies ResticRepositoryLocation
     }),
 } satisfies BackupDestinationTaskDriver<"s3">

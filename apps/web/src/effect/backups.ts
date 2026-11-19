@@ -1023,6 +1023,15 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   // tasks. A backup for a bucket, taken by a schedule this Hearth never
   // had, is another Hearth's: not this one's to catalog, as failed or at
   // all. One of a schedule it deleted is still its own to refuse.
+  // Whether it goes to a bucket is by the destination it names, which is
+  // where Hearth looks for its path or its repository, not by what kind
+  // the Relay says its destination is: a backup filed in a bucket is one
+  // Hearth checked the schedule for. An incremental one's repository in a
+  // bucket is admitted the same way a full one's copy is, since Hearth
+  // opens the repository only to a task it cataloged.
+  const toBucket = catalog.storageId !== null && input.mode === "full"
+  const toRepository =
+    catalog.storageId !== null && input.mode === "incremental"
   if (catalog.storageId !== null && catalog.schedule) {
     const known = yield* transaction.queryRows<RowDataPacket>(
       `SELECT 1 FROM ${databaseTable("schedule")} WHERE id = ? LIMIT 1`,
@@ -1031,9 +1040,12 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     if (known.length === 0) return
   }
   // An incremental one names the repository Hearth sent with its schedule;
-  // one from before that is found by its target and destination. Without
-  // its repository's password a snapshot can't be restored, so one whose
-  // repository is gone is cataloged as failed, not left out.
+  // one from before that is found by its target and destination. Either
+  // way it is that target's repository in the destination the backup says
+  // it is for, which is the one Hearth admits it against: a target can
+  // have a repository in each of several. Without its repository's
+  // password a snapshot can't be restored, so one whose repository is gone
+  // is cataloged as failed, not left out.
   const repositoryRows =
     input.mode === "incremental"
       ? catalog.repositoryId
@@ -1041,10 +1053,16 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
             `SELECT id
                FROM ${databaseTable("backup_repository")}
               WHERE id = ? AND relay_id = ? AND target_kind = ?
-                AND target_id = ?
+                AND target_id = ? AND storage_key = ?
               LIMIT 1
               FOR UPDATE`,
-            [catalog.repositoryId, relayId, input.target.kind, input.target.id]
+            [
+              catalog.repositoryId,
+              relayId,
+              input.target.kind,
+              input.target.id,
+              catalog.storageId ?? "local",
+            ]
           )
         : yield* transaction.queryRows<ScheduledBackupRepositoryRow>(
             `SELECT id
@@ -1076,11 +1094,6 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
         catalog.storageId
       )
     : undefined
-  // Whether it goes to a bucket is by the destination it names, which is
-  // where Hearth files it, not by what kind the Relay says its
-  // destination is: a backup filed in a bucket is one Hearth checked the
-  // schedule for.
-  const toBucket = catalog.storageId !== null && input.mode === "full"
   const keyUnder = (objectPrefix: string) =>
     backupObjectKey({
       artifactKind: input.artifactKind,
@@ -1098,11 +1111,12 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   // Hearth chooses the path. Nothing a Relay says of where a copy is, or
   // that it is already there, is taken: that would be a bucket and a
   // folder no schedule had been checked for.
-  const refusal = !toBucket
-    ? null
-    : !storage
-      ? "Its backup destination was gone, so it had nowhere to go"
-      : yield* scheduledCopyRefusal(transaction, relayId, input, storage)
+  const refusal =
+    !toBucket && !toRepository
+      ? null
+      : !storage
+        ? "Its backup destination was gone, so it had nowhere to go"
+        : yield* scheduledCopyRefusal(transaction, relayId, input, storage)
   // Hearth has yet to tell that Relay what the schedule backs up, as just
   // after an update: nothing is decided, and nothing recorded, until it
   // has. A failure recorded now would be the answer when the backup is
@@ -1156,7 +1170,10 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       failed ? "failed" : "queued",
       catalog.name,
       objectKey,
-      repositoryId,
+      // A backup Hearth refused is given no repository either: deleting
+      // its record must remove the record alone, not open the repository
+      // to a delete that names no snapshot.
+      refusal === null ? repositoryId : null,
       // A volume's is live or stopped; a database's says so only when it
       // was dumped in a stopped batch.
       input.target.kind === "volume"
@@ -1639,6 +1656,27 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 WHERE id = ?`,
               [status, status, task.finishedAt ?? now, now, task.backupId]
             )
+            // A snapshot forgotten in a bucket's repository leaves data
+            // for a prune, which its Relay offers and Hearth admits only
+            // while one is owed (`admitRepositoryPruneEffect`). A delete
+            // Hearth had asked for by the time it last admitted a prune
+            // there was covered by that one, and owes no other: its Relay
+            // prunes as soon as its deletes have run, often before Hearth
+            // reads that they ended.
+            if (knownTask.repository_id) {
+              yield* transaction.execute(
+                `UPDATE ${databaseTable("backup_repository")} repository
+                    SET repository.prune_owed = 1
+                  WHERE repository.id = ? AND repository.storage_id IS NOT NULL
+                    AND (repository.prune_admitted_at IS NULL
+                      OR repository.prune_admitted_at < (
+                        SELECT asked.created_at
+                          FROM ${databaseTable("backup_task")} asked
+                         WHERE asked.id = ?
+                      ))`,
+                [knownTask.repository_id, task.taskId]
+              )
+            }
           } else if (task.status === "failed" || task.status === "cancelled") {
             yield* restoreStatusAfterFailedDelete(transaction, {
               backupId: task.backupId,
@@ -3933,6 +3971,7 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
 )
 
 export interface BackupRepositorySecret {
+  id: string
   objectPrefix: string | null
   password: string
   storageId: string | null
@@ -3990,14 +4029,15 @@ export const loadBackupRepositoryPasswordEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<
     {
+      id: string
       object_prefix: string | null
       password_ciphertext: string
       storage_id: string | null
     } & RowDataPacket
   >(
     "backup_repository_password",
-    `SELECT repository.password_ciphertext, repository.storage_id,
-            repository.object_prefix
+    `SELECT repository.id, repository.password_ciphertext,
+            repository.storage_id, repository.object_prefix
        FROM ${databaseTable("backup")} backup
        JOIN ${databaseTable("backup_repository")} repository
          ON repository.id = backup.repository_id
@@ -4014,6 +4054,7 @@ export const loadBackupRepositoryPasswordEffect = Effect.fn(
     })
   }
   return {
+    id: row.id,
     objectPrefix: row.object_prefix,
     password: yield* decryptRepositoryPassword(row.password_ciphertext),
     storageId: row.storage_id,

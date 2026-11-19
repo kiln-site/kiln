@@ -19,7 +19,14 @@ import {
   statfs,
   writeFile,
 } from "node:fs/promises"
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path"
 import { constants as zlibConstants } from "node:zlib"
 import { logException } from "@workspace/telemetry"
 import {
@@ -106,7 +113,9 @@ import {
   isHearthUnreachable,
   type BackupStorageAccess,
   type BackupTaskOffer,
+  type HearthRepositoryAccess,
 } from "./backups/storage-access.js"
+import type { ResticRepositoryAccess } from "./backups/restic-bridge.js"
 import {
   backupTaskAttributes,
   type BackupTaskOutcome,
@@ -118,7 +127,7 @@ import {
   backupArchivePath,
   backupDestinationFor,
   backupDirectoryPath,
-  resticRepositoryString,
+  resticRepositoryKey,
 } from "./backups/destinations/index.js"
 import {
   installPreparedInstanceRestore,
@@ -243,6 +252,7 @@ export class BackupManager {
   readonly #offer: BackupTaskOffer
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
+  readonly #repository: HearthRepositoryAccess
   readonly #storage: HearthStorageAccess
   readonly #wake: Queue.Queue<void>
   readonly #activeCreates = new Map<string, AbortController>()
@@ -257,6 +267,7 @@ export class BackupManager {
     fences: TarRestoreFences
     lanes: OperationLanes
     offer: BackupTaskOffer
+    repository: HearthRepositoryAccess
     restic: ResticDriver
     state: RelayStateStore["Service"]
     storage: HearthStorageAccess
@@ -274,8 +285,53 @@ export class BackupManager {
     this.#restic = options.restic
     this.#state = options.state
     this.#offer = options.offer
+    this.#repository = options.repository
     this.#storage = options.storage
     this.#wake = options.wake
+  }
+
+  // The Hearth to ask for a task that can't wait, as an incremental
+  // backup's can't. One whose schedule has yet to say whose it is has none,
+  // and fails as it does with its Hearth away.
+  #hearthOf(taskId: string, operation: string) {
+    return this.#state.backupTaskOwner(taskId).pipe(
+      Effect.mapError((cause) =>
+        RelayBackupError.make({
+          code: "backup_task_unreadable",
+          operation,
+          reason: "The backup task's record could not be read",
+          cause,
+        })
+      ),
+      Effect.flatMap(({ awaitsSchedule, hearth }) =>
+        awaitsSchedule
+          ? Effect.fail(
+              RelayBackupError.make({
+                code: "hearth_unreachable",
+                operation,
+                reason:
+                  "The schedule that took this backup hasn't been sent again by its Hearth since this Relay was updated",
+              })
+            )
+          : Effect.succeed(hearth)
+      )
+    )
+  }
+
+  /**
+   * What restic asks of Hearth, one request at a time, for a repository in
+   * a bucket: asked of the Hearth `taskId`'s task came from, as that task,
+   * which Hearth must know and have open.
+   */
+  #repositoryAccess(taskId: string): ResticRepositoryAccess {
+    return (request) =>
+      Effect.runPromise(
+        this.#hearthOf(taskId, "repository.access").pipe(
+          Effect.flatMap((hearth) =>
+            this.#repository({ ...request, taskId }, hearth)
+          )
+        )
+      )
   }
 
   /**
@@ -366,6 +422,11 @@ export class BackupManager {
     storage: HearthStorageAccess
     /** Offers a Hearth a backup the Relay started on its own. */
     offer: BackupTaskOffer
+    /**
+     * Asks one Hearth client for one signed request to a restic repository
+     * in a bucket (`backupRepositoryAccessThrough`).
+     */
+    repository: HearthRepositoryAccess
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -395,6 +456,7 @@ export class BackupManager {
           ),
         }),
         offer: options.offer,
+        repository: options.repository,
         state,
         storage: options.storage,
         wake,
@@ -446,11 +508,23 @@ export class BackupManager {
     return this.#state.getBackupTask(taskId)
   }
 
+  /**
+   * The tasks Hearth is told of. A prune is the Relay's own work, and of a
+   * repository on its own disk says nothing to Hearth. One of a repository
+   * in a bucket is listed: Hearth admitted it, and closes the bucket to it
+   * again when it reads that it ended.
+   */
   list(updatedAfter?: number) {
     return this.#state
       .listBackupTasks(updatedAfter)
       .pipe(
-        Effect.map((tasks) => tasks.filter((task) => task.kind !== "prune"))
+        Effect.map((tasks) =>
+          tasks.filter(
+            (task) =>
+              task.input.kind !== "prune" ||
+              task.input.repository.kind === "s3"
+          )
+        )
       )
   }
 
@@ -1681,10 +1755,9 @@ export class BackupManager {
       }
     }).pipe(
       Effect.catch((cause) =>
-        Effect.logWarning(
-          "Couldn't settle unfinished volume restores",
-          { cause }
-        )
+        Effect.logWarning("Couldn't settle unfinished volume restores", {
+          cause,
+        })
       )
     )
   }
@@ -2008,6 +2081,7 @@ export class BackupManager {
         const result = yield* runResticExport(
           this.#config,
           this.#restic,
+          this.#repositoryAccess(task.taskId),
           this.#findInstance,
           task.input,
           task.taskId,
@@ -2038,9 +2112,42 @@ export class BackupManager {
         return
       }
       if (task.input.kind === "prune") {
+        // A prune is work the Relay starts itself, and it removes data. In
+        // a bucket Hearth opens the repository to one only when it admits
+        // it: when a delete Hearth asked for is still owed its prune.
+        if (task.input.repository.kind === "s3") {
+          const offered = yield* Effect.result(
+            this.#hearthOf(task.taskId, "prune.offer").pipe(
+              Effect.flatMap((hearth) =>
+                this.#offer(
+                  redactRelayBackupTask(task) as RelayBackupTask,
+                  hearth
+                )
+              )
+            )
+          )
+          if (Result.isFailure(offered)) {
+            if (!isHearthUnreachable(offered.failure)) {
+              return yield* Effect.fail(offered.failure)
+            }
+            // No answer is Hearth being away, perhaps with the answer on
+            // its way: it may have admitted this prune already, and spent
+            // on it the delete that was owed one. Offered again, the same
+            // prune is admitted again; failed here, the space it frees
+            // would wait for some other delete.
+            const now = Date.now()
+            yield* this.#state.returnBackupTask(
+              task.taskId,
+              now,
+              now + HEARTH_RETRY_MS
+            )
+            return "waiting" as const
+          }
+        }
         yield* runResticPrune(
           this.#config,
           this.#restic,
+          this.#repositoryAccess(task.taskId),
           task.input,
           (progress) =>
             this.#state.updateBackupTaskProgress(
@@ -2202,34 +2309,36 @@ export class BackupManager {
             "Stop the server before restoring a backup"
           )
         }
-        const result = yield* (input.source.kind === "restic"
-          ? runResticRestore(
-              this.#config,
-              this.#restic,
-              input,
-              instance,
-              createSignal,
-              beginInstall
-            )
-          : Effect.tryPromise({
-              try: () =>
-                restorePortableInstanceBackup(
-                  this.#config,
-                  { ...input, kind: "restore" },
-                  instance,
-                  beginInstall,
-                  this.#restoreAccess(input.taskId)
-                ),
-              catch: (cause) =>
-                cause instanceof RelayBackupError
-                  ? cause
-                  : RelayBackupError.make({
-                      code: "restore_failed",
-                      operation: "restore",
-                      reason: backupErrorMessage(cause),
-                      cause,
-                    }),
-            })
+        const result = yield* (
+          input.source.kind === "restic"
+            ? runResticRestore(
+                this.#config,
+                this.#restic,
+                this.#repositoryAccess(task.taskId),
+                input,
+                instance,
+                createSignal,
+                beginInstall
+              )
+            : Effect.tryPromise({
+                try: () =>
+                  restorePortableInstanceBackup(
+                    this.#config,
+                    { ...input, kind: "restore" },
+                    instance,
+                    beginInstall,
+                    this.#restoreAccess(input.taskId)
+                  ),
+                catch: (cause) =>
+                  cause instanceof RelayBackupError
+                    ? cause
+                    : RelayBackupError.make({
+                        code: "restore_failed",
+                        operation: "restore",
+                        reason: backupErrorMessage(cause),
+                        cause,
+                      }),
+              })
         ).pipe(
           Effect.withSpan("Backups.restore.files", {
             attributes: {
@@ -2263,6 +2372,7 @@ export class BackupManager {
             ? yield* runResticForget(
                 this.#config,
                 this.#restic,
+                this.#repositoryAccess(task.taskId),
                 task.input,
                 createSignal
               )
@@ -2471,9 +2581,24 @@ export class BackupManager {
         input.target.kind === "instance"
       ) {
         const destination = input.destination
+        // The Relay started a schedule's backup itself, so Hearth has yet
+        // to hear of it, and opens the bucket only to a task it knows.
+        // With Hearth away it fails here: an incremental backup to a
+        // bucket has nowhere on the Relay to wait.
+        if (
+          input.reason === "scheduled" &&
+          destination.repository.kind === "s3"
+        ) {
+          yield* this.#hearthOf(task.taskId, "create.offer").pipe(
+            Effect.flatMap((hearth) =>
+              this.#offer(redactRelayBackupTask(task) as RelayBackupTask, hearth)
+            )
+          )
+        }
         const result = yield* runResticCreate(
           this.#config,
           this.#restic,
+          this.#repositoryAccess(task.taskId),
           this.#findInstance,
           input,
           (progress) =>
@@ -2490,12 +2615,16 @@ export class BackupManager {
         ).pipe(
           // Data a failed backup uploaded belongs to no snapshot; prune it,
           // unless storage or the repository itself refused the work, which
-          // a prune would hit too.
+          // a prune would hit too. In a bucket it waits for the prune after
+          // the repository's next delete: Hearth opens one to a prune only
+          // after a delete it asked for, never after a backup that failed.
           Effect.tapError((cause) =>
             destination.repositoryPassword &&
+            destination.repository.kind !== "s3" &&
             !refusedByStorage(backupFailureCode(cause))
               ? this.#state.scheduleBackupPrune(
                   resticPruneFor(this.#config, {
+                    followsTaskId: input.taskId,
                     repository: destination.repository,
                     repositoryPassword: destination.repositoryPassword,
                     target: input.target,
@@ -2511,39 +2640,48 @@ export class BackupManager {
           Date.now()
         )
         if (!completed) {
-          const cleaned = yield* Effect.result(
-            runResticForget(
-              this.#config,
-              this.#restic,
-              {
-                backupId: input.backupId,
-                destination: {
-                  ...input.destination,
-                  snapshotId: result.snapshotId,
+          // Cancelled as it finished: the snapshot it made is no backup's.
+          // On the Relay's own disk it is forgotten here. In a bucket the
+          // Relay has no leave to: its task has ended, and Hearth opens a
+          // repository only to a task that is open. That snapshot is
+          // forgotten when Hearth deletes the backup's record, by the tag
+          // its create gave it.
+          if (destination.repository.kind !== "s3") {
+            const cleaned = yield* Effect.result(
+              runResticForget(
+                this.#config,
+                this.#restic,
+                this.#repositoryAccess(input.taskId),
+                {
+                  backupId: input.backupId,
+                  destination: {
+                    ...input.destination,
+                    snapshotId: result.snapshotId,
+                  },
+                  kind: "delete",
+                  target: input.target,
+                  taskId: input.taskId,
                 },
-                kind: "delete",
-                target: input.target,
-                taskId: randomUUID(),
-              },
-              AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS)
-            ).pipe(
-              Effect.flatMap(({ prune }) =>
-                prune
-                  ? this.#state.scheduleBackupPrune(prune, Date.now())
-                  : Effect.void
+                AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS)
+              ).pipe(
+                Effect.flatMap(({ prune }) =>
+                  prune
+                    ? this.#state.scheduleBackupPrune(prune, Date.now())
+                    : Effect.void
+                )
               )
             )
-          )
-          if (Result.isFailure(cleaned)) {
-            yield* Effect.logError(
-              "Could not forget a restic snapshot completed after cancellation",
-              {
-                backupId: input.backupId,
-                cause: cleaned.failure,
-                snapshotId: result.snapshotId,
-                taskId: task.taskId,
-              }
-            )
+            if (Result.isFailure(cleaned)) {
+              yield* Effect.logError(
+                "Could not forget a restic snapshot completed after cancellation",
+                {
+                  backupId: input.backupId,
+                  cause: cleaned.failure,
+                  snapshotId: result.snapshotId,
+                  taskId: task.taskId,
+                }
+              )
+            }
           }
           return yield* backupFailure(
             "task_state_changed",
@@ -3228,6 +3366,7 @@ async function readExportExpiry(path: string): Promise<number | null> {
 function runResticCreate(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
   input: BackupCreateTaskInput & { kind?: "create" },
   updateProgress: (
@@ -3280,6 +3419,7 @@ function runResticCreate(
         createResticSnapshot(
           config,
           restic,
+          access,
           input,
           instance,
           password,
@@ -3301,7 +3441,7 @@ function runResticCreate(
     }).pipe(
       Effect.ensuring(Fiber.interrupt(progressFiber)),
       Effect.ensuring(
-        cleanupResticCache(config, restic, {
+        cleanupResticCache(config, restic, access, {
           password,
           repository:
             input.destination.kind === "restic"
@@ -3343,6 +3483,7 @@ function runResticCreate(
 async function createResticSnapshot(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   input: BackupCreateTaskInput,
   instance: RelayInstanceConfig,
   password: string,
@@ -3357,12 +3498,16 @@ async function createResticSnapshot(
     input.target.id,
     input.destination.kind === "restic"
       ? input.destination.repository
-      : undefined
+      : undefined,
+    access
   )
   const translated = translateExcludePatterns([
     ...DEFAULT_EXCLUDES,
     ...input.exclude,
   ])
+  const inBucket =
+    input.destination.kind === "restic" &&
+    input.destination.repository.kind === "s3"
   // A snapshot an attempt before a Relay restart saved is kept, not taken
   // again.
   const existing = await restic.openForBackup({
@@ -3381,6 +3526,7 @@ async function createResticSnapshot(
     })
     await rejectOverLimitSnapshot(restic, {
       backupId: input.backupId,
+      forget: !inBucket,
       location,
       maxBytes: input.maxBytes,
       password,
@@ -3446,7 +3592,13 @@ async function createResticSnapshot(
       })
     )
   )
+  // In a bucket a create may add a snapshot and never remove one, so what
+  // a failed or oversized one left is forgotten when Hearth deletes the
+  // backup's record, by the tag given here. Asked of Hearth now it would
+  // be refused, and the refusal would stand in for why the backup failed.
+  const forgetsItsOwn = !inBucket
   if (Result.isFailure(summary)) {
+    if (!forgetsItsOwn) throw summary.failure
     await Effect.runPromise(
       Effect.tryPromise({
         try: () =>
@@ -3475,6 +3627,7 @@ async function createResticSnapshot(
   }
   await rejectOverLimitSnapshot(restic, {
     backupId: input.backupId,
+    forget: forgetsItsOwn,
     location,
     maxBytes: input.maxBytes,
     password,
@@ -3513,6 +3666,8 @@ async function rejectOverLimitSnapshot(
   restic: ResticDriver,
   input: {
     backupId: string
+    /** False where the create may not remove a snapshot, as in a bucket. */
+    forget?: boolean
     location: ResticDriverLocation
     maxBytes: number | null
     password: string
@@ -3534,12 +3689,14 @@ async function rejectOverLimitSnapshot(
       })
     ).totalSize
   if (totalBytes <= input.maxBytes) return
-  await restic.forget({
-    location: input.location,
-    password: input.password,
-    signal,
-    snapshotId: input.snapshotId,
-  })
+  if (input.forget !== false) {
+    await restic.forget({
+      location: input.location,
+      password: input.password,
+      signal,
+      snapshotId: input.snapshotId,
+    })
+  }
   // The failed create queues the prune; see `scheduleBackupPrune`.
   throw backupTooLarge()
 }
@@ -3607,6 +3764,7 @@ async function resticSnapshotSource(
 function runResticRestore(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   input: Extract<BackupTaskInput, { kind: "restore" }>,
   instance: RelayInstanceConfig,
   signal: AbortSignal,
@@ -3631,7 +3789,8 @@ function runResticRestore(
       const location = resticDriverLocation(
         config,
         input.archive?.targetId ?? input.target.id,
-        source.repository
+        source.repository,
+        access
       )
       const prepared = await prepareInstanceRestoreStaging(
         config,
@@ -3698,7 +3857,7 @@ function runResticRestore(
   }).pipe(
     Effect.ensuring(
       input.source.kind === "restic" && input.source.repositoryPassword
-        ? cleanupResticCache(config, restic, {
+        ? cleanupResticCache(config, restic, access, {
             password: input.source.repositoryPassword,
             repository: input.source.repository,
             targetId: input.archive?.targetId ?? input.target.id,
@@ -3715,6 +3874,7 @@ function runResticRestore(
 function runResticForget(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   input: BackupDeleteTaskInput & { kind: "delete" },
   signal: AbortSignal
 ) {
@@ -3734,7 +3894,8 @@ function runResticForget(
     const location = resticDriverLocation(
       config,
       input.target.id,
-      destination.repository
+      destination.repository,
+      access
     )
     const repositoryExists = yield* Effect.tryPromise({
       try: async () => {
@@ -3792,10 +3953,11 @@ function runResticForget(
       prune: !repositoryExists
         ? undefined
         : resticPruneFor(config, {
-        repository: destination.repository,
-        repositoryPassword: password,
-        target: input.target,
-      }),
+            followsTaskId: input.taskId,
+            repository: destination.repository,
+            repositoryPassword: password,
+            target: input.target,
+          }),
       result: {
         artifacts: input.destination.artifactId
           ? [
@@ -3823,12 +3985,15 @@ function refusedByStorage(code: BackupFailureCode | null): boolean {
 function resticPruneFor(
   config: RelayConfig,
   input: {
+    /** The task that left something to prune. */
+    followsTaskId: string
     repository: ResticRepositoryLocation
     repositoryPassword: string
     target: BackupTaskInput["target"]
   }
 ): ScheduledBackupPrune {
   return {
+    followsTaskId: input.followsTaskId,
     input: {
       backupId: randomUUID(),
       kind: "prune",
@@ -3837,15 +4002,21 @@ function resticPruneFor(
       target: input.target,
       taskId: randomUUID(),
     },
-    repositoryKey: resticRepositoryString(
-      resticDriverLocation(config, input.target.id, input.repository)
+    repositoryKey: resticRepositoryKey(
+      resticDriverLocation(config, input.target.id, input.repository, noAccess),
+      input.target.id
     ),
   }
 }
 
+// For naming a repository, which asks nothing of it.
+const noAccess: ResticRepositoryAccess = () =>
+  Promise.reject(new Error("Nothing was to be asked of the repository"))
+
 function runResticPrune(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   input: Extract<BackupTaskInput, { kind: "prune" }>,
   updateProgress: (
     progress: BackupProgress
@@ -3878,7 +4049,8 @@ function runResticPrune(
           location: resticDriverLocation(
             config,
             input.target.id,
-            input.repository
+            input.repository,
+            access
           ),
           onProgress: (update) => {
             progress.completed = update.bytesCompleted
@@ -3905,7 +4077,7 @@ function runResticPrune(
       ),
       Effect.ensuring(Fiber.interrupt(progressFiber)),
       Effect.ensuring(
-        cleanupResticCache(config, restic, {
+        cleanupResticCache(config, restic, access, {
           password,
           repository: input.repository,
           targetId: input.target.id,
@@ -3918,6 +4090,7 @@ function runResticPrune(
 function cleanupResticCache(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   input: {
     password: string
     repository: ResticRepositoryLocation | undefined
@@ -3930,7 +4103,8 @@ function cleanupResticCache(
         location: resticDriverLocation(
           config,
           input.targetId,
-          input.repository
+          input.repository,
+          access
         ),
         password: input.password,
         signal: AbortSignal.timeout(RESTIC_CACHE_CLEANUP_TIMEOUT_MS),
@@ -3946,6 +4120,7 @@ function cleanupResticCache(
 function runResticExport(
   config: RelayConfig,
   restic: ResticDriver,
+  access: ResticRepositoryAccess,
   findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
   input: Extract<BackupTaskInput, { kind: "export" }>,
   taskId: string,
@@ -3974,7 +4149,8 @@ function runResticExport(
     const location = resticDriverLocation(
       config,
       input.target.id,
-      input.repository
+      input.repository,
+      access
     )
     const destination = backupExportPath(config, input.backupId)
     const partial = backupExportPartialPath(config, input.backupId, taskId)
@@ -4063,7 +4239,7 @@ function runResticExport(
       ),
       Effect.ensuring(Fiber.interrupt(progressFiber)),
       Effect.ensuring(
-        cleanupResticCache(config, restic, {
+        cleanupResticCache(config, restic, access, {
           password,
           repository: input.repository,
           targetId: input.target.id,

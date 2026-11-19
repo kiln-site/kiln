@@ -9,12 +9,10 @@ import {
 } from "./local/index.js"
 import {
   applyS3ResticEnvironment,
-  resticS3EndpointPort,
   s3BackupDestination,
   s3ResticDriverLocation,
-  s3ResticGlobalArgs,
-  s3ResticRepositoryString,
 } from "./s3/index.js"
+import type { ResticRepositoryAccess } from "../restic-bridge.js"
 import type {
   BackupDestinationDriver,
   BackupDestinationKind,
@@ -45,42 +43,52 @@ export function backupDestinationFor<TKind extends BackupDestinationKind>(
   return backupDestinations[kind]
 }
 
+/**
+ * Where a repository is, for restic. One in a bucket is reached with
+ * requests Hearth signs, which `access` asks for on the task's behalf.
+ */
 export function resticDriverLocation(
   config: RelayConfig,
   targetId: string,
-  location: ResticRepositoryLocation | undefined
+  location: ResticRepositoryLocation | undefined,
+  access: ResticRepositoryAccess
 ): ResticDriverLocation {
   return !location || location.kind === "local"
     ? localResticDriverLocation(config, targetId, location)
-    : s3ResticDriverLocation(location)
+    : s3ResticDriverLocation(location, access)
 }
 
-export function resticRepositoryString(location: ResticDriverLocation): string {
+/**
+ * A name for the repository that is the same every time, to tell one
+ * from another on this Relay.
+ */
+export function resticRepositoryKey(
+  location: ResticDriverLocation,
+  targetId: string
+): string {
   return location.kind === "local"
     ? localResticRepositoryString(location)
-    : s3ResticRepositoryString(location)
+    : `bucket:${location.repositoryId ?? targetId}`
 }
 
 export function resticGlobalArgs(
   location: ResticDriverLocation
 ): Array<string> {
-  return location.kind === "local"
-    ? localResticGlobalArgs()
-    : s3ResticGlobalArgs(location)
+  return location.kind === "local" ? localResticGlobalArgs() : []
+}
+
+/** What restic is told of a repository on the Relay's own disk. */
+export function localRepositoryString(location: ResticDriverLocation): string {
+  if (location.kind !== "local") {
+    throw new Error("A repository in a bucket is reached through the bridge")
+  }
+  return localResticRepositoryString(location)
 }
 
 export function applyResticDestinationEnvironment(
   env: NodeJS.ProcessEnv,
   location: ResticDriverLocation,
-  options: { cacheDirectory?: string; proxyUrl?: string }
+  options: { cacheDirectory?: string }
 ): void {
-  if (location.kind === "s3") {
-    applyS3ResticEnvironment(env, location, options)
-  }
-}
-
-export function resticDestinationEndpointPort(
-  location: ResticDriverLocation
-): number | null {
-  return location.kind === "s3" ? resticS3EndpointPort(location.endpoint) : null
+  if (location.kind === "s3") applyS3ResticEnvironment(env, options)
 }

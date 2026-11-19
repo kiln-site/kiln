@@ -1,8 +1,12 @@
 import { Effect } from "effect"
 
 import {
+  backupRepositoryAccessResponseSchema,
   backupStorageAccessResponseSchema,
   backupTaskOfferResponseSchema,
+  type BackupRepositoryAccessGrant,
+  type BackupRepositoryAccessRequest,
+  type BackupRepositoryListing,
   type BackupStorageAccessGrant,
   type BackupStorageAccessRequest,
   type RelayBackupTask,
@@ -47,8 +51,7 @@ export function backupStorageAccessThrough(
       "backup.storage.action": request.action,
     })
     const answers = yield* Effect.tryPromise({
-      try: () =>
-        ask(request, STORAGE_ACCESS_TIMEOUT_MS, answersFor(hearth)),
+      try: () => ask(request, STORAGE_ACCESS_TIMEOUT_MS, answersFor(hearth)),
       catch: (cause) => hearthUnreachable(request, cause),
     })
     let refusal: string | null = null
@@ -144,3 +147,61 @@ export function backupTaskOfferThrough(
 }
 
 export type BackupTaskOffer = ReturnType<typeof backupTaskOfferThrough>
+
+/**
+ * Asks one Hearth client for what restic needs of a repository in a
+ * bucket: one signed request to read, write or remove a file of it, or a
+ * page of one of its folders. Hearth finds the repository from the task
+ * that asks and decides what that task may do to it.
+ */
+export type HearthRepositoryAccess = (
+  request: BackupRepositoryAccessRequest,
+  hearth: string | null
+) => Effect.Effect<
+  BackupRepositoryAccessGrant | BackupRepositoryListing,
+  RelayBackupError
+>
+
+/**
+ * As `backupStorageAccessThrough`, for a restic repository: restic makes
+ * many small requests, and each is one Hearth signs. No span of its own,
+ * which a backup of any size would make thousands of.
+ */
+export function backupRepositoryAccessThrough(
+  ask: (
+    payload: BackupRepositoryAccessRequest,
+    timeoutMs: number,
+    only: (client: { readonly id: string; readonly role: string }) => boolean
+  ) => Promise<ReadonlyArray<{ readonly payload: unknown }>>
+): HearthRepositoryAccess {
+  return (request, hearth) =>
+    Effect.gen(function* () {
+      const unreachable = (cause?: unknown) =>
+        RelayBackupError.make({
+          code: "hearth_unreachable",
+          operation: "repository.access",
+          reason:
+            "Hearth couldn't be reached for access to the backup repository, which only it holds the keys to",
+          ...(cause === undefined ? {} : { cause }),
+        })
+      const answers = yield* Effect.tryPromise({
+        try: () => ask(request, STORAGE_ACCESS_TIMEOUT_MS, answersFor(hearth)),
+        catch: unreachable,
+      })
+      let refusal: string | null = null
+      for (const answer of answers) {
+        const parsed = backupRepositoryAccessResponseSchema.safeParse(
+          answer.payload
+        )
+        if (!parsed.success) continue
+        if (parsed.data.status !== "refused") return parsed.data
+        refusal ??= parsed.data.reason
+      }
+      if (refusal === null) return yield* unreachable()
+      return yield* RelayBackupError.make({
+        code: "storage_access_refused",
+        operation: "repository.access",
+        reason: `Hearth refused access to the backup repository: ${refusal}`,
+      })
+    })
+}

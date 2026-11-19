@@ -5,13 +5,10 @@ import { Transform } from "node:stream"
 
 import { Effect } from "effect"
 
-import {
-  resticRepositoryPrefixSchema,
-  resticS3BucketSchema,
-  resticS3RegionSchema,
-  type BackupS3CopyDestination,
-  type BackupStorageAccessAction,
-  type ResticRepositoryLocation,
+import type {
+  BackupS3CopyDestination,
+  BackupStorageAccessAction,
+  ResticRepositoryLocation,
 } from "@workspace/contracts"
 
 import { RelayBackupError } from "../../../effect/errors.js"
@@ -19,6 +16,7 @@ import {
   isPublicRemoteAddress,
   secureRemoteLookup,
 } from "../../../source-policy.js"
+import type { ResticRepositoryAccess } from "../../restic-bridge.js"
 import type { BackupStorageAccess } from "../../storage-access.js"
 import { backupArchivePath } from "../local/index.js"
 import {
@@ -32,88 +30,19 @@ const MAX_S3_RESPONSE_BYTES = 64 * 1024
 const MAX_S3_ERROR_FIELD_LENGTH = 512
 
 export function s3ResticDriverLocation(
-  location: Extract<ResticRepositoryLocation, { kind: "s3" }>
+  location: Extract<ResticRepositoryLocation, { kind: "s3" }>,
+  access: ResticRepositoryAccess
 ): ResticS3DriverLocation {
-  if (!location.accessKeyId || !location.secretAccessKey) {
-    throw RelayBackupError.make({
-      code: "repository_credentials_missing",
-      operation: "restic.repository",
-      reason: "The restic S3 repository credentials were not provided to Relay",
-    })
-  }
-  const parsedBucket = resticS3BucketSchema.safeParse(location.bucket)
-  if (!parsedBucket.success) {
-    throw RelayBackupError.make({
-      code: "invalid_restic_repository",
-      operation: "restic.repository",
-      reason:
-        parsedBucket.error.issues[0]?.message ??
-        "The restic S3 bucket name is invalid",
-    })
-  }
-  const parsedRegion = resticS3RegionSchema.safeParse(location.region)
-  if (!parsedRegion.success) {
-    throw RelayBackupError.make({
-      code: "invalid_restic_repository",
-      operation: "restic.repository",
-      reason:
-        parsedRegion.error.issues[0]?.message ??
-        "The restic S3 region is invalid",
-    })
-  }
-  const parsedPrefix = resticRepositoryPrefixSchema.safeParse(
-    location.repositoryPrefix
-  )
-  if (!parsedPrefix.success) {
-    throw RelayBackupError.make({
-      code: "invalid_restic_repository",
-      operation: "restic.repository",
-      reason:
-        parsedPrefix.error.issues[0]?.message ??
-        "The restic S3 repository prefix is invalid",
-    })
-  }
-  return {
-    accessKeyId: location.accessKeyId,
-    allowPrivateNetwork: location.allowPrivateNetwork,
-    bucket: location.bucket,
-    endpoint: location.endpoint,
-    forcePathStyle: location.forcePathStyle,
-    kind: "s3",
-    region: location.region,
-    repositoryPrefix: location.repositoryPrefix,
-    secretAccessKey: location.secretAccessKey,
-  }
-}
-
-export function s3ResticRepositoryString(
-  location: ResticS3DriverLocation
-): string {
-  return `s3:${new URL(location.endpoint).origin}/${location.bucket}/${location.repositoryPrefix}`
-}
-
-export function s3ResticGlobalArgs(
-  location: ResticS3DriverLocation
-): Array<string> {
-  const args = ["-o", `s3.region=${location.region}`]
-  if (location.forcePathStyle) args.push("-o", "s3.bucket-lookup=path")
-  return args
+  return { access, kind: "s3", repositoryId: location.repositoryId ?? null }
 }
 
 export function applyS3ResticEnvironment(
   env: NodeJS.ProcessEnv,
-  location: ResticS3DriverLocation,
-  options: { cacheDirectory?: string; proxyUrl?: string }
+  options: { cacheDirectory?: string }
 ): void {
-  env.AWS_ACCESS_KEY_ID = location.accessKeyId
-  env.AWS_SECRET_ACCESS_KEY = location.secretAccessKey
+  // What restic keeps of a repository's metadata, so it asks the bucket,
+  // and so Hearth, for less each run.
   if (options.cacheDirectory) env.RESTIC_CACHE_DIR = options.cacheDirectory
-  if (options.proxyUrl) env.HTTPS_PROXY = options.proxyUrl
-}
-
-export function resticS3EndpointPort(endpoint: string): number {
-  const parsed = new URL(endpoint)
-  return parsed.port ? Number(parsed.port) : 443
 }
 
 // One signed request for a copy the Relay holds no keys to, from Hearth.

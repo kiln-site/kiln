@@ -48,6 +48,7 @@ import type {
   RelaySystemUpdate,
 } from "@workspace/contracts"
 import {
+  backupRepositoryAccessRequestSchema,
   backupStorageAccessRequestSchema,
   hearthTerminalOutputSchema,
   relayBackupTaskSchema,
@@ -64,6 +65,7 @@ import { RelayUnavailableError } from "@/effect/errors"
 import { loadedKilnInstallationId } from "@/effect/installation"
 import {
   forkAppEffect,
+  forkAppWorker,
   forkAppEffectInTrace,
   logAppEvent,
   reportAppError,
@@ -1974,21 +1976,24 @@ class RelayConnection {
         this.#reverseInFlight.delete(message.id)
         return
       }
-      inFlight.fiber = forkAppEffect(
-        `relay.reverse.${message.operation}`,
-        Effect.yieldNow.pipe(
-          Effect.andThen(
-            this.#handleRelayRequestEffect(message, controller, socket)
-          ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (this.#reverseInFlight.get(message.id) === inFlight) {
-                this.#reverseInFlight.delete(message.id)
-              }
-            })
-          )
+      const handle = Effect.yieldNow.pipe(
+        Effect.andThen(
+          this.#handleRelayRequestEffect(message, controller, socket)
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (this.#reverseInFlight.get(message.id) === inFlight) {
+              this.#reverseInFlight.delete(message.id)
+            }
+          })
         )
       )
+      inFlight.fiber =
+        message.operation === "backup.repository.access"
+          ? // restic asks for each file it touches, thousands a backup: a
+            // hot path, with no span for each.
+            forkAppWorker(handle)
+          : forkAppEffect(`relay.reverse.${message.operation}`, handle)
     }
   }
 
@@ -2090,6 +2095,29 @@ class RelayConnection {
         })
         const payload = yield* Effect.tryPromise({
           try: () => answerBackupStorageAccess(this.#relay.id, access),
+          catch: asError,
+        })
+        yield* sendSocketEffect(socket, {
+          id: randomUUID(),
+          payload,
+          replyTo: request.id,
+          type: "response",
+          v: 1,
+        })
+      })
+    }
+    if (request.operation === "backup.repository.access") {
+      return Effect.gen({ self: this }, function* () {
+        const access = yield* Effect.try({
+          try: () => backupRepositoryAccessRequestSchema.parse(request.payload),
+          catch: asError,
+        })
+        const { answerBackupRepositoryAccess } = yield* Effect.tryPromise({
+          try: () => import("@/server/backup-repository-access.server"),
+          catch: asError,
+        })
+        const payload = yield* Effect.tryPromise({
+          try: () => answerBackupRepositoryAccess(this.#relay.id, access),
           catch: asError,
         })
         yield* sendSocketEffect(socket, {

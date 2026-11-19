@@ -167,8 +167,8 @@ and updates to the shared selectors that translate stored artifacts into the
 registry kind. The registries centralize destination behavior, but they are not
 dynamic plugin loading.
 
-S3 credentials never go to a game container and are not returned to the
-browser. For a full archive Hearth sends, they never leave Hearth. The task
+S3 credentials never go to a game container, are not returned to the
+browser, and never leave Hearth: no Relay holds a bucket's keys. The task
 names the copy and its destination's ID, and nothing in the bucket; a copy
 on the Relay's own disk names the Relay's ID, the destination that disk is.
 The Relay asks Hearth over its control connection as it is ready to send,
@@ -331,13 +331,12 @@ in the bucket. The schedule's next run is admitted as usual.
 Schedules and waiting backups stored on a Relay lose the keys they
 carried as it updates.
 
-Only an incremental restic repository still carries the destination's
-static keys: it cannot be driven with single signed requests, so the keys
-are inside the durable task input (see
+An incremental restic repository in a bucket is reached without keys too,
+one signed request at a time (see
 [Incremental snapshots](#incremental-snapshots)). A full archive is
 staged locally, its size and digest validated, then uploaded in a single
 request, so it has a 5 GiB ceiling; the single queue plus a free-space
-preflight keeps staging bounded. Restic S3 pack writes aren't subject to that
+preflight keeps staging bounded. Restic's pack writes aren't subject to that
 ceiling.
 
 User-owned endpoints must resolve exclusively to public network addresses on
@@ -956,33 +955,168 @@ Live game-server backups default to restic incremental snapshots. Each instance
 has one restic repository per destination:
 
 - Relay-local: `<data>/restic/instance/<id>/`
-- S3-compatible: `s3:https://<endpoint>/<bucket>/<stored-prefix>` where the
-  stored prefix is
-  `<objectPrefix>/kiln/<installation>/<relay>/restic/instance/<targetId>/<repositoryId>`
+- S3-compatible: in the destination's bucket, under
+  `<objectPrefix>/kiln/<installation>/<relay>/restic/instance/<targetId>/<repositoryId>`,
+  laid out as restic's own S3 backend lays a repository out
 
 Hearth generates a repository password on first use and encrypts it with the
-installation keyring. For S3 repositories it also sends the destination's
-static access key and secret inside the durable task input. These are the
-destination keys as stored in Hearth, not scoped or temporary credentials —
-Relay receives whatever those keys can do. Use least-privilege keys
-(per-bucket or per-prefix policy) for destinations used with incremental mode.
+installation keyring. A task carries that password, which decrypts the
+repository's contents and is no key to the bucket.
 
-Relay persists complete task input in its SQLite journal before acknowledging,
-so secrets are durably stored while the task is live. Mitigations: mTLS control
-socket, journal file mode 0600, task-list responses redact `repositoryPassword`,
-`accessKeyId`, and `secretAccessKey`, terminal journal rows scrub those keys
-even when the stored JSON is corrupt, and restic stderr is redacted before it
-becomes a Relay error. A task that fails because credentials were rotated is
-terminal; retry the operation so Hearth dispatches a new task with the current
-keys. Queued tasks are not refreshed in place.
+### A repository in a bucket, without the bucket's keys
 
-Restic cannot pin DNS itself. For S3 repositories the Relay starts a
-per-invocation local HTTP CONNECT proxy on `127.0.0.1` and sets `HTTPS_PROXY`
-only for that restic process. Every CONNECT resolves the requested host with the
-same public-address policy as other backup downloads and connects to the vetted
-IP. A derived host allowlist (endpoint, `bucket.endpoint`, and AWS regional /
-dual-stack forms when the endpoint is on `amazonaws.com`) is a secondary
-control that fails closed. TLS stays end-to-end inside the CONNECT tunnel.
+A Relay holds nothing of the bucket a repository is in: no key, bucket,
+endpoint or path. A task or schedule names the repository
+(`{ kind: "s3", repositoryId }`) and nothing else.
+
+restic is pointed at a bridge on the Relay's loopback instead of the
+bucket (`apps/relay/src/backups/restic-bridge.ts`). The bridge speaks
+restic's REST backend protocol at an address with a secret path, made for
+that one restic process and gone when it exits. For each request restic
+makes, the bridge asks Hearth (`backup.repository.access`), naming the task
+and the file (`data/<sha256>`, `snapshots/<sha256>`, `config`, ...):
+
+- For a file read, written or removed, Hearth answers with one signed
+  request for that object, good for ten minutes, which the bridge sends to
+  the bucket itself. File contents never pass through Hearth. A read is
+  asked for once and reused for five minutes, since restic reads one pack
+  in many ranges.
+- For a folder's listing, Hearth reads the bucket itself and answers with
+  the page: a listing is of the bucket, not of one object, and not every
+  S3-compatible store takes a signed request for one.
+
+The bridge sends signed requests by the same rules as any other the Relay
+is given: HTTPS only, and no private or reserved address unless the
+destination allows one.
+
+Hearth finds the repository from the task, never from what the Relay says
+of it, and decides by the task what may be done there
+(`grantBackupRepositoryAccessEffect`). The rule is one: the task is one
+Hearth knows, of a backup or repository on the Relay that asks, and still
+open.
+
+| Task | Reads | Writes | Removes |
+| --- | --- | --- | --- |
+| Create | everything | everything | locks |
+| Restore, export | everything | locks | locks |
+| Delete (`forget`) | everything | locks | locks, snapshots |
+| Prune | everything | locks, index, data | locks, index, data |
+
+A create, restore, export or delete is a task Hearth sent, or admitted from
+a schedule, and is open while it is queued or running. A delete forgets
+the snapshot its backup is, and no other; one whose backup never recorded
+a snapshot, as a create cancelled as it finished, is found on the Relay by
+its tag, which Hearth can't check.
+
+A prune is the one task here the Relay starts itself, once the deletes
+waiting on a repository have run, and it removes data. So in a bucket the
+Relay offers it to Hearth first (`backup.task.offer`), and Hearth admits it
+(`admitRepositoryPruneEffect`) only for something Hearth asked for: a
+delete of a snapshot in that repository, asked for since the last prune
+Hearth admitted there, that has ended or is still under way. Admitting it
+covers every delete Hearth has asked for there by then, so one delete
+opens the repository to one prune, however long the delete stays open,
+and none is left over to be had later; the same prune offered again, as
+when its answer was lost, is admitted again. It
+stays open until Hearth reads, in the Relay's tasks, that it ended, and for
+a day at most. Nothing else owes a prune: not a backup that failed, which
+a Relay could bring about itself, and not time passing. The data a failed
+backup left in a bucket is pruned after the repository's next delete, and
+a later backup reuses what of it was indexed. A prune offered with Hearth
+away is kept and offered again a minute on: Hearth may have admitted it
+already, with its answer lost on the way. A repository on the
+Relay's own disk is pruned as it always was, straight after a delete or a
+failed backup, with nobody asked. One limit of counting by when a delete
+was asked for: a delete Hearth asked for just before it admitted a prune,
+which its Relay runs only after that prune, is counted as covered by it,
+and its data waits for the next delete's prune.
+
+A backup cancelled just as it finished may have written its snapshot. On
+the Relay's own disk that snapshot is forgotten at once. In a bucket it
+can't be: the task has ended, and Hearth opens a repository only to one
+that is open. It is forgotten when the backup's record is deleted, by the
+tag its create gave it, as a failed backup's is. So is one a create in a
+bucket found to be over its size ceiling, which fails saying so: a create
+may add a snapshot there and never remove one.
+
+A repository's `config` and `keys` are written only while it holds no
+backup, as when it is made, and never removed: replacing them would lose
+every backup in it. A backup being deleted is still held until restic has
+forgotten it. The request Hearth signs to write one is good for ten
+minutes like any, so a Relay could write its repository's `config` again
+within that of making it; it is that Relay's own repository. So when a bucket's contents are lost while Hearth still
+lists backups there, the next backup fails with that refusal instead of
+quietly making an empty repository under them; delete the lost backups and
+it is made again. The destination must not be being deleted, and must be
+enabled for a create.
+
+What this buys: the bucket's keys can't leak from a Relay, a Relay reaches
+only the repositories of its own servers' backups and nothing else in the
+bucket, and it reaches nothing once Hearth stops answering, as when it is
+unpaired, beyond the requests already signed for it, each good for ten
+minutes. What it doesn't: a Relay that backs a server up can still damage
+that server's backups in the repository, as it can damage the server. A
+backup may write over a file that is there, since not every S3-compatible
+store can refuse that, and the prune after a delete removes data. Keeping
+backups safe from the Relay that takes them needs a bucket that refuses
+overwrites and a prune run somewhere trusted, which this is not.
+
+restic reports only the status it was answered with, so the bridge answers
+a request the bucket refuses, or has no room for, as that, which restic
+doesn't try again, and keeps what the bucket said, such as that its storage cap is reached,
+for the task's failure. That is how a full bucket is still told from a
+broken one, and how a restore or download is tried again without a lock
+when a bucket refuses the lock file. A request restic gives up on stops
+its transfer with the bucket too, and a listing asks Hearth for no more
+pages. Hearth lists a folder itself, and a bucket that refuses it that is
+answered as a refusal with what the bucket said, not left unanswered as
+if Hearth were away.
+
+The bridge sets no limit on how long restic may take to send it one
+file: over a slow line a pack is still arriving after the five minutes
+Node allows by default. It sends the bucket no checksum with a file, as
+restic's own S3 backend does, so a bucket that demands one, as one with
+Object Lock retention by default does, refuses what an incremental backup
+writes.
+
+The bridge is for whoever knows its address, which is made for one restic
+run and passed to it alone. Another process on the Relay's host that can
+read that run's environment could use it while the run lasts; the Relay's
+host is trusted with its own backups.
+
+After a write that fails, restic removes the file before it tries again,
+though a bucket stores a file whole or not at all. The bridge answers
+that removal itself for a file the bucket never stored, asking Hearth
+nothing: Hearth lets a backup remove no data, and its refusal would end
+a run that only had to try again.
+
+A refusal from Hearth ends the restic run at once with Hearth's reason.
+Hearth being away doesn't: the bridge answers restic that the repository is unavailable,
+restic tries again as it does for a bucket, and the task fails with
+"Hearth couldn't be reached" only if restic gives up. So an incremental
+backup to a bucket needs Hearth reachable, unlike a full one, which waits
+on the Relay ([Waiting for Hearth](#waiting-for-hearth)). A scheduled one
+is offered to Hearth before it starts
+(`backup.task.offer`), admitted as a scheduled full backup is, and fails
+without running when Hearth can't be asked. Its repository is the one its
+target has in the destination the schedule backs up to: a target can have
+one in each of several, and a backup admitted for one opens no other.
+
+Relay persists complete task input in its SQLite journal before
+acknowledging, so a repository's password is durably stored while the task
+is live. Mitigations: mTLS control socket, journal file mode 0600,
+task-list responses redact `repositoryPassword`, terminal journal rows
+scrub it even when the stored JSON is corrupt, and restic stderr is
+redacted before it becomes a Relay error.
+
+A Relay from before this held the bucket's keys for its repositories.
+Schedules and waiting tasks stored on one lose them as it updates. Kiln
+isn't built to run mixed versions, and incremental work under way as it
+updates is not carried across: a prune that was waiting then no longer
+says which repository it is of and fails, its data left for the next
+delete's prune, and a scheduled snapshot such a Relay finished that Hearth
+hadn't cataloged is recorded as failed. The keys such a Relay was given
+stay good until they are rotated at the bucket.
 
 A live server can have files restic can't read, such as one locked or
 replaced mid-backup. restic still saves the snapshot and exits with code 3;
@@ -1007,15 +1141,16 @@ create never recorded a snapshot ID — forgets snapshots tagged
 `task:<createTaskId>`. A missing snapshot, or a repository that's gone, is
 treated as a successful forget, and the latter queues no prune.
 The delete completes once the snapshot is forgotten, and in the same journal
-transaction Relay queues an internal `prune` task that Hearth never lists,
-unless one for that repository is already waiting. A prune waits while
+transaction Relay queues an internal `prune` task, unless one for that
+repository is already waiting. Hearth is told of a prune only when its
+repository is in a bucket, which it must admit it for (see above). A prune waits while
 deletes are queued, so deleting many backups of a server runs one prune after
 the last delete; it doesn't wait behind later creates or restores, so space
 is reclaimed even on a busy Relay. Prune on S3 rereads packs and rewrites
-the repository, so it costs bandwidth. A failed or cancelled create also
-queues a prune for data it uploaded without saving a snapshot, or for a
-snapshot it forgot for exceeding the size limit, unless the storage or
-repository refused the work, which a prune would hit too. Recovery never
+the repository, so it costs bandwidth. On the Relay's own disk a failed or
+cancelled create also queues a prune for data it wrote without saving a
+snapshot, or for a snapshot it forgot for exceeding the size limit, unless
+the storage or repository refused the work, which a prune would hit too. Recovery never
 prunes inside the create task itself.
 Ordinary snapshot deletion never deletes the repository row; an empty repo is
 the dedup base for later backups and costs a few KiB. A prune whose

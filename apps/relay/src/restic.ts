@@ -11,18 +11,13 @@ import { Effect, Result, Schedule } from "effect"
 import { RelayBackupError } from "./effect/errors.js"
 import {
   applyResticDestinationEnvironment,
-  resticDestinationEndpointPort,
+  localRepositoryString,
   resticDriverLocation,
   resticGlobalArgs,
   resticRepositoryPath,
-  resticRepositoryString,
   type ResticDriverLocation,
 } from "./backups/destinations/index.js"
-import {
-  resticS3ProxyAllowedHosts,
-  resticS3ProxyToken,
-  withResticS3Proxy,
-} from "./backups/destinations/s3/proxy.js"
+import { withResticBridge } from "./backups/restic-bridge.js"
 import { backupFailureCode } from "./backups/failure.js"
 import { traceResticCommand } from "./backups/telemetry.js"
 
@@ -679,16 +674,40 @@ async function spawnResticCommand(
     if (location.kind !== "s3") {
       return spawnResticOnce(spawnRestic, args, input)
     }
-    const token = resticS3ProxyToken()
-    return withResticS3Proxy(
-      {
-        allowPrivateNetwork: location.allowPrivateNetwork,
-        allowedHosts: resticS3ProxyAllowedHosts(location),
-        endpointPort: resticDestinationEndpointPort(location) ?? 443,
-        token,
-      },
-      (proxyUrl) => spawnResticOnce(spawnRestic, args, { ...input, proxyUrl })
-    )
+    // restic talks to a bridge on this machine, which turns each of its
+    // requests into one Hearth signs: it is given no key and no bucket.
+    return withResticBridge(location.access, async (address, bridge) => {
+      const ran = await resultOf(() =>
+        spawnResticOnce(spawnRestic, args, {
+          ...input,
+          repository: `rest:${address}`,
+          signal: AbortSignal.any([input.signal, bridge.refused]),
+        })
+      )
+      if (Result.isSuccess(ran)) return ran.success
+      // Hearth refused a request, or couldn't be asked for as long as
+      // restic kept trying: that is why the run ended, whatever restic
+      // made of it.
+      if (bridge.refused.aborted) throw bridge.refused.reason
+      const away = bridge.away()
+      if (away) throw away
+      // restic says only which status it was answered with. What the
+      // bucket said as it turned a request down goes with the failure, so
+      // it is named as a full bucket or a denied key is, and a read that
+      // only failed to lock is tried again without one.
+      const said = bridge.turnedDown()
+      throw said && ran.failure instanceof RelayBackupError
+        ? RelayBackupError.make({
+            code: ran.failure.code,
+            operation: ran.failure.operation,
+            reason: ran.failure.reason,
+            ...(ran.failure.exitCode === undefined
+              ? {}
+              : { exitCode: ran.failure.exitCode }),
+            cause: new Error(said),
+          })
+        : ran.failure
+    })
   }
   return traceResticCommand(
     args[0] ?? "restic",
@@ -707,7 +726,8 @@ async function spawnResticOnce(
     location: ResticDriverLocation
     onJson?: (value: unknown) => void
     password: string
-    proxyUrl?: string
+    /** What restic is told the repository is, when not the location's own. */
+    repository?: string
     signal: AbortSignal
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
     tolerateIncomplete?: boolean
@@ -976,7 +996,7 @@ function resticSpawnEnv(input: {
   cacheDirectory?: string
   location: ResticDriverLocation
   password: string
-  proxyUrl?: string
+  repository?: string
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const key of RESTIC_ENV_ALLOWLIST) {
@@ -984,27 +1004,37 @@ function resticSpawnEnv(input: {
     if (value) env[key] = value
   }
   env.RESTIC_PASSWORD = input.password
-  env.RESTIC_REPOSITORY = resticRepositoryString(input.location)
-  applyResticDestinationEnvironment(env, input.location, {
-    ...(input.cacheDirectory ? { cacheDirectory: input.cacheDirectory } : {}),
-    ...(input.proxyUrl ? { proxyUrl: input.proxyUrl } : {}),
-  })
+  env.RESTIC_REPOSITORY =
+    input.repository ?? localRepositoryString(input.location)
+  applyResticDestinationEnvironment(
+    env,
+    input.location,
+    input.cacheDirectory ? { cacheDirectory: input.cacheDirectory } : {}
+  )
   return env
 }
 
 function redactResticStderr(
   stderr: string,
-  input: { location: ResticDriverLocation; password: string }
-): string {
-  let redacted = stderr.split(input.password).join("[redacted]")
-  if (input.location.kind === "s3") {
-    redacted = redacted
-      .split(input.location.secretAccessKey)
-      .join("[redacted]")
-      .split(input.location.accessKeyId)
-      .join("[redacted]")
+  input: {
+    location: ResticDriverLocation
+    password: string
+    repository?: string
   }
+): string {
+  // The repository's password is the only secret restic is given. The
+  // bridge's address, which restic names in what it says, means nothing
+  // once the run is over, and is left out of what is kept of it.
+  const redacted = stderr.split(input.password).join("[redacted]")
+  if (!input.repository) return redacted
+  // restic names it as the repository, and as the address of a request
+  // that failed.
+  const address = input.repository.replace(/^rest:/u, "")
   return redacted
+    .split(input.repository)
+    .join("the repository")
+    .split(address)
+    .join("the repository/")
 }
 
 function retryResticOperation<T>(run: () => Promise<T>): Promise<T> {

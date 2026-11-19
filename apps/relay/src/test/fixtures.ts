@@ -1,5 +1,6 @@
 import type { RestoreArchiveAccess } from "../backup-restore"
 import {
+  backupRepositoryAccessThrough,
   backupStorageAccessThrough,
   backupTaskOfferThrough,
 } from "../backups/storage-access"
@@ -12,6 +13,7 @@ import type { RelayConfig, RelayInstanceConfig } from "../config"
  */
 export const noHearth = {
   offer: backupTaskOfferThrough(async () => []),
+  repository: backupRepositoryAccessThrough(async () => []),
   storage: backupStorageAccessThrough(async () => []),
 }
 

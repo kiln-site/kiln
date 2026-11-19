@@ -168,6 +168,22 @@ export async function answerBackupTaskOffer(
   relayId: string,
   task: RelayBackupTask
 ): Promise<{ status: "admitted" } | { reason: string; status: "refused" }> {
+  // A prune is the other task a Relay starts itself, of a repository.
+  if (task.input.kind === "prune") {
+    const { admitRepositoryPruneEffect } = await import(
+      "@/server/backup-repository-access.server"
+    )
+    const answer = await runAppEffect(
+      "Backups.admitPrune",
+      admitRepositoryPruneEffect(relayId, task)
+    )
+    if (answer.status === "admitted") {
+      // Read until it ends, which closes the repository to it again.
+      const { followRelayBackups } = await import("@/lib/backup-reconciliation")
+      await followRelayBackups(relayId)
+    }
+    return answer
+  }
   const { cataloged, ...answer } = await runAppEffect(
     "Backups.offer",
     admitOfferedBackupEffect(task, relayId)

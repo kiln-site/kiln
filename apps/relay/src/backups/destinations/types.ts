@@ -7,6 +7,7 @@ import type {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "../../config.js"
+import type { ResticRepositoryAccess } from "../restic-bridge.js"
 import type { BackupStorageAccess } from "../storage-access.js"
 
 export type FullBackupCreateDestination = Exclude<
@@ -21,16 +22,17 @@ export type FullBackupDeleteDestination = Exclude<
 export type BackupDestinationKind = FullBackupCreateDestination["kind"]
 
 export type ResticLocalDriverLocation = { kind: "local"; path: string }
+/**
+ * A repository in a bucket, reached through the bridge with requests
+ * Hearth signs (`withResticBridge`). The Relay knows nothing of where in
+ * the bucket it is.
+ */
 export type ResticS3DriverLocation = {
-  accessKeyId: string
-  allowPrivateNetwork: boolean
-  bucket: string
-  endpoint: string
-  forcePathStyle: boolean
+  /** Asks Hearth for one signed request, for the task that runs restic. */
+  access: ResticRepositoryAccess
   kind: "s3"
-  region: string
-  repositoryPrefix: string
-  secretAccessKey: string
+  /** Which repository, to tell one from another on this Relay. */
+  repositoryId: string | null
 }
 export type ResticDriverLocation =
   | ResticLocalDriverLocation

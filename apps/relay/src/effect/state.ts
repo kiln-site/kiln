@@ -495,6 +495,11 @@ const RelayBackupTaskPhaseSchema = Schema.Literals([
   "finalizing",
 ])
 export type ScheduledBackupPrune = {
+  /**
+   * The task that left something to prune, whose Hearth the prune is
+   * offered to: for a repository in a bucket, only that Hearth can open it.
+   */
+  followsTaskId: string
   input: Extract<BackupTaskInput, { kind: "prune" }>
   /** Names the repository, so one queued prune covers it. */
   repositoryKey: string
@@ -844,10 +849,15 @@ export class RelayStateStore extends Context.Service<
       hearth: string | null,
       resumeAt: number
     ) => Effect.Effect<number, RelayStateError>
-    /** Puts back a claimed task that never started, as when a pause withdrew it. */
+    /**
+     * Puts back a claimed task that never started, as when a pause
+     * withdrew it; from `resumeAt`, when it has to wait before it is
+     * claimed again, as a prune whose Hearth couldn't be asked.
+     */
     readonly returnBackupTask: (
       taskId: string,
-      now: number
+      now: number,
+      resumeAt?: number
     ) => Effect.Effect<boolean, RelayStateError>
     readonly getBackupTask: (
       taskId: string
@@ -2216,7 +2226,113 @@ const migrations = SqliteMigrator.fromRecord({
       `
     }
   }),
+  // An incremental backup's repository in a bucket no longer comes with
+  // the bucket's keys either: restic asks Hearth for each request. So the
+  // keys, bucket and folder a stored schedule or a waiting task carried
+  // for one are dropped, and what's left names the repository.
+  "54_keyless_restic_repositories": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const schedules = yield* sql<{ id: string; json: string }>`
+      SELECT schedule_id AS id, definition_json AS json FROM relay_schedules
+    `
+    for (const row of schedules) {
+      const kept = withoutScheduleRepositoryKeys(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_schedules SET definition_json = ${kept}
+        WHERE schedule_id = ${row.id}
+      `
+    }
+    const waiting = yield* sql<{ id: string; json: string }>`
+      SELECT task_id AS id, input_json AS json FROM relay_backup_tasks
+      WHERE status IN ('queued', 'running')
+    `
+    for (const row of waiting) {
+      const kept = withoutRepositoryKeys(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks SET input_json = ${kept}
+        WHERE task_id = ${row.id}
+      `
+    }
+  }),
 })
+
+// A repository in a bucket as it is named now, or null for one that
+// already is, or isn't in a bucket.
+function keylessRepository(
+  repository: unknown,
+  repositoryId: unknown
+): { kind: "s3"; repositoryId?: string } | null {
+  if (!Predicate.isObject(repository) || repository.kind !== "s3") return null
+  if (
+    Object.keys(repository).every(
+      (key) => key === "kind" || key === "repositoryId"
+    )
+  ) {
+    return null
+  }
+  const named = repository.repositoryId ?? repositoryId
+  return {
+    kind: "s3",
+    ...(Predicate.isString(named) ? { repositoryId: named } : {}),
+  }
+}
+
+// A stored schedule without what it held of the buckets its incremental
+// backups' repositories are in, or null for one that held nothing of them.
+function withoutScheduleRepositoryKeys(definitionJson: string): string | null {
+  const definition = Result.getOrNull(
+    Result.try(() => JSON.parse(definitionJson) as unknown)
+  )
+  if (!Predicate.isObject(definition) || !Array.isArray(definition.actions)) {
+    return null
+  }
+  let changed = false
+  for (const action of definition.actions as ReadonlyArray<unknown>) {
+    if (!Predicate.isObject(action) || !Array.isArray(action.executions)) {
+      continue
+    }
+    for (const execution of action.executions as ReadonlyArray<unknown>) {
+      if (!Predicate.isObject(execution)) continue
+      const destination = execution.destination
+      if (!Predicate.isObject(destination) || destination.kind !== "restic") {
+        continue
+      }
+      const keyless = keylessRepository(
+        destination.repository,
+        execution.repositoryId
+      )
+      if (keyless === null) continue
+      destination.repository = keyless
+      changed = true
+    }
+  }
+  return changed ? JSON.stringify(definition) : null
+}
+
+// A waiting task's input without what it held of the bucket its restic
+// repository is in, or null for one that held nothing of one. A create or
+// delete names it in its destination, a restore in its source, a prune or
+// export on itself.
+function withoutRepositoryKeys(inputJson: string): string | null {
+  const input = Result.getOrNull(
+    Result.try(() => JSON.parse(inputJson) as unknown)
+  )
+  if (!Predicate.isObject(input)) return null
+  const repositoryId = Predicate.isObject(input.catalog)
+    ? input.catalog.repositoryId
+    : undefined
+  let changed = false
+  for (const holder of [input, input.destination, input.source]) {
+    if (!Predicate.isObject(holder)) continue
+    const keyless = keylessRepository(holder.repository, repositoryId)
+    if (keyless === null) continue
+    holder.repository = keyless
+    changed = true
+  }
+  return changed ? JSON.stringify(input) : null
+}
 
 // A stored schedule without what it held of the buckets its full backups go
 // to, or null for one that held nothing of them.
@@ -2250,8 +2366,8 @@ function withoutScheduleBucketKeys(definitionJson: string): string | null {
 }
 
 // A waiting create's input without the keys of the bucket its archive goes
-// to, or null for one that held none. A restic repository is left as it
-// is: the Relay still holds its keys.
+// to, or null for one that held none. A restic repository's are dropped by
+// the migration after (`withoutRepositoryKeys`).
 function withoutBucketKeys(inputJson: string): string | null {
   const input = Result.getOrNull(
     Result.try(() => JSON.parse(inputJson) as unknown)
@@ -2259,7 +2375,11 @@ function withoutBucketKeys(inputJson: string): string | null {
   if (!Predicate.isObject(input)) return null
   let changed = false
   const named = (copy: unknown) => {
-    if (!Predicate.isObject(copy) || copy.kind !== "s3" || !("bucket" in copy)) {
+    if (
+      !Predicate.isObject(copy) ||
+      copy.kind !== "s3" ||
+      !("bucket" in copy)
+    ) {
       return copy
     }
     changed = true
@@ -2812,7 +2932,22 @@ const makeRelayStateStore = Effect.gen(function* () {
           AND maintenance_key = ${prune.repositoryKey}
         LIMIT 1
       `
-      if (waiting[0]) return
+      if (waiting[0]) {
+        // One prune covers the repository's deletes, and is offered to
+        // the Hearth of the latest of them.
+        yield* sql`
+          UPDATE relay_backup_tasks
+          SET client_id = COALESCE(
+                (SELECT client_id FROM relay_backup_tasks AS followed
+                  WHERE followed.task_id = ${prune.followsTaskId}),
+                client_id
+              ),
+              updated_at = ${now}
+          WHERE kind = 'prune' AND status = 'queued'
+            AND maintenance_key = ${prune.repositoryKey}
+        `
+        return
+      }
       yield* sql`
         INSERT INTO relay_backup_tasks (
           task_id,
@@ -2821,6 +2956,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           status,
           input_json,
           maintenance_key,
+          client_id,
           created_at,
           updated_at
         ) VALUES (
@@ -2830,6 +2966,9 @@ const makeRelayStateStore = Effect.gen(function* () {
           'queued',
           ${JSON.stringify(prune.input)},
           ${prune.repositoryKey},
+          -- It asks the Hearth of the task that left it something to prune.
+          (SELECT client_id FROM relay_backup_tasks
+            WHERE task_id = ${prune.followsTaskId}),
           ${now},
           ${now}
         )
@@ -3934,7 +4073,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           RETURNING task_id AS taskId
         `.pipe(Effect.map((rows) => rows.length))
       ),
-    returnBackupTask: (taskId, now) =>
+    returnBackupTask: (taskId, now, resumeAt) =>
       run(
         "return_backup_task",
         sql<{ taskId: string }>`
@@ -3942,6 +4081,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           SET status = 'queued',
               started_at = NULL,
               phase = NULL,
+              resume_at = COALESCE(${resumeAt ?? null}, resume_at),
               updated_at = ${now}
           WHERE task_id = ${taskId} AND status = 'running'
           RETURNING task_id AS taskId

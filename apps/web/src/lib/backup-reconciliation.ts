@@ -274,7 +274,8 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
     // that the pass failed the same way every time, and none of a batch was
     // ever cataloged.
     const settled = yield* Effect.forEach(
-      tasks,
+      // A prune is no backup's task: nothing of the catalog follows it.
+      tasks.filter((task) => task.kind !== "prune"),
       (task) =>
         reconcileBackupTaskEffect(task, relay.id).pipe(
           Effect.map((updated) => ({ ended: false, task, updated })),
@@ -312,6 +313,17 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       )
       requestBackupRetention()
     }
+    // A prune Hearth admitted is open until it ends.
+    yield* closeEndedPrunes(
+      relay.id,
+      tasks.flatMap((task) =>
+        task.kind === "prune" &&
+        task.status !== "queued" &&
+        task.status !== "running"
+          ? [task.taskId]
+          : []
+      )
+    )
     yield* stopCreatesOfDeletedBackups(relay, relayTasksById, subject)
     const dispatchable = yield* listDispatchableBackupTasksEffect(relay.id)
     let pending = 0
@@ -364,6 +376,17 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
     }
   }
 )
+
+const closeEndedPrunes = Effect.fnUntraced(function* (
+  relayId: string,
+  taskIds: ReadonlyArray<string>
+) {
+  if (taskIds.length === 0) return
+  const { closeRepositoryPrunesEffect } = yield* promiseEffect(
+    () => import("@/server/backup-repository-access.server")
+  )
+  yield* closeRepositoryPrunesEffect(relayId, taskIds)
+})
 
 // Creates still running or queued for backups being deleted are stopped on
 // the Relay, and ones the Relay never received are cancelled in Hearth, so

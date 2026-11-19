@@ -768,6 +768,7 @@ async function scheduledResticDestination(
     Effect.suspend(() =>
       prepareResticRepositoryLocation({
         objectPrefix: repository.objectPrefix,
+        repositoryId: repository.id,
         requireEnabled: true,
         storageId: repository.storageId,
       })

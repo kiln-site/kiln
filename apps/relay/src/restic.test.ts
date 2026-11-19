@@ -15,21 +15,49 @@ import {
 } from "./restic.js"
 import { RelayBackupError } from "./effect/errors.js"
 
+// The bucket, as the bridge reaches one over HTTPS: here it only refuses.
+const bucket = vi.hoisted(() => ({
+  refuses: null as { body: string; status: number } | null,
+}))
+
+vi.mock("node:https", async (importOriginal) => {
+  const https = await importOriginal<typeof import("node:https")>()
+  const { PassThrough, Writable } = await import("node:stream")
+  const request = (
+    _url: URL,
+    _options: unknown,
+    respond: (response: unknown) => void
+  ) => {
+    const body = new Writable({
+      write(_chunk, _encoding, written) {
+        written()
+      },
+    })
+    body.once("finish", () => {
+      const response = Object.assign(new PassThrough(), {
+        headers: {},
+        statusCode: bucket.refuses?.status ?? 200,
+      })
+      respond(response)
+      response.end(bucket.refuses?.body)
+    })
+    return Object.assign(body, { setTimeout: () => body })
+  }
+  return { ...https, default: { ...https, request }, request }
+})
+
 const testDirectory = mkdtempSync(join(tmpdir(), "kiln-restic-"))
+// A repository in a bucket: restic is given no key, only a bridge on this
+// machine that asks Hearth for each request.
 const s3Location: ResticDriverLocation = {
-  accessKeyId: "AKIAEXAMPLE",
-  allowPrivateNetwork: true,
-  bucket: "kiln-backups",
-  endpoint: "https://s3.example.com",
-  forcePathStyle: true,
+  access: () => Promise.reject(new Error("Nothing was asked of Hearth")),
   kind: "s3",
-  region: "us-east-1",
-  repositoryPrefix: "team/kiln/relay/restic/instance/srv/repo",
-  secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+  repositoryId: null,
 }
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  bucket.refuses = null
 })
 
 afterAll(() => {
@@ -51,8 +79,10 @@ describe("restic staging validation", () => {
   })
 })
 
-describe("restic S3 driver", () => {
-  it("sanitizes the restic environment and keeps secrets out of argv", async () => {
+describe("restic with a repository in a bucket", () => {
+  it("gives restic no key and no bucket, only the bridge's address", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "leaked-key")
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "leaked-secret")
     vi.stubEnv("AWS_SESSION_TOKEN", "leaked-session")
     vi.stubEnv("HTTPS_PROXY", "http://evil.example:8080")
     vi.stubEnv("HTTP_PROXY", "http://evil.example:8080")
@@ -67,35 +97,24 @@ describe("restic S3 driver", () => {
     const call = processes[0]
     expect(call).toBeDefined()
     if (!call) return
-    expect(call.env.AWS_SESSION_TOKEN).toBeUndefined()
-    expect(call.env.HTTP_PROXY).toBeUndefined()
-    expect(call.env.HTTPS_PROXY).toMatch(
-      /^http:\/\/user:[^@]+@127\.0\.0\.1:\d+$/u
-    )
-    expect(call.env.AWS_ACCESS_KEY_ID).toBe(s3Location.accessKeyId)
-    expect(call.env.AWS_SECRET_ACCESS_KEY).toBe(s3Location.secretAccessKey)
+    expect(
+      Object.keys(call.env).filter((name) => /^AWS_|PROXY$/iu.test(name))
+    ).toEqual([])
     expect(call.env.RESTIC_PASSWORD).toBe("repo-secret")
-    expect(call.env.RESTIC_REPOSITORY).toBe(
-      "s3:https://s3.example.com/kiln-backups/team/kiln/relay/restic/instance/srv/repo"
+    expect(call.env.RESTIC_REPOSITORY).toMatch(
+      /^rest:http:\/\/127\.0\.0\.1:\d+\/[\w-]{43}\/$/u
     )
     expect(call.env.RESTIC_CACHE_DIR).toBe(cacheDirectory)
     expect(existsSync(cacheDirectory)).toBe(true)
-    const argv = call.args.join(" ")
-    for (const secret of [
-      "repo-secret",
-      s3Location.accessKeyId,
-      s3Location.secretAccessKey,
-    ]) {
-      expect(argv).not.toContain(secret)
-    }
+    expect(call.args.join(" ")).not.toContain("repo-secret")
   })
 
-  it("redacts repository secrets from restic stderr", async () => {
+  it("keeps the repository's password, and the bridge's address, out of what restic said", async () => {
     const { spawn } = fakeRestic((restic) =>
       restic.respond({
         exitCode: 1,
-        stderr:
-          "Fatal: could not use AKIAEXAMPLE or wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY with repo-secret",
+        // As restic says a request to the repository failed, and names it.
+        stderr: `Fatal: wrong password repo-secret\nGet "${restic.env.RESTIC_REPOSITORY!.slice("rest:".length)}config": EOF\n${restic.env.RESTIC_REPOSITORY}`,
       })
     )
     const failure = await createResticDriver({ spawn })
@@ -114,10 +133,86 @@ describe("restic S3 driver", () => {
       )
     expect(failure).toBeInstanceOf(RelayBackupError)
     const reason = failure instanceof RelayBackupError ? failure.reason : ""
-    expect(reason).not.toContain("AKIAEXAMPLE")
-    expect(reason).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
     expect(reason).not.toContain("repo-secret")
+    expect(reason).not.toContain("127.0.0.1")
     expect(reason).toContain("[redacted]")
+  })
+
+  it("fails with Hearth's refusal, whatever restic made of it", async () => {
+    const refusal = RelayBackupError.make({
+      code: "storage_access_refused",
+      operation: "repository.access",
+      reason: "Hearth refused access to the backup repository: no such task",
+    })
+    // restic, as far as it matters here: it asks the bridge for the
+    // repository's config, and exits as it does when it can't open one.
+    const { spawn } = fakeRestic((restic) => {
+      void fetch(`${restic.env.RESTIC_REPOSITORY!.slice("rest:".length)}config`)
+        .then((answer) => answer.arrayBuffer())
+        .finally(() =>
+          restic.respond({
+            exitCode: 1,
+            stderr: "Fatal: unable to open config",
+          })
+        )
+    })
+    const failure = await createResticDriver({ spawn })
+      .forget({
+        location: { ...s3Location, access: () => Promise.reject(refusal) },
+        password: "repo-secret",
+        signal: new AbortController().signal,
+        snapshotId: "abcdef12",
+      })
+      .then(
+        () => null,
+        (cause: unknown) => cause
+      )
+    expect(failure).toBe(refusal)
+  })
+
+  // A bucket at its storage cap still serves what it holds, so a restore
+  // or download must still work there.
+  it("reads without a lock when the bucket refuses the lock file", async () => {
+    bucket.refuses = {
+      body: "<Error><Code>AccessDenied</Code><Message>Cannot upload files, storage cap exceeded.</Message></Error>",
+      status: 403,
+    }
+    const { processes, spawn } = fakeRestic((restic) => {
+      if (restic.args.includes("--no-lock")) {
+        return restic.respond({ stdout: '{"total_size":42}\n' })
+      }
+      // restic, as far as it matters here: it writes its lock first, and
+      // says which status that was answered with.
+      void fetch(
+        `${restic.env.RESTIC_REPOSITORY!.slice("rest:".length)}locks/${"ab".repeat(32)}`,
+        { body: "lock", method: "POST" }
+      ).then((answer) =>
+        restic.respond({
+          exitCode: 1,
+          stderr: `Fatal: unable to create lock in backend: unexpected HTTP response (${answer.status}): ${answer.status} Forbidden`,
+        })
+      )
+    })
+    const size = await createResticDriver({ spawn }).stats({
+      location: {
+        ...s3Location,
+        access: async () => ({
+          allowPrivateNetwork: false,
+          headers: {},
+          method: "PUT",
+          status: "granted",
+          url: "https://bucket.example.com/repo/locks/lock",
+        }),
+      },
+      password: "repo-secret",
+      signal: new AbortController().signal,
+      snapshotId: "abcdef12",
+    })
+    expect(size).toEqual({ totalSize: 42 })
+    expect(processes.map(({ args }) => args.includes("--no-lock"))).toEqual([
+      false,
+      true,
+    ])
   })
 })
 
@@ -139,9 +234,13 @@ class FakeResticProcess {
     }) as unknown as ReturnType<ResticSpawn>
   }
 
-  respond(output: { exitCode?: number; stderr?: string }): void {
+  respond(output: {
+    exitCode?: number
+    stderr?: string
+    stdout?: string
+  }): void {
     queueMicrotask(() => {
-      this.stdout.end("")
+      this.stdout.end(output.stdout ?? "")
       this.stderr.end(output.stderr ?? "")
       this.child.emit("close", output.exitCode ?? 0)
     })

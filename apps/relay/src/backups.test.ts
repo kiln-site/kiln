@@ -110,7 +110,9 @@ describe("Relay backups in a bucket it holds no keys to", () => {
   // copy, and each offer of a backup the Relay started itself.
   const hearth = (
     answer: (action: string, artifactId: string) => unknown,
-    admits: () => unknown = () => ({ status: "admitted" })
+    admits: () => unknown = () => ({ status: "admitted" }),
+    // Whether it is the only Hearth paired with the Relay.
+    alone = false
   ) => {
     const asked: Array<unknown> = []
     const offered: Array<string> = []
@@ -124,7 +126,7 @@ describe("Relay backups in a bucket it holds no keys to", () => {
       options: {
         offer: backupTaskOfferThrough(async (task, _timeout, only) => {
           const answers: Array<{ payload: unknown }> = []
-          if (only({ id: "hearth-other", role: "full_access" })) {
+          if (!alone && only({ id: "hearth-other", role: "full_access" })) {
             strayed.push(task.taskId)
             answers.push({
               payload: { reason: "no such schedule", status: "refused" },
@@ -669,6 +671,57 @@ describe("Relay backups in a bucket it holds no keys to", () => {
       )
   )
 
+  // Hearth can admit a prune, spending the delete that was owed one, and
+  // go away before its answer arrives. Failed then, the prune is gone and
+  // the space it would free waits for some other delete.
+  it.effect(
+    "keeps a prune it couldn't offer Hearth, to offer again, in place of failing it",
+    () =>
+      withRelay("kiln-backup-prune-offer-", ({ config }) =>
+        Effect.gen(function* () {
+          const { offered, options } = hearth(
+            () => signed("PUT"),
+            () => null,
+            true
+          )
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const journal = yield* RelayStateStore
+          const pruneId = "10000000-0000-4000-8000-000000000051"
+          yield* journal.scheduleBackupPrune(
+            {
+              followsTaskId: "10000000-0000-4000-8000-000000000052",
+              input: {
+                backupId: "00000000-0000-4000-8000-000000000051",
+                kind: "prune",
+                repository: {
+                  kind: "s3",
+                  repositoryId: "22222222-2222-4222-8222-222222222222",
+                },
+                repositoryPassword: "repo-password",
+                target: { id: "instance-1", kind: "instance" },
+                taskId: pruneId,
+              },
+              repositoryKey: "a-repository",
+            },
+            Date.now()
+          )
+
+          yield* manager.runPending()
+
+          assert.deepStrictEqual(offered, [])
+          assert.strictEqual(
+            (yield* journal.getBackupTask(pruneId))?.status,
+            "queued"
+          )
+        })
+      )
+  )
+
   it.effect("removes what a waiting backup took when it is cancelled", () =>
     withRelay("kiln-backup-waits-cancel-", ({ config, root }) =>
       Effect.gen(function* () {
@@ -1054,6 +1107,7 @@ function backupManager(
   > = noHearth
 ) {
   return BackupManager.make({
+    ...noHearth,
     ...hearth,
     config,
     findInstance,

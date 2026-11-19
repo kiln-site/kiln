@@ -21,10 +21,15 @@ import { Effect, Predicate, Result, Schedule } from "effect"
 import {
   backupArtifactFilename,
   type BackupArtifactKind,
+  type BackupRepositoryAccessGrant,
+  type BackupRepositoryListing,
   type BackupStorageAccessAction,
   type BackupStorageAccessGrant,
   type BackupTargetKind,
+  type resticRepositoryObjectTypes,
 } from "@workspace/contracts"
+
+type ResticRepositoryObjectType = (typeof resticRepositoryObjectTypes)[number]
 
 import { BackupStorageError } from "@/effect/errors"
 
@@ -460,6 +465,97 @@ export function signS3BackupAccess(
 }
 
 /**
+ * Where one of a restic repository's files is in its bucket, as restic's
+ * own S3 layout files it: `config` alone, a pack of data under its name's
+ * first two characters, anything else under its folder.
+ */
+export function resticRepositoryObjectKey(
+  repositoryPrefix: string,
+  type: ResticRepositoryObjectType,
+  name: string | null
+): string {
+  if (type === "config" || name === null) return `${repositoryPrefix}/config`
+  return type === "data"
+    ? `${repositoryPrefix}/data/${name.slice(0, 2)}/${name}`
+    : `${repositoryPrefix}/${type}/${name}`
+}
+
+/**
+ * One signed request for one file of a restic repository, for a Relay
+ * whose restic asked for it (`grantBackupRepositoryAccessEffect`): that
+ * object, that method, for `STORAGE_ACCESS_SECONDS`.
+ */
+export function signS3RepositoryAccess(
+  credential: S3BackupCredential,
+  objectKey: string,
+  method: BackupRepositoryAccessGrant["method"]
+) {
+  const object = { Bucket: credential.bucket, Key: objectKey }
+  return withS3Client(credential, (client) =>
+    s3Request(`repository.sign.${method}`, () =>
+      getSignedUrl(
+        client,
+        method === "PUT"
+          ? new PutObjectCommand(object)
+          : method === "GET"
+            ? new GetObjectCommand(object)
+            : method === "HEAD"
+              ? new HeadObjectCommand(object)
+              : new DeleteObjectCommand(object),
+        { expiresIn: STORAGE_ACCESS_SECONDS }
+      )
+    ).pipe(
+      Effect.map((url): BackupRepositoryAccessGrant => ({
+        allowPrivateNetwork: credential.allowPrivateNetwork,
+        headers: {},
+        method,
+        status: "granted",
+        url,
+      }))
+    )
+  )
+}
+
+const RESTIC_FILE_NAME = /^[a-f0-9]{64}$/u
+
+/**
+ * One page of one folder of a restic repository, read from the bucket
+ * here: a listing is of the bucket, not of one object, so it isn't handed
+ * to a Relay as a signed request. Only restic's own files are named.
+ */
+export function listS3RepositoryFolder(
+  credential: S3BackupCredential,
+  repositoryPrefix: string,
+  type: Exclude<ResticRepositoryObjectType, "config">,
+  continuationToken: string | undefined
+) {
+  return withS3Client(credential, (client) =>
+    s3Request("repository.list", (signal) =>
+      client.send(
+        new ListObjectsV2Command({
+          Bucket: credential.bucket,
+          ContinuationToken: continuationToken,
+          MaxKeys: S3_DELETE_PAGE_SIZE,
+          Prefix: `${repositoryPrefix}/${type}/`,
+        }),
+        { abortSignal: signal }
+      )
+    ).pipe(
+      Effect.map((page): BackupRepositoryListing => ({
+        files: (page.Contents ?? []).flatMap((entry) => {
+          const name = entry.Key?.slice(entry.Key.lastIndexOf("/") + 1)
+          return name !== undefined && RESTIC_FILE_NAME.test(name)
+            ? [{ name, size: entry.Size ?? 0 }]
+            : []
+        }),
+        next: page.IsTruncated ? (page.NextContinuationToken ?? null) : null,
+        status: "listed",
+      }))
+    )
+  )
+}
+
+/**
  * Deletes one object of a bucket, as Hearth does for a stored copy of a
  * backup: it holds the bucket's keys, so no Relay is asked to. A bucket
  * answers a delete of an object that isn't there as it does one that was,
@@ -736,6 +832,23 @@ export function s3Failure(
     .replaceAll(/[\p{Cc}]+/gu, " ")
     .trim()
   return { answered: status !== null, said: said ? said.slice(0, 512) : null }
+}
+
+/**
+ * Whether a bucket turned a request down, as for a key that may not do it
+ * or a bucket that isn't there, rather than failing in passing: asking
+ * again would be answered the same.
+ */
+export function s3RefusedRequest(error: unknown): boolean {
+  if (!(error instanceof BackupStorageError)) return false
+  const status = s3FailureStatus(error.cause)
+  return (
+    status !== null &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429
+  )
 }
 
 function s3FailureStatus(cause: unknown): number | null {

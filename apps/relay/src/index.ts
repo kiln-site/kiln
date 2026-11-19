@@ -160,6 +160,7 @@ import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
 import {
+  backupRepositoryAccessThrough,
   backupStorageAccessThrough,
   backupTaskOfferThrough,
 } from "./backups/storage-access.js"
@@ -1057,6 +1058,14 @@ const backupManager = await runRelayEffect(
     ),
     offer: backupTaskOfferThrough((payload, timeoutMs, only) =>
       controlSocket.requestClients("backup.task.offer", payload, timeoutMs, only)
+    ),
+    repository: backupRepositoryAccessThrough((payload, timeoutMs, only) =>
+      controlSocket.requestClients(
+        "backup.repository.access",
+        payload,
+        timeoutMs,
+        only
+      )
     ),
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {
@@ -4195,6 +4204,7 @@ async function executeControlRequest(
       throw new Error(`${request.operation} is not available yet`)
     // Asked of Hearth, never of the Relay.
     case "backup.storage.access":
+    case "backup.repository.access":
     case "backup.task.offer":
       throw new Error(`${request.operation} is answered by Hearth`)
   }

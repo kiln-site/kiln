@@ -182,6 +182,8 @@ export const relayControlOperations = [
   "backup.storage.access",
   // The Relay offers Hearth a backup it started itself, as a schedule's is.
   "backup.task.offer",
+  // The Relay asks Hearth for one request to a restic repository in a bucket.
+  "backup.repository.access",
   "operation.get",
   "relay.pause.write",
   "resource.freeze",
@@ -346,6 +348,7 @@ export function relayControlOperationChanges(
     case "sftp.authorization.resolve":
     case "backup.storage.access":
     case "backup.task.offer":
+    case "backup.repository.access":
     case "operation.get":
       return false
     case "relay.pause.write":

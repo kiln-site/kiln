@@ -43,23 +43,20 @@ describe("Relay backup task inputs", () => {
     expect(read).toMatchObject({ kind: "create", target: stored.target })
   })
 
-  it("rejects S3 repositories with plaintext endpoints, invalid ports, or escaping prefixes", () => {
-    expect(resticRepositoryLocationSchema.safeParse(s3Repository).success).toBe(
-      true
-    )
-    for (const unsafe of [
-      { endpoint: "http://minio:9000" },
-      { endpoint: "https://minio:0" },
-      { repositoryPrefix: "../escape" },
-    ]) {
-      expect(
-        resticRepositoryLocationSchema.safeParse({ ...s3Repository, ...unsafe })
-          .success
-      ).toBe(false)
-    }
+  // A Relay keeps the tasks and schedules it stored. One from when Hearth
+  // sent a bucket's keys with a restic repository is still read, and
+  // nothing of the bucket is kept: restic asks Hearth for each request.
+  it("reads a repository as an older Hearth sent it, keeping nothing of its bucket", () => {
+    expect(resticRepositoryLocationSchema.parse(s3Repository)).toEqual({
+      kind: "s3",
+    })
+    const repositoryId = "44444444-4444-4444-8444-444444444444"
+    expect(
+      resticRepositoryLocationSchema.parse({ ...s3Repository, repositoryId })
+    ).toEqual({ kind: "s3", repositoryId })
   })
 
-  it("strips repository passwords and S3 keys from restic task input", () => {
+  it("strips repository passwords from restic task input", () => {
     const redacted = redactBackupTaskInput({
       artifactKind: "restic_snapshot",
       backupId,
