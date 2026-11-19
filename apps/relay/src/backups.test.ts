@@ -10,8 +10,10 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { setImmediate as yieldToEventLoop } from "node:timers/promises"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, type Scope } from "effect"
+import { Effect, Exit, Fiber, type Scope } from "effect"
+import { TestClock } from "effect/testing"
 import ZipStream from "zip-stream"
 
 import type {
@@ -215,6 +217,38 @@ describe("Relay archive restores", () => {
       assert.isFalse(existsSync(resolve(directory, "evil.txt")))
       assert.isFalse(existsSync(resolve(config.rootDirectory, "evil.txt")))
     })
+  )
+})
+
+describe("Relay backup exports", () => {
+  // The Relay makes its backup worker in one fiber, which then ends, and
+  // runs it in another. A timer started as it's made ends with the first.
+  it.effect(
+    "sweeps a download that expires while the Relay runs, not only as it starts",
+    () =>
+      withRelay("kiln-backup-export-sweep-", ({ config }) =>
+        Effect.gen(function* () {
+          const manager = yield* Fiber.join(
+            yield* Effect.forkChild(backupManager(config))
+          )
+          const worker = yield* Effect.forkChild(manager.run())
+          const exports = resolve(config.dataDirectory, "exports")
+          const download = resolve(exports, "download.zip")
+          yield* Effect.promise(async () => {
+            await writeFile(download, "archive")
+            await writeFile(resolve(exports, ".download.zip.expires"), "1")
+          })
+
+          yield* TestClock.adjust("1 hour")
+          // The sweep's file work takes turns of the event loop, not time.
+          while (existsSync(download)) {
+            yield* Effect.promise(() => yieldToEventLoop())
+          }
+          yield* Fiber.interrupt(worker)
+
+          assert.isFalse(existsSync(download))
+        })
+      )
   )
 })
 

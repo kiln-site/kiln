@@ -1,3 +1,4 @@
+import { Effect } from "effect"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
@@ -6,6 +7,7 @@ import {
   isSafeResticObjectPrefix,
   resticPrefixSegment,
   resticRepositoryObjectPrefix,
+  signS3BackupUpload,
 } from "./client"
 
 describe("S3 backup storage", () => {
@@ -75,5 +77,30 @@ describe("restic S3 prefixes", () => {
         targetId: "instance-one",
       })
     ).toBe("team/kiln/kiln.dev/relay-one/restic/instance/instance-one/repo-one")
+  })
+})
+
+describe("signed S3 uploads", () => {
+  // The URL is signed before there is an archive. A checksum signed into it
+  // would be of an empty body, and buckets that check it refuse the upload.
+  it("carry no checksum of a body Hearth never saw", async () => {
+    const upload = await Effect.runPromise(
+      signS3BackupUpload(
+        {
+          accessKeyId: "AKIAEXAMPLE",
+          allowPrivateNetwork: true,
+          bucket: "kiln-backups",
+          endpoint: "https://s3.example.com",
+          forcePathStyle: false,
+          objectPrefix: "team",
+          region: "us-east-1",
+          secretAccessKey: "s3-secret",
+        },
+        "team/backup.zip"
+      )
+    )
+    const signed = [...new URL(upload.uploadUrl).searchParams.keys()]
+    expect(signed).toContain("X-Amz-Signature")
+    expect(signed.filter((name) => /checksum/iu.test(name))).toEqual([])
   })
 })
