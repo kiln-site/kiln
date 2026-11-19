@@ -159,7 +159,10 @@ import { transferSpace } from "./transfers/peer/space.js"
 import type { TransferRootResolver } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
-import { backupStorageAccessThrough } from "./backups/storage-access.js"
+import {
+  backupStorageAccessThrough,
+  backupTaskOfferThrough,
+} from "./backups/storage-access.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -1052,6 +1055,9 @@ const backupManager = await runRelayEffect(
         only
       )
     ),
+    offer: backupTaskOfferThrough((payload, timeoutMs, only) =>
+      controlSocket.requestClients("backup.task.offer", payload, timeoutMs, only)
+    ),
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {
       const instance = (await docker.inspectInstances()).find(
@@ -1172,10 +1178,10 @@ const containerCommands = new ContainerCommands({
   lanes,
 })
 const scheduleManager = await ScheduleManager.make({
-  enqueueBackup: (input) =>
+  enqueueBackup: (input, hearth) =>
     runRelayEffect(
       "relay.schedules.backup.enqueue",
-      backupManager.enqueue(input)
+      backupManager.enqueue(input, hearth)
     ),
   findInstance: (instanceId) => docker.findInstance(instanceId),
   findVolume: (volumeId) =>
@@ -3389,7 +3395,8 @@ async function executeControlRequest(
     }
     case "schedule.apply":
       return scheduleManager.apply(
-        relayScheduleProjectionSchema.parse(request.payload)
+        relayScheduleProjectionSchema.parse(request.payload),
+        client.id
       )
     case "schedule.run":
       return scheduleManager.runNow({
@@ -4188,6 +4195,7 @@ async function executeControlRequest(
       throw new Error(`${request.operation} is not available yet`)
     // Asked of Hearth, never of the Relay.
     case "backup.storage.access":
+    case "backup.task.offer":
       throw new Error(`${request.operation} is answered by Hearth`)
   }
 }

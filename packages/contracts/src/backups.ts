@@ -317,34 +317,19 @@ export const backupS3CredentialSchema = z
  * it (`backup.storage.access`).
  *
  * Read loosely: a Relay keeps the tasks it stored, and Hearth once sent a
- * signed URL and a path with one. Those are read and dropped.
+ * signed URL and a path with one, and the bucket's keys with a schedule's.
+ * Those are read and dropped. The path such a Relay uploaded a scheduled
+ * backup to is kept (`objectKey`), for Hearth to find one it hadn't
+ * cataloged; nothing sends one now.
  */
 export const backupS3CopyDestinationSchema = z.object({
   artifactId: z.uuid().optional(),
   destinationId: instanceIdSchema.optional(),
   kind: z.literal("s3"),
+  objectKey: z.string().min(1).max(1_024).optional(),
 })
 
-/**
- * A scheduled backup's copy in a bucket, sent with the bucket's keys: the
- * Relay starts those on its own and signs their uploads itself.
- */
-export const backupS3CredentialUploadDestinationSchema =
-  backupS3CredentialSchema
-    .partial({ accessKeyId: true, secretAccessKey: true })
-    .safeExtend({
-      artifactId: z.uuid().optional(),
-      kind: z.literal("s3"),
-      objectKey: backupObjectKeySchema,
-    })
-    .strict()
-
-// The one with keys first: it is strict, so a copy that names none falls
-// through to the other.
-export const backupS3UploadDestinationSchema = z.union([
-  backupS3CredentialUploadDestinationSchema,
-  backupS3CopyDestinationSchema,
-])
+export const backupS3UploadDestinationSchema = backupS3CopyDestinationSchema
 
 const resticLocalRepositoryLocationSchema = z
   .object({
@@ -395,6 +380,13 @@ const backupCreateTaskInputObjectSchema = z
         batchId: z.uuid().optional(),
         // The repository an incremental scheduled backup goes to.
         repositoryId: z.uuid().optional(),
+        // The schedule and its step a scheduled backup was taken for.
+        // Hearth admits a backup for a bucket against that step, as its
+        // own record of the schedule has it.
+        schedule: z
+          .object({ actionId: z.uuid(), id: z.uuid() })
+          .strict()
+          .optional(),
         storageId: instanceIdSchema.nullable(),
       })
       .strict()
@@ -1049,6 +1041,22 @@ export const backupStorageAccessResponseSchema = z.discriminatedUnion(
   [backupStorageAccessGrantSchema, backupStorageAccessRefusalSchema]
 )
 
+/**
+ * Hearth's answer to a backup a Relay started on its own, as a schedule's
+ * are, and offers to it (`backup.task.offer`, whose payload is the task as
+ * the Relay has it). `admitted` once Hearth has cataloged it and will open
+ * its bucket; `refused` when it won't, which asking again can't change.
+ */
+export const backupTaskOfferResponseSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("admitted") }).strict(),
+  z
+    .object({
+      reason: z.string().min(1).max(300),
+      status: z.literal("refused"),
+    })
+    .strict(),
+])
+
 export type BackupStorageAccessAction =
   (typeof backupStorageAccessActions)[number]
 export type BackupStorageAccessRequest = z.infer<
@@ -1100,9 +1108,6 @@ export type BackupExportTaskResult = z.infer<
   typeof backupExportTaskResultSchema
 >
 export type BackupMode = z.infer<typeof backupModeSchema>
-export type BackupS3CredentialUploadDestination = z.infer<
-  typeof backupS3CredentialUploadDestinationSchema
->
 export type BackupPruneTaskInput = z.infer<typeof backupPruneTaskInputSchema>
 export type ResticRepositoryLocation = z.infer<
   typeof resticRepositoryLocationSchema

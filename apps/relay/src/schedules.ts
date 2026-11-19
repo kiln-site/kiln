@@ -6,7 +6,7 @@ import type { Fiber } from "effect"
 import { z } from "zod"
 
 import {
-  backupArtifactFilename,
+  backupTaskAwaitsHearth,
   type BackupTaskInput,
   type RelayBackupTask,
 } from "@workspace/contracts"
@@ -80,7 +80,11 @@ class ScheduledBackupWaitError extends Data.TaggedError(
 }> {}
 
 export interface ScheduleManagerOptions {
-  readonly enqueueBackup: (input: BackupTaskInput) => Promise<RelayBackupTask>
+  /** `hearth` is the Hearth client the schedule that takes it came from. */
+  readonly enqueueBackup: (
+    input: BackupTaskInput,
+    hearth: string | null
+  ) => Promise<RelayBackupTask>
   readonly findInstance: (instanceId: string) => Promise<object | null>
   readonly findVolume: (volumeId: string) => Promise<object | null>
   readonly forkEffect?: (
@@ -183,14 +187,15 @@ export class ScheduleManager {
     this.#occurrenceFibers.clear()
   }
 
-  apply(projection: RelayScheduleProjection) {
+  /** `hearth` is the Hearth client that sent it. */
+  apply(projection: RelayScheduleProjection, hearth: string | null = null) {
     const input = relayScheduleProjectionSchema.parse(projection)
     const nextRunAt = input.enabled
       ? nextScheduleOccurrence(input.cron, Date.now()).getTime()
       : null
     return this.#serialized(async () => {
       const applied = await Effect.runPromise(
-        this.#options.state.apply(input, nextRunAt)
+        this.#options.state.apply(input, nextRunAt, hearth)
       )
       this.#nextRunAt = undefined
       return applied
@@ -228,7 +233,11 @@ export class ScheduleManager {
         )
       )
       if ("error" in occurrence) throw new Error(occurrence.error)
-      this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
+      this.#launchOccurrence(
+        occurrence.definition,
+        occurrence.scheduledAt,
+        occurrence.hearth
+      )
       return occurrence.run
     })
   }
@@ -278,7 +287,8 @@ export class ScheduleManager {
           if (occurrence.run.status === "running")
             this.#launchOccurrence(
               occurrence.definition,
-              occurrence.scheduledAt
+              occurrence.scheduledAt,
+              occurrence.hearth
             )
         }
         if (due.failure) return this.#claimFailed(due.failure.cause)
@@ -288,9 +298,20 @@ export class ScheduleManager {
     })
   }
 
-  #launchOccurrence(definition: RelayScheduleProjection, scheduledAt: number) {
+  /**
+   * `hearth` is the Hearth client that sent the schedule, as the occurrence
+   * was claimed. Its backups ask that one for access to a bucket, whatever
+   * becomes of the schedule while the occurrence runs: one removed during a
+   * wait step still has its backup step to run.
+   */
+  #launchOccurrence(
+    definition: RelayScheduleProjection,
+    scheduledAt: number,
+    hearth: string | null
+  ) {
     const effect = Effect.tryPromise({
-      try: (signal) => this.#executeOccurrence(definition, scheduledAt, signal),
+      try: (signal) =>
+        this.#executeOccurrence(definition, scheduledAt, hearth, signal),
       catch: (cause) => cause,
     }).pipe(
       Effect.catch((cause) =>
@@ -318,6 +339,7 @@ export class ScheduleManager {
   async #executeOccurrence(
     schedule: RelayScheduleProjection,
     scheduledAt: number,
+    hearth: string | null,
     signal?: AbortSignal
   ) {
     const startedAt = Date.now()
@@ -513,6 +535,7 @@ export class ScheduleManager {
                     sequenceFailure,
                     recordProgress,
                     together,
+                    hearth,
                     signal
                   )
                 ),
@@ -591,6 +614,7 @@ export class ScheduleManager {
     sequenceFailure: string | null,
     recordProgress: (required: boolean) => Promise<boolean>,
     together: StoppedTogether | null,
+    hearth: string | null,
     signal?: AbortSignal
   ) {
     if (state.activeKey === null) return
@@ -769,6 +793,7 @@ export class ScheduleManager {
                 scheduledAt,
                 state.powerIntent,
                 together,
+                hearth,
                 signal
               )
             )
@@ -864,6 +889,7 @@ export class ScheduleManager {
     scheduledAt: number,
     powerIntent: string,
     together: StoppedTogether | null,
+    hearth: string | null,
     signal?: AbortSignal
   ): Promise<ContainerCommandResult | undefined> {
     if (action.type === "console_command") {
@@ -913,12 +939,13 @@ export class ScheduleManager {
           target,
           together,
           scheduledAt,
+          hearth,
           signal
         )
         return
       }
       const input = this.#targetBackup(schedule, action, target, scheduledAt)
-      const queued = await this.#options.enqueueBackup(input)
+      const queued = await this.#options.enqueueBackup(input, hearth)
       await Effect.runPromise(
         this.#waitForBackup(queued),
         signal ? { signal } : undefined
@@ -974,14 +1001,14 @@ export class ScheduleManager {
             : ("platform_bundle" as const)
     const destination = scheduledBackupDestination(
       deployedDestination,
-      backupId,
-      artifactId,
-      artifactKind
+      artifactId
     )
     return {
       artifactKind,
       backupId,
       catalog: {
+        // The step it was taken for, which Hearth admits it against.
+        schedule: { actionId: action.id, id: schedule.id },
         name: resolveScheduleBackupName(action.name, {
           backupId,
           instanceId: target.kind === "instance" ? target.id : "",
@@ -1044,6 +1071,7 @@ export class ScheduleManager {
     target: ScheduleTarget,
     together: StoppedTogether | null,
     scheduledAt: number,
+    hearth: string | null,
     signal?: AbortSignal
   ) {
     const whole =
@@ -1121,6 +1149,7 @@ export class ScheduleManager {
         backupId,
         catalog: {
           batchId,
+          schedule: { actionId: action.id, id: schedule.id },
           name: resolveScheduleBackupName(action.name, {
             backupId,
             instanceId: of,
@@ -1139,9 +1168,7 @@ export class ScheduleManager {
         ...batch,
         destination: scheduledBackupDestination(
           execution.destination!,
-          backupId,
-          scheduleDeterministicUuid("artifact", backupId),
-          "tar_archive"
+          scheduleDeterministicUuid("artifact", backupId)
         ),
         exclude: [],
         kind: "create",
@@ -1167,7 +1194,9 @@ export class ScheduleManager {
     // a batch queues the same tasks, by the same IDs: the first makes
     // them, and the others, now or after a restart, find them there.
     const queued = await Promise.all(
-      [...volumes, ...dumps].map((input) => this.#options.enqueueBackup(input))
+      [...volumes, ...dumps].map((input) =>
+        this.#options.enqueueBackup(input, hearth)
+      )
     )
     // Each target answers for its own: one of another's that fails, as of
     // a volume that is gone, fails that target's step and not this one's.
@@ -1192,7 +1221,10 @@ export class ScheduleManager {
     const getBackup = this.#options.getBackup
     const poll = Effect.gen(function* () {
       let task: RelayBackupTask | null = initial
-      while (task.status === "queued" || task.status === "running") {
+      while (
+        (task.status === "queued" || task.status === "running") &&
+        !backupTaskAwaitsHearth(task)
+      ) {
         yield* Effect.sleep(`${scheduledBackupPollIntervalMs} millis`)
         task = yield* Effect.tryPromise({
           try: () => getBackup(initial.taskId),
@@ -1210,6 +1242,10 @@ export class ScheduleManager {
           })
         }
       }
+      // Taken, and waiting for Hearth to open where it goes: the step did
+      // what it is for, and the schedule goes on. How sending it ends shows
+      // on the backup.
+      if (backupTaskAwaitsHearth(task)) return
       if (task.status !== "succeeded") {
         return yield* new ScheduledBackupWaitError({
           message: task.error ?? `Scheduled backup ${task.status}`,
@@ -1532,8 +1568,9 @@ function backupRefusal(
   return executions.find((execution) => execution?.refusal)?.refusal ?? null
 }
 
-// Where a scheduled backup goes: its local or S3 destination, with the
-// artifact's identity and, on S3, its object key.
+// Where a scheduled backup goes, naming the copy it makes there. A
+// bucket's copy waits in the spool, offered to Hearth and asked of it as
+// it is sent: the schedule holds no key to the bucket and no path in it.
 function scheduledBackupDestination(
   deployed: NonNullable<
     Extract<
@@ -1541,22 +1578,9 @@ function scheduledBackupDestination(
       { type: "backup" }
     >["executions"][number]["destination"]
   >,
-  backupId: string,
-  artifactId: string,
-  artifactKind: Extract<BackupTaskInput, { kind: "create" }>["artifactKind"]
+  artifactId: string
 ) {
   return deployed.kind === "s3"
-    ? {
-        accessKeyId: deployed.accessKeyId,
-        allowPrivateNetwork: deployed.allowPrivateNetwork,
-        artifactId,
-        bucket: deployed.bucket,
-        endpoint: deployed.endpoint,
-        forcePathStyle: deployed.forcePathStyle,
-        kind: "s3" as const,
-        objectKey: `${deployed.objectKeyPrefix}/${backupId}/${backupArtifactFilename(backupId, artifactKind)}`,
-        region: deployed.region,
-        secretAccessKey: deployed.secretAccessKey,
-      }
+    ? { artifactId, kind: "s3" as const }
     : { ...deployed, artifactId }
 }

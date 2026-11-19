@@ -8,9 +8,7 @@ import {
   backupConsistencySchema,
   backupLocalDestinationSchema,
   backupModeSchema,
-  backupObjectKeySchema,
   backupResticDestinationSchema,
-  backupS3CredentialSchema,
 } from "./backups.js"
 
 export const scheduleActionTypeSchema = z.enum([
@@ -290,12 +288,13 @@ export const scheduleDefinitionSchema = scheduleInputSchema
 
 export type ScheduleDefinition = z.infer<typeof scheduleDefinitionSchema>
 
-export const relayScheduleS3DestinationSchema = backupS3CredentialSchema
-  .safeExtend({
-    kind: z.literal("s3"),
-    objectKeyPrefix: backupObjectKeySchema,
-  })
-  .strict()
+// A full backup to a bucket. The step names the destination, and Hearth
+// holds its keys and chooses its paths (`backupS3CopyDestinationSchema`). A
+// Relay keeps the schedules it stored, and Hearth once sent the keys and a
+// folder with one: those are read and dropped.
+export const relayScheduleS3DestinationSchema = z.object({
+  kind: z.literal("s3"),
+})
 
 // One target's scheduled backup, as Hearth admitted it when it last sent
 // the schedule: where it goes, or, when Hearth would refuse it as it would

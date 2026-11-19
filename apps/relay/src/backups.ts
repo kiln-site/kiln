@@ -38,6 +38,7 @@ import ZipStream from "zip-stream"
 
 import {
   backupArtifactFilename,
+  redactRelayBackupTask,
   type BackupArchiveCreateTaskResult,
   type BackupArchiveManifest,
   type BackupCreateTaskInput,
@@ -104,6 +105,7 @@ import { backupFailureCode } from "./backups/failure.js"
 import {
   isHearthUnreachable,
   type BackupStorageAccess,
+  type BackupTaskOffer,
 } from "./backups/storage-access.js"
 import {
   backupTaskAttributes,
@@ -238,6 +240,7 @@ export class BackupManager {
   readonly #engine: DockerEngine
   readonly #fences: TarRestoreFences
   readonly #lanes: OperationLanes
+  readonly #offer: BackupTaskOffer
   readonly #restic: ResticDriver
   readonly #state: RelayStateStore["Service"]
   readonly #storage: HearthStorageAccess
@@ -253,6 +256,7 @@ export class BackupManager {
     volumes: BackupVolumes | null
     fences: TarRestoreFences
     lanes: OperationLanes
+    offer: BackupTaskOffer
     restic: ResticDriver
     state: RelayStateStore["Service"]
     storage: HearthStorageAccess
@@ -269,6 +273,7 @@ export class BackupManager {
     this.#fences = options.fences
     this.#restic = options.restic
     this.#state = options.state
+    this.#offer = options.offer
     this.#storage = options.storage
     this.#wake = options.wake
   }
@@ -276,20 +281,57 @@ export class BackupManager {
   /**
    * Access to a bucket's copy for one task, asked of the Hearth the task
    * came from and no other.
+   *
+   * A backup the Relay started itself, as a schedule's is, is one that
+   * Hearth hasn't heard of, and Hearth opens a bucket only for a task it
+   * knows. So it is offered to that Hearth before its first upload is
+   * asked for, once for each run of the task: Hearth catalogs it against
+   * its own record of the schedule, and admits it or doesn't. An offer
+   * Hearth has already admitted is admitted again, so one whose answer was
+   * lost is simply offered again.
    */
   #accessFor(taskId: string): BackupStorageAccess {
+    const unreadable = (operation: string) => (cause: unknown) =>
+      RelayBackupError.make({
+        code: "backup_task_unreadable",
+        operation,
+        reason: "The backup task's record could not be read",
+        cause,
+      })
+    let offered = false
     return (request) =>
-      this.#state.backupTaskHearth(taskId).pipe(
-        Effect.mapError((cause) =>
-          RelayBackupError.make({
-            code: "backup_task_unreadable",
-            operation: `${request.action}.access`,
-            reason: "The backup task's record could not be read",
-            cause,
-          })
-        ),
-        Effect.flatMap((hearth) => this.#storage(request, hearth))
-      )
+      Effect.gen({ self: this }, function* () {
+        const { awaitsSchedule, hearth } = yield* this.#state
+          .backupTaskOwner(taskId)
+          .pipe(Effect.mapError(unreadable(`${request.action}.access`)))
+        if (request.action === "upload" && !offered) {
+          const task = yield* this.#state
+            .getBackupTask(taskId)
+            .pipe(Effect.mapError(unreadable("create.offer")))
+          if (task?.input.kind === "create" && task.input.reason === "scheduled") {
+            // Only the Hearth its schedule came from can say whether to
+            // keep it. One paired with the Relay besides knows nothing of
+            // the schedule, and its refusal would discard the backup. Until
+            // the schedule is sent again, saying whose it is, it waits. One
+            // whose schedule is gone from here, or that names none, has
+            // nothing to wait for, and is offered to any.
+            if (awaitsSchedule) {
+              return yield* RelayBackupError.make({
+                code: "hearth_unreachable",
+                operation: "create.offer",
+                reason:
+                  "The schedule that took this backup hasn't been sent again by its Hearth since this Relay was updated",
+              })
+            }
+            yield* this.#offer(
+              redactRelayBackupTask(task) as RelayBackupTask,
+              hearth
+            )
+          }
+          offered = true
+        }
+        return yield* this.#storage(request, hearth)
+      })
   }
 
   // What a restore asks of Hearth for an archive kept only in a bucket.
@@ -322,6 +364,8 @@ export class BackupManager {
      * Relay holds no keys to (`backupStorageAccessThrough`).
      */
     storage: HearthStorageAccess
+    /** Offers a Hearth a backup the Relay started on its own. */
+    offer: BackupTaskOffer
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -350,6 +394,7 @@ export class BackupManager {
             "cache"
           ),
         }),
+        offer: options.offer,
         state,
         storage: options.storage,
         wake,

@@ -255,10 +255,85 @@ tasks every second while one is under way, and every thirty while the only
 ones unfinished are waiting; a Relay asking to send one is read at once
 (`followRelayBackups`), whatever Hearth answers.
 
-Two kinds of backup still carry the destination's static keys. A scheduled
-backup is started by the Relay, which signs its upload itself. An
-incremental restic repository cannot be driven with single signed requests,
-so the keys are inside the durable task input (see
+A schedule's run counts its backup step done once the backup is taken
+(`backupTaskAwaitsHearth`): its next steps and its next run don't wait for
+Hearth. If sending it fails later, the backup shows that, and the run
+isn't corrected.
+
+### A schedule's backups in a bucket
+
+A scheduled backup is started by the Relay, so Hearth hasn't heard of it
+when its archive is taken. Its schedule carries nothing of the bucket: the
+step says only that the backup goes to one. Before the Relay asks for the
+copy's upload it offers Hearth the backup (`backup.task.offer`, the task as
+the Relay has it), and Hearth catalogs it if it hasn't, and says whether it
+will keep it there (`admitOfferedBackupEffect`). With Hearth away the
+backup waits to be offered as it waits to be sent
+([Waiting for Hearth](#waiting-for-hearth)), so a schedule's backups are
+taken on time whether or not Hearth can be reached. The Relay chose the
+backup's IDs and says which destination and which schedule step it is for,
+so each is checked against Hearth's own records (`scheduledCopyRefusal`):
+
+- a schedule Hearth has, not removed;
+- one of the backups Hearth last told that Relay to take for it: the same
+  step, kind of backup, target and destination. Hearth keeps that list on
+  the schedule's deployment to the Relay each time it sends the schedule
+  (`backup_executions`): every backup of a step it admitted there, as a
+  manual backup would be, an App's as each volume it uses. One Hearth
+  refused, as with backups turned off for its target, isn't on it. Only
+  the newest send of the newest revision keeps its list, and one that
+  doesn't isn't sent. A deployment Hearth has kept no list for yet, as
+  just after an update, decides nothing: the backup is neither cataloged
+  nor refused until the schedule has been sent again;
+- a destination that is enabled, not being deleted, and the schedule
+  owner's to use;
+- IDs that are no other backup's, copy's or task's: an offer that reuses
+  one catalogs nothing.
+
+An offer is the Relay's word. It can put a new backup in Hearth's records,
+and changes nothing of one already there, which reading the Relay's tasks
+does. What a Relay says of where a copy is, or that it is already in the
+bucket, is never taken. Hearth decides once: a backup it admitted is sent
+even if its schedule changes before it is.
+
+A scheduled backup is offered to the Hearth that sent its schedule, as
+that stood when the run began, even when the schedule is replaced before
+the backup is taken, and to no other: a Relay can be paired with several,
+and one that knows nothing of the schedule would refuse the backup. Each
+Hearth reads all of a Relay's tasks, so one catalogs nothing for a bucket
+backup of a schedule it never had. A schedule stored before the Relay kept
+which Hearth sent it is sent again by that Hearth as it updates (Hearth
+migration 93), and a backup it takes before then waits
+(`backupTaskOwner`). A Hearth that pairs again under a new key revokes
+the old one, and the Relay hands that key's schedules and waiting backups
+to the new one.
+
+Hearth chooses the path, holding the destination as it does (so its
+bucket or folder can't be changed in between), and signs an upload only
+at the path it files that backup at under the destination's folder. Only
+a backup for a bucket is offered; one for the Relay's own disk is
+cataloged as Hearth reads the Relay's tasks, and whether a backup is for a
+bucket is by the destination it names, not by what the Relay says. A backup it won't keep is
+cataloged as failed, with why, naming no destination, so its record never
+stands in the way of deleting one; it stays failed whatever the Relay
+reports of it later. One consequence: a schedule removed, pointed at
+another destination, or taken off that Relay or target, while its backup
+was being taken or was waiting for Hearth, no longer vouches for that
+backup, which fails.
+
+Kiln isn't built to run mixed versions, and a scheduled backup to a bucket
+that is under way as Kiln updates is not carried across: Hearth's
+migration records it as failed, and signs nothing for it (one being
+deleted stays so, for its delete to go on). One a Relay
+still holding the keys finishes after Hearth has updated doesn't say
+which schedule took it, so it is cataloged as failed though its file is
+in the bucket. The schedule's next run is admitted as usual.
+Schedules and waiting backups stored on a Relay lose the keys they
+carried as it updates.
+
+Only an incremental restic repository still carries the destination's
+static keys: it cannot be driven with single signed requests, so the keys
+are inside the durable task input (see
 [Incremental snapshots](#incremental-snapshots)). A full archive is
 staged locally, its size and digest validated, then uploaded in a single
 request, so it has a 5 GiB ceiling; the single queue plus a free-space

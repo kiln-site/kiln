@@ -4,22 +4,33 @@ import { Effect, Result } from "effect"
 import { logException } from "@workspace/telemetry"
 
 import type {
+  BackupArtifactKind,
+  BackupTargetKind,
   BackupStorageAccessRequest,
   BackupStorageAccessResponse,
+  RelayBackupTask,
 } from "@workspace/contracts"
 
 import {
+  backupObjectKey,
   loadBackupStorageCredentialEffect,
   signS3BackupAccess,
 } from "@/backups/destinations/s3"
+import { admitOfferedBackupEffect } from "@/effect/backups"
 import { Database } from "@/effect/database"
+import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { databaseTable } from "@/lib/database-config"
 
 type CopyRow = RowDataPacket & {
+  artifact_kind: BackupArtifactKind
   artifact_status: string
   backup_status: string
+  backup_id: string
+  target_id: string
+  target_kind: BackupTargetKind
   object_key: string | null
   open_restores: number | string
   storage_id: string | null
@@ -39,7 +50,8 @@ function refused(reason: string): BackupStorageAccessResponse {
  * wants it, which Hearth decided when it sent the task:
  *
  * - the copy is of a backup on the Relay that asks;
- * - it is written only while it has yet to be stored;
+ * - it is written only while it has yet to be stored, and only at a path
+ *   Hearth chose for it;
  * - it is read only once stored, and while a restore of its backup is
  *   under way, so a Relay can't read back backups it no longer holds
  *   whenever it likes;
@@ -58,7 +70,9 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   const [copy] = yield* database.queryRows<CopyRow>(
     "backup_storage_access",
     `SELECT artifact.status AS artifact_status, artifact.storage_id,
-            artifact.object_key, backup.status AS backup_status,
+            artifact.object_key, backup.id AS backup_id, backup.artifact_kind,
+            backup.target_kind, backup.target_id,
+            backup.status AS backup_status,
             (SELECT COUNT(*)
                FROM ${databaseTable("backup_task")} restore
               WHERE restore.backup_id = backup.id
@@ -81,6 +95,28 @@ export const grantBackupStorageAccessEffect = Effect.fn(
       copy.artifact_status !== "running"
     ) {
       return refused(`the copy is ${copy.artifact_status}`)
+    }
+    // Hearth chooses where a copy goes: under the destination's folder,
+    // a path made of the installation, the Relay, what is backed up and
+    // the backup itself. A copy cataloged while Relays held the keys may
+    // carry a path its Relay named, and Hearth signs no write to one. The
+    // folder isn't checked, so a destination's can change under a backup
+    // that is waiting to be sent.
+    const own = backupObjectKey({
+      artifactKind: copy.artifact_kind,
+      backupId: copy.backup_id,
+      installationId: kilnInstallationId(),
+      objectPrefix: "",
+      relayId,
+      // Kiln's own are filed under the installation.
+      targetId:
+        copy.target_kind === "platform"
+          ? kilnInstallationId()
+          : copy.target_id,
+      targetKind: copy.target_kind,
+    })
+    if (copy.object_key !== own && !copy.object_key.endsWith(`/${own}`)) {
+      return refused("the copy's path isn't one Hearth chose for it")
     }
   } else if (request.action === "download") {
     if (copy.artifact_status !== "available") {
@@ -123,6 +159,24 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   }
   return yield* signS3BackupAccess(storage, copy.object_key, request.action)
 })
+
+/**
+ * Answers a Relay offering a backup it started on its own, as a schedule's
+ * are (`backup.task.offer`). `admitOfferedBackupEffect` decides.
+ */
+export async function answerBackupTaskOffer(
+  relayId: string,
+  task: RelayBackupTask
+): Promise<{ status: "admitted" } | { reason: string; status: "refused" }> {
+  const { cataloged, ...answer } = await runAppEffect(
+    "Backups.offer",
+    admitOfferedBackupEffect(task, relayId)
+  )
+  if (cataloged) publishBackupChange(relayId, task.backupId)
+  // Under way on that Relay, which nothing else has Hearth reading.
+  if (answer.status === "admitted") followSoon(relayId)
+  return answer
+}
 
 /**
  * Answers `backup.storage.access` for the Relay a control connection is.

@@ -207,8 +207,9 @@ Browser console input is admitted the same way when its frame arrives.
 
 A few requests go the other way, from the Relay to Hearth, on the same
 connection: a terminal's output (`hearth.terminal.output`), an SFTP sign-in
-to check (`sftp.authorization.resolve`), and access to a backup's copy in a
-bucket (`backup.storage.access`). They change nothing on the Relay, so they
+to check (`sftp.authorization.resolve`), and two about backups in a
+bucket: an offer of one the Relay started (`backup.task.offer`), and access
+to a copy (`backup.storage.access`). They change nothing on the Relay, so they
 take no lane and no lock (`controlRequestLocks` answers `null`), and Hearth
 may not send them. Hearth knows which Relay asks from the connection, never
 from what the request says, and each handler checks for itself what that

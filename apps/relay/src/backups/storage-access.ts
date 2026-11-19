@@ -2,8 +2,10 @@ import { Effect } from "effect"
 
 import {
   backupStorageAccessResponseSchema,
+  backupTaskOfferResponseSchema,
   type BackupStorageAccessGrant,
   type BackupStorageAccessRequest,
+  type RelayBackupTask,
 } from "@workspace/contracts"
 
 import { RelayBackupError } from "../effect/errors.js"
@@ -46,9 +48,7 @@ export function backupStorageAccessThrough(
     })
     const answers = yield* Effect.tryPromise({
       try: () =>
-        ask(request, STORAGE_ACCESS_TIMEOUT_MS, (client) =>
-          hearth === null ? client.role === "full_access" : client.id === hearth
-        ),
+        ask(request, STORAGE_ACCESS_TIMEOUT_MS, answersFor(hearth)),
       catch: (cause) => hearthUnreachable(request, cause),
     })
     let refusal: string | null = null
@@ -66,6 +66,13 @@ export function backupStorageAccessThrough(
     })
   })
 }
+
+// The clients that answer for a task: the Hearth it came from, or, for one
+// stored before that was kept, any Hearth with full access to the Relay.
+const answersFor =
+  (hearth: string | null) =>
+  (client: { readonly id: string; readonly role: string }) =>
+    hearth === null ? client.role === "full_access" : client.id === hearth
 
 /**
  * Whether a failure is only that Hearth couldn't be asked: nothing was
@@ -87,3 +94,53 @@ function hearthUnreachable(
     ...(cause === undefined ? {} : { cause }),
   })
 }
+
+/**
+ * Offers the Hearth a schedule came from a backup the Relay took for it,
+ * as the Relay has the task. Hearth catalogs it and says whether it will
+ * open the bucket for it (`admitted`) or won't, and why. No answer is
+ * Hearth being away: it is offered again.
+ */
+export function backupTaskOfferThrough(
+  offer: (
+    payload: RelayBackupTask,
+    timeoutMs: number,
+    only: (client: { readonly id: string; readonly role: string }) => boolean
+  ) => Promise<ReadonlyArray<{ readonly payload: unknown }>>
+) {
+  return Effect.fn("Backups.offer")(function* (
+    task: RelayBackupTask,
+    hearth: string | null
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      "backup.id": task.backupId,
+      "backup.task.id": task.taskId,
+    })
+    const unreachable = (cause?: unknown) =>
+      RelayBackupError.make({
+        code: "hearth_unreachable",
+        operation: "create.offer",
+        reason: "Hearth couldn't be reached to offer it the backup",
+        ...(cause === undefined ? {} : { cause }),
+      })
+    const answers = yield* Effect.tryPromise({
+      try: () => offer(task, STORAGE_ACCESS_TIMEOUT_MS, answersFor(hearth)),
+      catch: unreachable,
+    })
+    let refusal: string | null = null
+    for (const answer of answers) {
+      const parsed = backupTaskOfferResponseSchema.safeParse(answer.payload)
+      if (!parsed.success) continue
+      if (parsed.data.status === "admitted") return
+      refusal ??= parsed.data.reason
+    }
+    if (refusal === null) return yield* unreachable()
+    return yield* RelayBackupError.make({
+      code: "backup_offer_refused",
+      operation: "create.offer",
+      reason: `Hearth won't store the backup: ${refusal}`,
+    })
+  })
+}
+
+export type BackupTaskOffer = ReturnType<typeof backupTaskOfferThrough>

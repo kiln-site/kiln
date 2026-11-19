@@ -255,6 +255,60 @@ describeMysql("Scheduled backups, checked before they run", () => {
           assert.isNull(sent[capped]?.refusal ?? null)
           assert.deepStrictEqual(sent[capped]?.destination, { kind: "local" })
           assert.strictEqual(sent[capped]?.maxBytes, 2_048)
+          // What it told the Relay to take is what it admits of what the
+          // Relay then offers: the one it didn't refuse.
+          const [deployment] = yield* selectRows<{
+            backup_executions: unknown
+          }>("schedule_deployment")
+          const told =
+            typeof deployment?.backup_executions === "string"
+              ? (JSON.parse(deployment.backup_executions) as unknown)
+              : deployment?.backup_executions
+          assert.deepStrictEqual(
+            (told as Array<{ targetId: string }>).map(
+              ({ targetId }) => targetId
+            ),
+            [capped]
+          )
+        })
+    )
+
+    // A send can be put together from a schedule read before it was
+    // changed, and arrive after the change was sent. Its list would bring
+    // back leave the change took away.
+    it.effect(
+      "keeps what the newest revision told the Relay when an older send comes late",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const older = backupSchedule({ kind: "local" }, [capped])
+          yield* deploy(older)
+          const [persisted] = yield* Effect.promise(listPersistedRelays)
+          const newer = { ...older, revision: 2, targets: [target(turnedOff)] }
+          yield* Effect.promise(async () => {
+            await upsertDeployment(newer.id, relayId, 2, "pending")
+            await deployScheduleToRelay(newer, newer.targets, persisted)
+          })
+          const sends = relay.applied.length
+
+          yield* Effect.promise(() =>
+            deployScheduleToRelay(older, older.targets, persisted)
+          )
+
+          const [deployment] = yield* selectRows<{
+            backup_executions: unknown
+          }>("schedule_deployment")
+          const told =
+            typeof deployment?.backup_executions === "string"
+              ? (JSON.parse(deployment.backup_executions) as unknown)
+              : deployment?.backup_executions
+          assert.deepStrictEqual(
+            (told as Array<{ targetId: string }>).map(
+              ({ targetId }) => targetId
+            ),
+            [turnedOff]
+          )
+          assert.strictEqual(relay.applied.length, sends)
         })
     )
 
@@ -293,6 +347,13 @@ describeMysql("Scheduled backups, checked before they run", () => {
             backupSchedule({ kind: "storage", storageId }, [capped])
           )
           const before = executions()[capped]
+          // The schedule names the bucket's kind and nothing in it: Hearth
+          // keeps its keys and its paths.
+          assert.deepStrictEqual(before?.destination, { kind: "s3" })
+          assert.notMatch(
+            JSON.stringify(relay.applied.at(-1)),
+            /access-key|secret-key/u
+          )
 
           const failed = yield* Effect.flip(
             deleteBackupStorageEffect(storageId)

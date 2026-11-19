@@ -750,12 +750,18 @@ export class RelayStateStore extends Context.Service<
       hearth?: string | null
     ) => Effect.Effect<RelayBackupTask, RelayStateError>
     /**
-     * The Hearth client a task came from, or null for one stored before
-     * that was kept.
+     * Whose a task is: the Hearth client it came from, or null for one
+     * stored before that was kept, which any Hearth with full access to
+     * the Relay answers for. A schedule's backup taken before its schedule
+     * kept which Hearth sent it becomes that Hearth's once the schedule is
+     * sent again; until then it `awaitsSchedule`, and is nobody's to
+     * answer for. Read in one step, so a schedule sent in between can't
+     * leave it both unowned and not waiting.
      */
-    readonly backupTaskHearth: (
-      taskId: string
-    ) => Effect.Effect<string | null, RelayStateError>
+    readonly backupTaskOwner: (taskId: string) => Effect.Effect<
+      { readonly awaitsSchedule: boolean; readonly hearth: string | null },
+      RelayStateError
+    >
     readonly claimNextBackupTask: (
       now: number
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
@@ -1071,8 +1077,8 @@ export class RelayStateStore extends Context.Service<
       input: PairRelayClientInput
     ) => Effect.Effect<void, RelayStateError>
     /**
-     * Revokes a Hearth client. The backups it has still to be answered for
-     * become `successor`'s: the client that revoked it, as a Hearth does
+     * Revokes a Hearth client. Its schedules, and the backups it has still
+     * to be answered for, become `successor`'s: the client that revoked it, as a Hearth does
      * the key it replaces, or nobody's in particular (null), which any
      * Hearth with full access answers for. Left with the revoked client
      * they would wait for good on one that can never answer.
@@ -2171,7 +2177,103 @@ const migrations = SqliteMigrator.fromRecord({
       yield* sql`ALTER TABLE relay_backup_tasks ADD COLUMN resume_at INTEGER`
     }
   }),
+  // A schedule's full backups to a bucket no longer come with the bucket's
+  // keys: Hearth keeps them, and the Relay offers each backup it takes and
+  // asks for its upload. So a schedule says which Hearth sent it, the one
+  // its backups are offered to, and the keys a stored schedule or a waiting
+  // backup carried are dropped.
+  "53_scheduled_backup_offers": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const has = (table: string, column: string) =>
+      Effect.map(
+        sql<{ name: string }>`SELECT name FROM pragma_table_info(${table})`,
+        (columns) => columns.some(({ name }) => name === column)
+      )
+    if (!(yield* has("relay_schedules", "client_id"))) {
+      yield* sql`ALTER TABLE relay_schedules ADD COLUMN client_id TEXT`
+    }
+    const schedules = yield* sql<{ id: string; json: string }>`
+      SELECT schedule_id AS id, definition_json AS json FROM relay_schedules
+    `
+    for (const row of schedules) {
+      const kept = withoutScheduleBucketKeys(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_schedules SET definition_json = ${kept}
+        WHERE schedule_id = ${row.id}
+      `
+    }
+    const waiting = yield* sql<{ id: string; json: string }>`
+      SELECT task_id AS id, input_json AS json FROM relay_backup_tasks
+      WHERE status IN ('queued', 'running') AND kind = 'create'
+    `
+    for (const row of waiting) {
+      const kept = withoutBucketKeys(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks SET input_json = ${kept}
+        WHERE task_id = ${row.id}
+      `
+    }
+  }),
 })
+
+// A stored schedule without what it held of the buckets its full backups go
+// to, or null for one that held nothing of them.
+function withoutScheduleBucketKeys(definitionJson: string): string | null {
+  const definition = Result.getOrNull(
+    Result.try(() => JSON.parse(definitionJson) as unknown)
+  )
+  if (!Predicate.isObject(definition) || !Array.isArray(definition.actions)) {
+    return null
+  }
+  let changed = false
+  for (const action of definition.actions as ReadonlyArray<unknown>) {
+    if (!Predicate.isObject(action) || !Array.isArray(action.executions)) {
+      continue
+    }
+    for (const execution of action.executions as ReadonlyArray<unknown>) {
+      if (!Predicate.isObject(execution)) continue
+      const destination = execution.destination
+      if (
+        !Predicate.isObject(destination) ||
+        destination.kind !== "s3" ||
+        Object.keys(destination).length === 1
+      ) {
+        continue
+      }
+      execution.destination = { kind: "s3" }
+      changed = true
+    }
+  }
+  return changed ? JSON.stringify(definition) : null
+}
+
+// A waiting create's input without the keys of the bucket its archive goes
+// to, or null for one that held none. A restic repository is left as it
+// is: the Relay still holds its keys.
+function withoutBucketKeys(inputJson: string): string | null {
+  const input = Result.getOrNull(
+    Result.try(() => JSON.parse(inputJson) as unknown)
+  )
+  if (!Predicate.isObject(input)) return null
+  let changed = false
+  const named = (copy: unknown) => {
+    if (!Predicate.isObject(copy) || copy.kind !== "s3" || !("bucket" in copy)) {
+      return copy
+    }
+    changed = true
+    return {
+      ...(copy.artifactId === undefined ? {} : { artifactId: copy.artifactId }),
+      kind: "s3",
+    }
+  }
+  if ("destination" in input) input.destination = named(input.destination)
+  if (Array.isArray(input.replicas)) {
+    input.replicas = (input.replicas as ReadonlyArray<unknown>).map(named)
+  }
+  return changed ? JSON.stringify(input) : null
+}
 
 // A stored create's or delete's input without the signed requests it held
 // for a bucket's copies, or null for one that held none.
@@ -3413,15 +3515,46 @@ const makeRelayStateStore = Effect.gen(function* () {
           )
         `.pipe(Effect.asVoid)
       ),
-    backupTaskHearth: (taskId) =>
+    backupTaskOwner: (taskId) =>
       run(
-        "backup_task_hearth",
-        sql<{ hearth: string | null }>`
-          SELECT client_id AS hearth
-          FROM relay_backup_tasks
-          WHERE task_id = ${taskId}
-          LIMIT 1
-        `.pipe(Effect.map((rows) => rows[0]?.hearth ?? null))
+        "backup_task_owner",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              UPDATE relay_backup_tasks
+              SET client_id = (
+                SELECT schedule.client_id
+                FROM relay_schedules AS schedule
+                WHERE schedule.schedule_id = json_extract(
+                  relay_backup_tasks.input_json, '$.catalog.schedule.id'
+                )
+              )
+              WHERE task_id = ${taskId} AND client_id IS NULL
+                AND json_extract(input_json, '$.reason') = 'scheduled'
+            `
+            const [owner] = yield* sql<{
+              awaitsSchedule: number
+              hearth: string | null
+            }>`
+              SELECT task.client_id AS hearth,
+                EXISTS (
+                  SELECT 1 FROM relay_schedules AS schedule
+                  WHERE schedule.schedule_id = json_extract(
+                      task.input_json, '$.catalog.schedule.id'
+                    )
+                    AND schedule.client_id IS NULL
+                ) AS awaitsSchedule
+              FROM relay_backup_tasks AS task
+              WHERE task.task_id = ${taskId}
+              LIMIT 1
+            `
+            const hearth = owner?.hearth ?? null
+            return {
+              awaitsSchedule: hearth === null && owner?.awaitsSchedule === 1,
+              hearth,
+            }
+          })
+        )
       ),
     enqueueBackupTask: (input, now, hearth = null) =>
       run(
@@ -4951,6 +5084,14 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET client_id = ${successor}
               WHERE client_id = ${clientId}
                 AND status IN ('queued', 'running')
+            `
+            // And its schedules, whose backups are offered to whoever
+            // sent them. With no successor they are nobody's until a
+            // Hearth sends them again.
+            yield* sql`
+              UPDATE relay_schedules
+              SET client_id = ${successor}
+              WHERE client_id = ${clientId}
             `
             return true
           })

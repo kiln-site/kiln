@@ -28,13 +28,17 @@ import {
   brickRecipeSchema,
   brickRecipeV1Schema,
 } from "@workspace/contracts"
+import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 
 import {
   recoverInterruptedRestores,
   restorePortableInstanceBackup,
 } from "./backup-restore.js"
 import { BackupManager } from "./backups.js"
-import { backupStorageAccessThrough } from "./backups/storage-access.js"
+import {
+  backupStorageAccessThrough,
+  backupTaskOfferThrough,
+} from "./backups/storage-access.js"
 import { backupArchivePath } from "./backups/destinations/index.js"
 import { BrickCatalog, brickSnapshotDirectory } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -102,12 +106,37 @@ describe("Relay backups in a bucket it holds no keys to", () => {
     status: "granted" as const,
     url: `https://kiln-backups.s3.example.com/team/backup.zip?X-Amz-Signature=${method}`,
   })
-  // The Hearth these tasks came from, and what it answers each request.
-  const hearth = (answer: (action: string, artifactId: string) => unknown) => {
+  // The Hearth these tasks came from: what it answers each request for a
+  // copy, and each offer of a backup the Relay started itself.
+  const hearth = (
+    answer: (action: string, artifactId: string) => unknown,
+    admits: () => unknown = () => ({ status: "admitted" })
+  ) => {
     const asked: Array<unknown> = []
+    const offered: Array<string> = []
+    // Offers that reached another Hearth paired with the Relay, which
+    // knows nothing of these backups and refuses them.
+    const strayed: Array<string> = []
     return {
       asked,
+      offered,
+      strayed,
       options: {
+        offer: backupTaskOfferThrough(async (task, _timeout, only) => {
+          const answers: Array<{ payload: unknown }> = []
+          if (only({ id: "hearth-other", role: "full_access" })) {
+            strayed.push(task.taskId)
+            answers.push({
+              payload: { reason: "no such schedule", status: "refused" },
+            })
+          }
+          if (only({ id: hearthId, role: "full_access" })) {
+            const answered = admits()
+            if (answered !== null) offered.push(task.taskId)
+            answers.push({ payload: answered })
+          }
+          return answers
+        }),
         storage: backupStorageAccessThrough(async (request, _timeout, only) => {
           if (!only({ id: hearthId, role: "full_access" })) return []
           asked.push(request)
@@ -238,7 +267,10 @@ describe("Relay backups in a bucket it holds no keys to", () => {
   const comesAndGoes = () => {
     const state = { away: true }
     return {
-      ...hearth(() => (state.away ? null : signed("PUT"))),
+      ...hearth(
+        () => (state.away ? null : signed("PUT")),
+        () => (state.away ? null : { status: "admitted" })
+      ),
       state,
     }
   }
@@ -472,6 +504,167 @@ describe("Relay backups in a bucket it holds no keys to", () => {
           )
           // Still the Relay's own copy.
           assert.isTrue(existsSync(archiveOf(config, 43)))
+        })
+      )
+  )
+
+  // The Relay starts a schedule's backup itself, so Hearth hasn't heard of
+  // it, and opens a bucket only for a task it knows.
+  it.effect.each([
+    { admits: { status: "admitted" }, case: "admits it", sent: ["PUT"] },
+    {
+      admits: { reason: "its schedule is gone", status: "refused" },
+      case: "refuses it",
+      sent: [],
+    },
+  ])(
+    "offers Hearth a backup a schedule took before asking for its upload, and sends it only if Hearth $case",
+    ({ admits, sent }) =>
+      withRelay("kiln-backup-offer-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          bucket.asked.length = 0
+          const { asked, offered, options } = hearth(
+            () => signed("PUT"),
+            () => admits
+          )
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const create = { ...toBucket(46), reason: "scheduled" as const }
+
+          const task = yield* runTask(manager, create, hearthId)
+
+          assert.deepStrictEqual(offered, [create.taskId])
+          assert.lengthOf(asked, sent.length)
+          assert.deepStrictEqual(
+            bucket.asked.map(({ method }) => method),
+            sent
+          )
+          assert.strictEqual(
+            task.status,
+            sent.length > 0 ? "succeeded" : "failed",
+            task.error ?? ""
+          )
+          if (sent.length === 0) {
+            assert.include(task.error ?? "", "its schedule is gone")
+            assert.isFalse(existsSync(archiveOf(config, 46)))
+          }
+        })
+      )
+  )
+
+  // A schedule runs on the Relay's own clock, Hearth there or not.
+  it.effect(
+    "takes a schedule's backup with Hearth away, and offers and sends it once Hearth is back",
+    () =>
+      withRelay("kiln-backup-offer-waits-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          bucket.asked.length = 0
+          const { offered, options, state } = comesAndGoes()
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const create = { ...toBucket(47), reason: "scheduled" as const }
+
+          const waiting = yield* runTask(manager, create, hearthId)
+          assert.strictEqual(waiting.status, "queued")
+          assert.strictEqual(waiting.phase, "uploading")
+          assert.deepStrictEqual(offered, [])
+          const taken = sha256(
+            yield* Effect.promise(() => readFile(archiveOf(config, 47)))
+          )
+
+          state.away = false
+          yield* manager.hearthConnected(hearthId)
+          yield* manager.runPending()
+
+          const sent = (yield* manager.get(create.taskId))!
+          assert.strictEqual(sent.status, "succeeded", sent.error ?? "")
+          assert.deepStrictEqual(offered, [create.taskId])
+          assert.strictEqual(sha256(bucket.object), taken)
+        })
+      )
+  )
+
+  // A schedule stored before the Relay kept which Hearth sent it says
+  // nothing of whose its backups are. Another Hearth paired with the Relay
+  // knows nothing of the schedule, and would refuse and so discard them.
+  it.effect(
+    "keeps a schedule's backup until its schedule says which Hearth it is for, then offers it there",
+    () =>
+      withRelay("kiln-backup-offer-unbound-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          bucket.asked.length = 0
+          const { offered, options, strayed } = hearth(() => signed("PUT"))
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const scheduleId = "14bb1e12-fab9-45f3-8f85-ae22d2f074e5"
+          const stepId = "0d6f6f0a-6a59-4f0e-9d53-0f7a3f1f8a11"
+          const create = {
+            ...toBucket(49),
+            catalog: {
+              name: "Nightly",
+              schedule: { actionId: stepId, id: scheduleId },
+              storageId: "d".repeat(12),
+            },
+            reason: "scheduled" as const,
+          }
+
+          const journal = yield* RelayStateStore
+          const schedule = (revision: number) =>
+            relayScheduleProjectionSchema.parse({
+              actions: [
+                { duration: 1, id: stepId, type: "wait", unit: "minutes" },
+              ],
+              cron: "daily",
+              enabled: false,
+              id: scheduleId,
+              name: "Nightly",
+              revision,
+              targets: [
+                {
+                  id: "instance-1",
+                  kind: "instance",
+                  name: "One",
+                  relayId: "relay-a",
+                },
+              ],
+            })
+          yield* journal.schedules.apply(schedule(1), null)
+
+          const waiting = yield* runTask(manager, create, null)
+          assert.strictEqual(waiting.status, "queued")
+          assert.strictEqual(waiting.phase, "uploading")
+          assert.deepStrictEqual(offered, [])
+
+          // Its Hearth sends the schedule again.
+          yield* journal.schedules.apply(schedule(2), null, hearthId)
+          yield* manager.hearthConnected(hearthId)
+          yield* manager.runPending()
+
+          const sent = (yield* manager.get(create.taskId))!
+          assert.strictEqual(sent.status, "succeeded", sent.error ?? "")
+          assert.deepStrictEqual(offered, [create.taskId])
+          assert.deepStrictEqual(strayed, [])
         })
       )
   )
@@ -857,7 +1050,7 @@ function backupManager(
   lanes = new OperationLanes(),
   hearth: Pick<
     Parameters<typeof BackupManager.make>[0],
-    "storage"
+    "offer" | "storage"
   > = noHearth
 ) {
   return BackupManager.make({

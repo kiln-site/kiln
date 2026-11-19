@@ -1019,6 +1019,17 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   const catalog = input.catalog
   const artifactId = input.destination.artifactId
   if (!catalog || !artifactId) return
+  // A Relay can be paired with several Hearths, and each reads all its
+  // tasks. A backup for a bucket, taken by a schedule this Hearth never
+  // had, is another Hearth's: not this one's to catalog, as failed or at
+  // all. One of a schedule it deleted is still its own to refuse.
+  if (catalog.storageId !== null && catalog.schedule) {
+    const known = yield* transaction.queryRows<RowDataPacket>(
+      `SELECT 1 FROM ${databaseTable("schedule")} WHERE id = ? LIMIT 1`,
+      [catalog.schedule.id]
+    )
+    if (known.length === 0) return
+  }
   // An incremental one names the repository Hearth sent with its schedule;
   // one from before that is found by its target and destination. Without
   // its repository's password a snapshot can't be restored, so one whose
@@ -1052,16 +1063,82 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       : []
   const repositoryId = repositoryRows[0]?.id ?? null
   const orphaned = input.mode === "incremental" && !repositoryId
-  // A schedule's copy in a bucket is sent with the bucket's keys and a
-  // path, which the Relay reports back.
+  // A copy for a bucket. The Relay names the destination and the schedule
+  // step it took the backup for; Hearth decides against its own record of
+  // that schedule whether the bucket is one for this backup, and chooses
+  // where in it the copy goes. The Relay never names a path.
+  // Held from here until the copy is cataloged, as a manual backup's
+  // reservation holds it: a destination's bucket or folder can be changed
+  // only while nothing is filed there, and a change in between would have
+  // Hearth sign the path chosen here against the bucket it became.
+  const storage = catalog.storageId
+    ? (yield* lockBackupStorageRows(transaction, [catalog.storageId])).get(
+        catalog.storageId
+      )
+    : undefined
+  // Whether it goes to a bucket is by the destination it names, which is
+  // where Hearth files it, not by what kind the Relay says its
+  // destination is: a backup filed in a bucket is one Hearth checked the
+  // schedule for.
+  const toBucket = catalog.storageId !== null && input.mode === "full"
+  const keyUnder = (objectPrefix: string) =>
+    backupObjectKey({
+      artifactKind: input.artifactKind,
+      backupId: input.backupId,
+      installationId: kilnInstallationId(),
+      objectPrefix,
+      relayId,
+      // Kiln's own are filed under the installation.
+      targetId:
+        input.target.kind === "platform"
+          ? kilnInstallationId()
+          : input.target.id,
+      targetKind: input.target.kind,
+    })
+  // Hearth chooses the path. Nothing a Relay says of where a copy is, or
+  // that it is already there, is taken: that would be a bucket and a
+  // folder no schedule had been checked for.
+  const refusal = !toBucket
+    ? null
+    : !storage
+      ? "Its backup destination was gone, so it had nowhere to go"
+      : yield* scheduledCopyRefusal(transaction, relayId, input, storage)
+  // Hearth has yet to tell that Relay what the schedule backs up, as just
+  // after an update: nothing is decided, and nothing recorded, until it
+  // has. A failure recorded now would be the answer when the backup is
+  // offered.
+  if (refusal === NOT_YET_TOLD) return "pending" as const
   const objectKey =
-    input.destination.kind === "s3" && "objectKey" in input.destination
-      ? input.destination.objectKey
+    toBucket && storage && refusal === null
+      ? keyUnder(storage.object_prefix)
       : null
+  // A record can't name a destination that no longer exists. Nor does one
+  // Hearth refused: nothing of it is in that bucket, and a row that named
+  // the destination would stand in the way of deleting it, for a backup
+  // that only a Relay's word put there. `destination_key` still says
+  // which it was for.
+  const storageId = storage && refusal === null ? catalog.storageId : null
+  const failed = orphaned || refusal !== null
 
+  // Cataloged whole or not at all. The Relay chose these IDs, and one that
+  // is already another backup's, copy's or task's would otherwise tie what
+  // this Relay asks for to a backup Hearth made for something else.
+  // When the Relay says it made the task, but never later than now: the
+  // time Hearth keeps is one nothing reported afterwards moves.
+  const createdAt = Math.min(task.createdAt, now)
+  const taken = yield* transaction.queryRows<RowDataPacket>(
+    `SELECT 1 FROM ${databaseTable("backup")} WHERE id = ?
+      UNION ALL
+     SELECT 1 FROM ${databaseTable("backup_artifact")} WHERE id = ?
+      UNION ALL
+     SELECT 1 FROM ${databaseTable("backup_task")} WHERE id = ?
+      LIMIT 1`,
+    [input.backupId, artifactId, input.taskId]
+  )
+  if (taken.length > 0) return
   // An App's scheduled backups are cataloged as one batch, live or stopped,
   // as its manual ones are.
-  yield* transaction.execute(
+  const cataloged = yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup")}
       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
        backup_mode, reason, status, name, object_key, repository_id,
@@ -1073,10 +1150,10 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       relayId,
       input.target.kind,
       input.target.id,
-      catalog.storageId,
+      storageId,
       input.artifactKind,
       input.mode,
-      orphaned ? "failed" : "queued",
+      failed ? "failed" : "queued",
       catalog.name,
       objectKey,
       repositoryId,
@@ -1086,44 +1163,141 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
         ? (input.consistency ?? "live")
         : (input.consistency ?? null),
       catalog.batchId ?? input.batch?.id ?? null,
-      task.createdAt,
+      createdAt,
       now,
     ]
   )
+  // Lost to another cataloging of the same task, which has it all.
+  if (cataloged.affectedRows === 0) return
   yield* transaction.execute(
-    `INSERT IGNORE INTO ${databaseTable("backup_artifact")}
+    `INSERT INTO ${databaseTable("backup_artifact")}
       (id, backup_id, destination_key, storage_id, status, object_key,
        created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       artifactId,
       input.backupId,
+      // Which destination it was for stays, even one that's gone.
       input.mode === "incremental" ? "restic" : (catalog.storageId ?? "local"),
-      catalog.storageId,
-      orphaned ? "failed" : "queued",
+      storageId,
+      failed ? "failed" : "queued",
       objectKey,
-      task.createdAt,
+      createdAt,
       now,
     ]
   )
   yield* transaction.execute(
-    `INSERT IGNORE INTO ${databaseTable("backup_task")}
+    `INSERT INTO ${databaseTable("backup_task")}
       (id, backup_id, task_kind, status, reserved_bytes, requested_by,
        error, created_at, updated_at)
      VALUES (?, ?, 'create', ?, ?, NULL, ?, ?, ?)`,
     [
       input.taskId,
       input.backupId,
-      orphaned ? "failed" : "queued",
+      failed ? "failed" : "queued",
       input.maxBytes,
       orphaned
         ? "Its repository was gone when it finished, so it can't be restored"
-        : null,
-      task.createdAt,
+        : refusal,
+      createdAt,
       now,
     ]
   )
 })
+
+/**
+ * What Hearth told a Relay to back up for a schedule, each time it sent
+ * the schedule: every backup a step takes there that Hearth admitted, as a
+ * manual backup of it would be (`scheduledBackupAdmissionEffect`). Kept on
+ * the schedule's deployment to that Relay, it is what a backup the Relay
+ * offers is checked against.
+ */
+export interface ScheduledBackupExecution {
+  readonly actionId: string
+  readonly mode: "full" | "incremental"
+  /** The destination, or null for the Relay's own disk. */
+  readonly storageId: string | null
+  readonly targetId: string
+  /** As a backup names it: Kiln itself is `platform`. */
+  readonly targetKind: BackupTargetKind
+}
+
+/**
+ * Why Hearth won't keep a backup a Relay took for a schedule in the bucket
+ * the Relay names, or null when it will. The Relay starts these on its
+ * own, so what it says is checked against Hearth's own record: the
+ * schedule, not removed, and the backups Hearth last told that Relay to
+ * take for it (`ScheduledBackupExecution`). One of them must be this
+ * backup: the same step, kind of backup, target and destination, which the
+ * schedule's owner may still use. So a schedule removed, pointed
+ * elsewhere, or taken off that Relay or that target since the backup was
+ * taken no longer vouches for it, and neither does one whose backup of
+ * that target Hearth refused, as with backups turned off for it.
+ */
+const scheduledCopyRefusal = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  relayId: string,
+  input: BackupCreateTaskInput,
+  storage: {
+    deleting: boolean | number
+    enabled: boolean | number
+    owner_user_id: string | null
+  }
+) {
+  const named = input.catalog?.schedule
+  if (!named) return "It doesn't say which schedule took it"
+  const [sent] = yield* transaction.queryRows<
+    RowDataPacket & { backup_executions: unknown; created_by: string | null }
+  >(
+    `SELECT schedule.created_by, deployment.backup_executions
+       FROM ${databaseTable("schedule")} schedule
+       JOIN ${databaseTable("schedule_deployment")} deployment
+         ON deployment.schedule_id = schedule.id AND deployment.relay_id = ?
+      WHERE schedule.id = ? AND schedule.deleted_at IS NULL
+      LIMIT 1`,
+    [relayId, named.id]
+  )
+  if (!sent) return "No schedule of this Relay's takes that backup now"
+  if (sent.backup_executions === null) return NOT_YET_TOLD
+  const destination = input.catalog?.storageId ?? null
+  const told = scheduledBackupExecutions(sent.backup_executions).some(
+    (execution) =>
+      execution.actionId === named.actionId &&
+      execution.mode === input.mode &&
+      execution.storageId === destination &&
+      execution.targetKind === input.target.kind &&
+      // Kiln itself is one target on a Relay, whatever ID names it.
+      (execution.targetKind === "platform" ||
+        execution.targetId === input.target.id)
+  )
+  if (!told) return "Its schedule doesn't take that backup on this Relay now"
+  if (!storage.enabled) return "Its backup destination is disabled"
+  if (storage.deleting) return "Its backup destination is being deleted"
+  if (
+    storage.owner_user_id !== null &&
+    storage.owner_user_id !== sent.created_by
+  ) {
+    return "Its backup destination is someone else's personal one"
+  }
+  return null
+})
+
+// What `scheduledCopyRefusal` answers while Hearth has kept no list for a
+// schedule's deployment: it has yet to send the schedule since it began
+// keeping one. Neither a refusal nor leave.
+const NOT_YET_TOLD = Symbol("not yet told")
+
+// As stored: a JSON column reads back parsed from MySQL, as text from
+// MariaDB. Anything else is no list.
+function scheduledBackupExecutions(
+  stored: unknown
+): ReadonlyArray<ScheduledBackupExecution> {
+  const value =
+    typeof stored === "string"
+      ? Result.getOrNull(Result.try((): unknown => JSON.parse(stored)))
+      : stored
+  return Array.isArray(value) ? (value as Array<ScheduledBackupExecution>) : []
+}
 
 // One artifact's part in a delete the Relay reported: gone, or kept as
 // valid as it was, with why it wasn't deleted.
@@ -1166,11 +1340,106 @@ const applyDeleteOutcome = Effect.fnUntraced(function* (
   )
 })
 
+/**
+ * Answers a Relay offering a backup it took for a schedule
+ * (`backup.task.offer`): catalogs it if Hearth hasn't, and says whether
+ * Hearth will open its bucket for it. What decides that is in the
+ * cataloging (`scheduledCopyRefusal`), once: a backup admitted is sent
+ * even if its schedule changes before it is.
+ *
+ * Only the offered backup's own record answers: a scheduled create, of
+ * this Relay, with exactly these IDs. Nothing the offer says is applied to
+ * a backup Hearth already has, which reading the Relay's tasks does
+ * (`reconcileBackupTaskEffect`); IDs that are another backup's, copy's or
+ * task's are refused.
+ */
+export const admitOfferedBackupEffect = Effect.fn("backups.admitOffered")(
+  function* (task: RelayBackupTask, relayId: string) {
+    const refused = (reason: string) => ({
+      cataloged: false,
+      reason: reason.slice(0, 300),
+      status: "refused" as const,
+    })
+    const copyId =
+      task.input.kind === "create"
+        ? task.input.destination.artifactId
+        : undefined
+    if (
+      task.kind !== "create" ||
+      task.input.kind !== "create" ||
+      task.input.reason !== "scheduled" ||
+      !copyId
+    ) {
+      return refused("it isn't a backup a schedule took")
+    }
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const own = database.queryRows<
+      RowDataPacket & { error: string | null; status: string }
+    >(
+      "backup_offered_copy",
+      `SELECT artifact.status, task.error
+         FROM ${databaseTable("backup_artifact")} artifact
+         JOIN ${databaseTable("backup")} backup
+           ON backup.id = artifact.backup_id
+         JOIN ${databaseTable("backup_task")} task
+           ON task.backup_id = backup.id AND task.id = ?
+          AND task.task_kind = 'create'
+        WHERE artifact.id = ? AND backup.id = ? AND backup.relay_id = ?
+          AND backup.reason = 'scheduled'
+        LIMIT 1`,
+      [task.taskId, copyId, task.backupId, relayId]
+    )
+    // An offer is for a backup that needs a bucket opened. One for the
+    // Relay's own disk needs nothing of Hearth, and is cataloged as Hearth
+    // reads the Relay's tasks.
+    if (task.input.catalog?.storageId == null) {
+      return refused("it isn't a backup for a bucket")
+    }
+    const known = (yield* own).length > 0
+    if (!known) {
+      const adopted = yield* database.transaction("backup_offer", (transaction) =>
+        adoptScheduledBackupTask(transaction, relayId, task, now)
+      )
+      // No answer, which the Relay takes as Hearth being away: it keeps
+      // the backup and offers it again.
+      if (adopted === "pending") {
+        return yield* Effect.fail(
+          new Error(
+            "Hearth has yet to send this schedule again since it was updated"
+          )
+        )
+      }
+    }
+    // Read once that has committed, not inside it: reading the Relay's
+    // tasks can catalog the same backup at the same moment, and a read
+    // that began before it would miss the row and refuse a backup Hearth
+    // has admitted.
+    const [copy] = yield* own
+    if (!copy) {
+      return refused(
+        "Hearth has no schedule that took it, or its IDs are another backup's"
+      )
+    }
+    if (copy.status === "failed" || copy.status === "deleted") {
+      return {
+        ...refused(copy.error ?? "Hearth won't keep it"),
+        cataloged: !known,
+      }
+    }
+    return { cataloged: !known, status: "admitted" as const }
+  }
+)
+
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
   function* (task: RelayBackupTask, relayId?: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     let changed = false
+    // A Relay speaks for its own backups' tasks only, and for the kind of
+    // task each is: its report of another's, or of a restore as a create,
+    // is no word on it.
+    const scope = relayId ?? null
     yield* database.transaction("backup_reconcile", (transaction) =>
       Effect.gen(function* () {
         const knownTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
@@ -1180,9 +1449,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   task.relay_updated_at_ms
              FROM ${databaseTable("backup_task")} task
              JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
-            WHERE task.id = ? AND task.backup_id = ?
+            WHERE task.id = ? AND task.backup_id = ? AND task.task_kind = ?
+              AND (? IS NULL OR backup.relay_id = ?)
             FOR UPDATE`,
-          [task.taskId, task.backupId]
+          [task.taskId, task.backupId, task.kind, scope, scope]
         )
         let knownTask = knownTasks[0]
         if (!knownTask && relayId) {
@@ -1195,9 +1465,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                       task.relay_updated_at_ms
                  FROM ${databaseTable("backup_task")} task
                  JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
-                WHERE task.id = ? AND task.backup_id = ?
+                WHERE task.id = ? AND task.backup_id = ? AND task.task_kind = ?
+                  AND backup.relay_id = ?
                 FOR UPDATE`,
-            [task.taskId, task.backupId]
+            [task.taskId, task.backupId, task.kind, relayId]
           )
           knownTask = adoptedTasks[0]
         }
@@ -1210,6 +1481,18 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           knownTask.reason === "scheduled" &&
           knownTask.backup_mode === "incremental" &&
           !knownTask.repository_id
+        ) {
+          return
+        }
+        // As does any scheduled backup Hearth failed as it cataloged it,
+        // which is the only failure it records before a Relay's report:
+        // Hearth wouldn't keep it where the Relay said, or its destination
+        // was gone.
+        if (
+          knownTask.task_kind === "create" &&
+          knownTask.reason === "scheduled" &&
+          knownTask.status === "failed" &&
+          knownTask.relay_updated_at_ms === null
         ) {
           return
         }

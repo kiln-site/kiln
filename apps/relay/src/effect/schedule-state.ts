@@ -36,6 +36,11 @@ interface ScheduleRow {
   definition_json: string
 }
 
+// A schedule as an occurrence of it starts, with the Hearth that sent it.
+interface DueScheduleRow extends ScheduleRow {
+  client_id: string | null
+}
+
 interface RunRow {
   run_id: string
   schedule_id: string
@@ -50,6 +55,13 @@ interface RunRow {
 
 export interface ScheduleOccurrence {
   readonly definition: RelayScheduleProjection
+  /**
+   * The Hearth client that sent the schedule, as the occurrence began: its
+   * backups ask that Hearth for access to a bucket, even when the schedule
+   * is replaced or removed before they are taken. Null for a schedule
+   * stored before that was kept.
+   */
+  readonly hearth: string | null
   readonly run: ScheduleRun
   readonly scheduledAt: number
 }
@@ -154,7 +166,7 @@ export function makeRelayScheduleState(sql: SqlClient) {
     )
   `.pipe(Effect.asVoid)
   const claim = (
-    row: ScheduleRow,
+    row: DueScheduleRow,
     occurrence: { definition: RelayScheduleProjection; nextRunAt: number },
     now: number,
     bootAt: number,
@@ -186,7 +198,12 @@ export function makeRelayScheduleState(sql: SqlClient) {
       `
       yield* sql`UPDATE relay_schedules SET next_run_at = ${occurrence.nextRunAt} WHERE schedule_id = ${row.schedule_id}`
       return inserted.length
-        ? { definition: occurrence.definition, run: record, scheduledAt }
+        ? {
+            definition: occurrence.definition,
+            hearth: row.client_id,
+            run: record,
+            scheduledAt,
+          }
         : null
     })
 
@@ -251,7 +268,13 @@ export function makeRelayScheduleState(sql: SqlClient) {
     // such as a destination being disabled, and an older send arriving late
     // mustn't undo that. A stale apply or remove acknowledges what this
     // Relay already holds instead of failing.
-    apply: (definition: RelayScheduleProjection, nextRunAt: number | null) =>
+    // `hearth` is the Hearth client that sent it: the one asked for access
+    // to a bucket when a backup the schedule takes needs it.
+    apply: (
+      definition: RelayScheduleProjection,
+      nextRunAt: number | null,
+      hearth: string | null = null
+    ) =>
       run(
         "apply",
         sql.withTransaction(
@@ -279,10 +302,11 @@ export function makeRelayScheduleState(sql: SqlClient) {
                 storedGeneration(current[0])
               )
             }
-            yield* sql`INSERT INTO relay_schedules (schedule_id, revision, enabled, next_run_at, definition_json)
-        VALUES (${definition.id}, ${definition.revision}, ${definition.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)})
+            yield* sql`INSERT INTO relay_schedules (schedule_id, revision, enabled, next_run_at, definition_json, client_id)
+        VALUES (${definition.id}, ${definition.revision}, ${definition.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)}, ${hearth})
         ON CONFLICT(schedule_id) DO UPDATE SET revision = excluded.revision, enabled = excluded.enabled,
-          next_run_at = excluded.next_run_at, definition_json = excluded.definition_json`
+          next_run_at = excluded.next_run_at, definition_json = excluded.definition_json,
+          client_id = COALESCE(excluded.client_id, relay_schedules.client_id)`
             yield* sql`DELETE FROM relay_schedule_tombstones WHERE schedule_id = ${definition.id}`
             return deployment(
               definition.id,
@@ -323,8 +347,8 @@ export function makeRelayScheduleState(sql: SqlClient) {
       run(
         "claim_due",
         Effect.gen(function* () {
-          const rows = yield* sql<ScheduleRow>`
-            SELECT schedule_id, revision, next_run_at, definition_json
+          const rows = yield* sql<DueScheduleRow>`
+            SELECT schedule_id, revision, next_run_at, definition_json, client_id
             FROM relay_schedules WHERE enabled = 1 AND next_run_at <= ${now}
             ORDER BY next_run_at, schedule_id LIMIT ${limit}`
           const occurrences: Array<ScheduleOccurrence> = []
@@ -394,8 +418,8 @@ export function makeRelayScheduleState(sql: SqlClient) {
         "run_now",
         sql.withTransaction(
           Effect.gen(function* () {
-            const rows = yield* sql<ScheduleRow>`
-              SELECT schedule_id, revision, next_run_at, definition_json
+            const rows = yield* sql<DueScheduleRow>`
+              SELECT schedule_id, revision, next_run_at, definition_json, client_id
               FROM relay_schedules WHERE schedule_id = ${input.scheduleId}`
             const row = rows[0]
             if (!row) {
@@ -424,7 +448,12 @@ export function makeRelayScheduleState(sql: SqlClient) {
               targetRuns: [],
             })
             yield* writeRun(record)
-            return { definition, run: record, scheduledAt }
+            return {
+              definition,
+              hearth: row.client_id,
+              run: record,
+              scheduledAt,
+            }
           })
         )
       ),

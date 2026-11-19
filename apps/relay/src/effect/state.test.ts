@@ -136,7 +136,7 @@ describe("Relay state", () => {
         yield* store.revokeClient("hearth-1", Date.UTC(2026, 0, 2), "hearth-2")
       )
       assert.strictEqual(
-        yield* store.backupTaskHearth(waiting.taskId),
+        (yield* store.backupTaskOwner(waiting.taskId)).hearth,
         "hearth-2"
       )
       assert.isNull(yield* store.findClientById("hearth-1"))
@@ -740,7 +740,110 @@ describe("Relay state from before destinations took 12-character IDs", () => {
 
 describe("Relay tasks stored with signed requests for a bucket", () => {
   it.effect(
-    "keeps only the copy's name for a waiting backup, the keys a schedule's came with, and has Hearth send a waiting restore again",
+    "drops the bucket keys a stored schedule carried for its full backups, and keeps the rest of it",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const repository = {
+            accessKeyId: "AKIAREPOSITORY",
+            bucket: "kiln-backups",
+            kind: "s3",
+            secretAccessKey: "repository-secret",
+          }
+          // As a Hearth sent it while a schedule carried a bucket's keys.
+          const stored = {
+            actions: [
+              { id: "wait", type: "wait" },
+              {
+                executions: [
+                  {
+                    destination: {
+                      accessKeyId: "AKIAARCHIVE",
+                      bucket: "kiln-backups",
+                      endpoint: "https://s3.example.com",
+                      kind: "s3",
+                      objectKeyPrefix: "team/kiln/install/relay/instance/one",
+                      region: "us-east-1",
+                      secretAccessKey: "archive-secret",
+                    },
+                    mode: "full",
+                    targetId: "one",
+                    targetKind: "instance",
+                  },
+                  {
+                    destination: { kind: "local" },
+                    mode: "full",
+                    targetId: "two",
+                    targetKind: "instance",
+                  },
+                  {
+                    destination: {
+                      kind: "restic",
+                      repository,
+                      repositoryPassword: "repository-password",
+                    },
+                    mode: "incremental",
+                    targetId: "three",
+                    targetKind: "instance",
+                  },
+                ],
+                id: "backup",
+                type: "backup",
+              },
+            ],
+            id: "schedule-1",
+            name: "Nightly",
+          }
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`
+                INSERT INTO relay_schedules
+                  (schedule_id, revision, enabled, next_run_at, definition_json)
+                VALUES ('schedule-1', 1, 1, NULL, ${JSON.stringify(stored)})
+              `
+              yield* sql`
+                DELETE FROM effect_sql_migrations WHERE migration_id >= 53
+              `
+            })
+          )
+
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const [row] = yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{ definition_json: string }>`
+                SELECT definition_json FROM relay_schedules
+              `
+            })
+          )
+          assert.notMatch(
+            row?.definition_json ?? "",
+            /AKIAARCHIVE|archive-secret|objectKeyPrefix/u
+          )
+          const [bucket, local, incremental] = (
+            JSON.parse(row?.definition_json ?? "{}") as typeof stored
+          ).actions[1]!.executions!
+          assert.deepStrictEqual(bucket?.destination, { kind: "s3" })
+          assert.deepStrictEqual(local, stored.actions[1]!.executions![1])
+          // An incremental backup's repository still reaches the bucket with
+          // them.
+          assert.deepStrictEqual(
+            incremental,
+            stored.actions[1]!.executions![2]
+          )
+        })
+      )
+  )
+
+  it.effect(
+    "keeps only the copy's name for a waiting backup, whether it came with a signed URL or the bucket's keys, and has Hearth send a waiting restore again",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -834,7 +937,9 @@ describe("Relay tasks stored with signed requests for a bucket", () => {
                 artifactId,
                 kind: "s3",
               })
-              assert.deepStrictEqual(yield* stored(scheduled.taskId), withKeys)
+              assert.deepStrictEqual(yield* stored(scheduled.taskId), {
+                kind: "s3",
+              })
               const store = yield* RelayStateStore
               assert.isTrue(
                 (yield* store.getBackupTask(restore.taskId))

@@ -19,6 +19,7 @@ import { migrations } from "@/migrations"
 import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { instanceIds } from "@/migrations/0058_instance_ids"
 import { backupDestinationIds } from "@/migrations/0092_backup_destination_ids"
+import { scheduledBackupHearth } from "@/migrations/0093_scheduled_backup_hearth"
 import { expandStoredSelections } from "@/lib/resource-permissions"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -2859,6 +2860,83 @@ describeMysql("database migrations", () => {
             `
           ).toEqual([{ kind: "destination", legacy_id: old }])
           vi.unstubAllEnvs()
+        }),
+      schemaBuildTimeout
+    )
+
+    // A schedule's backup for a bucket that is under way as Kiln updates
+    // was started by a Relay that held the bucket's keys, at a path it
+    // named. It is not carried across, and nothing else is touched.
+    it.effect(
+      "ends scheduled backups for a bucket that were under way, and leaves one being deleted to its delete",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(migrations)
+          const relayId = "c".repeat(12)
+          const storageId = "d".repeat(12)
+          yield* insertRelay(relayId)
+          yield* insertBackupStorage(storageId)
+          const seed = (
+            index: number,
+            row: Record<string, number | string | null>
+          ) =>
+            Effect.gen(function* () {
+              const id = `1111111${index}-1111-4111-8111-111111111111`
+              yield* insertBackup(id, {
+                reason: "scheduled",
+                relay_id: relayId,
+                status: "running",
+                storage_id: storageId,
+                ...row,
+              })
+              yield* insertRows("backup_artifact", {
+                backup_id: id,
+                created_at: 1,
+                destination_key: row.storage_id === null ? "local" : storageId,
+                id: `2222222${index}-2222-4222-8222-222222222222`,
+                status: "running",
+                storage_id: row.storage_id === null ? null : storageId,
+                updated_at: 1,
+              })
+              yield* insertRows("backup_task", {
+                backup_id: id,
+                created_at: 1,
+                id: `3333333${index}-3333-4333-8333-333333333333`,
+                status: "running",
+                task_kind: "create",
+                updated_at: 1,
+              })
+            })
+          yield* seed(1, {})
+          yield* seed(2, { status: "deleting" })
+          yield* seed(3, { reason: "manual" })
+          yield* seed(4, { storage_id: null })
+
+          yield* scheduledBackupHearth.run
+
+          const states = yield* sql<{
+            backup: string
+            copy: string
+            id: string
+            task: string
+          }>`
+            SELECT backup.id, backup.status AS backup, task.status AS task,
+                   artifact.status AS copy
+              FROM kiln_backup backup
+              JOIN kiln_backup_task task ON task.backup_id = backup.id
+              JOIN kiln_backup_artifact artifact ON artifact.backup_id = backup.id
+             ORDER BY backup.id
+          `
+          expect(
+            states.map(({ backup, copy, task }) => [backup, task, copy])
+          ).toEqual([
+            ["failed", "failed", "failed"],
+            ["deleting", "failed", "failed"],
+            ["running", "running", "running"],
+            ["running", "running", "running"],
+          ])
         }),
       schemaBuildTimeout
     )

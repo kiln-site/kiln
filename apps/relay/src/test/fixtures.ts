@@ -1,5 +1,8 @@
 import type { RestoreArchiveAccess } from "../backup-restore"
-import { backupStorageAccessThrough } from "../backups/storage-access"
+import {
+  backupStorageAccessThrough,
+  backupTaskOfferThrough,
+} from "../backups/storage-access"
 import { loadConfig } from "../config"
 import type { RelayConfig, RelayInstanceConfig } from "../config"
 
@@ -8,6 +11,7 @@ import type { RelayConfig, RelayInstanceConfig } from "../config"
  * answers when it asks for access to a bucket.
  */
 export const noHearth = {
+  offer: backupTaskOfferThrough(async () => []),
   storage: backupStorageAccessThrough(async () => []),
 }
 

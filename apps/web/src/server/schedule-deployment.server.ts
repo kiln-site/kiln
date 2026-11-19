@@ -21,13 +21,11 @@ import {
 } from "@workspace/contracts/schedules"
 
 import { prepareResticRepositoryLocation } from "@/backups/destinations"
-import {
-  backupObjectKeyPrefix,
-  loadBackupStorageCredentialEffect,
-} from "@/backups/destinations/s3"
+import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import {
   ensureBackupRepositoryEffect,
   scheduledBackupAdmissionEffect,
+  type ScheduledBackupExecution,
 } from "@/effect/backups"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { refuseResourcesBeingDeleted } from "@/effect/resource-deletions"
@@ -334,6 +332,27 @@ export async function deployScheduleToRelay(
           revision: schedule.revision,
           targets: [...targets],
         }
+        // What Hearth is telling this Relay to back up, kept before it is
+        // told: a backup the Relay then offers is admitted against it
+        // (`scheduledCopyRefusal`). Only the newest send of the newest
+        // revision keeps its list: one read before a change that has been
+        // made since, or overtaken by a later send, would bring back what
+        // the change took away. It isn't sent either, so a Relay never
+        // holds a schedule Hearth kept no list for.
+        const [kept] = await databasePool.execute<ResultSetHeader>(
+          `UPDATE ${databaseTable("schedule_deployment")}
+              SET backup_executions = ?
+            WHERE schedule_id = ? AND relay_id = ? AND desired_generation = ?
+              AND desired_revision = ?`,
+          [
+            JSON.stringify(admittedBackupExecutions(projection.actions)),
+            schedule.id,
+            relayId,
+            generation,
+            schedule.revision,
+          ]
+        )
+        if (kept.affectedRows === 0) return
         const result = relayScheduleDeploymentSchema.parse(
           await relayRpc(relay, "schedule.apply", projection, 15_000, subject)
         )
@@ -380,6 +399,39 @@ export async function deployScheduleToRelay(
       generation
     )
   }
+}
+
+// Each backup of a schedule's steps that Hearth admitted on a Relay, as a
+// backup the Relay offers names it.
+function admittedBackupExecutions(
+  actions: ReadonlyArray<RelayScheduleAction>
+): Array<ScheduledBackupExecution> {
+  return actions.flatMap((action) =>
+    action.type !== "backup"
+      ? []
+      : action.executions.flatMap((execution) =>
+          execution.refusal ||
+          !execution.destination ||
+          // An App's backups are of its volumes, each an execution of its own.
+          execution.targetKind === "app"
+            ? []
+            : [
+                {
+                  actionId: action.id,
+                  mode: execution.mode,
+                  storageId:
+                    action.destination.kind === "storage"
+                      ? action.destination.storageId
+                      : null,
+                  targetId: execution.targetId,
+                  targetKind:
+                    execution.targetKind === "relay"
+                      ? ("platform" as const)
+                      : execution.targetKind,
+                },
+              ]
+        )
+  )
 }
 
 // The next generation of what's sent for a schedule to one Relay.
@@ -609,7 +661,7 @@ async function scheduledBackupExecution(
   if (action.mode === "full") {
     return {
       ...execution,
-      destination: await scheduledFullBackupDestination(action, target),
+      destination: await scheduledFullBackupDestination(action),
       maxBytes: admission.maxBytes,
       refusal: null,
       repositoryId: null,
@@ -677,39 +729,24 @@ interface BackupMember {
   readonly relayId: string
 }
 
+// A bucket's is named by the step alone: Hearth keeps its keys and chooses
+// its paths. The Relay offers each backup it takes (`backup.task.offer`),
+// which Hearth admits against this schedule, and asks for access as the
+// copy is ready to send.
 async function scheduledFullBackupDestination(
-  action: Extract<ScheduleAction, { type: "backup" }>,
-  target: BackupMember
+  action: Extract<ScheduleAction, { type: "backup" }>
 ) {
   if (action.destination.kind === "local") {
     return { kind: "local" as const }
   }
   const storage = await runAppEffect(
-    "schedules.loadBackupStorageCredential",
-    loadBackupStorageCredentialEffect(action.destination.storageId)
+    "schedules.loadBackupStorage",
+    loadBackupStorageEffect(action.destination.storageId)
   )
   if (!storage || !storage.enabled || storage.deleting) {
     throw new Error("Backup destination is unavailable")
   }
-  const installationId = kilnInstallationId()
-  const targetKind = target.kind === "relay" ? "platform" : target.kind
-  return {
-    accessKeyId: storage.accessKeyId,
-    allowPrivateNetwork: storage.allowPrivateNetwork,
-    bucket: storage.bucket,
-    endpoint: storage.endpoint,
-    forcePathStyle: storage.forcePathStyle,
-    kind: "s3" as const,
-    objectKeyPrefix: backupObjectKeyPrefix({
-      installationId,
-      objectPrefix: storage.objectPrefix,
-      relayId: target.relayId,
-      targetId: targetKind === "platform" ? installationId : target.id,
-      targetKind,
-    }),
-    region: storage.region,
-    secretAccessKey: storage.secretAccessKey,
-  }
+  return { kind: "s3" as const }
 }
 
 async function scheduledResticDestination(
@@ -1051,6 +1088,15 @@ export async function removeRelayProjections(
   await Promise.all(
     relayIds.map(async (relayId) => {
       await upsertDeployment(scheduleId, relayId, revision, "pending")
+      // Off this Relay from now, whenever the Relay hears so: nothing it
+      // takes for the schedule is admitted any more. An empty list, which
+      // refuses; none at all would say Hearth had yet to send one.
+      await databasePool.execute(
+        `UPDATE ${databaseTable("schedule_deployment")}
+            SET backup_executions = '[]'
+          WHERE schedule_id = ? AND relay_id = ? AND desired_revision = ?`,
+        [scheduleId, relayId, revision]
+      )
       const [rows] = await databasePool.query<
         Array<RowDataPacket & { desired_generation: number }>
       >(
