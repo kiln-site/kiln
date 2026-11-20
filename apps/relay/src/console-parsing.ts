@@ -24,8 +24,11 @@ const TERMINAL_EDIT_PATTERN = new RegExp(
   "u"
 )
 const MINECRAFT_STYLE_PATTERN = /§x(?:§[\da-f]){6}|§[0-9a-fk-or]/giu
+// Paper writes `[12:00:00 INFO]:`; vanilla and Forge write
+// `[12:00:00] [Server thread/INFO]`, which Forge's console prompt prefixes
+// with `> ` once it is up.
 const MINECRAFT_LOG_PREFIX_PATTERN =
-  /\[\d{2}:\d{2}:\d{2} (?:INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE|DEBUG|TRACE)\]:/iu
+  /\[\d{2}:\d{2}:\d{2} (?:INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE|DEBUG|TRACE)\]:|\[\d{2}:\d{2}:\d{2}\] \[[^\]\n]+\/(?:INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE|DEBUG|TRACE)\]/iu
 const CURL_PROGRESS_HEADER_PATTERN =
   /^\s*%\s+Total\s+%\s+Received\s+%\s+Xferd\s+Average\s+Speed\s+Time\s+Time\s+Time\s+Current\s*$/iu
 const CURL_PROGRESS_ROW_PATTERN =
