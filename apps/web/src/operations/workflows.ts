@@ -7,7 +7,7 @@ import { deleteResource, keepResource } from "@/lib/resource-deletion.server"
 import {
   rollBackLegacyServerMigration,
   serverMigration,
-} from "@/lib/server-migrations.server"
+} from "@/lib/instance-migrations.server"
 import { deleteTunnel } from "@/lib/tunnel-deletion.server"
 import { rewriteTailscaleDns } from "@/lib/tunnel-dns.server"
 import { pruneTunnelGateways } from "@/lib/tunnel-gateway-pruning.server"

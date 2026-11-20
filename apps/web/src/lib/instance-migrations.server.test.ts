@@ -20,7 +20,7 @@ import {
   rollBackLegacyServerMigrationsEffect,
   serverMigration,
   startServerMigrationEffect,
-} from "@/lib/server-migrations.server"
+} from "@/lib/instance-migrations.server"
 import { OperationsEngine } from "@/operations/engine"
 import {
   OperationsEngineService,

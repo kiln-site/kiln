@@ -37,7 +37,7 @@ import {
   listServerMigrationsEffect,
   requireMigrationPermissions,
   startServerMigrationEffect,
-} from "@/lib/server-migrations.server"
+} from "@/lib/instance-migrations.server"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import type {

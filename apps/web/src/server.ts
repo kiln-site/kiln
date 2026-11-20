@@ -49,7 +49,7 @@ import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import { startNotificationPushes } from "./lib/notification-pushes.server"
 import { startDnsWorker } from "./lib/dns-worker.server"
 import { startOperationsEngine } from "./operations/startup"
-import { startLegacyServerMigrationRollback } from "./lib/server-migrations.server"
+import { startLegacyServerMigrationRollback } from "./lib/instance-migrations.server"
 import {
   startBackupMaintenance,
   stopBackupMaintenance,
