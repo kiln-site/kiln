@@ -429,6 +429,10 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
       "the copy to be created",
       () => provisioned(input)
     )
+    const settled = kind.settled
+    if (settled) {
+      yield* step(input, "settle", (actor) => settled(input, actor, options))
+    }
     const backupFirst = kind.backupFirst
     if (options.backup && backupFirst) {
       yield* checkpoint(input, "backup")

@@ -196,6 +196,15 @@ export interface MigratedKind {
     actor: AuthenticatedUser,
     backupId: string
   ) => Effect.Effect<void, unknown, Database>
+  /**
+   * What its copy takes of the old one once it is made, before it's filled,
+   * that making it couldn't give it. Asked again, it changes nothing more.
+   */
+  readonly settled?: (
+    migration: Migration,
+    actor: AuthenticatedUser,
+    options: ResourceMigrationOptions
+  ) => Effect.Effect<void, unknown, Database>
   /** What one that was started again needs besides, of its own. */
   readonly started?: (
     relay: PersistedRelay,

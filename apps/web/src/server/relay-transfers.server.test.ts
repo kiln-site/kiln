@@ -186,23 +186,34 @@ describeMysql("Copying files between Relays", () => {
     )
 
     it.effect(
-      "asks no Relay about a database's transfer, whatever the person may do",
+      "copies a database only for someone who may back it up and restore it",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
           relayRequests.length = 0
-          // An administrator may export and import any database's dumps,
-          // which isn't what copying one between Relays takes of a Relay.
-          const administrator = {
-            ...user,
-            id: "administrator",
-            role: "admin",
-          } satisfies AuthenticatedUser
-          yield* insertUser(administrator.id, {
-            emailVerifiedAt: new Date(),
-            role: "admin",
-          })
+          yield* insertUser(user.id, { emailVerifiedAt: new Date() })
           yield* insertRelay(relayId)
+          // Exporting and importing a dump uses the database's own login.
+          // Its Relay copies it as its administrator, which those don't
+          // stand for.
+          for (const [databaseId, permission] of [
+            [sourceId, "database.dump.export"],
+            [destinationId, "database.dump.import"],
+          ] as const) {
+            const id = randomUUID()
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId: databaseId,
+              resourceType: "database",
+              userId: user.id,
+            })
+            yield* insertRows("access_selection", {
+              access_id: id,
+              selection_key: permission,
+              selection_kind: "permission",
+            })
+          }
           const handle = {
             destination: { relayId, rootId: `database:${destinationId}` },
             source: { relayId, rootId: `database:${sourceId}` },
@@ -210,15 +221,15 @@ describeMysql("Copying files between Relays", () => {
           }
 
           for (const asked of [
-            relayTransferStatusEffect(administrator, handle),
-            cancelRelayTransferEffect(administrator, handle),
+            relayTransferStatusEffect(user, handle),
+            cancelRelayTransferEffect(user, handle),
           ]) {
             const exit = yield* Effect.exit(asked)
             assert.isTrue(Exit.isFailure(exit))
             if (Exit.isFailure(exit)) {
               assert.match(
                 String(Cause.squash(exit.cause)),
-                /Databases can't be copied as files/
+                /^PermissionDeniedError/
               )
             }
           }

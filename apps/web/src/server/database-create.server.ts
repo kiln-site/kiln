@@ -85,7 +85,11 @@ export const createDatabase = operation<CreateDatabaseInput>()({
   }),
 })
 
-async function createDatabaseHandler(
+/**
+ * Creates a database under an ID reserved for it, for whoever already holds
+ * it and its Relay: the operation above, or a copy being made of another.
+ */
+export async function createDatabaseHandler(
   user: AuthenticatedUser,
   data: CreateDatabaseInput,
   id: string

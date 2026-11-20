@@ -30,7 +30,10 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
-import { requireFileRootPermissionEffect } from "@/lib/access-control"
+import {
+  requireFileRootPermissionEffect,
+  requireRelayPermissionsEffect,
+} from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
 
@@ -57,7 +60,7 @@ export interface RelayTransferRequest {
 
 /** Something that keeps a transfer from starting, and what fixes it. */
 export interface RelayTransferProblem {
-  readonly code: "database_root" | "hearth_access" | "relay_offline"
+  readonly code: "hearth_access" | "relay_offline"
   readonly relayId: string
   readonly message: string
   readonly remedy: string
@@ -110,8 +113,7 @@ const orchestrationFailures = new Map<
 export const preflightRelayTransferEffect = Effect.fn(
   "RelayTransfers.preflight"
 )(function* (user: AuthenticatedUser, request: RelayTransferRequest) {
-  // A database root is one of the problems it lists.
-  const { source, destination } = yield* authorizeRootsEffect(user, request)
+  const { source, destination } = yield* authorizeTransferEffect(user, request)
   return yield* relayTransferProblemsEffect({
     destination,
     destinationRootId: request.destination.rootId,
@@ -121,10 +123,10 @@ export const preflightRelayTransferEffect = Effect.fn(
 })
 
 /**
- * What would keep files moving from a root on one Relay to a root on
- * another, whatever the person may do: an offline or outdated Relay, a root
- * that can't be copied as files, or a pairing that doesn't let Hearth move
- * files in or out. The roots needn't exist yet; only their kind matters.
+ * What would keep a root on one Relay from being copied to a root on
+ * another, whatever the person may do: an offline Relay, or a pairing that
+ * doesn't let Hearth take it out or put it in. The roots needn't exist yet;
+ * only their kind matters.
  */
 export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
   function* (input: {
@@ -139,15 +141,6 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
       [input.destination, input.destinationRootId, "upload"],
     ] as const
     for (const [relay, rootId, direction] of sides) {
-      if (databaseIdFromFileRoot(rootId) !== null) {
-        problems.push({
-          code: "database_root",
-          message: "Databases can't be copied as files",
-          relayId: relay.id,
-          remedy: "Export the database's dump and import it on the other Relay",
-        })
-        continue
-      }
       if (!(yield* relayReachable(relay))) {
         problems.push({
           code: "relay_offline",
@@ -479,26 +472,9 @@ export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
   }
 )
 
-// The person may copy from the source root to the destination's. Hearth
-// copies no database: a Relay dumps and restores one as its administrator,
-// which the file permissions checked here don't stand for, so Hearth asks
-// no Relay to start, report or stop a database's transfer.
+// The person may copy what the source root holds into the destination's, on
+// Relays this Hearth has.
 const authorizeTransferEffect = Effect.fn("RelayTransfers.authorize")(
-  function* (user: AuthenticatedUser, request: RelayTransferRequest) {
-    for (const rootId of [request.source.rootId, request.destination.rootId]) {
-      if (databaseIdFromFileRoot(rootId) !== null) {
-        return yield* new RelayTransferError({
-          message: "Databases can't be copied as files",
-        })
-      }
-    }
-    return yield* authorizeRootsEffect(user, request)
-  }
-)
-
-// The person may read files under the source root and write under the
-// destination's, on Relays this Hearth has.
-const authorizeRootsEffect = Effect.fn("RelayTransfers.authorizeRoots")(
   function* (user: AuthenticatedUser, request: RelayTransferRequest) {
     const { activeRelay } = yield* Effect.promise(
       () => import("@/lib/relay-registry")
@@ -526,12 +502,31 @@ const authorizeRootsEffect = Effect.fn("RelayTransfers.authorizeRoots")(
   }
 )
 
+// What copying a root out of or into a Relay takes of the person. A folder's
+// files take what they do anywhere. A database is dumped and restored by
+// its Relay as its backups are, with no login from whoever asks, so it
+// takes what making a backup and taking it off the Relay do, or what
+// restoring one does, as its Relay asks of Hearth's pairing
+// (`peerTransferAction`): never what exporting or importing a dump with the
+// database's own login does.
 function requireRootPermission(
   user: AuthenticatedUser,
   relayId: string,
   rootId: string,
   access: "read" | "write"
 ) {
+  const databaseId = databaseIdFromFileRoot(rootId)
+  if (databaseId !== null) {
+    return requireRelayPermissionsEffect({
+      databaseId,
+      permissions:
+        access === "read"
+          ? ["backup.create", "backup.download"]
+          : ["backup.restore"],
+      relayId,
+      user,
+    })
+  }
   return requireFileRootPermissionEffect(user, relayId, rootId, access).pipe(
     Effect.catchTag("ResourceNotFoundError", (error) =>
       Effect.fail(new RelayTransferError({ message: error.message }))

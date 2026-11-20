@@ -40,7 +40,7 @@ Every kind gets these from the platform.
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                                                          |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                                                                                     |
 | Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own                                                                        |
-| Move        | Move and duplicate every kind but a tunnel      | One operation, dialog, toast and notification; game servers so far ([Moving and duplicating](resource-migrations.md))                              |
+| Move        | Move and duplicate every kind but a tunnel      | One operation, dialog, toast and notification; game servers and databases so far ([Moving and duplicating](resource-migrations.md))                |
 
 A Relay implements each in its own way: it can only be restarted, its
 deployments are its updates, and its files and its shell are the host's.

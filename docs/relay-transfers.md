@@ -137,13 +137,12 @@ dump, and `backup.restore` to install it on the destination. The
 database's own login, don't allow any of it. A Relay that restarts while a dump is being imported fails the
 pull, as it does one that was installing files, since the database may
 hold part of it. `transfer.space` reports a database's size on disk, which
-is more than its dump takes. Hearth doesn't ask for this yet: it refuses a
-database root when a transfer is started, advanced, reported or cancelled,
-and its preflight lists one as a problem.
+is more than its dump takes. Hearth asks the person for the same as their
+Relays ask of it: `backup.create` and `backup.download` on the database
+it's copied from, and `backup.restore` on the one it's copied into.
 
 `preflightRelayTransfer` lists what would stop a copy and what fixes it:
-an offline or outdated Relay, a database root, or a pairing that can't
-move files in or out. A pull that can't reach its source reports why in
+an offline or outdated Relay, or a pairing that can't move data in or out. A pull that can't reach its source reports why in
 its `error` while it waits to try again.
 
 ## Through Hearth

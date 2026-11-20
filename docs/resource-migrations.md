@@ -54,6 +54,23 @@ goes to.
 | Backups            | Optional  | Optional | Links the old server's full backups to the new one, sharing their archives ([Linked backups](backups.md#linked-backups)). Backups in S3 link anywhere; backups kept on the Relay only to a copy on the same Relay. Needs `backup.download`.                                                       |
 | Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before the source is stopped or copied. Needs `backup.create`. Not offered by the dialog.                                                                                                                                                         |
 
+### Databases
+
+The copy is made from the old one's Brick, engine version, database name
+and username, with a password and hostname of its own, and the old one's
+limits or those given in the dialog, applied once it's made. It is filled
+with the old one's dump ([Relay transfers](relay-transfers.md#between-relays)),
+so it has to run to be copied: it's never stopped first, and a move stops
+the old one once the copy is in. What's written after the dump starts
+isn't carried, which the dialog says, along with what connects to it on
+the old Relay and stays there. An engine Kiln can't dump (Redis, Valkey)
+is copied empty, as the dialog says too.
+
+Copying one needs its `database.read`, and `backup.create` and
+`backup.download`, since its Relay dumps it as a backup does, and
+`database.create` on the Relay the copy goes to. It has owner and access
+to hand over; its connections stay with the old one.
+
 ## Power
 
 A kind that runs can be stopped while it's copied. A duplicate can stop

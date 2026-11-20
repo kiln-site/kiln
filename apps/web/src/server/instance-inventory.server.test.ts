@@ -192,6 +192,7 @@ describeMysql("scoped instance inventory", () => {
                       startedAt: null,
                       status: "Ready",
                       supportsImportExport: true,
+                      variables: {},
                     },
                     observation: {
                       ...request.reference,
