@@ -9,6 +9,15 @@ const notificationResourceSchema = z.object({
   type: z.enum(["relay", "instance", "database", "app"]),
 })
 
+// What was moved or duplicated: an instance, or a volume, which has no page
+// of its own.
+const migratedResourceSchema = notificationResourceSchema.extend({
+  type: z.enum(["instance", "database", "app", "volume"]),
+})
+export type MigratedNotificationResource = z.infer<
+  typeof migratedResourceSchema
+>
+
 const severitySchema = z.enum([
   "critical",
   "high",
@@ -107,18 +116,18 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     resources: z.array(notificationResourceSchema).min(1),
     severity: severitySchema,
   }),
-  // A game server finished copying to a new one, as a duplicate or a move to
-  // another Relay. A finished move offers to delete the server it left;
+  // A resource finished copying to a new one, as a duplicate or a move to
+  // another Relay. A finished move offers to delete the one it left;
   // `sourceDeleting` marks one the move deletes itself after a final backup,
   // and `sourceDeleted` one that's gone.
   z.object({
-    destination: notificationResourceSchema,
+    destination: migratedResourceSchema,
     error: z.string().optional(),
-    kind: z.literal("server.migration"),
+    kind: z.literal("resource.migration"),
     migrationId: z.string(),
     mode: z.enum(["duplicate", "migrate"]),
     outcome: z.enum(["completed", "failed", "cancelled"]),
-    source: notificationResourceSchema,
+    source: migratedResourceSchema,
     sourceDeleted: z.boolean().optional(),
     sourceDeleting: z.boolean().optional(),
   }),

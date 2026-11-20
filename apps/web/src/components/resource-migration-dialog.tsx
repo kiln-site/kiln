@@ -4,6 +4,7 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
   MINIMUM_MEMORY_LIMIT_BYTES,
   resourceLimitsEqual,
+  type ResourceLimits,
 } from "@workspace/contracts"
 import {
   ArrowRight,
@@ -14,6 +15,7 @@ import {
   Info,
   LoaderCircle,
   Minus,
+  TriangleAlert,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -35,12 +37,18 @@ import {
 } from "@/components/drawer-popover"
 import { InstanceCard } from "@/components/instance-card"
 import {
+  AppKindIcon,
+  DatabaseKindIcon,
+  VolumeKindIcon,
+} from "@/components/instance-kind-icon"
+import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
 import { ResourceLimitRows } from "@/components/resource-limits/resource-limit-rows"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { formatBytes } from "@/lib/format-bytes"
+import type { MigratedKindName } from "@/lib/resource-migration-input"
 import {
   parseResourceLimitsDraft,
   resourceLimitsDraft,
@@ -49,26 +57,36 @@ import {
 import {
   migrationRoomProblems,
   type MigrationRoomProblem,
-} from "@/lib/server-migration-room"
+} from "@/lib/resource-migration-room"
 import {
-  serverMigrationPreviewQueryOptions,
-  serverMigrationsQueryOptions,
-} from "@/lib/server-migration-queries"
+  resourceMigrationPreviewQueryOptions,
+  resourceMigrationsQueryOptions,
+} from "@/lib/resource-migration-queries"
 import type {
-  ServerMigrationDestination,
-  ServerMigrationPreview,
-} from "@/server/server-migrations.server"
-import { startServerMigration } from "@/server/server-migrations"
+  ResourceMigrationDestination,
+  ResourceMigrationPreview,
+} from "@/server/resource-migrations.server"
+import { startResourceMigration } from "@/server/resource-migrations"
 
-export type ServerMigrationMode = "duplicate" | "migrate"
+export type ResourceMigrationMode = "duplicate" | "migrate"
 
-type MigrationServer = {
+/** What is being copied: a game server says which Brick's icon it wears. */
+export type MigratedResource = {
   brickId?: string
   brickSource?: string
   id: string
   implementation?: string
+  kind: MigratedKindName
   name: string
   relayId: string
+}
+
+// What copying each kind while it runs can miss, in its own words.
+const liveRisk: Record<MigratedKindName, string> = {
+  app: "What it writes while it's copied can be missed.",
+  database: "What's written after the copy starts isn't carried.",
+  instance: "A running world can be caught mid-save.",
+  volume: "What's written while it's copied can be missed.",
 }
 
 type Tone = "error" | "muted" | "warning"
@@ -78,36 +96,33 @@ type Status = {
   tone: Tone
 }
 
-const NAME_LIMIT = 32
 const GIBIBYTE = 1024 ** 3
 
 /**
- * Copies a game server to a new one: a duplicate on any Relay the person
- * may create servers on, or a move to another Relay. It starts the copy and
- * closes; the copy carries on in the background with a progress toast.
+ * Copies a resource to a new one: a duplicate on any Relay the person may
+ * create one on, or a move to another Relay. It starts the copy and closes;
+ * the copy carries on in the background with a progress toast.
  *
- * The server and its Relay sit beside the copy and where it goes, then the
- * copy's limits and a few choices. Explanations live in tooltips and the
- * metadata checklist; what's wrong takes one line, so the dialog keeps its
- * size whatever is chosen.
+ * It is one dialog for every kind. The resource and its Relay sit beside
+ * the copy and where it goes, then the copy's limits and a few choices,
+ * each shown only for a kind that has it. Explanations live in tooltips and
+ * the metadata checklist; what's wrong takes one line, and what to know
+ * first sits above the buttons.
  */
-export function ServerMigrationDialog({
+export function ResourceMigrationDialog({
   initialMode,
   onOpenChange,
   open,
-  server,
+  resource,
 }: {
-  initialMode: ServerMigrationMode
+  initialMode: ResourceMigrationMode
   onOpenChange: (open: boolean) => void
   open: boolean
-  server: MigrationServer
+  resource: MigratedResource
 }) {
   const [mode, setMode] = React.useState(initialMode)
   const preview = useQuery({
-    ...serverMigrationPreviewQueryOptions({
-      instanceId: server.id,
-      relayId: server.relayId,
-    }),
+    ...resourceMigrationPreviewQueryOptions(resource),
     enabled: open,
     // Opened once the preview settled, it stays as it was while open: a
     // failure isn't asked again and grown into the form, nor a form swapped
@@ -122,7 +137,7 @@ export function ServerMigrationDialog({
         <div className="flex flex-wrap items-center justify-between gap-3 pr-10">
           <DialogTitle>Move or duplicate</DialogTitle>
           <DialogDescription className="sr-only">
-            Copy {server.name} to a new game server, here or on another Relay.
+            Copy {resource.name} to a new one, here or on another Relay.
           </DialogDescription>
           <div
             aria-label="What to do"
@@ -133,14 +148,14 @@ export function ServerMigrationDialog({
               checked={mode === "duplicate"}
               icon={<Copy />}
               label="Duplicate"
-              title="Keep this server too"
+              title="Keep this one too"
               onSelect={() => setMode("duplicate")}
             />
             <ModeButton
               checked={mode === "migrate"}
               icon={<ArrowRightLeft />}
               label="Move"
-              title="Hand this server's place to the copy"
+              title="Hand its place to the copy"
               onSelect={() => setMode("migrate")}
             />
           </div>
@@ -149,13 +164,13 @@ export function ServerMigrationDialog({
           <MigrationForm
             mode={mode}
             preview={preview.data}
-            server={server}
+            resource={resource}
             onDone={() => onOpenChange(false)}
           />
         ) : preview.isPending ? (
           <div className="type-support flex h-[25rem] items-center justify-center gap-2 text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin" />
-            Checking where this server can go…
+            Checking where it can go…
           </div>
         ) : (
           <p
@@ -174,13 +189,14 @@ function MigrationForm({
   mode,
   onDone,
   preview,
-  server,
+  resource,
 }: {
-  mode: ServerMigrationMode
+  mode: ResourceMigrationMode
   onDone: () => void
-  preview: ServerMigrationPreview
-  server: MigrationServer
+  preview: ResourceMigrationPreview
+  resource: MigratedResource
 }) {
+  const { noun, offers } = preview
   const queryClient = useQueryClient()
   const moving = mode === "migrate"
   const destinations = React.useMemo(
@@ -191,30 +207,35 @@ function MigrationForm({
     [moving, preview.destinations]
   )
 
-  // The copy's limits start as the old server's.
+  // The copy's limits start as the old one's, for a kind whose copy can be
+  // given its own.
+  const sourceLimits = preview.source.limits ?? unlimited
   const sourceDraft = React.useMemo(
-    () => resourceLimitsDraft(preview.source.limits),
-    [preview.source.limits]
+    () => resourceLimitsDraft(sourceLimits),
+    [sourceLimits]
   )
   const [draft, setDraft] = React.useState(sourceDraft)
   const parsed = parseResourceLimitsDraft(draft, null)
   const limits = "limits" in parsed ? parsed.limits : null
   const limitsChanged =
-    limits !== null && !resourceLimitsEqual(limits, preview.source.limits)
+    offers.limits &&
+    limits !== null &&
+    !resourceLimitsEqual(limits, sourceLimits)
 
   // Whether the copy fits there, as the Relays said when the dialog opened.
-  // Checked again when it starts and before the server stops.
+  // Checked again when it starts and before the old one stops.
   const roomProblemsFor = (
-    destination: ServerMigrationDestination
+    destination: ResourceMigrationDestination
   ): ReadonlyArray<MigrationRoomProblem> =>
     destination.room && preview.room
       ? migrationRoomProblems({
           destination: destination.room,
           limits: true,
           localBackups: 0,
-          server: {
-            ...preview.room.server,
-            limits: limits ?? preview.source.limits,
+          noun,
+          resource: {
+            ...preview.room.resource,
+            limits: limits ?? sourceLimits,
           },
           source: preview.room.source,
         })
@@ -239,7 +260,13 @@ function MigrationForm({
     )
   const [name, setName] = React.useState<string | null>(null)
   const effectiveName =
-    name ?? defaultName(server.name, mode, selected?.takenNames ?? [])
+    name ??
+    defaultName(
+      resource.name,
+      mode,
+      selected?.takenNames ?? [],
+      offers.nameLimit
+    )
 
   const linkableBackups =
     selected && preview.allowed.linkBackups
@@ -253,7 +280,7 @@ function MigrationForm({
     preview,
     relay: selected,
   })
-  // Everything besides files and settings comes along, or none of it.
+  // Everything besides its data and settings comes along, or none of it.
   const [copyMetadata, setCopyMetadata] = React.useState(true)
   const copies = (key: MetadataKey) =>
     copyMetadata && metadata.find((item) => item.key === key)?.reason === null
@@ -266,10 +293,11 @@ function MigrationForm({
     mutationFn: () => {
       if (!selected) throw new Error("Choose a Relay")
       if (!limits) throw new Error("Check the copy's limits")
-      return startServerMigration({
+      return startResourceMigration({
         data: {
           destinationRelayId: selected.id,
-          instanceId: server.id,
+          id: resource.id,
+          kind: resource.kind,
           mode,
           name: effectiveName.trim(),
           options: {
@@ -283,13 +311,13 @@ function MigrationForm({
             moveWebRoutes: copies("routes"),
             stopSource: moving || stopSource,
           },
-          relayId: server.relayId,
+          relayId: resource.relayId,
         },
       })
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: serverMigrationsQueryOptions().queryKey,
+        queryKey: resourceMigrationsQueryOptions().queryKey,
       })
       onDone()
     },
@@ -314,11 +342,11 @@ function MigrationForm({
     !trimmedName ||
     nameTaken ||
     preview.source.provisioning ||
-    (moving && !preview.allowed.stop)
+    (moving && offers.power && !preview.allowed.stop)
 
   const usedBytes =
-    preview.room && preview.room.server.usedFrom !== "limit"
-      ? preview.room.server.usedBytes
+    preview.room && preview.room.resource.usedFrom !== "limit"
+      ? preview.room.resource.usedBytes
       : null
   const room = selected?.room ?? null
   const fitFix = limitFix(limitProblem, room, usedBytes, (key, value) =>
@@ -353,21 +381,21 @@ function MigrationForm({
                       text: "Still being created; copy it once it's ready.",
                       tone: "warning",
                     }
-                  : moving && !preview.allowed.stop
+                  : moving && offers.power && !preview.allowed.stop
                     ? {
-                        text: "A move stops this server, and you can't stop it.",
+                        text: `A move stops this ${noun}, and you can't stop it.`,
                         tone: "error",
                       }
                     : destinations.length === 0
                       ? {
                           text: moving
-                            ? "No other Relay can take game servers from you."
-                            : "No Relay can take game servers from you.",
+                            ? `No other Relay can take a ${noun} from you.`
+                            : `No Relay can take a ${noun} from you.`,
                           tone: "warning",
                         }
-                      : archMismatch && selected
+                      : archMismatch && selected && resource.kind !== "volume"
                         ? {
-                            text: `${selected.name} runs ${selected.nodeArch}; the Brick's image must support it.`,
+                            text: `${selected.name} runs ${selected.nodeArch}; its image must support it.`,
                             tone: "warning",
                           }
                         : null
@@ -382,23 +410,13 @@ function MigrationForm({
     >
       <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
         <CardBox>
-          <InstanceCard
-            className="min-w-0 flex-1"
-            instance={{
-              brickId: server.brickId,
-              brickSource: server.brickSource,
-              id: server.id,
-              implementation: server.implementation,
-              kind: "server",
-              relayId: server.relayId,
-            }}
+          <ResourceCard
             meta={
               usedBytes === null
-                ? server.id
-                : `${formatBytes(usedBytes)} of files`
+                ? resource.id.slice(0, 12)
+                : `${formatBytes(usedBytes)} of ${resource.kind === "instance" ? "files" : "data"}`
             }
-            name={server.name}
-            showFavorite={false}
+            resource={resource}
           />
         </CardBox>
         {/* A duplicate shows a copy above the arrow, which stays put. */}
@@ -413,18 +431,14 @@ function MigrationForm({
         </span>
         <CardBox interactive>
           <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-            <LiveServerBrickIcon
-              brickId={server.brickId}
-              brickSource={server.brickSource}
-              implementation={server.implementation ?? ""}
-            />
+            <ResourceIcon resource={resource} />
           </span>
           <Input
             aria-invalid={nameTaken || !trimmedName}
-            aria-label="New server's name"
+            aria-label="The copy's name"
             className="h-8 min-w-0 border-0 bg-transparent px-1 text-xs font-semibold shadow-none focus-visible:ring-0 dark:bg-transparent"
             disabled={pending}
-            maxLength={NAME_LIMIT}
+            maxLength={offers.nameLimit}
             value={effectiveName}
             onChange={(event) => setName(event.currentTarget.value)}
           />
@@ -446,59 +460,84 @@ function MigrationForm({
         />
       </div>
 
-      <section className="grid gap-2">
-        <div className="flex h-5 items-center justify-between">
-          <h3 className="type-technical-label text-muted-foreground">Limits</h3>
-          <Button
-            className={cn("h-5 px-1.5", !limitsChanged && "invisible")}
+      {offers.limits ? (
+        <section className="grid gap-2">
+          <div className="flex h-5 items-center justify-between">
+            <h3 className="type-technical-label text-muted-foreground">
+              Limits
+            </h3>
+            <Button
+              className={cn("h-5 px-1.5", !limitsChanged && "invisible")}
+              disabled={pending}
+              size="xs"
+              title={`Use ${resource.name}'s limits`}
+              type="button"
+              variant="ghost"
+              onClick={() => setDraft(sourceDraft)}
+            >
+              Reset
+            </Button>
+          </div>
+          <ResourceLimitRows
+            capacity={room}
             disabled={pending}
-            size="xs"
-            title={`Use ${server.name}'s limits`}
-            type="button"
-            variant="ghost"
-            onClick={() => setDraft(sourceDraft)}
-          >
-            Reset
-          </Button>
-        </div>
-        <ResourceLimitRows
-          capacity={room}
-          disabled={pending}
-          diskFloorBytes={usedBytes}
-          draft={draft}
-          invalid={"error" in parsed ? parsed.field : null}
-          original={preview.source.limits}
-          onChange={setDraft}
-        />
-      </section>
+            diskFloorBytes={usedBytes}
+            draft={draft}
+            invalid={"error" in parsed ? parsed.field : null}
+            original={sourceLimits}
+            onChange={setDraft}
+          />
+        </section>
+      ) : null}
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-x-8 gap-y-2 sm:grid-cols-2">
-        <SwitchRow
-          checked={copyMetadata}
-          disabled={pending}
-          label="Copy metadata"
-          info={<MetadataCard items={metadata} />}
-          onCheckedChange={setCopyMetadata}
-        />
-        <SwitchRow
-          checked={moving || (stopSource && preview.source.running)}
-          disabled={
-            pending ||
-            moving ||
-            !preview.allowed.power ||
-            !preview.source.running
-          }
-          label={moving ? "Stop this server" : "Stop while copying"}
-          title={
-            moving
-              ? "A move always stops it, and it stays stopped."
-              : preview.source.running
-                ? "It starts again afterwards. A running world can be caught mid-save."
-                : "It isn't running."
-          }
-          onCheckedChange={setStopSource}
-        />
-      </div>
+      {metadata.length > 0 || offers.power ? (
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-x-8 gap-y-2 sm:grid-cols-2">
+          {metadata.length > 0 ? (
+            <SwitchRow
+              checked={copyMetadata}
+              disabled={pending}
+              label="Copy metadata"
+              info={<MetadataCard items={metadata} />}
+              onCheckedChange={setCopyMetadata}
+            />
+          ) : null}
+          {!offers.power ? null : offers.copiedRunning ? (
+            // It has to run to be copied, so it's never stopped first.
+            <SwitchRow
+              checked={moving}
+              disabled
+              label={moving ? "Stop once the copy is ready" : "Keeps running"}
+              title={
+                moving
+                  ? `It runs until its copy is in, then stops and stays stopped. ${liveRisk[resource.kind]}`
+                  : `It runs while it's copied. ${liveRisk[resource.kind]}`
+              }
+              onCheckedChange={() => {}}
+            />
+          ) : (
+            <SwitchRow
+              checked={moving || (stopSource && preview.source.running)}
+              disabled={
+                pending ||
+                moving ||
+                !preview.allowed.power ||
+                !preview.source.running
+              }
+              label={moving ? `Stop this ${noun}` : "Stop while copying"}
+              title={
+                moving
+                  ? "A move always stops it, and it stays stopped."
+                  : preview.source.running
+                    ? `It starts again afterwards. ${liveRisk[resource.kind]}`
+                    : "It isn't running."
+              }
+              onCheckedChange={setStopSource}
+            />
+          )}
+        </div>
+      ) : null}
+
+      <MigrationWarnings warnings={preview.warnings[mode]} />
 
       <DialogFooter className="items-center">
         <div className="min-w-0 sm:mr-auto">
@@ -617,8 +656,8 @@ function RelayCard({
   )
 }
 
-// Where the copy goes, picked from the Relays the person may create game
-// servers on with the searchable picker used across Kiln. Each says whether
+// Where the copy goes, picked from the Relays the person may create one of
+// its kind on with the searchable picker used across Kiln. Each says whether
 // the copy fits there.
 function RelayPicker({
   destinations,
@@ -627,13 +666,13 @@ function RelayPicker({
   problemsFor,
   selected,
 }: {
-  destinations: ReadonlyArray<ServerMigrationDestination>
+  destinations: ReadonlyArray<ResourceMigrationDestination>
   disabled: boolean
   onSelect: (relayId: string) => void
   problemsFor: (
-    destination: ServerMigrationDestination
+    destination: ResourceMigrationDestination
   ) => ReadonlyArray<MigrationRoomProblem>
-  selected: ServerMigrationDestination | undefined
+  selected: ResourceMigrationDestination | undefined
 }) {
   const [open, setOpen] = React.useState(false)
   const items: Array<InstancePickerItem> = destinations.map((destination) => {
@@ -691,7 +730,7 @@ function RelayPicker({
       >
         <InstancePickerContent
           ariaLabel="Relays"
-          emptyMessage="No Relay can take game servers from you"
+          emptyMessage="No Relay can take it from you"
           includeKindGroups={false}
           items={items}
           selectedKeys={selectedKeys}
@@ -706,7 +745,7 @@ function RelayPicker({
 }
 
 function relayTag(
-  destination: ServerMigrationDestination,
+  destination: ResourceMigrationDestination,
   problems: ReadonlyArray<MigrationRoomProblem>
 ): { text: string; tone: Tone } | null {
   if (destination.problems.length) return { text: "Unavailable", tone: "error" }
@@ -723,6 +762,102 @@ function freeBytes(room: {
 }
 
 // One line, kept whether or not it has anything to say.
+// What to know before copying this one this way: kept apart from what's
+// wrong, which blocks it, and never more than its kind has to say.
+function MigrationWarnings({ warnings }: { warnings: ReadonlyArray<string> }) {
+  if (warnings.length === 0) return null
+  return (
+    <ul className="type-meta grid gap-1.5 border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-amber-200 light:text-amber-900">
+      {warnings.map((warning) => (
+        <li className="flex items-start gap-2" key={warning}>
+          <TriangleAlert
+            aria-hidden="true"
+            className="mt-[0.15em] size-3.5 shrink-0"
+          />
+          <span>{warning}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+// The old resource's card: an instance's as it shows everywhere, and a
+// volume's, which is no instance, drawn to match.
+function ResourceCard({
+  meta,
+  resource,
+}: {
+  meta: string
+  resource: MigratedResource
+}) {
+  if (resource.kind === "volume") {
+    return (
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35">
+          <VolumeKindIcon className="size-4" />
+        </span>
+        <span className="grid min-w-0">
+          <span className="truncate text-xs font-semibold">
+            {resource.name}
+          </span>
+          <span className="type-meta truncate text-muted-foreground">
+            {meta}
+          </span>
+        </span>
+      </div>
+    )
+  }
+  return (
+    <InstanceCard
+      className="min-w-0 flex-1"
+      instance={{
+        brickId: resource.brickId,
+        brickSource: resource.brickSource,
+        id: resource.id,
+        implementation: resource.implementation,
+        kind: instanceKinds[resource.kind],
+        relayId: resource.relayId,
+      }}
+      meta={meta}
+      name={resource.name}
+      showFavorite={false}
+    />
+  )
+}
+
+// The copy's icon, beside its name: a game server's Brick, else its kind.
+function ResourceIcon({ resource }: { resource: MigratedResource }) {
+  switch (resource.kind) {
+    case "instance":
+      return (
+        <LiveServerBrickIcon
+          brickId={resource.brickId}
+          brickSource={resource.brickSource}
+          implementation={resource.implementation ?? ""}
+        />
+      )
+    case "database":
+      return <DatabaseKindIcon className="size-4" />
+    case "app":
+      return <AppKindIcon className="size-4" />
+    case "volume":
+      return <VolumeKindIcon className="size-4" />
+  }
+}
+
+// What each kind is called where instances are drawn.
+const instanceKinds = {
+  app: "app",
+  database: "database",
+  instance: "server",
+} as const
+
+const unlimited: ResourceLimits = {
+  cpuMillis: null,
+  diskBytes: null,
+  memoryBytes: null,
+}
+
 function StatusLine({ status }: { status: Status | null }) {
   return (
     <p className="type-meta flex min-h-[1lh] min-w-0 items-center gap-2">
@@ -756,7 +891,7 @@ function StatusLine({ status }: { status: Status | null }) {
 // The suggestion for a limit that won't fit: the nearest that would.
 function limitFix(
   problem: MigrationRoomProblem | undefined,
-  room: ServerMigrationDestination["room"] | null,
+  room: ResourceMigrationDestination["room"] | null,
   usedBytes: number | null,
   set: (key: keyof ResourceLimitsDraft, value: number) => void
 ): Status["fix"] {
@@ -799,8 +934,8 @@ type MetadataItem = {
   reason: string | null
 }
 
-// What a copy can take besides its files and settings, and why not when
-// it can't.
+// What a copy can take besides its data and settings, of what its kind has
+// at all, and why not when it can't.
 function metadataItems({
   linkableBackups,
   moving,
@@ -809,21 +944,21 @@ function metadataItems({
 }: {
   linkableBackups: number
   moving: boolean
-  preview: ServerMigrationPreview
-  relay: ServerMigrationDestination | undefined
+  preview: ResourceMigrationPreview
+  relay: ResourceMigrationDestination | undefined
 }): ReadonlyArray<MetadataItem> {
-  const { allowed, backups, domains, webRoutes } = preview
-  return [
+  const { access, allowed, backups, domains, offers, webRoutes } = preview
+  const items: ReadonlyArray<MetadataItem> = [
     {
       detail:
-        preview.accessCount === 1
+        access === 1
           ? "1 person, with the same permissions"
-          : `${preview.accessCount} people, with the same permissions`,
+          : `${access} people, with the same permissions`,
       key: "access",
       label: "User access",
       reason: !allowed.copyAccess
         ? "You can't see who has access"
-        : preview.accessCount === 0
+        : access === 0
           ? "Only its owner has access"
           : null,
     },
@@ -878,6 +1013,11 @@ function metadataItems({
             : null,
     },
   ]
+  return items.filter((item) =>
+    item.key === "activity"
+      ? offers.activity
+      : offers.handOvers.includes(item.key)
+  )
 }
 
 // A label and its switch, the label's explanation in a tooltip or, with
@@ -981,9 +1121,9 @@ function roundUp(value: number, step: number): number {
 }
 
 function defaultDestination(
-  destinations: ReadonlyArray<ServerMigrationDestination>,
-  mode: ServerMigrationMode,
-  usable: (destination: ServerMigrationDestination) => boolean
+  destinations: ReadonlyArray<ResourceMigrationDestination>,
+  mode: ResourceMigrationMode,
+  usable: (destination: ResourceMigrationDestination) => boolean
 ) {
   const candidates = destinations.filter(usable)
   return (
@@ -995,18 +1135,19 @@ function defaultDestination(
   )
 }
 
-// A move keeps the server's name; a duplicate takes the first free
+// A move keeps its name; a duplicate takes the first free
 // "<name> copy", "<name> copy 2", … on its Relay.
 function defaultName(
   name: string,
-  mode: ServerMigrationMode,
-  taken: ReadonlyArray<string>
+  mode: ResourceMigrationMode,
+  taken: ReadonlyArray<string>,
+  limit: number
 ) {
-  if (mode === "migrate") return name.slice(0, NAME_LIMIT)
+  if (mode === "migrate") return name.slice(0, limit)
   for (let index = 1; index < 100; index += 1) {
     const suffix = index === 1 ? " copy" : ` copy ${index}`
-    const candidate = `${name.slice(0, NAME_LIMIT - suffix.length)}${suffix}`
+    const candidate = `${name.slice(0, limit - suffix.length)}${suffix}`
     if (!taken.includes(candidate)) return candidate
   }
-  return `${name.slice(0, NAME_LIMIT - 5)} copy`
+  return `${name.slice(0, limit - 5)} copy`
 }

@@ -213,7 +213,7 @@ request is answered once.
 | `file-activity:<relay>/<root>#pins` | A file root's pinned files, under their limit          |
 | `user-settings:<id>#notifications`  | A person's notification settings                       |
 | `platform-appearance#default`       | The appearance new people start with                   |
-| `server-migration:<id>`             | A game server's copy; `#task` cancelling it            |
+| `resource-migration:<id>`           | A game server's copy; `#task` cancelling it            |
 | `instance:<relay>/<id>#migration`   | Copying it, one copy at a time                         |
 
 A game server's move holds it whole until the move ends; a duplicate
@@ -221,7 +221,7 @@ holds it shared and its `#migration`, and its `#power` and `#dns` when it
 stops it. Either holds the copy whole and both Relays shared. Asking for
 the old server's deletion, or removing a copy that didn't finish, queues a
 deletion that runs once the copy ends. See
-[Moving and duplicating game servers](server-migrations.md#how-it-runs).
+[Moving and duplicating](resource-migrations.md#how-it-runs).
 
 A backup or restore holds what its data belongs to: the game server or
 database, or the volume. A run of several

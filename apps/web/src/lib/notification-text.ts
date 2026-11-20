@@ -1,4 +1,5 @@
 import type {
+  MigratedNotificationResource,
   NotificationContent,
   NotificationResource,
 } from "@/lib/notifications"
@@ -15,6 +16,14 @@ export const resourceTypeLabels = {
   instance: "Game Server",
   relay: "Relay",
 } satisfies Record<NotificationResource["type"], string>
+
+// What was moved or duplicated, as its notification names it.
+const migratedTitles = {
+  app: "App",
+  database: "Database",
+  instance: "Game Server",
+  volume: "Volume",
+} satisfies Record<MigratedNotificationResource["type"], string>
 
 // The release name GitHub gave the build, e.g. "v0.1.0 Nightly #17", or one
 // made from its version for notifications written without it.
@@ -85,17 +94,18 @@ export function notificationTitle(content: NotificationContent): string {
       return content.count === 1
         ? "1 new vulnerability found"
         : `${content.count} new vulnerabilities found`
-    case "server.migration": {
+    case "resource.migration": {
       const action = content.mode === "migrate" ? "move" : "copy"
+      const what = migratedTitles[content.source.type]
       switch (content.outcome) {
         case "completed":
           return content.mode === "migrate"
-            ? "Your Game Server was moved"
-            : "Your Game Server was duplicated"
+            ? `Your ${what} was moved`
+            : `Your ${what} was duplicated`
         case "failed":
-          return `Your Game Server couldn't ${action}`
+          return `Your ${what} couldn't ${action}`
         case "cancelled":
-          return `Your Game Server ${action} was cancelled`
+          return `Your ${what} ${action} was cancelled`
       }
     }
   }
@@ -142,11 +152,11 @@ export function notificationDetail(
           : `, ${knownExploited} exploited`
       return `${count === 1 ? label : `Up to ${label.toLowerCase()}`} in ${where}${exploited}`
     }
-    case "server.migration":
+    case "resource.migration":
       return content.outcome === "failed"
         ? `${content.source.name} - ${content.error ?? "The copy stopped"}`
         : content.sourceDeleting && !content.sourceDeleted
-          ? `${content.source.name} to ${content.destination.name} - the old server is deleted after its final backup`
+          ? `${content.source.name} to ${content.destination.name} - the old one is deleted after its final backup`
           : `${content.source.name} to ${content.destination.name}`
   }
 }

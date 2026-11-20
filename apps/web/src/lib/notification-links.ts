@@ -1,5 +1,6 @@
 import type {
   KilnNotification,
+  MigratedNotificationResource,
   NotificationContent,
   NotificationResource,
 } from "@/lib/notifications"
@@ -17,6 +18,16 @@ const resourcePaths = {
 
 export function notificationResourceHref(resource: NotificationResource) {
   return `/${resourcePaths[resource.type]}/${encodeURIComponent(resource.id)}`
+}
+
+/**
+ * Where something that was moved or duplicated is found: an instance's own
+ * page, or a volume's Relay's volumes, since a volume has no page.
+ */
+export function migratedResourceHref(resource: MigratedNotificationResource) {
+  return resource.type === "volume"
+    ? `/relay/${encodeURIComponent(resource.relayId)}/volumes`
+    : notificationResourceHref({ ...resource, type: resource.type })
 }
 
 function resourceInfoHref(resource: NotificationResource) {
@@ -72,8 +83,8 @@ export function notificationHref(
         : notificationResourceHref(content.resource)
     case "security.report":
       return securityReportHref(content.resources, platformAdmin)
-    case "server.migration":
-      return notificationResourceHref(
+    case "resource.migration":
+      return migratedResourceHref(
         content.outcome === "completed" ? content.destination : content.source
       )
   }

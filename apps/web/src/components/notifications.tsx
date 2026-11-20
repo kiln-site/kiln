@@ -187,7 +187,7 @@ function notificationToastType(content: NotificationContent): AppToastType {
       return content.status === "failed" ? "error" : "success"
     case "kiln.updated":
       return "success"
-    case "server.migration":
+    case "resource.migration":
       return content.outcome === "completed"
         ? "success"
         : content.outcome === "failed"

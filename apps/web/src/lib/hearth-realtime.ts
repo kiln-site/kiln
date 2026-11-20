@@ -93,7 +93,7 @@ const hearthRealtimeQueryScopes = {
   ],
   favorites: [exact(queryKeys.instanceFavorites)],
   icons: [exact(queryKeys.icons.index), prefix(queryKeys.icons.details)],
-  "server-migrations": [prefix(["server-migrations"])],
+  "resource-migrations": [prefix(["resource-migrations"])],
   "file-activity": [prefix(["file-activity"])],
   "github-sync": [prefix(["github-sync"])],
   "instance-directory": [

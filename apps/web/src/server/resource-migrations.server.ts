@@ -1,0 +1,412 @@
+// The migration server functions in ./resource-migrations authenticate the
+// caller and hand the signed-in user to these handlers.
+import type { ResourceLimits } from "@workspace/contracts"
+import type { z } from "zod"
+
+import { recoverPromise } from "@/effect/promise"
+import { runAppEffect } from "@/effect/runtime"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
+import {
+  activeRelay,
+  listPersistedRelays,
+  type PersistedRelay,
+} from "@/lib/relay-registry"
+import type {
+  MigratedKindName,
+  resourceReferenceSchema,
+  startResourceMigrationInputSchema,
+} from "@/lib/resource-migration-input"
+import {
+  migrationHandOvers,
+  migrationScope,
+  type MigratedDescription,
+  type MigratedKind,
+  type MigrationHandOver,
+  type MigrationHandOverCounts,
+  type MigrationWarnings,
+} from "@/lib/resource-migration-kinds/kind.server"
+import {
+  migratedKind,
+  requireMigrationPermissions,
+} from "@/lib/resource-migration-kinds/registry.server"
+import type {
+  MigrationRelayRoom,
+  MigrationSourceRoom,
+} from "@/lib/resource-migration-room"
+import {
+  checkMigrationRoom,
+  loadRelayRoom,
+  measureRoots,
+  migrationSourceRoom,
+} from "@/lib/resource-migration-room.server"
+import {
+  cancelResourceMigration,
+  listResourceMigrationsEffect,
+  startResourceMigrationEffect,
+} from "@/lib/resource-migrations.server"
+import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
+import {
+  relayTransferProblemsEffect,
+  type RelayTransferProblem,
+} from "@/server/relay-transfers.server"
+
+/** A Relay the resource could be copied to, and what stands in the way. */
+export interface ResourceMigrationDestination {
+  readonly current: boolean
+  readonly id: string
+  readonly name: string
+  readonly nodeArch: string | null
+  readonly problems: ReadonlyArray<RelayTransferProblem>
+  /** What it can give the copy; null when it couldn't say. */
+  readonly room: MigrationRelayRoom | null
+  /** Names of its kind there already, which a copy can't take. */
+  readonly takenNames: ReadonlyArray<string>
+}
+
+/** What the Move or duplicate dialog offers for one resource. */
+export interface ResourceMigrationPreview extends MigrationHandOverCounts {
+  readonly allowed: {
+    readonly backup: boolean
+    readonly copyAccess: boolean
+    /** Deleting it after a move, which backs it up first. */
+    readonly delete: boolean
+    readonly linkBackups: boolean
+    readonly network: boolean
+    /** Stopping and starting it, as a duplicate that stops it does. */
+    readonly power: boolean
+    /** Stopping it, as a move does. */
+    readonly stop: boolean
+  }
+  readonly destinations: ReadonlyArray<ResourceMigrationDestination>
+  readonly kind: MigratedKindName
+  /** What its kind is called, inside a sentence. */
+  readonly noun: string
+  /** What its kind has, of what the dialog can offer. */
+  readonly offers: {
+    /** Whether a copy's activity can include the old one's history. */
+    readonly activity: boolean
+    readonly nameLimit: number
+    /** Whether it has to run to be copied, so it's never stopped first. */
+    readonly copiedRunning: boolean
+    readonly handOvers: ReadonlyArray<MigrationHandOver>
+    /** Whether its copy can be given limits of its own. */
+    readonly limits: boolean
+    /** Whether it is stopped and started at all. */
+    readonly power: boolean
+  }
+  /**
+   * What it takes and its Relay has room for, to check a copy fits; null
+   * when its Relay couldn't say.
+   */
+  readonly room: {
+    readonly resource: MigrationSourceRoom
+    readonly source: MigrationRelayRoom
+  } | null
+  /** What to know before each way of copying it. */
+  readonly warnings: MigrationWarnings
+  readonly source: {
+    readonly id: string
+    /** The limits its copy takes unless it's given others. */
+    readonly limits: ResourceLimits | null
+    readonly name: string
+    readonly nodeArch: string | null
+    readonly provisioning: boolean
+    readonly relayId: string
+    readonly relayName: string
+    readonly running: boolean
+  }
+}
+
+export async function previewResourceMigrationHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof resourceReferenceSchema>
+): Promise<ResourceMigrationPreview> {
+  const { authorization, description, kind, relay } = await authorizeSource(
+    user,
+    data
+  )
+  const relays = (await listPersistedRelays()).filter((item) => item.enabled)
+  const roots = await runAppEffect(
+    "resourceMigrations.preview.roots",
+    kind.sourceRoots(relay.id, data.id)
+  )
+  const [sourceRoom, measured] = await Promise.all([
+    recoverPromise(
+      () => loadRelayRoom(relay, { subject: user.id }),
+      () => null
+    ),
+    recoverPromise(
+      () => measureRoots(relay, roots, user.id),
+      () => null
+    ),
+  ])
+  const destinations = await Promise.all(
+    relays.map(async (candidate) => {
+      const allowed = (
+        await resolveScopeAuthorization({
+          scope: {
+            relayId: candidate.id,
+            resourceId: candidate.id,
+            resourceType: "relay",
+          },
+          user,
+        })
+      ).allows(kind.permissions.create)
+      if (!allowed) return null
+      const [problems, takenNames, space] = await Promise.all([
+        transferProblems(relay, candidate, roots),
+        kind.takenNames(candidate, user.id),
+        candidate.id === relay.id
+          ? sourceRoom
+          : recoverPromise(
+              () => loadRelayRoom(candidate, { subject: user.id }),
+              () => null
+            ),
+      ])
+      return {
+        current: candidate.id === relay.id,
+        id: candidate.id,
+        name: candidate.name,
+        nodeArch: candidate.nodeArch,
+        problems,
+        room: space?.room ?? null,
+        takenNames,
+      } satisfies ResourceMigrationDestination
+    })
+  )
+  const allowed = {
+    backup: authorization.allows("backup.create"),
+    copyAccess: authorization.allows("access.read"),
+    delete:
+      authorization.allows(kind.permissions.delete) &&
+      authorization.allows("backup.create"),
+    linkBackups: authorization.allows("backup.download"),
+    network: authorization.allows(kind.permissions.network),
+    power:
+      authorization.allows("instance.power.stop") &&
+      authorization.allows("instance.power.start"),
+    stop: authorization.allows("instance.power.stop"),
+  }
+  const counts = await kind.handOverCounts(relay, data.id, user, {
+    backups: authorization.allows("backup.read"),
+    network: authorization.allows(kind.permissions.network),
+  })
+  return {
+    ...counts,
+    allowed,
+    destinations: destinations.filter((item) => item !== null),
+    kind: kind.kind,
+    noun: kind.noun,
+    offers: {
+      // History is read from a game server's own records so far.
+      activity: kind.kind === "instance",
+      copiedRunning: kind.copiedRunning,
+      nameLimit: kind.nameLimit,
+      handOvers: migrationHandOvers.filter((name) => kind.handOver[name]),
+      limits: description.limits !== null,
+      power: kind.powered,
+    },
+    room: sourceRoom
+      ? {
+          resource: migrationSourceRoom(description, measured),
+          source: sourceRoom.room,
+        }
+      : null,
+    warnings: (await kind.warnings?.(relay, data.id, user.id)) ?? {
+      duplicate: [],
+      migrate: [],
+    },
+    source: {
+      id: data.id,
+      limits: description.limits,
+      name: description.name,
+      nodeArch: relay.nodeArch,
+      provisioning: description.provisioning,
+      relayId: relay.id,
+      relayName: relay.name,
+      running: description.running,
+    },
+  }
+}
+
+export async function startResourceMigrationHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof startResourceMigrationInputSchema>
+): Promise<{ id: string }> {
+  const { description, kind, relay } = await authorizeSource(user, data)
+  if (description.provisioning) {
+    throw new Error(`Wait for this ${kind.noun} to finish being created first`)
+  }
+  if (description.unbuildable) throw new Error(description.unbuildable)
+  const destination = await activeRelay(data.destinationRelayId)
+  if (data.mode === "migrate" && destination.id === relay.id) {
+    throw new Error(`Choose another Relay to move this ${kind.noun} to`)
+  }
+  // A move always stops what can be stopped: the copy must be the last of
+  // it. Only what its kind has is handed over.
+  const moved = data.mode === "migrate"
+  const options = {
+    ...data.options,
+    backup: kind.backupFirst ? data.options.backup : null,
+    copyAccess: Boolean(kind.handOver.access) && data.options.copyAccess,
+    deleteSource: moved ? data.options.deleteSource : null,
+    limits: description.limits ? data.options.limits : null,
+    linkBackups: Boolean(kind.handOver.backups) && data.options.linkBackups,
+    moveDomain:
+      moved && Boolean(kind.handOver.domains) && data.options.moveDomain,
+    moveWebRoutes:
+      moved && Boolean(kind.handOver.routes) && data.options.moveWebRoutes,
+    stopSource:
+      kind.powered &&
+      (moved || (!kind.copiedRunning && data.options.stopSource)),
+  }
+  // Each option needs its own permission, checked again as the copy goes.
+  await requireMigrationPermissions(user, {
+    destination: { relayId: destination.id },
+    kind: kind.kind,
+    mode: data.mode,
+    options,
+    source: { id: data.id, relayId: relay.id },
+  })
+  // A backup first goes where they chose: the copy holds that while it runs.
+  const backupStorageIds = options.backup ? [options.backup.storageId] : []
+  if (kind.kind !== "app") {
+    await requireBackupStorageSelection({
+      relayId: relay.id,
+      storageIds: backupStorageIds,
+      targetId: data.id,
+      targetKind: kind.kind,
+      user,
+    })
+  }
+  // Deleting the old one backs it up first, to a destination they may use.
+  if (options.deleteSource) {
+    await requireDeleteConfirmation({
+      confirmation: data.confirmation?.confirmation ?? "",
+      name: description.name,
+      password: data.confirmation?.password ?? "",
+      user,
+    })
+    if (kind.kind !== "app") {
+      await requireBackupStorageSelection({
+        relayId: relay.id,
+        storageIds: [options.deleteSource.storageId],
+        targetId: data.id,
+        targetKind: kind.kind,
+        user,
+      })
+    }
+  }
+  const roots = await runAppEffect(
+    "resourceMigrations.start.roots",
+    kind.sourceRoots(relay.id, data.id)
+  )
+  const problems = await transferProblems(relay, destination, roots)
+  if (problems.length) {
+    throw new Error(problems.map((problem) => problem.message).join(". "))
+  }
+  if ((await kind.takenNames(destination, user.id)).includes(data.name)) {
+    throw new Error(
+      `A ${kind.noun} on ${destination.name} is already named ${data.name}`
+    )
+  }
+  const room = await checkMigrationRoom({
+    backup: options.backup,
+    copyLimits: options.limits,
+    destination,
+    kind: kind.kind,
+    limits: true,
+    source: relay,
+    sourceId: data.id,
+    subject: user.id,
+  })
+  if (room.length) {
+    throw new Error(room.map((problem) => problem.message).join(". "))
+  }
+  const id = await runAppEffect(
+    "resourceMigrations.start",
+    startResourceMigrationEffect({
+      actor: user,
+      backupStorageIds,
+      destinationName: data.name,
+      destinationRelayId: destination.id,
+      kind: kind.kind,
+      mode: data.mode,
+      options,
+      source: { id: data.id, name: description.name, relayId: relay.id },
+    })
+  )
+  return { id }
+}
+
+export function listResourceMigrationsHandler(user: AuthenticatedUser) {
+  return runAppEffect(
+    "resourceMigrations.list",
+    listResourceMigrationsEffect(user.id)
+  )
+}
+
+export async function cancelResourceMigrationHandler(
+  user: AuthenticatedUser,
+  id: string
+) {
+  await cancelResourceMigration(user, id)
+}
+
+// Copying a resource needs what its kind says copying one takes, and for it
+// to be on its Relay.
+async function authorizeSource(
+  user: AuthenticatedUser,
+  data: z.infer<typeof resourceReferenceSchema>
+): Promise<{
+  authorization: Awaited<ReturnType<typeof resolveScopeAuthorization>>
+  description: MigratedDescription
+  kind: MigratedKind
+  relay: PersistedRelay
+}> {
+  const kind = migratedKind(data.kind)
+  const relay = await activeRelay(data.relayId)
+  const authorization = await resolveScopeAuthorization({
+    scope: migrationScope(kind.kind, { id: data.id, relayId: relay.id }),
+    user,
+  })
+  for (const permission of kind.permissions.copy) {
+    authorization.require(permission)
+  }
+  const description = await kind.describe(relay, data.id, user.id)
+  if (!description) {
+    throw new Error(`This ${kind.noun} isn't on this Relay`)
+  }
+  return { authorization, description, kind, relay }
+}
+
+// What would keep any of its roots from being copied between two Relays,
+// each problem once.
+async function transferProblems(
+  source: PersistedRelay,
+  destination: PersistedRelay,
+  roots: ReadonlyArray<string>
+): Promise<Array<RelayTransferProblem>> {
+  const found = await Promise.all(
+    roots.map((rootId) =>
+      runAppEffect(
+        "resourceMigrations.transferProblems",
+        relayTransferProblemsEffect({
+          destination,
+          destinationRootId: rootId,
+          source,
+          sourceRootId: rootId,
+        })
+      )
+    )
+  )
+  const seen = new Set<string>()
+  return found.flat().filter((problem) => {
+    const key = `${problem.code}:${problem.relayId}:${problem.message}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}

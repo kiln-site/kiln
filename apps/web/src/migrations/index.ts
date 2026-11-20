@@ -90,6 +90,7 @@ import { relayJoinFeatures } from "@/migrations/0089_relay_join_features"
 import { relayDatabasePermission } from "@/migrations/0090_relay_database_permission"
 import { scheduleVolumeTargets } from "@/migrations/0091_schedule_volume_targets"
 import { backupDestinationIds } from "@/migrations/0092_backup_destination_ids"
+import { resourceMigrations } from "@/migrations/0093_resource_migrations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -183,4 +184,5 @@ export const migrations: ReadonlyArray<Migration> = [
   relayDatabasePermission,
   scheduleVolumeTargets,
   backupDestinationIds,
+  resourceMigrations,
 ]

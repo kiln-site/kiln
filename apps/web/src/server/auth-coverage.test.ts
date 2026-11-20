@@ -50,7 +50,7 @@ const confirmedDeletions = [
   "relay-volumes.ts:deleteRelayVolume",
   "resource-deletions.ts:retryResourceDeletion",
   // A move that deletes the old server it leaves.
-  "server-migrations.ts:startServerMigration",
+  "resource-migrations.ts:startResourceMigration",
 ]
 const confirmedCliDeletions = ["deleteCliServerEffect"]
 

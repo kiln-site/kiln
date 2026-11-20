@@ -404,29 +404,32 @@ function copiedPresetId(presetId: string, to: ResourceScope): string {
 }
 
 /**
- * Gives a new game server the access its source had: the same people, with
- * the same permissions and presets. Presets belong to one resource, so the
- * source's are copied to the new server. Pending invitations aren't copied,
- * since their links can't be, and the new server's owner owns it rather
- * than being granted access. Someone who already has access to the new
- * server keeps what they have. Returns the people given access.
+ * Gives a copy of a game server or a database the access its source had:
+ * the same people, with the same permissions and presets. Presets belong to
+ * one resource, so the source's are copied to the copy. Pending invitations
+ * aren't copied, since their links can't be, and the copy's owner owns it
+ * rather than being granted access. Someone who already has access to the
+ * copy keeps what they have. Returns the people given access.
  */
-export function copyInstanceAccessEffect(input: {
+export function copyResourceAccessEffect(input: {
   readonly actorId: string
-  readonly from: { readonly instanceId: string; readonly relayId: string }
-  readonly to: { readonly instanceId: string; readonly relayId: string }
+  /** What both are: grants are made on game servers and databases. */
+  readonly resourceType: "database" | "instance"
+  readonly from: { readonly id: string; readonly relayId: string }
+  readonly to: { readonly id: string; readonly relayId: string }
 }) {
+  const { resourceType } = input
   const fromScope: ResourceScope = {
     relayId: input.from.relayId,
-    resourceId: input.from.instanceId,
-    resourceType: "instance",
+    resourceId: input.from.id,
+    resourceType,
   }
   const toScope: ResourceScope = {
     relayId: input.to.relayId,
-    resourceId: input.to.instanceId,
-    resourceType: "instance",
+    resourceId: input.to.id,
+    resourceType,
   }
-  return accessPolicyTransaction("access.copyInstance", (transaction) =>
+  return accessPolicyTransaction("access.copyResource", (transaction) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       // Locked in one order whichever way the copy goes, so copies in
@@ -443,8 +446,8 @@ export function copyInstanceAccessEffect(input: {
       const target = fromFirst ? second : first
       const presets = yield* transaction.queryRows<CopiedPresetRow>(
         `SELECT id, name FROM ${databaseTable("permission_preset")}
-          WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?`,
-        [fromScope.relayId, fromScope.resourceId]
+          WHERE relay_id = ? AND resource_type = ? AND resource_id = ?`,
+        [fromScope.relayId, resourceType, fromScope.resourceId]
       )
       const presetIds = new Map<string, string>()
       for (const preset of presets) {
@@ -456,10 +459,11 @@ export function copyInstanceAccessEffect(input: {
           `INSERT IGNORE INTO ${databaseTable("permission_preset")}
              (id, relay_id, resource_type, resource_id, name, created_by,
               updated_by, created_at, updated_at)
-           VALUES (?, ?, 'instance', ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             toScope.relayId,
+            resourceType,
             toScope.resourceId,
             preset.name,
             input.actorId,
@@ -479,9 +483,9 @@ export function copyInstanceAccessEffect(input: {
       }
       const grants = yield* transaction.queryRows<CopiedGrantRow>(
         `SELECT id, user_id, role FROM ${databaseTable("access_grant")}
-          WHERE relay_id = ? AND resource_type = 'instance'
+          WHERE relay_id = ? AND resource_type = ?
             AND resource_id = ? AND state = 'active'`,
-        [fromScope.relayId, fromScope.resourceId]
+        [fromScope.relayId, resourceType, fromScope.resourceId]
       )
       const copiedTo: Array<string> = []
       for (const grant of grants) {
@@ -491,11 +495,12 @@ export function copyInstanceAccessEffect(input: {
           `INSERT IGNORE INTO ${databaseTable("access_grant")}
              (id, user_id, relay_id, resource_type, resource_id, role, state,
               granted_by, created_at, updated_at)
-           VALUES (?, ?, ?, 'instance', ?, ?, 'active', ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
           [
             id,
             grant.user_id,
             toScope.relayId,
+            resourceType,
             toScope.resourceId,
             grant.role,
             input.actorId,

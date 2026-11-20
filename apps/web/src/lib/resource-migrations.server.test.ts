@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomUUID } from "node:crypto"
+import { generateKeyPairSync } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Scope } from "effect"
@@ -11,16 +11,13 @@ import { Database } from "@/effect/database"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { encryptPrivateKey } from "@/lib/relay-registry"
-import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { deleteResource, keepResource } from "@/lib/resource-deletion.server"
-import type { ServerMigrationOptions } from "@/lib/server-migration-input"
+import type { ResourceMigrationOptions } from "@/lib/resource-migration-input"
 import {
-  cancelServerMigrationEffect,
-  rollBackLegacyServerMigration,
-  rollBackLegacyServerMigrationsEffect,
-  serverMigration,
-  startServerMigrationEffect,
-} from "@/lib/instance-migrations.server"
+  cancelResourceMigrationEffect,
+  resourceMigration,
+  startResourceMigrationEffect,
+} from "@/lib/resource-migrations.server"
 import { OperationsEngine } from "@/operations/engine"
 import {
   OperationsEngineService,
@@ -31,10 +28,8 @@ import { startRelayTransfer } from "@/server/relay-transfers.server"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
-  insertBackup,
   insertInstance,
   insertRelay,
-  insertRows,
   insertUser,
   selectRows,
 } from "@/test/seed"
@@ -376,8 +371,7 @@ const hearths = Effect.gen(function* () {
     const scope = yield* Scope.make()
     const engine = yield* Layer.buildWithScope(
       Layer.mergeAll(
-        serverMigration.layer,
-        rollBackLegacyServerMigration.layer,
+        resourceMigration.layer,
         deleteResource.layer,
         keepResource.layer
       ).pipe(
@@ -475,8 +469,8 @@ const seed = Effect.gen(function* () {
 
 const options = (
   mode: "duplicate" | "migrate",
-  chosen: Partial<ServerMigrationOptions> = {}
-): ServerMigrationOptions => ({
+  chosen: Partial<ResourceMigrationOptions> = {}
+): ResourceMigrationOptions => ({
   backup: null,
   copyAccess: false,
   deleteSource: null,
@@ -492,22 +486,23 @@ const options = (
 const start = (
   service: OperationsEngineService["Service"],
   input: {
-    readonly chosen?: Partial<ServerMigrationOptions>
+    readonly chosen?: Partial<ResourceMigrationOptions>
     readonly mode: "duplicate" | "migrate"
     readonly name: string
     readonly source?: string
   }
 ) => {
   const chosen = options(input.mode, input.chosen)
-  return startServerMigrationEffect({
+  return startResourceMigrationEffect({
     actor: mover,
     backupStorageIds: chosen.backup ? [null] : [],
     destinationName: input.name,
     destinationRelayId: newRelay,
+    kind: "instance",
     mode: input.mode,
     options: chosen,
     source: {
-      instanceId: input.source ?? survival,
+      id: input.source ?? survival,
       name: "Survival",
       relayId: oldRelay,
     },
@@ -515,14 +510,14 @@ const start = (
 }
 
 interface MigrationRecord {
-  destination_instance_id: string
+  destination_id: string
   error: string | null
   id: string
   state: string
   step: string
 }
 
-const migrations = selectRows<MigrationRecord>("server_migration")
+const migrations = selectRows<MigrationRecord>("resource_migration")
 
 const migrationUntil = (id: string, done: (row: MigrationRecord) => boolean) =>
   until(
@@ -566,63 +561,6 @@ const serverState = (relayId: string, id: string) =>
 
 describeMysql("Server migrations", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "resumes a move an upgrade cut off with what that upgrade settled",
-      () =>
-        Effect.gen(function* () {
-          const { service, startHearth } = yield* hearths
-          const sql = yield* SqlClient.SqlClient
-          yield* seed
-          const before = yield* startHearth
-
-          // The engine keeps what this run read, a destination that's gone.
-          relay.provisioningHeld.add("Moved")
-          const move = yield* start(service, {
-            chosen: {
-              deleteSource: {
-                storageId: "d".repeat(12),
-              },
-            },
-            mode: "migrate",
-            name: "Moved",
-          })
-          yield* migrationUntil(move, (row) => row.step === "provision")
-          yield* stopHearth(before)
-
-          // Its records as they stood before a destination was required,
-          // its server without a preferred one.
-          yield* sql`UPDATE kiln_operation
-            SET input = JSON_REMOVE(input, '$.options.deleteSource.storageId')
-            WHERE kind = 'server.migration'`
-          yield* sql`UPDATE kiln_server_migration
-            SET options = JSON_REMOVE(options, '$.deleteSource.storageId')`
-          yield* sql`ALTER TABLE kiln_backup_policy
-            ADD COLUMN storage_id char(36) DEFAULT NULL`
-          yield* explicitBackupDestinations.run
-
-          const after = yield* startHearth
-          releaseProvisioning("Moved")
-          const moved = yield* migrationUntil(move, ended)
-          const { backup_id: finalBackup } = yield* until(
-            deletions.pipe(
-              Effect.map((rows) =>
-                rows.find((deletion) => deletion.resource_id === survival)
-              )
-            ),
-            (deletion) => deletion?.backup_id != null
-          ).pipe(Effect.map((deletion) => deletion!))
-          yield* finishBackup(finalBackup!)
-          const deletion = yield* deletionUntil(survival, ["completed"])
-          yield* operationsEnded
-          yield* stopHearth(after)
-
-          assert.strictEqual(moved.state, "completed")
-          assert.isNull(deletion.storage_id)
-          assert.strictEqual(serverState(oldRelay, survival), "gone")
-        }),
-      180_000
-    )
-
     it.effect(
       "copies one server once at a time, while another server copies alongside",
       () =>
@@ -697,7 +635,7 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(row.state, "completed")
           // The limit its room was checked with, not one saved since.
           assert.strictEqual(
-            relay.servers.get(serverKey(newRelay, row.destination_instance_id))
+            relay.servers.get(serverKey(newRelay, row.destination_id))
               ?.memoryBytes,
             4 * 1024 ** 3
           )
@@ -832,7 +770,7 @@ describeMysql("Server migrations", () => {
             mode: "migrate",
             name: "Early",
           })
-          const { destination_instance_id: earlyCopy } = yield* migrationUntil(
+          const { destination_id: earlyCopy } = yield* migrationUntil(
             early,
             (row) => row.step === "provision"
           )
@@ -840,7 +778,7 @@ describeMysql("Server migrations", () => {
             Effect.sync(() => serversOn(newRelay).length),
             (count) => count === 1
           )
-          yield* cancelServerMigrationEffect(mover.id, early)
+          yield* cancelResourceMigrationEffect(mover.id, early)
           const earlyRow = yield* migrationUntil(early, ended)
           yield* deletionUntil(earlyCopy, ["completed"])
           yield* operationsEnded
@@ -875,11 +813,11 @@ describeMysql("Server migrations", () => {
           })
           // Its files packed, and the new Relay asked to pull them.
           yield* reached(pull)
-          const { destination_instance_id: removed } = yield* migrationUntil(
+          const { destination_id: removed } = yield* migrationUntil(
             cancelled,
             () => true
           )
-          yield* cancelServerMigrationEffect(mover.id, cancelled)
+          yield* cancelResourceMigrationEffect(mover.id, cancelled)
           yield* Deferred.succeed(pull.release, undefined)
           relay.copyHeld = false
           const cancelledRow = yield* migrationUntil(cancelled, ended)
@@ -903,7 +841,7 @@ describeMysql("Server migrations", () => {
             name: "Moved",
           })
           yield* reached(handingOver)
-          const refused = yield* cancelServerMigrationEffect(
+          const refused = yield* cancelResourceMigrationEffect(
             mover.id,
             moved
           ).pipe(Effect.flip)
@@ -932,7 +870,7 @@ describeMysql("Server migrations", () => {
             source: creative,
           })
           yield* reached(keepingSource)
-          yield* cancelServerMigrationEffect(mover.id, kept)
+          yield* cancelResourceMigrationEffect(mover.id, kept)
           yield* Deferred.succeed(keepingSource.release, undefined)
           const keptRow = yield* migrationUntil(kept, ended)
           yield* operationsEnded
@@ -951,133 +889,12 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(serverState(oldRelay, survival), "gone")
           assert.strictEqual(keptRow.state, "cancelled")
           assert.sameMembers(serversOn(newRelay), [
-            serverKey(newRelay, movedRow.destination_instance_id),
-            serverKey(newRelay, keptRow.destination_instance_id),
+            serverKey(newRelay, movedRow.destination_id),
+            serverKey(newRelay, keptRow.destination_id),
           ])
           assert.strictEqual(serverState(oldRelay, creative), "running")
         }),
       180_000
     )
-
-    it.effect(
-      "undoes migrations a Hearth from before left running, keeping a move already handed to deletion",
-      () =>
-        Effect.gen(function* () {
-          const { service, startHearth } = yield* hearths
-          yield* seed
-          // A move copying its files, its old server stopped for it, and
-          // its copy made.
-          const copying = randomUUID()
-          const copy = "b2".repeat(6)
-          relay.servers.set(serverKey(oldRelay, survival), {
-            name: "Survival",
-            provisioning: false,
-            state: "stopped",
-          })
-          relay.servers.set(serverKey(newRelay, copy), {
-            name: "Copy",
-            provisioning: false,
-            state: "stopped",
-          })
-          relay.pulls.set("legacytransfer", "pulling")
-          yield* insertInstance(newRelay, copy, { owner_id: mover.id })
-          yield* insertLegacy({
-            destination: copy,
-            id: copying,
-            source: survival,
-            step: "copy",
-            transfer: "legacytransfer",
-          })
-          // A move whose old server's deletion it already asked for.
-          const handedOver = randomUUID()
-          yield* insertLegacy({
-            deleteSource: true,
-            destination: "d4".repeat(6),
-            error: "Relay connection closed",
-            id: handedOver,
-            source: creative,
-            state: "cancelling",
-            step: "finish",
-          })
-          yield* insertBackup("final-backup", {
-            reason: "final_delete",
-            relay_id: oldRelay,
-            status: "running",
-            target_id: creative,
-          })
-          yield* insertRows("resource_deletion", {
-            actor: JSON.stringify(mover),
-            backup_id: "final-backup",
-            created_at: at,
-            final_backup: true,
-            id: randomUUID(),
-            relay_id: oldRelay,
-            requested_by: mover.id,
-            resource_id: creative,
-            resource_kind: "instance",
-            status: "backing_up",
-            updated_at: at,
-          })
-          relay.servers.get(serverKey(oldRelay, creative))!.state = "stopped"
-
-          const hearth = yield* startHearth
-          yield* rollBackLegacyServerMigrationsEffect().pipe(
-            Effect.provideService(OperationsEngineService, service)
-          )
-          const undone = yield* migrationUntil(copying, ended)
-          const kept = yield* migrationUntil(handedOver, ended)
-          yield* deletionUntil(copy, ["completed"])
-          yield* operationsEnded
-          yield* stopHearth(hearth)
-
-          assert.strictEqual(undone.state, "failed")
-          assert.match(undone.error ?? "", /Hearth was updated/)
-          assert.deepStrictEqual(serversOn(newRelay), [])
-          assert.strictEqual(serverState(oldRelay, survival), "running")
-          assert.strictEqual(relay.pulls.get("legacytransfer"), "cancelled")
-          assert.strictEqual(kept.state, "completed")
-          assert.strictEqual(serverState(oldRelay, creative), "stopped")
-        }),
-      180_000
-    )
   })
 })
-
-// A migration as a Hearth from before migrations were operations recorded
-// it, with no operation.
-function insertLegacy(row: {
-  deleteSource?: boolean
-  destination: string
-  error?: string
-  id: string
-  source: string
-  state?: "running" | "cancelling"
-  step: string
-  transfer?: string
-}) {
-  return insertRows("server_migration", {
-    actor: JSON.stringify(mover),
-    create_key: randomUUID(),
-    created_at: at,
-    destination_instance_id: row.destination,
-    destination_name: "Copy",
-    destination_relay_id: newRelay,
-    error: row.error ?? null,
-    id: row.id,
-    mode: "migrate",
-    options: JSON.stringify(
-      options("migrate", {
-        deleteSource: row.deleteSource ? { storageId: null } : null,
-      })
-    ),
-    requested_by: mover.id,
-    source_instance_id: row.source,
-    source_name: "Survival",
-    source_relay_id: oldRelay,
-    source_was_running: 1,
-    state: row.state ?? "running",
-    step: row.step,
-    transfer_id: row.transfer ?? null,
-    updated_at: at,
-  })
-}
