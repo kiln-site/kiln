@@ -7,7 +7,7 @@ import { databaseTableName } from "@/lib/database-config"
 // Server migrations: copying a game server to a new one, on the same Relay or
 // another, and for a move, handing its place over to the copy. A row holds
 // what someone asked for and how far the copy got, so one that stopped, such
-// as when Hearth restarted, carries on (lib/server-migrations.server.ts).
+// as when Hearth restarted, carries on (lib/instance-migrations.server.ts).
 // Finished rows stay as the new server's lineage: which server it came from.
 export const serverMigrations: Migration = {
   id: 29,

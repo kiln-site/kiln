@@ -69,10 +69,20 @@ old server stops.
 
 A copy is a durable operation, `server.migration`
 ([Hearth operations](hearth-operations.md#durable-operations),
-`apps/web/src/lib/server-migrations.server.ts`), started once the start
+`apps/web/src/lib/instance-migrations.server.ts`), started once the start
 request's checks pass. Its row in `server_migration` keeps how far it got
-and how it ended, for the person and for activity history. It holds, until
-it ends:
+and how it ended, for the person and for activity history.
+
+That file is what every kind of instance would share: holding both
+instances, storing each step, waiting, cancelling, and undoing. What a game
+server adds is its `MigratedKind`
+(`apps/web/src/lib/instance-migration-kinds.server.ts`): what the copy is
+built from, how it's made, its file root, its backup first, the room it
+needs, the permissions it takes, and what a finished copy is handed. Game
+servers are the only kind there; another kind is another entry in
+`migratedKinds`, not another operation.
+
+The operation holds, until it ends:
 
 - **Move**: the old server whole, so nothing else changes it until its
   place is handed over.

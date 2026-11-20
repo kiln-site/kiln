@@ -6,7 +6,7 @@ import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 
 import { formatBytes } from "@/lib/format-bytes"
 import { serverMigrationsQueryOptions } from "@/lib/server-migration-queries"
-import type { ServerMigrationView } from "@/lib/server-migrations.server"
+import type { ServerMigrationView } from "@/lib/instance-migrations.server"
 import { cancelServerMigration } from "@/server/server-migrations"
 
 // Copies whose toast someone closed stay closed across reloads; how each

@@ -20,7 +20,7 @@ import {
   rollBackLegacyServerMigrationsEffect,
   serverMigration,
   startServerMigrationEffect,
-} from "@/lib/server-migrations.server"
+} from "@/lib/instance-migrations.server"
 import { OperationsEngine } from "@/operations/engine"
 import {
   OperationsEngineService,
@@ -98,6 +98,8 @@ const mover = {
 // ------------------------------------------------------------ the Relays
 
 interface FakeServer {
+  // Its memory limit, as it was created with or changed to since.
+  memoryBytes?: number
   name: string
   // Created, and not yet provisioned.
   provisioning: boolean
@@ -163,7 +165,11 @@ function instanceOf(relayId: string, id: string) {
     id,
     implementation: "paper",
     javaVersion: "21",
-    limits: { cpuMillis: null, diskBytes: 1024 ** 3, memoryBytes: null },
+    limits: {
+      cpuMillis: null,
+      diskBytes: 1024 ** 3,
+      memoryBytes: server.memoryBytes ?? null,
+    },
     name: server.name,
     observedState: server.state,
     service: "survival",
@@ -290,7 +296,9 @@ function answer(
   switch (operation) {
     case "instance.provision.prepare":
       if (!relay.servers.has(key)) {
+        const limits = payload.limits as { memoryBytes?: number } | undefined
         relay.servers.set(key, {
+          memoryBytes: limits?.memoryBytes,
           name: String(payload.name),
           provisioning: true,
           state: "stopped",
@@ -661,6 +669,37 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(serversOn(newRelay).length, 3)
           // A duplicate leaves the old server as it was.
           assert.strictEqual(serverState(oldRelay, survival), "running")
+        }),
+      180_000
+    )
+
+    it.effect(
+      "makes a duplicate from what its server was before its room was checked",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          yield* seed
+          const hearth = yield* startHearth
+          const old = relay.servers.get(serverKey(oldRelay, survival))!
+          old.memoryBytes = 4 * 1024 ** 3
+          // A duplicate lets its server be changed while it runs: its limit
+          // is raised while the Relays are asked whether the copy fits.
+          const fitting = hold("transfer.space")
+          const id = yield* start(service, { mode: "duplicate", name: "Copy" })
+          yield* reached(fitting)
+          old.memoryBytes = 8 * 1024 ** 3
+          yield* Deferred.succeed(fitting.release, undefined)
+          const row = yield* migrationUntil(id, ended)
+          yield* operationsEnded
+          yield* stopHearth(hearth)
+
+          assert.strictEqual(row.state, "completed")
+          // The limit its room was checked with, not one saved since.
+          assert.strictEqual(
+            relay.servers.get(serverKey(newRelay, row.destination_instance_id))
+              ?.memoryBytes,
+            4 * 1024 ** 3
+          )
         }),
       180_000
     )
