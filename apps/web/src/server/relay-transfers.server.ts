@@ -10,7 +10,7 @@ import { randomUUID, sign } from "node:crypto"
 
 import {
   databaseIdFromFileRoot,
-  fileTransferAction,
+  peerTransferAction,
   RelayTransferPullSchema,
   RelayTransferSourceSchema,
   type RelayPeerEndpoint,
@@ -156,7 +156,7 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
         })
         continue
       }
-      const action = fileTransferAction(rootId, direction)
+      const action = peerTransferAction(rootId, direction)
       if (relay.role !== "full_access" && !relay.actions.includes(action)) {
         problems.push({
           code: "hearth_access",

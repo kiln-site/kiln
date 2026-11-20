@@ -137,6 +137,24 @@ export function fileTransferAction(
   return fileTransferActions[fileRootOwner(rootId).kind][direction]
 }
 
+/**
+ * The Relay action that copies a root to or from another Relay. A folder's
+ * files move with the actions they do through a browser. A database is
+ * dumped and restored by the Relay itself, as its administrator and with no
+ * login from whoever asks, as its backups are: so copying one takes what
+ * backing one up and restoring one do, never what exporting or importing a
+ * dump with its own login does.
+ */
+export function peerTransferAction(
+  rootId: string,
+  direction: "download" | "upload"
+): FileTransferAction | "backup.create" | "backup.restore" {
+  if (databaseIdFromFileRoot(rootId) !== null) {
+    return direction === "download" ? "backup.create" : "backup.restore"
+  }
+  return fileTransferAction(rootId, direction)
+}
+
 // Tailscale network members are named by kind: a game server as
 // `instance:<id>`, an App's service as `app:<appId>:<service>`, and a
 // database as `database:<id>`.

@@ -80,8 +80,8 @@ export async function databaseTransferRoot(
       `A ${database.engine} database can't be copied between Relays yet`
     )
   }
-  const whole = (path: string | undefined) =>
-    path
+  const whole = (named: boolean) =>
+    named
       ? Effect.fail(new Error("A database is copied whole, not by path"))
       : Effect.void
   return {
@@ -91,7 +91,7 @@ export async function databaseTransferRoot(
       Effect.map((current) => current.diskUsedBytes)
     ),
     install: (path, artifact) =>
-      whole(path).pipe(
+      whole(path !== "").pipe(
         Effect.andThen(
           Effect.tryPromise({
             try: () =>
@@ -102,14 +102,30 @@ export async function databaseTransferRoot(
         Effect.asVoid
       ),
     pack: (paths, artifact) =>
-      whole(paths[0]).pipe(
+      whole(paths.length > 0).pipe(
         Effect.andThen(
-          Effect.tryPromise({
-            try: (signal) =>
-              dumpCompressedDatabase(databases, databaseId, artifact, {
-                signal,
-              }),
-            catch: (cause) => cause,
+          Effect.suspend(() => {
+            const stop = new AbortController()
+            const dumping = dumpCompressedDatabase(
+              databases,
+              databaseId,
+              artifact,
+              { signal: stop.signal }
+            )
+            // Stopped, as when its transfer is discarded, it is waited for:
+            // the dump has ended and removed what it wrote before its lanes
+            // are let go or another pack is started under its transfer ID.
+            return Effect.tryPromise({
+              try: () => dumping,
+              catch: (cause) => cause,
+            }).pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => stop.abort()).pipe(
+                  Effect.andThen(Effect.tryPromise(() => dumping)),
+                  Effect.ignore
+                )
+              )
+            )
           })
         ),
         Effect.map((dump) => ({

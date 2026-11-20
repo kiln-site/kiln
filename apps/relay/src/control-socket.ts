@@ -30,7 +30,7 @@ import {
   relayControlMaxFrameBytes,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
-  fileTransferAction,
+  peerTransferAction,
   isAuditedRelayControlOperation,
   relayControlOperationChanges,
   relayControlOperationRefusedWhilePaused,
@@ -1913,11 +1913,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "backup.restore.unfinished":
       return "backup.read"
     // Copying files between Relays is downloading them from the source and
-    // uploading them to the destination.
+    // uploading them to the destination; copying a database is backing it
+    // up and restoring it.
     case "transfer.source.prepare":
     case "transfer.source.get":
     case "transfer.source.discard":
-      return fileTransferAction(
+      return peerTransferAction(
         objectString(request.payload, "rootId") ?? "",
         "download"
       )
@@ -1927,17 +1928,17 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       const rootId = objectString(request.payload, "rootId")
       return rootId === null
         ? "relay.read"
-        : fileTransferAction(rootId, "download")
+        : peerTransferAction(rootId, "download")
     }
     case "transfer.pull.start":
-      return fileTransferAction(
+      return peerTransferAction(
         objectString(objectRecord(request.payload, "target") ?? {}, "rootId") ??
           "",
         "upload"
       )
     case "transfer.pull.get":
     case "transfer.pull.cancel":
-      return fileTransferAction(
+      return peerTransferAction(
         objectString(request.payload, "rootId") ?? "",
         "upload"
       )

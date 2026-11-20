@@ -312,6 +312,51 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("copies a database between Relays only for a client that may back one up and restore one", async () => {
+    const relay = await startRelay()
+    const database = "database:0123456789ab"
+    const transferId = "transfer-database-1"
+    const copies = [
+      ["transfer.source.prepare", { paths: [], rootId: database, transferId }],
+      [
+        "transfer.pull.start",
+        { target: { path: "", rootId: database }, transferId },
+      ],
+    ] as const
+    // The Relay dumps and restores it as its administrator, which a client
+    // that may only export and import dumps with the database's own login
+    // was never given.
+    const dumper = await relay.connect(
+      await relay.pair({
+        role: "custom",
+        actions: ["database.dump.export", "database.dump.import"],
+      })
+    )
+    for (const [operation, payload] of copies) {
+      const refused = sendRequest(dumper.socket, operation, payload)
+      expect(await dumper.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: refused,
+        type: "error",
+      })
+    }
+
+    const keeper = await relay.connect(
+      await relay.pair({
+        role: "custom",
+        actions: ["backup.create", "backup.restore"],
+      })
+    )
+    for (const [operation, payload] of copies) {
+      const sent = sendRequest(keeper.socket, operation, payload)
+      expect(await keeper.inbox.next()).toMatchObject({
+        payload: { ok: true },
+        replyTo: sent,
+        type: "response",
+      })
+    }
+  })
+
   it("takes the same power action for every kind, one for each action, and none for a Relay", async () => {
     const relay = await startRelay()
     const id = "0123456789ab"

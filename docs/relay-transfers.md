@@ -124,7 +124,11 @@ names, as restoring a backup into another database does, holding that
 database whole. It is copied whole, never by path, and both databases must
 be running. A dump of another engine's family is refused before any of it
 is imported, and an engine Kiln can't dump (Redis, Valkey) can't be
-copied. A Relay that restarts while a dump is being imported fails the
+copied. The Relay dumps and restores it as its administrator, with no
+login from whoever asks, so a pairing needs `backup.create` on the source
+and `backup.restore` on the destination (`peerTransferAction`), not the
+`database.dump.*` actions that export and import a dump with the
+database's own login. A Relay that restarts while a dump is being imported fails the
 pull, as it does one that was installing files, since the database may
 hold part of it. `transfer.space` reports a database's size on disk, which
 is more than its dump takes. Hearth doesn't ask for this yet: its preflight
