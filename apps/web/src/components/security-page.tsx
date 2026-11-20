@@ -26,6 +26,7 @@ import {
 } from "@/components/data-table-workspace"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
+import { RecoveryCodeCard } from "@/components/recovery-code/recovery-code-card"
 import { RelativeTime } from "@/components/relative-time"
 import { SecurityDialog } from "@/components/security-dialog"
 import { securityFixLabel } from "@/components/security-fix"
@@ -66,10 +67,14 @@ import { scanSecurityNow, setSecurityScansPaused } from "@/server/security"
  * are in the dialog each row opens.
  */
 export const SecurityPage = React.memo(function SecurityPage({
+  onRecoveryCodeOpenChange,
   onScopeChange,
+  recoveryCodeOpen,
   scope,
 }: {
+  onRecoveryCodeOpenChange: (open: boolean) => void
   onScopeChange: (scope: string | null) => void
+  recoveryCodeOpen: boolean
   scope: string | null
 }) {
   // The whole view names every resource the picker offers.
@@ -89,6 +94,10 @@ export const SecurityPage = React.memo(function SecurityPage({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-card px-5 py-6 sm:px-7">
+      <RecoveryCodeCard
+        open={recoveryCodeOpen}
+        onOpenChange={onRecoveryCodeOpenChange}
+      />
       <SecurityScopePicker
         resources={everything.resources}
         scannable={everything.scannable}

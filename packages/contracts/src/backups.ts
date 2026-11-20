@@ -671,6 +671,9 @@ export const backupArchiveCreateTaskResultSchema = z
     // How an App's or volume's backup was taken.
     consistency: backupConsistencySchema.optional(),
     filename: backupFilenameSchema,
+    // A platform backup that, with Kiln's recovery code, restores Kiln on a
+    // new machine (format 2).
+    recoverable: z.literal(true).optional(),
     warnings: z.array(z.string().max(1_024)).max(1_000),
   })
   .strict()

@@ -107,7 +107,9 @@ when it's made, with no retries.
 An account's authority on a resource is the union of everything that applies
 to it. Nothing subtracts from it: there are no deny rules.
 
-- **Platform administrator**: everything, everywhere.
+- **Platform administrator**: everything, everywhere. Showing Kiln's
+  recovery code again, after its first showing, also takes a fresh
+  two-factor code; see [Recovery](self-hosting.md#saving-it-from-hearth).
 - **Ownership**: see [Ownership](#ownership).
 - **Relay grant**: applies to the Relay and to every game server, database,
   and App on it, including ones added later. Kiln never writes per-child rows
