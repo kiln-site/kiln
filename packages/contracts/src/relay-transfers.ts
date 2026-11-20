@@ -31,7 +31,11 @@ export const RelayPeerTransferGrantSchema = Schema.Struct({
   issuedAt: Schema.Number,
   /** Hearth's client ID on the source Relay. */
   issuer: Schema.String,
-  /** The destination Relay's ID, the fingerprint of its identity key. */
+  /**
+   * The destination Relay, by the fingerprint of its identity key and not
+   * by its ID: the source checks the key each request is signed with
+   * against it, and the destination that it is its own.
+   */
   peer: Schema.String,
   sha256: Sha256,
   size: ByteCount,

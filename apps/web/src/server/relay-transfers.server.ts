@@ -540,13 +540,22 @@ const signGrant = Effect.fn("RelayTransfers.signGrant")(function* (
   const credentials = yield* Effect.tryPromise(() =>
     loadRelayCredentials(source.id)
   )
+  // The source checks the key each request is signed with against this, so
+  // it names the destination by its key, not by its ID.
+  if (!destination.fingerprint) {
+    return yield* Effect.fail(
+      new Error(
+        `${destination.name} hasn't identified itself to Hearth yet. Pair it again, then copy again.`
+      )
+    )
+  }
   const now = Date.now()
   const grant: RelayPeerTransferGrant = {
     audience: source.id,
     expiresAt: now + Duration.toMillis(GRANT_LIFETIME),
     issuedAt: now,
     issuer: credentials.clientId,
-    peer: destination.id,
+    peer: destination.fingerprint,
     sha256: artifact.sha256,
     size: artifact.size,
     transferId: artifact.transferId,
