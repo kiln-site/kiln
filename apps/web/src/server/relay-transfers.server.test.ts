@@ -21,12 +21,18 @@ import {
   insertUser,
 } from "@/test/seed"
 
-import { advanceRelayTransferEffect } from "./relay-transfers.server"
+import {
+  advanceRelayTransferEffect,
+  cancelRelayTransferEffect,
+  relayTransferStatusEffect,
+} from "./relay-transfers.server"
 
 // The Relays are the only fake: the source has packed the transfer, the
 // destination hasn't started pulling it, and every change asked of them is
 // recorded.
 const relayChanges = vi.hoisted(() => [] as Array<string>)
+// Everything asked of them, reads included.
+const relayRequests = vi.hoisted(() => [] as Array<string>)
 // What each destination was asked to pull.
 const pullsStarted = vi.hoisted(() => [] as Array<{ grant: string }>)
 // Called as the source's packed transfer is read, after the first check.
@@ -34,6 +40,7 @@ const onSourceRead = vi.hoisted(() => ({ current: () => {} }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (_relay: unknown, operation: string, payload: unknown) => {
+    relayRequests.push(operation)
     if (operation === "transfer.pull.get") return null
     if (operation === "transfer.source.get") {
       onSourceRead.current()
@@ -175,6 +182,47 @@ describeMysql("Copying files between Relays", () => {
             )
           }
           assert.deepStrictEqual(relayChanges, [])
+        })
+    )
+
+    it.effect(
+      "asks no Relay about a database's transfer, whatever the person may do",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relayRequests.length = 0
+          // An administrator may export and import any database's dumps,
+          // which isn't what copying one between Relays takes of a Relay.
+          const administrator = {
+            ...user,
+            id: "administrator",
+            role: "admin",
+          } satisfies AuthenticatedUser
+          yield* insertUser(administrator.id, {
+            emailVerifiedAt: new Date(),
+            role: "admin",
+          })
+          yield* insertRelay(relayId)
+          const handle = {
+            destination: { relayId, rootId: `database:${destinationId}` },
+            source: { relayId, rootId: `database:${sourceId}` },
+            transferId: "transfer-database",
+          }
+
+          for (const asked of [
+            relayTransferStatusEffect(administrator, handle),
+            cancelRelayTransferEffect(administrator, handle),
+          ]) {
+            const exit = yield* Effect.exit(asked)
+            assert.isTrue(Exit.isFailure(exit))
+            if (Exit.isFailure(exit)) {
+              assert.match(
+                String(Cause.squash(exit.cause)),
+                /Databases can't be copied as files/
+              )
+            }
+          }
+          assert.deepStrictEqual(relayRequests, [])
         })
     )
 

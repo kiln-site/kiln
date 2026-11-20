@@ -99,7 +99,10 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
    missing or empty. Files keep their modes and belong to the root's owner.
 5. The destination deletes what it fetched once it's installed. Hearth
    discards the source's artifact once the pull ends, and cancelling a pull,
-   failed or not, deletes what it fetched. Artifacts nobody discards are
+   failed or not, deletes what it fetched. An artifact discarded while it's
+   still being packed is stopped first, and the discard waits until the pack
+   has ended and removed what it wrote, so the same transfer ID can pack
+   again. Artifacts nobody discards are
    deleted after a day; finished pulls' records after a week.
 
 `transfer.space` reports a Relay's free disk where it
@@ -131,8 +134,9 @@ and `backup.restore` on the destination (`peerTransferAction`), not the
 database's own login. A Relay that restarts while a dump is being imported fails the
 pull, as it does one that was installing files, since the database may
 hold part of it. `transfer.space` reports a database's size on disk, which
-is more than its dump takes. Hearth doesn't ask for this yet: its preflight
-still refuses a database root.
+is more than its dump takes. Hearth doesn't ask for this yet: it refuses a
+database root when a transfer is started, advanced, reported or cancelled,
+and its preflight lists one as a problem.
 
 `preflightRelayTransfer` lists what would stop a copy and what fixes it:
 an offline or outdated Relay, a database root, or a pairing that can't
