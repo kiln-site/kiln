@@ -1639,12 +1639,17 @@ async function renameRelay(name: string) {
 }
 
 const controlSocket = attachControlSocket({
-  adoptInstallationId: (installationId) =>
+  adoptInstallationId: (installationId, previousInstallationIds) =>
     recoverPromise(
       () =>
         runRelayEffect(
           "relay.installation.adopt",
-          adoptInstallationId(config, startup.state, installationId)
+          adoptInstallationId(
+            config,
+            startup.state,
+            installationId,
+            previousInstallationIds
+          )
         ),
       (cause) => {
         reportRelayError(cause, { operation: "relay.installation.adopt" })

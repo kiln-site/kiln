@@ -990,6 +990,10 @@ export class RelayStateStore extends Context.Service<
       key: string,
       value: string
     ) => Effect.Effect<void, RelayStateError>
+    /** Saves several entries together, all or none. */
+    readonly setMetadataEntries: (
+      entries: Readonly<Record<string, string>>
+    ) => Effect.Effect<void, RelayStateError>
     readonly setInstanceName: (
       instanceId: string,
       name: string
@@ -4558,6 +4562,21 @@ const makeRelayStateStore = Effect.gen(function* () {
           VALUES (${key}, ${value})
           ON CONFLICT (key) DO UPDATE SET value = excluded.value
         `.pipe(Effect.asVoid)
+      ),
+    setMetadataEntries: (entries) =>
+      run(
+        "set_metadata_entries",
+        sql.withTransaction(
+          Effect.forEach(
+            Object.entries(entries),
+            ([key, value]) => sql`
+              INSERT INTO relay_metadata (key, value)
+              VALUES (${key}, ${value})
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value
+            `,
+            { discard: true }
+          )
+        )
       ),
     setInstanceName: (instanceId, name) =>
       run(

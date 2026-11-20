@@ -102,7 +102,10 @@ export interface HearthContainerClaim {
 export interface ControlSocketOptions {
   // Saves the installation ID a full-access Hearth authenticated with. The
   // session is ready only once this settles; it reports its own failures.
-  readonly adoptInstallationId?: (installationId: string) => Promise<void>
+  readonly adoptInstallationId?: (
+    installationId: string,
+    previousInstallationIds: ReadonlyArray<string>
+  ) => Promise<void>
   // Saves the name a full-access Hearth calls this Relay, the same way.
   readonly adoptRelayName?: (name: string) => Promise<void>
   /**
@@ -505,6 +508,7 @@ function authenticateSocket(
           message.clientId,
           message.signature,
           message.installationId,
+          message.previousInstallationIds ?? [],
           message.relayName,
           message.hearthContainer
         ).pipe(
@@ -751,6 +755,7 @@ function authenticateSocket(
     clientId: string,
     signature: string,
     installationId: string | undefined,
+    previousInstallationIds: ReadonlyArray<string>,
     relayName: string | undefined,
     hearthContainer: { readonly id: string; readonly proof: string } | undefined
   ): EffectType.Effect<void, Error> {
@@ -781,6 +786,7 @@ function authenticateSocket(
       yield* completedAuthenticationEffect(
         client,
         installationId,
+        previousInstallationIds,
         relayName,
         hearthContainer
       )
@@ -1216,6 +1222,7 @@ function authenticateSocket(
   function completedAuthenticationEffect(
     client: RelayClientGrant,
     installationId: string | undefined,
+    previousInstallationIds: ReadonlyArray<string>,
     relayName: string | undefined,
     hearthContainer: { readonly id: string; readonly proof: string } | undefined
   ): EffectType.Effect<void, Error> {
@@ -1237,7 +1244,9 @@ function authenticateSocket(
       // platform backup or an update, runs under the previous ID.
       const adopt = options.adoptInstallationId
       if (adopt && installationId && client.role === "full_access") {
-        yield* promiseOperation(() => adopt(installationId)).pipe(Effect.ignore)
+        yield* promiseOperation(() =>
+          adopt(installationId, previousInstallationIds)
+        ).pipe(Effect.ignore)
       }
       const adoptName = options.adoptRelayName
       if (adoptName && relayName && client.role === "full_access") {

@@ -7,6 +7,7 @@ import { readPlatformState } from "./platform-state.js"
 import type { RelayStateStore } from "./effect/state.js"
 
 const INSTALLATION_ID_METADATA_KEY = "installation_id"
+const PREVIOUS_INSTALLATION_IDS_METADATA_KEY = "previous_installation_ids"
 const PROVEN_HEARTH_METADATA_KEY = "proven_hearth"
 
 const ProvenContainerSchema = Schema.Struct({
@@ -15,6 +16,17 @@ const ProvenContainerSchema = Schema.Struct({
   ),
   name: Schema.String,
 })
+
+// The IDs an installation had before it was restored, with the ID they
+// belong to: they're this Relay's only while that's still its own.
+const decodeLineage = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      installationId: Schema.String,
+      previous: Schema.Array(Schema.String),
+    })
+  )
+)
 
 const decodeProvenHearth = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -35,7 +47,7 @@ const adoption = Semaphore.makeUnsafe(1)
 
 type InstallationConfig = Pick<
   RelayConfig,
-  "installationId" | "installationIdConfigured"
+  "installationId" | "installationIdConfigured" | "previousInstallationIds"
 >
 
 /** The installation ID Hearth gave this Relay, or null before it has. */
@@ -47,8 +59,9 @@ export const savedInstallationId = Effect.fnUntraced(function* (
 })
 
 /**
- * Loads the saved installation ID unless KILN_INSTALLATION_ID set one, and
- * the Hearth that last proved its container.
+ * Loads the saved installation ID unless KILN_INSTALLATION_ID set one, the
+ * IDs it replaced after a restore, and the Hearth that last proved its
+ * container.
  */
 export const loadInstallationId = Effect.fn("Relay.installation.load")(
   function* (
@@ -58,6 +71,14 @@ export const loadInstallationId = Effect.fn("Relay.installation.load")(
     if (!config.installationIdConfigured) {
       config.installationId = yield* savedInstallationId(state)
     }
+    const record = yield* state.getMetadata(
+      PREVIOUS_INSTALLATION_IDS_METADATA_KEY
+    )
+    const lineage = record ? Option.getOrNull(decodeLineage(record)) : null
+    config.previousInstallationIds =
+      lineage && lineage.installationId === config.installationId
+        ? lineage.previous
+        : []
     const saved = yield* state.getMetadata(PROVEN_HEARTH_METADATA_KEY)
     config.provenHearth = saved
       ? Option.getOrNull(decodeProvenHearth(saved))
@@ -108,17 +129,50 @@ function provenHearthRecord(hearth: ProvenHearth): string {
 
 /**
  * Saves the installation ID a full-access Hearth sent when it connected,
- * when the Relay has none yet. One that has an ID keeps it: replacing it
- * takes `relay.installation.replace`, which a person confirms in Hearth, so
- * two Hearths sharing a Relay don't swap it back and forth.
+ * when the Relay has none yet, or has one Kiln had before it was restored
+ * from a backup (`previousInstallationIds`). Otherwise one that has an ID
+ * keeps it: replacing it takes `relay.installation.replace`, which a person
+ * confirms in Hearth, so two Hearths sharing a Relay don't swap it back and
+ * forth. A restored Kiln's Hearth lists the old ID and the old Hearth
+ * doesn't know the new one, so they can't either.
  */
 export const adoptInstallationId = Effect.fn("Relay.installation.adopt")(
   function* (
-    config: InstallationConfig,
+    config: InstallationConfig &
+      Pick<RelayConfig, "dataDirectory" | "installationIdConfigured">,
     state: RelayStateStore["Service"],
-    installationId: string
+    installationId: string,
+    previousInstallationIds: ReadonlyArray<string> = []
   ) {
     if (installationId === config.installationId) return
+    if (
+      config.installationId !== null &&
+      previousInstallationIds.includes(config.installationId) &&
+      isKilnInstallationId(installationId) &&
+      !(yield* installationFixed(config))
+    ) {
+      const replaced = config.installationId
+      const previous = [
+        ...new Set([
+          ...config.previousInstallationIds,
+          ...previousInstallationIds,
+        ]),
+      ].filter((id) => id !== installationId && isKilnInstallationId(id))
+      // Together, so the history always belongs to the ID saved with it.
+      yield* state.setMetadataEntries({
+        [INSTALLATION_ID_METADATA_KEY]: installationId,
+        [PREVIOUS_INSTALLATION_IDS_METADATA_KEY]: JSON.stringify({
+          installationId,
+          previous,
+        }),
+      })
+      config.previousInstallationIds = previous
+      config.installationId = installationId
+      yield* Effect.logInfo(
+        `Kiln was restored from a backup: installation ${installationId} replaces ${replaced}`
+      )
+      return
+    }
     if (config.installationId !== null) {
       yield* Effect.logWarning(
         `Hearth's installation ID ${installationId} differs from this Relay's; keeping ${config.installationId}`
@@ -207,7 +261,16 @@ export const replaceInstallationId = Effect.fn("Relay.installation.replace")(
         reason: `This Relay's installation ID is now ${config.installationId ?? "none"}`,
       })
     }
-    yield* state.setMetadata(INSTALLATION_ID_METADATA_KEY, input.installationId)
+    // Another installation's, whose label history isn't this one's: saved
+    // together with the new ID.
+    yield* state.setMetadataEntries({
+      [INSTALLATION_ID_METADATA_KEY]: input.installationId,
+      [PREVIOUS_INSTALLATION_IDS_METADATA_KEY]: JSON.stringify({
+        installationId: input.installationId,
+        previous: [],
+      }),
+    })
+    config.previousInstallationIds = []
     const previous = config.installationId
     config.installationId = input.installationId
     yield* Effect.logInfo(

@@ -2109,6 +2109,7 @@ function applyPlatformConfig(config: RelayConfig, state: PlatformState) {
   }
   config.installationId = state.installationId
   config.installationIdConfigured = true
+  config.previousInstallationIds = state.previousInstallationIds
   // Hearth is given the record's token, so the Relay must expect it.
   config.bootstrapToken = state.secrets.bootstrapToken
   // The record's key, which recovery kits carry: backups made with another

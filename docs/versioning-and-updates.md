@@ -75,7 +75,8 @@ One-click updates are enabled only when all of these are true:
 3. A paired Relay can access the target's Docker daemon.
 4. The selected release has a valid public release manifest.
 5. The target belongs to this installation: its `io.kiln.installation` label
-   matches the Relay's installation ID, or it has no label.
+   matches the Relay's installation ID, or one Kiln had before it was
+   restored from a backup, or it has no label.
 
 The installation ID is `KILN_INSTALLATION_ID` when set. Otherwise Hearth
 generates one on its first start, saves it in its database, and sends it to
@@ -83,7 +84,8 @@ its Relays when they connect; a Relay without one saves it in its data
 volume, and one with another keeps it unless someone pairing it chooses to
 replace it (see [Installation IDs](self-hosting.md#installation-ids)).
 Containers created before installation IDs existed have no label and stay
-updatable; their replacement gets the label. With `KILN_INSTALLATION_ID` set,
+updatable; their replacement gets the label. So does the replacement of one
+labeled with an ID from before a restore. With `KILN_INSTALLATION_ID` set,
 the label must match exactly.
 
 Exact version tags, digest pins, locally built images, and unsupported registries

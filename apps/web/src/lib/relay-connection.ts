@@ -58,6 +58,7 @@ import {
 import type { Database } from "@/effect/database"
 import { RelayUnavailableError } from "@/effect/errors"
 import { loadedKilnInstallationId } from "@/effect/installation"
+import { configuredPreviousInstallationIds } from "@/lib/environment"
 import {
   forkAppEffect,
   forkAppEffectInTrace,
@@ -1900,6 +1901,11 @@ class RelayConnection {
     const installationId = credentials.sendInstallationId
       ? loadedKilnInstallationId()
       : null
+    // The IDs Kiln had before it was restored from a backup, so a Relay
+    // that still has one takes the new one.
+    const previousInstallationIds = installationId
+      ? configuredPreviousInstallationIds()
+      : []
     // Likewise its name, which its telemetry carries: a Relay that kept its
     // ID belongs to another installation, which named it.
     const relayName = credentials.sendInstallationId
@@ -1930,6 +1936,9 @@ class RelayConnection {
         type: "auth.response",
         v: 1,
         ...(installationId ? { installationId } : {}),
+        ...(previousInstallationIds.length > 0
+          ? { previousInstallationIds }
+          : {}),
         ...(relayName ? { relayName } : {}),
         ...(hearthContainer ? { hearthContainer } : {}),
         dial: dialTarget(),
