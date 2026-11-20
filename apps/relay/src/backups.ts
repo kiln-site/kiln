@@ -304,14 +304,6 @@ export class BackupManager {
       yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
-      yield* Effect.forkChild(
-        Effect.sleep(EXPORT_SWEEP_INTERVAL).pipe(
-          Effect.andThen(
-            promiseEffect(() => sweepExpiredBackupExports(options.config))
-          ),
-          Effect.forever
-        )
-      )
       yield* Queue.offer(wake, undefined)
       return manager
     })
@@ -382,8 +374,24 @@ export class BackupManager {
     )
   }
 
+  /**
+   * The worker: runs tasks as they are queued, for as long as the Relay
+   * runs. What it does on a timer is forked here, not as the manager is
+   * made: a fiber forked there ends when making it does.
+   */
   run() {
     return Effect.gen({ self: this }, function* () {
+      yield* Effect.forkChild(
+        Effect.sleep(EXPORT_SWEEP_INTERVAL).pipe(
+          Effect.andThen(
+            promiseEffect(() => sweepExpiredBackupExports(this.#config))
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("Expired backup exports were not swept", cause)
+          ),
+          Effect.forever
+        )
+      )
       while (true) {
         yield* Queue.take(this.#wake)
         yield* this.#drain()

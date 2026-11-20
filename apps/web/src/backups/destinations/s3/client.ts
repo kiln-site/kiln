@@ -574,7 +574,13 @@ function makeS3Client(
     endpoint,
     forcePathStyle: credential.forcePathStyle,
     region: credential.region,
+    // Only where S3 requires one. By default the SDK signs a CRC32 of the
+    // body into every upload, and a signed URL is made before there is a
+    // body: it carried the checksum of an empty one, which buckets that
+    // check it refuse the archive for.
+    requestChecksumCalculation: "WHEN_REQUIRED",
     requestHandler,
+    responseChecksumValidation: "WHEN_REQUIRED",
   })
 }
 

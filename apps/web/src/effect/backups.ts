@@ -71,6 +71,15 @@ interface BackupStorageKeyRow extends RowDataPacket {
   region: string
 }
 
+/**
+ * The order of a backup's copies, read as `artifact`, the first being the
+ * one a restore reads: the Relay's own before a bucket's, then the earliest
+ * stored. Copies reserved together share a time, so their IDs decide
+ * between them: without that a restore sent twice could name two copies.
+ */
+const backupCopyOrderSql =
+  "(artifact.storage_id IS NULL) DESC, artifact.created_at ASC, artifact.id ASC"
+
 interface BackupArtifactRow extends RowDataPacket {
   backup_id: string
   bytes: number | string | null
@@ -2227,7 +2236,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
        FROM ${databaseTable("backup_artifact")} artifact
        JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
       WHERE backup.relay_id = ? AND artifact.status <> 'deleted'
-      ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+      ORDER BY ${backupCopyOrderSql}`,
     [relayId]
   )
   const artifactsByBackup = new Map<string, Array<BackupArtifactRow>>()
@@ -2465,7 +2474,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             artifact.error_code
                    FROM ${databaseTable("backup_artifact")} artifact
                   WHERE artifact.backup_id = ? AND artifact.status = 'available'
-                  ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC
+                  ORDER BY ${backupCopyOrderSql}
                   FOR UPDATE`,
                 [input.backupId]
               )
@@ -2862,7 +2871,7 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
                   artifact.error_code
              FROM ${databaseTable("backup_artifact")} artifact
             WHERE artifact.backup_id = ? AND artifact.status <> 'deleted'
-            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+            ORDER BY ${backupCopyOrderSql}`,
           [input.backupId]
         )
         return {
@@ -4418,7 +4427,7 @@ export const linkInstanceBackupsEffect = Effect.fn("backups.link")(
                   artifact.error_code
              FROM ${databaseTable("backup_artifact")} artifact
             WHERE artifact.backup_id = ? AND artifact.status = 'available'
-            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+            ORDER BY ${backupCopyOrderSql}`,
             [backup.id]
           )).filter((artifact) => sameRelay || artifact.storage_id !== null)
           const primary = artifacts[0]
