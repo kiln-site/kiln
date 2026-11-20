@@ -4,7 +4,7 @@
  * Relay its grant names, and deleted when Hearth discards it or it expires.
  */
 import { join } from "node:path"
-import { Clock, Deferred, Effect, Exit, Fiber } from "effect"
+import { Clock, Effect, Fiber } from "effect"
 
 import {
   RelayTransferSourceSchema,
@@ -39,24 +39,10 @@ export interface TransferArtifact {
   readonly size: number
 }
 
-// An artifact being packed. Once its turn comes its pack runs whether or
-// not anyone waits for it, as all work in the lanes does, so stopping one
-// takes asking it to and waiting until it has.
-interface Packing {
-  /** What waits for the pack's turn and then for the pack, once forked. */
-  fiber: Fiber.Fiber<void> | null
-  /** Done to stop the pack where it is. */
-  readonly stop: Deferred.Deferred<void>
-  /** Done once a pack that started has ended and cleaned up after itself. */
-  readonly ended: Deferred.Deferred<void>
-  /** Whether its turn came. */
-  started: boolean
-}
-
 export class TransferSources {
   readonly #options: TransferSourcesOptions
   readonly #records = new Map<string, RelayTransferSource>()
-  readonly #packing = new Map<string, Packing>()
+  readonly #packing = new Map<string, Fiber.Fiber<void>>()
 
   constructor(options: TransferSourcesOptions) {
     this.#options = options
@@ -120,19 +106,13 @@ export class TransferSources {
       }
       yield* ensureTransferDirectory(this.#options.directory)
       yield* this.#save(record)
-      const packing: Packing = {
-        ended: yield* Deferred.make<void>(),
-        fiber: null,
-        started: false,
-        stop: yield* Deferred.make<void>(),
-      }
-      packing.fiber = yield* this.#pack(record, input.paths, packing).pipe(
+      const fiber = yield* this.#pack(record, input.paths).pipe(
         Effect.ensuring(
           Effect.sync(() => this.#packing.delete(record.transferId))
         ),
         Effect.forkDetach
       )
-      this.#packing.set(record.transferId, packing)
+      this.#packing.set(record.transferId, fiber)
       return record
     }).pipe(Effect.withSpan("RelayTransfer.prepareSource"))
   }
@@ -186,35 +166,15 @@ export class TransferSources {
     })
   }
 
-  #pack(
-    record: RelayTransferSource,
-    paths: ReadonlyArray<string>,
-    packing: Packing
-  ) {
+  #pack(record: RelayTransferSource, paths: ReadonlyArray<string>) {
     const options = this.#options
     return Effect.gen({ self: this }, function* () {
       const target = yield* Effect.tryPromise(() =>
         options.resolveRoot(record.rootId)
       )
-      const artifact = this.#artifactPath(record.transferId)
       const packed = yield* options.lanes.run(
         { label: "transfer.source.pack", locks: target.packLocks },
-        Effect.gen(function* () {
-          packing.started = true
-          // Stopped from inside its turn: the pack is interrupted, and has
-          // removed what it wrote, before its lanes are let go.
-          const pack = yield* Effect.forkChild(target.pack(paths, artifact))
-          yield* Effect.forkChild(
-            Deferred.await(packing.stop).pipe(
-              Effect.andThen(Fiber.interrupt(pack))
-            )
-          )
-          const exit = yield* Fiber.await(pack)
-          if (Exit.isSuccess(exit)) return exit.value
-          return yield* Exit.hasInterrupts(exit)
-            ? Effect.fail(new Error("This transfer was discarded"))
-            : Effect.failCause(exit.cause)
-        }).pipe(Effect.ensuring(Deferred.succeed(packing.ended, undefined)))
+        target.pack(paths, this.#artifactPath(record.transferId))
       )
       yield* Effect.annotateCurrentSpan({
         "kiln.transfer.bytes": packed.size,
@@ -258,17 +218,10 @@ export class TransferSources {
     )
   }
 
-  // Its record goes last, so its ID isn't taken again while a pack under it
-  // is still stopping.
   #remove(transferId: string) {
     return Effect.gen({ self: this }, function* () {
       const packing = this.#packing.get(transferId)
-      if (packing) {
-        yield* Deferred.succeed(packing.stop, undefined)
-        // Withdraws one still waiting its turn, which then never starts.
-        if (packing.fiber) yield* Fiber.interrupt(packing.fiber)
-        if (packing.started) yield* Deferred.await(packing.ended)
-      }
+      if (packing) yield* Fiber.interrupt(packing)
       this.#records.delete(transferId)
       yield* removeTransferFiles(this.#options.directory, transferId)
     })

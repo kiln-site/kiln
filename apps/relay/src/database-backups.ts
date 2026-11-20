@@ -68,32 +68,18 @@ export async function dumpCompressedDatabase(
   const { progress } = options
   signal.throwIfAborted()
   const database = await databases.backupTarget(databaseId)
-  signal.throwIfAborted()
   const child = await startDatabaseClient(databases, database, "export")
-  // Stopped while its client started: nothing is written, and the client
-  // doesn't run on.
-  if (signal.aborted) {
-    child.kill()
-    signal.throwIfAborted()
-  }
   const stderr = collectProcessErrors(child)
   const sourceMeter = byteMeter((bytes) => {
     if (progress) progress.completed = bytes
   })
   const storedLimit = byteMeter(undefined, options.maxBytes)
-  // Only a file this dump made is its to remove: one already there, which
-  // the exclusive open refuses, is another's.
-  let created = false
-  const output = createWriteStream(destination, { flags: "wx", mode: 0o600 })
-  output.once("open", () => {
-    created = true
-  })
   const writing = pipeline(
     child.stdout,
     sourceMeter,
     createGzip({ level: 6 }),
     storedLimit,
-    output,
+    createWriteStream(destination, { flags: "wx", mode: 0o600 }),
     { signal }
   )
   const exited = requireSuccessfulProcess(child, stderr, signal)
@@ -111,7 +97,7 @@ export async function dumpCompressedDatabase(
     // A failed client can exit before the write stream even opens the file.
     // Settle both branches before cleanup, keeping the original failure.
     await Promise.allSettled([writing, exited])
-    if (created) await rm(destination, { force: true })
+    await rm(destination, { force: true })
     throw written.failure
   }
 

@@ -99,10 +99,10 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
    missing or empty. Files keep their modes and belong to the root's owner.
 5. The destination deletes what it fetched once it's installed. Hearth
    discards the source's artifact once the pull ends, and cancelling a pull,
-   failed or not, deletes what it fetched. An artifact discarded while it's
-   still being packed is stopped first, and the discard waits until the pack
-   has ended and removed what it wrote, so the same transfer ID can pack
-   again. Artifacts nobody discards are
+   failed or not, deletes what it fetched. Discarding an artifact that's
+   still being packed doesn't stop the pack, which runs on once its turn has
+   come: it finishes and leaves an archive no record names, a database's
+   dump as much as a folder's, until that transfer ID packs again. Artifacts nobody discards are
    deleted after a day; finished pulls' records after a week.
 
 `transfer.space` reports a Relay's free disk where it

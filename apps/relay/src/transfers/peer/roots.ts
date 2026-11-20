@@ -104,28 +104,12 @@ export async function databaseTransferRoot(
     pack: (paths, artifact) =>
       whole(paths.length > 0).pipe(
         Effect.andThen(
-          Effect.suspend(() => {
-            const stop = new AbortController()
-            const dumping = dumpCompressedDatabase(
-              databases,
-              databaseId,
-              artifact,
-              { signal: stop.signal }
-            )
-            // Stopped, as when its transfer is discarded, it is waited for:
-            // the dump has ended and removed what it wrote before its lanes
-            // are let go or another pack is started under its transfer ID.
-            return Effect.tryPromise({
-              try: () => dumping,
-              catch: (cause) => cause,
-            }).pipe(
-              Effect.onInterrupt(() =>
-                Effect.sync(() => stop.abort()).pipe(
-                  Effect.andThen(Effect.tryPromise(() => dumping)),
-                  Effect.ignore
-                )
-              )
-            )
+          Effect.tryPromise({
+            try: (signal) =>
+              dumpCompressedDatabase(databases, databaseId, artifact, {
+                signal,
+              }),
+            catch: (cause) => cause,
           })
         ),
         Effect.map((dump) => ({
