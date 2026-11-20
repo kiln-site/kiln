@@ -543,9 +543,11 @@ const signGrant = Effect.fn("RelayTransfers.signGrant")(function* (
   // The source checks the key each request is signed with against this, so
   // it names the destination by its key, not by its ID.
   if (!destination.fingerprint) {
+    // Pairing it again in place is refused while this record holds its
+    // address, so the record goes first.
     return yield* Effect.fail(
       new Error(
-        `${destination.name} hasn't identified itself to Hearth yet. Pair it again, then copy again.`
+        `Hearth doesn't know ${destination.name}'s key, so it can't let it fetch from another Relay. Remove ${destination.name} from Hearth and pair it again.`
       )
     )
   }
