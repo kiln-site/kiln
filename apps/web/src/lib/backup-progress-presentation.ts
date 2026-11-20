@@ -14,6 +14,7 @@ type BackupProgressPresentation = BackupUploadPhasePresentation & {
   bytes: number | null
   taskBytesCompleted: number
   taskBytesTotal: number | null
+  taskStatus?: BackupTaskStatus | null
 }
 
 type BackupTaskFeedbackPresentation = BackupUploadPhasePresentation & {
@@ -93,6 +94,9 @@ export function backupShowsPrimaryTaskFeedback(
   if (backup.taskStatus !== "queued" && backup.taskStatus !== "running") {
     return true
   }
+  // Taken, and waiting on its Relay to be sent: no copy is uploading, and
+  // the wait is what there is to say.
+  if (backup.taskStatus === "queued") return true
   return !backupShowsUploadArtifact(backup)
 }
 
@@ -118,6 +122,8 @@ export function backupTaskUploadProgressPercent(
 ): number | null {
   if (
     !backupShowsUploadArtifact(backup) ||
+    // Waiting on its Relay to be sent: nothing is uploading yet.
+    backup.taskStatus === "queued" ||
     backup.taskBytesTotal === null ||
     backup.taskBytesTotal <= 0
   ) {

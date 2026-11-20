@@ -31,7 +31,11 @@ const seed = (
   options: {
     artifact?: string
     backup?: string
-    storage?: { deleting?: boolean; enabled?: boolean }
+    storage?: {
+      access_key_id_ciphertext?: string
+      deleting?: boolean
+      enabled?: boolean
+    }
     tasks?: ReadonlyArray<{ kind: string; status: string }>
   } = {}
 ) =>
@@ -164,6 +168,13 @@ describeMysql("backup storage access", () => {
         action: "download" as const,
         case: "it asks to read a copy not yet stored",
         seeded: { tasks: restoring },
+      },
+      // Unanswered, the Relay would take Hearth for away and keep the
+      // backup waiting for good.
+      {
+        action: "upload" as const,
+        case: "Hearth can't read the keys it holds for the destination",
+        seeded: { storage: { access_key_id_ciphertext: "not-a-ciphertext" } },
       },
       {
         action: "delete" as const,

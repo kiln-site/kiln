@@ -15,7 +15,8 @@ import { backupFailureCode } from "./failure.js"
  * go on spans and logs, never here.
  */
 const tasks = Metric.counter("relay.backup.tasks", {
-  description: "Backup tasks the Relay finished, by how they ended",
+  description:
+    "Runs of backup tasks on the Relay, by how each left its task: ended, or waiting for its Hearth",
   attributes: { unit: "{task}" },
   incremental: true,
 })
@@ -53,7 +54,11 @@ const snapshotBytes = Metric.histogram("relay.restic.snapshot.bytes", {
   ],
 })
 
-export type BackupTaskOutcome = "succeeded" | "failed" | "cancelled"
+/**
+ * How a run of a task left it. `waiting` is a backup taken and set aside
+ * for its Hearth, which a later run sends.
+ */
+export type BackupTaskOutcome = "succeeded" | "failed" | "cancelled" | "waiting"
 
 /**
  * Records how much one snapshot read and how much it stored, by kind:

@@ -113,7 +113,32 @@ describe("Relay state", () => {
         role: "full_access",
         sourceCidrs: [],
       })
-      assert.isTrue(yield* store.revokeClient("hearth-1", Date.UTC(2026, 0, 2)))
+      // A backup it has still to be answered for goes with the revoking,
+      // to the client that revoked it, as a Hearth does the key it
+      // replaces: left with the revoked one it would wait for good.
+      const waiting = {
+        artifactKind: "archive" as const,
+        backupId: "41300000-0000-4000-8000-000000000001",
+        destination: {
+          artifactId: "41300000-0000-4000-8000-0000000000a1",
+          kind: "s3" as const,
+        },
+        exclude: [],
+        kind: "create" as const,
+        maxBytes: null,
+        mode: "full" as const,
+        reason: "manual" as const,
+        target: { id: "instance-a", kind: "instance" as const },
+        taskId: "41300000-0000-4000-8000-000000000002",
+      }
+      yield* store.enqueueBackupTask(waiting, now + 2, "hearth-1")
+      assert.isTrue(
+        yield* store.revokeClient("hearth-1", Date.UTC(2026, 0, 2), "hearth-2")
+      )
+      assert.strictEqual(
+        yield* store.backupTaskHearth(waiting.taskId),
+        "hearth-2"
+      )
       assert.isNull(yield* store.findClientById("hearth-1"))
       assert.isNull(yield* store.findClientByPublicKey("public-key-1"))
       assert.isFalse(
@@ -302,6 +327,119 @@ describe("Relay state", () => {
         undefined
       )
     })
+  )
+
+  // A backup is of the moment it was taken. One that has been, and still
+  // has to be sent, must never be taken again: by a restart, by its turn
+  // coming before its Hearth is back, or by its batch's window opening
+  // around it a second time.
+  stateTest(
+    "leaves a create that has taken its backup to send it, across a wait and a restart",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        // Volumes, as only they are backed up stopped, in a batch.
+        const create = (index: number, batch?: { id: string; size: number }) =>
+          ({
+            artifactKind: "tar_archive" as const,
+            backupId: `41200000-0000-4000-8000-00000000001${index}`,
+            ...(batch ? { batch, consistency: "stopped" as const } : {}),
+            destination: {
+              artifactId: `41200000-0000-4000-8000-0000000000a${index}`,
+              kind: "s3" as const,
+            },
+            exclude: [],
+            kind: "create" as const,
+            maxBytes: null,
+            mode: "full" as const,
+            reason: "manual" as const,
+            target: { id: String(index).repeat(40), kind: "volume" as const },
+            taskId: `41200000-0000-4000-8000-00000000002${index}`,
+          })
+        const taken = {
+          bytes: 10,
+          checksumSha256: "a".repeat(64),
+          filename: "backup.zip",
+          warnings: [],
+        }
+        const batch = { id: "41200000-0000-4000-8000-0000000000b0", size: 2 }
+        const [first, second, later] = [
+          create(1, batch),
+          create(2, batch),
+          create(3),
+        ]
+        yield* store.enqueueBackupTask(first, 100, "hearth-one")
+        yield* store.enqueueBackupTask(second, 101, "hearth-one")
+        yield* store.claimNextBackupTask(110)
+        yield* store.claimBatchBackupTasks(batch.id, 110)
+
+        // The batch took both, recorded together; one then has to wait.
+        // More warnings than a result may carry are cut, not left to make
+        // what was taken unreadable.
+        const warnings = Array.from({ length: 1_001 }, () => "changed")
+        yield* store.captureBackupTasks(
+          [
+            { captured: { ...taken, warnings }, taskId: first.taskId },
+            { captured: taken, taskId: second.taskId },
+          ],
+          120
+        )
+        // Its Hearth may hold fifteen bytes, and each is ten: the first to
+        // be set aside fits, though the other is taken too and still to
+        // be; the other, with the first's place taken, doesn't.
+        assert.strictEqual(
+          yield* store.parkBackupTask(first.taskId, 1_000, "waiting", 130, 15),
+          "parked"
+        )
+        assert.strictEqual(
+          yield* store.parkBackupTask(second.taskId, 1_000, "waiting", 130, 15),
+          "full"
+        )
+
+        // Not before it is due, and behind work that hasn't started.
+        assert.isNull(yield* store.claimNextBackupTask(500))
+        yield* store.enqueueBackupTask(later, 600, "hearth-one")
+        assert.strictEqual(
+          (yield* store.claimNextBackupTask(2_000))?.taskId,
+          later.taskId
+        )
+
+        // The Relay stops with one waiting, one being sent, one being taken.
+        yield* store.requeueInterruptedBackupTasks(3_000)
+
+        assert.deepStrictEqual(yield* store.backupTaskCapture(first.taskId), {
+          ...taken,
+          warnings: warnings.slice(0, 1_000),
+        })
+        assert.deepStrictEqual(
+          yield* store.backupTaskCapture(second.taskId),
+          taken
+        )
+        assert.isNull(yield* store.backupTaskCapture(later.taskId))
+        // Neither is claimed into its batch's window again.
+        assert.deepStrictEqual(
+          yield* store.claimBatchBackupTasks(batch.id, 3_100),
+          []
+        )
+        // Its Hearth connects: what was set aside for it is due at once.
+        // The one that was being sent as the Relay stopped is due as it
+        // is, and has no place among the waiting to be given one: given
+        // one by a restart, it would crowd out the one that had waited.
+        assert.strictEqual(
+          yield* store.rescheduleWaitingBackupTasks("hearth-one", 3_200),
+          1
+        )
+        const claimed = [
+          yield* store.claimNextBackupTask(3_300),
+          yield* store.claimNextBackupTask(3_300),
+          yield* store.claimNextBackupTask(3_300),
+        ].map((task) => task?.taskId)
+        assert.deepStrictEqual(claimed, [
+          later.taskId,
+          first.taskId,
+          second.taskId,
+        ])
+      })
   )
 
   stateTest("never runs a create that arrives after its backup's delete", () =>

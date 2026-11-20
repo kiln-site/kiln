@@ -1,5 +1,7 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
+
+import { logException } from "@workspace/telemetry"
 
 import type {
   BackupStorageAccessRequest,
@@ -11,6 +13,7 @@ import {
   signS3BackupAccess,
 } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
+import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 
@@ -92,7 +95,22 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   ) {
     return refused("that backup isn't being deleted")
   }
-  const storage = yield* loadBackupStorageCredentialEffect(copy.storage_id)
+  const read = yield* Effect.result(
+    loadBackupStorageCredentialEffect(copy.storage_id).pipe(
+      // What Hearth keeps of the destination can't be read, as with a key
+      // retired since. Asking again changes nothing, and left unanswered
+      // the Relay would take Hearth for away and keep the backup waiting
+      // for good.
+      Effect.catchTag("CredentialError", () => Effect.fail("unreadable" as const))
+    )
+  )
+  if (Result.isFailure(read)) {
+    if (read.failure === "unreadable") {
+      return refused("Hearth can't read the keys it holds for that destination")
+    }
+    return yield* Effect.fail(read.failure)
+  }
+  const storage = read.success
   // As a task Hearth sends is held to: a new backup needs a destination
   // that's enabled, and one being deleted only gives up what a restore
   // reads. Its purge removes what it holds.
@@ -106,13 +124,40 @@ export const grantBackupStorageAccessEffect = Effect.fn(
   return yield* signS3BackupAccess(storage, copy.object_key, request.action)
 })
 
-/** Answers `backup.storage.access` for the Relay a control connection is. */
-export function answerBackupStorageAccess(
+/**
+ * Answers `backup.storage.access` for the Relay a control connection is.
+ * An upload it asks for is a backup under way on that Relay, which Hearth
+ * follows to its end whatever the answer: one the Relay had been waiting
+ * with, while Hearth was away, is otherwise read only now and then, and
+ * one Hearth refuses ends there. The answer doesn't wait on that.
+ */
+export async function answerBackupStorageAccess(
   relayId: string,
   request: BackupStorageAccessRequest
 ): Promise<BackupStorageAccessResponse> {
-  return runAppEffect(
+  const answer = await runAppEffect(
     "Backups.storageAccess",
     grantBackupStorageAccessEffect(relayId, request)
+  )
+  if (request.action === "upload") followSoon(relayId)
+  return answer
+}
+
+// Starts reading a Relay's tasks again, on its own: an answer the Relay is
+// waiting for must not wait on it, or be lost to it failing.
+function followSoon(relayId: string): void {
+  void runAppEffect(
+    "Backups.follow",
+    promiseEffect(async () => {
+      const { followRelayBackups } = await import("@/lib/backup-reconciliation")
+      await followRelayBackups(relayId)
+    }).pipe(
+      Effect.catch((cause) =>
+        logException(cause, {
+          operation: "Backups.follow",
+          attributes: { "relay.id": relayId },
+        })
+      )
+    )
   )
 }

@@ -40,7 +40,9 @@ The managed server or database process never owns the backup job.
 
 Submitting an existing task ID returns its current task rather than starting a
 second operation. A Relay restart changes an interrupted `running` create or
-idempotent delete task back to `queued`. Relay-local work is immediately
+idempotent delete task back to `queued`. A create that had already taken
+its backup sends what it took rather than take it again (see
+[Waiting for Hearth](#waiting-for-hearth)). Relay-local work is immediately
 reclaimable and continues without Hearth. A task Hearth sends names a
 bucket's copy and holds no signed request for it (see
 [Storage destinations](#storage-destinations)), so one that is interrupted
@@ -189,8 +191,69 @@ with one signed request for one object, good for ten minutes, or a refusal
 A Relay asks the Hearth its task came from, and no other: it can be paired
 with several, and another's answer would send the backup where that one
 says. A task stored before the Relay kept which Hearth sent it is answered
-by any Hearth with full access to the Relay. With no answer the task fails;
-nothing waits for Hearth yet.
+by any Hearth with full access to the Relay. With no answer a restore
+fails. A backup waits.
+
+### Waiting for Hearth
+
+A backup is taken whether or not Hearth can be reached, and waits on the
+Relay for the part that needs Hearth, sending its copy to a bucket. It
+waits as a state of its own task, in the journal every task is in:
+
+- **What a create took is recorded before any of it is sent**
+  (`captured_json`: its size, checksum and file name), and each copy as it
+  is stored or fails. From then on the task has only to send what is left.
+  A Relay that restarts mid-upload sends the same archive again. It never
+  takes the backup a second time, which would be a backup of a later
+  moment, and for a stopped one would stop its Apps again. A stopped
+  backup is recorded before its Apps start again, so that holds while
+  they start too. An archive is removed once its task is recorded as
+  failed or cancelled, and for nothing else, so stopping the Relay
+  mid-send keeps it. What the create took stays recorded until the file is
+  gone, and a Relay that stopped in between removes it as it starts.
+- **With its Hearth away, the task is set aside**: `queued` again, with
+  the phase `uploading` and when to try again (`resume_at`). Its archive
+  stays where it was staged. The worker goes on to the next task.
+- **It is claimed again when its Hearth connects**, or a minute on, and
+  runs only the sending. Each waits out its own minute, so one its Hearth
+  won't answer for never holds back another. Work that hasn't started is
+  claimed first, a restore among it, so a backlog of backups to send never
+  holds one up. Sending holds no lane: it changes nothing the backup was
+  taken of.
+- **A stopped batch records what all of it took together**, as its window
+  closes: before its Apps start again, and before any of it is sent. A
+  Relay that restarts then sends each; one that restarted earlier takes the
+  whole batch again. None is ever claimed into a window a second time. A
+  batch that can't be recorded so fails, all of it. A member that failed
+  in the window is recorded as failed in that same step, so a Relay that
+  stops just after never takes it again alone, beside what the rest took.
+- **A Hearth client that is revoked hands on what it had waiting**, to
+  the client that revoked it, as a Hearth does the key it replaces when it
+  pairs again: left with the revoked one, a backup would wait for good.
+- **What it took must still be there when it is sent.** A backup resumed
+  after a restart whose archive is gone fails, and is not reported as
+  stored on its Relay.
+- **Hearth refusing ends it.** The copy fails, and the task with it unless
+  another copy was stored, as a backup deleted in Hearth meanwhile.
+  Cancelling a waiting backup removes its archive.
+- **The backups one Hearth has still to be sent take at most
+  `KILN_RELAY_BACKUP_OUTBOX`** on the Relay (a size such as `20g`, the
+  default), checked as a backup is set aside (`parkBackupTask`). Past it a
+  copy for a bucket fails as it would have with nowhere to wait, so a
+  Hearth that stays away can't fill the disk. One set aside for the first
+  time must also leave room on the disk for another its size, so waiting
+  backups don't take the room the next backup is taken in. A backup keeps
+  its place from the first time it is set aside until it ends, and a
+  restart gives none to one that was never set aside. Nothing waiting expires: it is
+  sent, cancelled, or refused. A destination whose keys Hearth can no
+  longer read is a refusal, not a wait.
+
+With Hearth there, none of this shows: the copy is sent inside the task,
+as it always was. A backup that waits shows in Hearth as "Waiting to
+upload" once Hearth is back, until it is sent. Hearth reads a Relay's
+tasks every second while one is under way, and every thirty while the only
+ones unfinished are waiting; a Relay asking to send one is read at once
+(`followRelayBackups`), whatever Hearth answers.
 
 Two kinds of backup still carry the destination's static keys. A scheduled
 backup is started by the Relay, which signs its upload itself. An
@@ -498,7 +561,10 @@ and `Backups.restore.files`, and a `Restic.command` span for every restic
 process. An incremental create records what restic said of its snapshot
 (`restic.bytes.added`, `restic.files.new`/`changed`/`unmodified`), and
 `relay.restic.snapshot.bytes` counts what each snapshot covered and what it
-newly stored, by storage kind. Progress writes are untraced. In Hearth, each
+newly stored, by storage kind. A run that leaves a backup taken and
+waiting for Hearth counts in `relay.backup.tasks` as `waiting`, and its
+`Backups.create` span carries `backup.copies.waiting`; the run that sends
+it later is a span and a count of its own. Progress writes are untraced. In Hearth, each
 reconciliation of a Relay's backups is a `Backups.reconcileRelay` span, and
 each task it sends a `Backups.dispatch`.
 

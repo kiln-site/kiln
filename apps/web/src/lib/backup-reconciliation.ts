@@ -4,6 +4,7 @@ import { logException } from "@workspace/telemetry"
 
 import {
   backupFailureCodeFromMessage,
+  backupTaskAwaitsHearth,
   relayBackupTaskSchema,
   type RelayBackupTask,
 } from "@workspace/contracts"
@@ -36,7 +37,14 @@ import { prepareBackupTaskEffect } from "@/lib/backup-task-prepare"
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 
-const reconciliationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const reconciliationTimers = new Map<
+  string,
+  { readonly at: number; readonly timer: ReturnType<typeof setTimeout> }
+>()
+// How soon a Relay's tasks are read again: while one is under way, and
+// while the only ones left are taken and waiting on the Relay for a Hearth.
+const RECONCILE_SOON_MS = 1_000
+const RECONCILE_WAITING_MS = 30_000
 
 const relayTasksSchema = z.array(relayBackupTaskSchema)
 
@@ -47,6 +55,18 @@ export async function reconcileBackupsAfterRelayConnect(
     (candidate) => candidate.enabled && candidate.id === relayId
   )
   if (relay) await reconcileRelayBackups(relay)
+}
+
+/**
+ * Reads a Relay's tasks soon, and keeps reading until none is under way:
+ * as when the Relay asks to send a backup it had been waiting with, which
+ * Hearth was reading only now and then.
+ */
+export async function followRelayBackups(relayId: string): Promise<void> {
+  const relay = (await listPersistedRelays()).find(
+    (candidate) => candidate.enabled && candidate.id === relayId
+  )
+  if (relay) scheduleBackupReconciliation(relay)
 }
 
 export function reconcileRelayBackups(
@@ -326,11 +346,21 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       "backup.tasks.changed": changed.length,
       "backup.tasks.dispatched": pending,
     })
-    if (
-      pending > 0 ||
-      tasks.some((task) => task.status === "queued" || task.status === "running")
-    ) {
-      scheduleBackupReconciliation(relay, subject)
+    const unfinished = tasks.filter(
+      (task) => task.status === "queued" || task.status === "running"
+    )
+    if (pending > 0 || unfinished.length > 0) {
+      scheduleBackupReconciliation(
+        relay,
+        subject,
+        // One taken and waiting on its Relay for a Hearth isn't moving, so
+        // it is read less often. When the Relay sends it, it asks for
+        // access first, which reads soon again (`followRelayBackups`); the
+        // slow reading is for one that ends without asking.
+        pending === 0 && unfinished.every(backupTaskAwaitsHearth)
+          ? RECONCILE_WAITING_MS
+          : RECONCILE_SOON_MS
+      )
     }
   }
 )
@@ -474,9 +504,14 @@ function dispatchAttributes(
 
 export function scheduleBackupReconciliation(
   relay: PersistedRelay,
-  subject?: string
+  subject?: string,
+  delayMs = RECONCILE_SOON_MS
 ): void {
-  if (reconciliationTimers.has(relay.id)) return
+  const at = Date.now() + delayMs
+  const scheduled = reconciliationTimers.get(relay.id)
+  // The sooner of two readings is the one kept.
+  if (scheduled && scheduled.at <= at) return
+  if (scheduled) clearTimeout(scheduled.timer)
   const timer = setTimeout(() => {
     reconciliationTimers.delete(relay.id)
     void runAppEffect(
@@ -494,7 +529,7 @@ export function scheduleBackupReconciliation(
         )
       )
     )
-  }, 1_000)
+  }, delayMs)
   timer.unref()
-  reconciliationTimers.set(relay.id, timer)
+  reconciliationTimers.set(relay.id, { at, timer })
 }

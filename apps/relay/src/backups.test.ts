@@ -103,7 +103,7 @@ describe("Relay backups in a bucket it holds no keys to", () => {
     url: `https://kiln-backups.s3.example.com/team/backup.zip?X-Amz-Signature=${method}`,
   })
   // The Hearth these tasks came from, and what it answers each request.
-  const hearth = (answer: (action: string) => unknown) => {
+  const hearth = (answer: (action: string, artifactId: string) => unknown) => {
     const asked: Array<unknown> = []
     return {
       asked,
@@ -111,7 +111,9 @@ describe("Relay backups in a bucket it holds no keys to", () => {
         storage: backupStorageAccessThrough(async (request, _timeout, only) => {
           if (!only({ id: hearthId, role: "full_access" })) return []
           asked.push(request)
-          return [{ payload: answer(request.action) }]
+          return [
+            { payload: await answer(request.action, request.artifactId) },
+          ]
         }),
       },
     }
@@ -205,20 +207,9 @@ describe("Relay backups in a bucket it holds no keys to", () => {
       )
   )
 
-  it.effect.each([
-    {
-      answer: () => ({ reason: "the copy is available", status: "refused" }),
-      says: "its Hearth refuses",
-      why: "the copy is available",
-    },
-    {
-      answer: () => null,
-      says: "its Hearth gives no answer",
-      why: "couldn't be reached",
-    },
-  ])(
-    "fails a backup to a bucket when $says, sending it nothing",
-    ({ answer, why }) =>
+  it.effect(
+    "fails a backup to a bucket when its Hearth refuses, sending it nothing",
+    () =>
       withRelay("kiln-backup-bucket-refused-", ({ config, root }) =>
         Effect.gen(function* () {
           yield* Effect.promise(() =>
@@ -229,19 +220,392 @@ describe("Relay backups in a bucket it holds no keys to", () => {
             config,
             undefined,
             undefined,
-            hearth(answer).options
+            hearth(() => ({
+              reason: "the copy is available",
+              status: "refused",
+            })).options
           )
-          const task = yield* runTask(
+          const task = yield* runTask(manager, toBucket(33), hearthId)
+          assert.strictEqual(task.status, "failed")
+          assert.include(task.error ?? "", "the copy is available")
+          assert.deepStrictEqual(bucket.asked, [])
+          assert.isFalse(existsSync(backupArchivePath(config, task.backupId)))
+        })
+      )
+  )
+
+  // A Hearth that is there or isn't, as one that restarts is.
+  const comesAndGoes = () => {
+    const state = { away: true }
+    return {
+      ...hearth(() => (state.away ? null : signed("PUT"))),
+      state,
+    }
+  }
+  const toBucket = (index: number) => ({
+    ...backupInput(index),
+    destination: { artifactId: copy, kind: "s3" as const },
+  })
+  const archiveOf = (config: RelayConfig, index: number) =>
+    backupArchivePath(config, backupInput(index).backupId)
+
+  // A backup is of the moment it was taken, so what waits is what is sent.
+  it.effect(
+    "keeps a backup its Hearth was away for, and sends what it took once the Hearth is back",
+    () =>
+      withRelay("kiln-backup-waits-", ({ config, root }) =>
+        Effect.gen(function* () {
+          const file = resolve(root, "world.txt")
+          yield* Effect.promise(() => writeFile(file, "as backed up"))
+          bucket.asked.length = 0
+          const { options, state } = comesAndGoes()
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+
+          const waiting = yield* runTask(manager, toBucket(41), hearthId)
+          assert.strictEqual(waiting.status, "queued")
+          assert.strictEqual(waiting.phase, "uploading")
+          assert.deepStrictEqual(bucket.asked, [])
+          const taken = sha256(
+            yield* Effect.promise(() => readFile(archiveOf(config, 41)))
+          )
+          // Nothing is asked again before the wait is up or it connects.
+          yield* manager.runPending()
+          assert.strictEqual(
+            (yield* manager.get(waiting.taskId))?.status,
+            "queued"
+          )
+
+          yield* Effect.promise(() => writeFile(file, "changed since"))
+          state.away = false
+          yield* manager.hearthConnected(hearthId)
+          yield* manager.runPending()
+
+          const sent = (yield* manager.get(waiting.taskId))!
+          assert.strictEqual(sent.status, "succeeded", sent.error ?? "")
+          assert.strictEqual(archiveResult(sent).checksumSha256, taken)
+          assert.strictEqual(sha256(bucket.object), taken)
+          assert.isFalse(existsSync(archiveOf(config, 41)))
+        })
+      )
+  )
+
+  it.effect(
+    "sends what it took after a restart, whether it was waiting or being sent",
+    () =>
+      withRelay("kiln-backup-waits-restart-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "as backed up")
+          )
+          const { options, state } = comesAndGoes()
+          const before = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const waiting = yield* runTask(before, toBucket(42), hearthId)
+          assert.strictEqual(waiting.status, "queued")
+          const taken = sha256(
+            yield* Effect.promise(() => readFile(archiveOf(config, 42)))
+          )
+          // Its turn comes again, and the Relay stops as the send is under
+          // way.
+          const journal = yield* RelayStateStore
+          yield* journal.rescheduleWaitingBackupTasks(hearthId, Date.now())
+          yield* journal.claimNextBackupTask(Date.now())
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "changed since")
+          )
+
+          const after = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          state.away = false
+          yield* after.runPending()
+
+          const sent = (yield* after.get(waiting.taskId))!
+          assert.strictEqual(sent.status, "succeeded", sent.error ?? "")
+          assert.strictEqual(sha256(bucket.object), taken)
+        })
+      )
+  )
+
+  // Stopping the Relay ends its worker. Whatever becomes of the send under
+  // way, nothing is recorded as ended, so what the backup took is still
+  // there to send when the Relay starts.
+  it.effect("keeps what it took when the Relay stops while sending it", () =>
+    withRelay("kiln-backup-waits-stop-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "world.txt"), "as backed up")
+        )
+        const silent = hearth(() => new Promise(() => {}))
+        const before = yield* backupManager(
+          config,
+          undefined,
+          undefined,
+          silent.options
+        )
+        const create = toBucket(46)
+        yield* before.enqueue(create, hearthId)
+        const run = yield* Effect.forkChild(before.runPending())
+        while (silent.asked.length === 0) {
+          yield* Effect.promise(() => yieldToEventLoop())
+        }
+        const taken = sha256(
+          yield* Effect.promise(() => readFile(archiveOf(config, 46)))
+        )
+
+        yield* Fiber.interrupt(run)
+        const after = yield* backupManager(
+          config,
+          undefined,
+          undefined,
+          hearth(() => signed("PUT")).options
+        )
+        yield* after.runPending()
+
+        const sent = (yield* after.get(create.taskId))!
+        assert.strictEqual(sent.status, "succeeded", sent.error ?? "")
+        assert.strictEqual(sha256(bucket.object), taken)
+      })
+    )
+  )
+
+  // Each waits out its own minute.
+  it.effect(
+    "sends a waiting backup though its Hearth still won't answer for an older one",
+    () =>
+      withRelay("kiln-backup-waits-each-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const unanswered = "30000000-0000-4000-8000-000000000006"
+          const state = { away: true }
+          const { options } = hearth((_action, artifactId) =>
+            state.away || artifactId === unanswered ? null : signed("PUT")
+          )
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const older = yield* runTask(
             manager,
             {
-              ...backupInput(33),
-              destination: { artifactId: copy, kind: "s3" as const },
+              ...backupInput(47),
+              destination: { artifactId: unanswered, kind: "s3" as const },
             },
             hearthId
           )
+          const newer = yield* runTask(manager, toBucket(48), hearthId)
+
+          state.away = false
+          yield* manager.hearthConnected(hearthId)
+          yield* manager.runPending()
+
+          assert.strictEqual(
+            (yield* manager.get(older.taskId))?.status,
+            "queued"
+          )
+          assert.strictEqual(
+            (yield* manager.get(newer.taskId))?.status,
+            "succeeded"
+          )
+        })
+      )
+  )
+
+  it.effect(
+    "keeps its own copy at once and sends the bucket's when the Hearth is back",
+    () =>
+      withRelay("kiln-backup-waits-both-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const own = "30000000-0000-4000-8000-000000000004"
+          const { options, state } = comesAndGoes()
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          const waiting = yield* runTask(
+            manager,
+            {
+              ...backupInput(43),
+              destination: { artifactId: own, kind: "local" as const },
+              replicas: [{ artifactId: copy, kind: "s3" as const }],
+            },
+            hearthId
+          )
+          assert.strictEqual(waiting.status, "queued")
+
+          state.away = false
+          yield* manager.hearthConnected(hearthId)
+          yield* manager.runPending()
+
+          const sent = (yield* manager.get(waiting.taskId))!
+          assert.strictEqual(sent.status, "succeeded", sent.error ?? "")
+          assert.deepStrictEqual(
+            archiveResult(sent).artifacts?.map((stored) => [
+              stored.artifactId,
+              stored.status,
+            ]),
+            [
+              [own, "available"],
+              [copy, "available"],
+            ]
+          )
+          // Still the Relay's own copy.
+          assert.isTrue(existsSync(archiveOf(config, 43)))
+        })
+      )
+  )
+
+  it.effect("removes what a waiting backup took when it is cancelled", () =>
+    withRelay("kiln-backup-waits-cancel-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "world.txt"), "world")
+        )
+        const manager = yield* backupManager(
+          config,
+          undefined,
+          undefined,
+          comesAndGoes().options
+        )
+        const waiting = yield* runTask(manager, toBucket(44), hearthId)
+        assert.isTrue(existsSync(archiveOf(config, 44)))
+
+        const cancelled = yield* manager.cancel(waiting.taskId)
+
+        assert.strictEqual(cancelled?.status, "cancelled")
+        assert.isFalse(existsSync(archiveOf(config, 44)))
+      })
+    )
+  )
+
+  // Recorded as cancelled, then the Relay stops before the file is gone.
+  it.effect(
+    "removes as it starts what a backup cancelled as the Relay stopped had taken",
+    () =>
+      withRelay("kiln-backup-waits-cancel-stop-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const before = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            comesAndGoes().options
+          )
+          const waiting = yield* runTask(before, toBucket(50), hearthId)
+          const journal = yield* RelayStateStore
+          yield* journal.cancelBackupTask(waiting.taskId, Date.now())
+          assert.isTrue(existsSync(archiveOf(config, 50)))
+
+          yield* backupManager(config)
+
+          assert.isFalse(existsSync(archiveOf(config, 50)))
+        })
+      )
+  )
+
+  // Cancelled between two copies, a backup used to end as a defect, which
+  // stopped the Relay's backup worker until the Relay was restarted.
+  it.effect(
+    "ends a backup cancelled as it asks to send a copy, and carries on",
+    () =>
+      withRelay("kiln-backup-bucket-cancel-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          // The backup is held as it asks Hearth for its upload.
+          let release = () => {}
+          const held = new Promise<void>((resolved) => {
+            release = resolved
+          })
+          const { asked, options } = hearth(async () => {
+            await held
+            return signed("PUT")
+          })
+          const manager = yield* backupManager(
+            config,
+            undefined,
+            undefined,
+            options
+          )
+          // A second copy to go on to, which is where it stopped.
+          const create = {
+            ...backupInput(35),
+            destination: { artifactId: copy, kind: "s3" as const },
+            replicas: [
+              {
+                artifactId: "30000000-0000-4000-8000-000000000005",
+                kind: "s3" as const,
+              },
+            ],
+          }
+          yield* manager.enqueue(create, hearthId)
+          const run = yield* Effect.forkChild(manager.runPending())
+          while (asked.length === 0) {
+            yield* Effect.promise(() => yieldToEventLoop())
+          }
+
+          yield* manager.cancel(create.taskId)
+          release()
+          yield* Fiber.join(run)
+
+          const journal = yield* RelayStateStore
+          assert.strictEqual(
+            (yield* journal.getBackupTask(create.taskId))?.status,
+            "cancelled"
+          )
+          assert.isFalse(existsSync(archiveOf(config, 35)))
+          // The worker is still there for the next one.
+          const next = yield* runTask(manager, backupInput(36))
+          assert.strictEqual(next.status, "succeeded")
+        })
+      )
+  )
+
+  // A Hearth that stays away mustn't fill the Relay's disk.
+  it.effect(
+    "fails the bucket's copy when no more may wait for that Hearth",
+    () =>
+      withRelay("kiln-backup-waits-full-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "world.txt"), "world")
+          )
+          const manager = yield* backupManager(
+            { ...config, backupOutboxBytes: 0 },
+            undefined,
+            undefined,
+            comesAndGoes().options
+          )
+
+          const task = yield* runTask(manager, toBucket(45), hearthId)
+
           assert.strictEqual(task.status, "failed")
-          assert.include(task.error ?? "", why)
-          assert.deepStrictEqual(bucket.asked, [])
+          assert.include(task.error ?? "", "KILN_RELAY_BACKUP_OUTBOX")
+          assert.isFalse(existsSync(archiveOf(config, 45)))
         })
       )
   )

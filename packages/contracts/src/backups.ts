@@ -1064,6 +1064,22 @@ export type BackupS3CopyDestination = z.infer<
   typeof backupS3CopyDestinationSchema
 >
 
+/**
+ * Whether a create has taken its backup and waits on its Relay to send it:
+ * a copy goes to a bucket only Hearth can open, and Hearth was away. The
+ * Relay sends it when Hearth is back, so the backup exists, though nothing
+ * of it is where it is going yet.
+ */
+export function backupTaskAwaitsHearth(
+  task: Pick<RelayBackupTask, "kind" | "phase" | "status">
+): boolean {
+  return (
+    task.kind === "create" &&
+    task.status === "queued" &&
+    task.phase === "uploading"
+  )
+}
+
 export type BackupArtifactKind = z.infer<typeof backupArtifactKindSchema>
 export type BackupConsistency = z.infer<typeof backupConsistencySchema>
 export type BackupTarManifest = z.infer<typeof backupTarManifestSchema>

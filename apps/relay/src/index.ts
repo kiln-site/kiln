@@ -1617,8 +1617,14 @@ const controlSocket = attachControlSocket({
   execute: executeControlRequest,
   // Which import each Hearth's protection of volumes counts is its current
   // connection's.
-  clientConnected: (clientId, connectionId) =>
-    volumes.clientConnected(clientId, connectionId),
+  clientConnected: (clientId, connectionId) => {
+    volumes.clientConnected(clientId, connectionId)
+    // Backups taken while this Hearth was away have it to ask now.
+    forkRelayEffect(
+      "relay.backups.hearthConnected",
+      backupManager.hearthConnected(clientId)
+    )
+  },
   identity: relayIdentity,
   journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
@@ -2923,11 +2929,19 @@ async function executeControlRequest(
     }
     case "relay.clients.revoke": {
       const clientId = requiredString(payload, "clientId")
+      // What the revoked client had still to be answered for is the
+      // revoking client's now: a Hearth revokes the key it replaces.
       const revoked = await runRelayEffect(
         "relay.control.clients.revoke",
-        startup.state.revokeClient(clientId, Date.now())
+        startup.state.revokeClient(clientId, Date.now(), client.id)
       )
       if (revoked) await applyPauseHolds()
+      if (revoked) {
+        forkRelayEffect(
+          "relay.backups.hearthConnected",
+          backupManager.hearthConnected(client.id)
+        )
+      }
       if (revoked) {
         await appendRelayAudit("client.revoked", client.id, request.id, {
           clientId,

@@ -22,7 +22,18 @@ import {
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { constants as zlibConstants } from "node:zlib"
 import { logException } from "@workspace/telemetry"
-import { Deferred, Effect, Fiber, Option, Queue, Result, Schema } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Queue,
+  Result,
+  Schedule,
+  Schema,
+} from "effect"
 import ZipStream from "zip-stream"
 
 import {
@@ -56,7 +67,7 @@ import {
   restoreCompressedDatabaseBackup,
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
-import { RelayBackupError } from "./effect/errors.js"
+import { RelayBackupError, type RelayStateError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
 import {
@@ -90,7 +101,10 @@ import {
 import { DockerEngine } from "./docker-engine.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { backupFailureCode } from "./backups/failure.js"
-import type { BackupStorageAccess } from "./backups/storage-access.js"
+import {
+  isHearthUnreachable,
+  type BackupStorageAccess,
+} from "./backups/storage-access.js"
 import {
   backupTaskAttributes,
   type BackupTaskOutcome,
@@ -133,6 +147,13 @@ const ZIP_OVERHEAD_RESERVE_BYTES = 64 * 1024 * 1024
 const BACKUP_TIMEOUT_REASON =
   "Cancelled after reaching the configured backup timeout"
 const EXPORT_SWEEP_INTERVAL = "1 hour"
+// How long a backup that is taken waits before its Hearth is asked again,
+// unless the Hearth connects sooner, which asks at once.
+const HEARTH_RETRY_MS = 60_000
+// How often the worker looks for a waiting backup that has come due.
+const WAITING_CHECK_INTERVAL = "30 seconds"
+const WAITING_FOR_HEARTH =
+  "Taken, and waiting for Hearth to open the bucket it goes to"
 const RESTIC_CACHE_CLEANUP_TIMEOUT_MS = 30_000
 const RESTIC_RECOVERY_TIMEOUT_MS = 30_000
 const DEFAULT_EXCLUDES = [
@@ -350,6 +371,10 @@ export class BackupManager {
       yield* manager.#recoverTarRestores()
       yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
+      // Archives of creates that ended as the Relay last stopped.
+      for (const ended of yield* state.endedBackupCaptures(Date.now())) {
+        yield* manager.#dropEndedArchive(ended)
+      }
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
       yield* Queue.offer(wake, undefined)
       return manager
@@ -388,7 +413,66 @@ export class BackupManager {
     return Effect.gen({ self: this }, function* () {
       const cancelled = yield* this.#state.cancelBackupTask(taskId, Date.now())
       if (cancelled) this.#activeCreates.get(taskId)?.abort()
-      return yield* this.#state.getBackupTask(taskId)
+      const task = yield* this.#state.getBackupTask(taskId)
+      // One waiting for its Hearth has no run to remove what it took, and a
+      // run that was setting it aside as this arrived ends without failing,
+      // so removes nothing either. A run still at work removes it again as
+      // it ends.
+      if (cancelled && task) yield* this.#dropEndedArchive(task)
+      return task
+    })
+  }
+
+  /**
+   * Removes the archive of a create that ended without a backup. How the
+   * task is recorded as ended decides it, not how its run stopped: a Relay
+   * stopping mid-send ends nothing, and keeps what it has still to send.
+   * What the create took stays recorded until the file is gone, so a Relay
+   * that stops in between removes it as it starts.
+   */
+  #dropEndedArchive(
+    task: Pick<RelayBackupTask, "backupId" | "taskId"> & { kind?: string }
+  ) {
+    if (task.kind !== undefined && task.kind !== "create") return Effect.void
+    return this.#state.getBackupTask(task.taskId).pipe(
+      Effect.flatMap((ended) =>
+        ended?.kind === "create" &&
+        (ended.status === "failed" || ended.status === "cancelled")
+          ? promiseEffect(() =>
+              rm(backupArchivePath(this.#config, task.backupId), {
+                force: true,
+              })
+            ).pipe(
+              Effect.andThen(this.#state.clearBackupCapture(task.taskId))
+            )
+          : Effect.void
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("An ended backup's archive was not removed", cause)
+      )
+    )
+  }
+
+  // Fails a task that never ran, and removes what an earlier run of it,
+  // cut off by a restart, may have left.
+  #failUnrun(task: RelayBackupTask, reason: string) {
+    return this.#state
+      .failBackupTask(task.taskId, reason, Date.now())
+      .pipe(Effect.andThen(this.#dropEndedArchive(task)))
+  }
+
+  /**
+   * A Hearth connected: the backups taken and waiting for it are sent now
+   * rather than when their wait is up. So are those stored before a task
+   * kept which Hearth sent it, which any Hearth with full access answers.
+   */
+  hearthConnected(clientId: string) {
+    return Effect.gen({ self: this }, function* () {
+      const now = Date.now()
+      const hastened =
+        (yield* this.#state.rescheduleWaitingBackupTasks(clientId, now)) +
+        (yield* this.#state.rescheduleWaitingBackupTasks(null, now))
+      if (hastened > 0) yield* Queue.offer(this.#wake, undefined)
     })
   }
 
@@ -447,6 +531,13 @@ export class BackupManager {
           Effect.forever
         )
       )
+      // A backup waiting for its Hearth comes due by time, with nothing
+      // to wake the worker for it.
+      yield* Effect.forkChild(
+        Queue.offer(this.#wake, undefined).pipe(
+          Effect.repeat(Schedule.spaced(WAITING_CHECK_INTERVAL))
+        )
+      )
       while (true) {
         yield* Queue.take(this.#wake)
         yield* this.#drain()
@@ -469,10 +560,28 @@ export class BackupManager {
         if (this.#lanes.paused) return
         const task = yield* this.#state.claimNextBackupTask(Date.now())
         if (!task) return
-        const batch = stoppedBatch(task)
+        // One that has taken its backup has only to send it, on its own:
+        // its batch's window closed when it was taken.
+        const capture =
+          task.kind === "create"
+            ? yield* Effect.result(this.#state.backupTaskCapture(task.taskId))
+            : Result.succeed(null)
+        if (Result.isFailure(capture)) {
+          // What it took can't be read, so it can't be sent, and taking it
+          // again would be another backup. It fails alone; the rest run.
+          yield* this.#state.failBackupTask(
+            task.taskId,
+            "What this backup took could no longer be read on its Relay",
+            Date.now()
+          )
+          yield* this.#dropEndedArchive(task)
+          continue
+        }
+        const taken = capture.success
+        const batch = taken ? null : stoppedBatch(task)
         const outcome = batch
           ? yield* this.#runBatch(task, batch)
-          : yield* this.#runTask(task, null)
+          : yield* this.#runTask(task, null, taken)
         if (outcome === "paused") return
       }
     })
@@ -482,7 +591,11 @@ export class BackupManager {
    * Runs one claimed task, waiting its turn in the lanes; or, in a stopped
    * batch's window, inside the locks the batch already holds.
    */
-  #runTask(task: RelayBackupTask, window: StoppedWindow | null) {
+  #runTask(
+    task: RelayBackupTask,
+    window: StoppedWindow | null,
+    taken: BackupArchiveCreateTaskResult | null = null
+  ) {
     return Effect.gen({ self: this }, function* () {
       const controller = new AbortController()
       this.#activeCreates.set(task.taskId, controller)
@@ -519,7 +632,8 @@ export class BackupManager {
                     task.taskId,
                     Date.now(),
                     BACKUP_TIMEOUT_REASON,
-                    "timed_out"
+                    "timed_out",
+                    true
                   )
                 : this.#state.failBackupTask(
                     task.taskId,
@@ -544,11 +658,21 @@ export class BackupManager {
       // holds, looked up before its turn and checked again once it has
       // it; a lookup that fails fails the task, never locking too little.
       const outcome = yield* (
-        window ? Effect.succeed([]) : this.#lockedVolumeApps(task.input)
+        window || taken
+          ? Effect.succeed([])
+          : this.#lockedVolumeApps(task.input)
       )
         .pipe(
           Effect.flatMap((volumeApps) =>
-            window
+            taken
+              ? // Sending an archive changes nothing it was taken of, so it
+                // holds no lane, as an export or a delete holds none.
+                Effect.suspend(() =>
+                  controller.signal.aborted
+                    ? Effect.fail(backupAbortError(controller.signal))
+                    : this.#resumeCreate(task, taken, controller.signal)
+                )
+              : window
               ? // Its batch holds the locks; it starts unless cancelled.
                 Effect.suspend(() =>
                   controller.signal.aborted
@@ -584,7 +708,19 @@ export class BackupManager {
           )
         )
         .pipe(
-          Effect.as<BackupTaskEnd>({ outcome: "succeeded", failure: null }),
+          Effect.map(
+            (ended): BackupTaskEnd => ({
+              // Set aside for its Hearth: neither ended nor failed.
+              outcome: ended === "waiting" ? "waiting" : "succeeded",
+              failure: null,
+            })
+          ),
+          // A batch's member that fails leaves the window before its
+          // failure is recorded: what the rest took is then recorded first,
+          // so a Relay that stops in between still sends theirs.
+          Effect.tapError((cause) =>
+            window ? window.leave(task.taskId, cause) : Effect.void
+          ),
           // Withdrawn by a pause before it started: it goes back in line
           // and starts once the Relay is resumed.
           Effect.catch((cause) =>
@@ -607,6 +743,15 @@ export class BackupManager {
                 backupFailureCode(cause)
               )
               .pipe(
+                // Its batch's window may have recorded the failure already,
+                // with what the rest took.
+                Effect.flatMap((failed) =>
+                  failed || !window
+                    ? Effect.succeed(failed)
+                    : this.#state
+                        .getBackupTask(task.taskId)
+                        .pipe(Effect.map((now) => now?.status === "failed"))
+                ),
                 Effect.flatMap((failed): Effect.Effect<BackupTaskEnd> => {
                   // Cancelled by a user, or stopped by its deadline, which
                   // already recorded the timeout.
@@ -628,7 +773,8 @@ export class BackupManager {
                         cause instanceof RelayBackupError ? cause.code : null,
                     },
                   }).pipe(Effect.as({ outcome: "failed", failure }))
-                })
+                }),
+                Effect.tap(() => this.#dropEndedArchive(task))
               )
           ),
           Effect.tap((ended) =>
@@ -657,8 +803,16 @@ export class BackupManager {
               ? Effect.sync(() => this.#activeCreates.delete(task.taskId))
               : Effect.void
           ),
-          // A batch's window closes once every backup in it has left.
-          Effect.ensuring(window ? window.leave(task.taskId) : Effect.void),
+          // A batch's window closes once every backup in it has left: taken,
+          // or ended without. One cut off as the Relay stops has done
+          // neither, and mustn't count: the window would close around
+          // what the others took, recording part of a batch as taken.
+          Effect.onExit((exit) =>
+            window &&
+            !(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+              ? window.leave(task.taskId)
+              : Effect.void
+          ),
           Effect.withSpan(`Backups.${task.kind}`, {
             attributes: backupTaskAttributes(task),
           })
@@ -703,10 +857,9 @@ export class BackupManager {
           (yield* this.#state.batchHoldsDatabase(batch.id)))
       ) {
         for (const member of claimed) {
-          yield* this.#state.failBackupTask(
-            member.taskId,
-            "This backup's batch is incomplete; no backups were started",
-            Date.now()
+          yield* this.#failUnrun(
+            member,
+            "This backup's batch is incomplete; no backups were started"
           )
         }
         return undefined
@@ -723,11 +876,7 @@ export class BackupManager {
           Result.isFailure(found) &&
           found.failure.code === "volume_not_found"
         ) {
-          yield* this.#state.failBackupTask(
-            member.taskId,
-            backupErrorMessage(found.failure),
-            Date.now()
-          )
+          yield* this.#failUnrun(member, backupErrorMessage(found.failure))
         } else members.push(member)
       }
       const [first] = members
@@ -735,11 +884,7 @@ export class BackupManager {
       const prepared = yield* Effect.result(this.#batchLocks(members))
       if (Result.isFailure(prepared)) {
         for (const member of members) {
-          yield* this.#state.failBackupTask(
-            member.taskId,
-            backupErrorMessage(prepared.failure),
-            Date.now()
-          )
+          yield* this.#failUnrun(member, backupErrorMessage(prepared.failure))
         }
         return undefined
       }
@@ -768,13 +913,7 @@ export class BackupManager {
       for (const member of members) {
         yield* paused
           ? this.#state.returnBackupTask(member.taskId, Date.now())
-          : this.#state
-              .failBackupTask(
-                member.taskId,
-                backupErrorMessage(run.failure),
-                Date.now()
-              )
-              .pipe(Effect.asVoid)
+          : this.#failUnrun(member, backupErrorMessage(run.failure))
       }
       return paused ? ("paused" as const) : undefined
     }).pipe(Effect.withSpan("Backups.batch"))
@@ -843,28 +982,76 @@ export class BackupManager {
           stopped = yield* this.#stopApps(leader.taskId, [...consumers], true)
         })
       )
-      const done = yield* Deferred.make<ReadonlyArray<string>>()
+      const done = yield* Deferred.make<
+        ReadonlyArray<string>,
+        RelayStateError
+      >()
       const left = new Set<string>()
+      const taken: Array<{
+        captured: BackupArchiveCreateTaskResult
+        taskId: string
+      }> = []
+      // The members that failed in the window, recorded as failed in the
+      // step that records what the rest took.
+      const failed: Array<{
+        error: string
+        errorCode: BackupFailureCode | null
+        taskId: string
+      }> = []
+      const fails = (taskId: string, cause: unknown) => {
+        if (cause === undefined || failed.some((one) => one.taskId === taskId)) {
+          return
+        }
+        failed.push({
+          error: backupErrorMessage(cause),
+          errorCode: backupFailureCode(cause),
+          taskId,
+        })
+      }
       let restarting = false
       const finishIfLast = Effect.suspend(() => {
         if (restarting || left.size < members.length) return Effect.void
         restarting = true
-        return this.#startApps(leader.taskId, stopped).pipe(
-          Effect.orElseSucceed((): ReadonlyArray<string> => []),
-          Effect.flatMap((warnings) => Deferred.succeed(done, warnings)),
+        // What the batch took is recorded for all of it at once, before
+        // its Apps start and before any of it is sent: a Relay that
+        // restarts then sends every one, and one that restarted before
+        // takes the whole batch again, never part of it in a window of its
+        // own. The members that failed are recorded as failed in the same
+        // step, so one of them is never taken again alone beside what the
+        // rest took here. A batch that couldn't be recorded so fails, all
+        // of it.
+        return this.#state.captureBackupTasks(taken, Date.now(), failed).pipe(
+          Effect.result,
+          Effect.flatMap((recorded) =>
+            this.#startApps(leader.taskId, stopped).pipe(
+              Effect.orElseSucceed((): ReadonlyArray<string> => []),
+              Effect.flatMap((warnings) =>
+                Result.isFailure(recorded)
+                  ? Deferred.fail(done, recorded.failure)
+                  : Deferred.succeed(done, warnings)
+              )
+            )
+          ),
           Effect.asVoid
         )
       })
       return {
-        arrive: (taskId: string) =>
+        arrive: (
+          taskId: string,
+          captured: BackupArchiveCreateTaskResult | null,
+          failure?: unknown
+        ) =>
           Effect.suspend(() => {
             left.add(taskId)
+            if (captured) taken.push({ captured, taskId })
+            else fails(taskId, failure)
             return finishIfLast.pipe(Effect.andThen(Deferred.await(done)))
           }),
         begin,
-        leave: (taskId: string) =>
+        leave: (taskId: string, failure?: unknown) =>
           Effect.suspend(() => {
             left.add(taskId)
+            fails(taskId, failure)
             return finishIfLast
           }),
         lockedApps,
@@ -1005,38 +1192,51 @@ export class BackupManager {
           ? yield* this.#stopApps(taskId, consumers, !final)
           : []
       const archived = yield* Effect.result(archive)
+      const taken = Result.map(
+        archived,
+        (done): BackupArchiveCreateTaskResult => ({
+          bytes: done.bytes,
+          checksumSha256: done.checksumSha256,
+          consistency,
+          filename: backupArtifactFilename(input.backupId, "tar_archive"),
+          warnings: done.warnings,
+        })
+      )
+      // What a stopped backup took is recorded before its Apps start
+      // again, as a batch's is: a Relay that stops while they start sends
+      // it then, rather than stop them once more for a backup of a later
+      // moment. They start again whether or not it could be recorded.
+      const recorded =
+        !window && stopped.length > 0 && Result.isSuccess(taken)
+          ? yield* Effect.result(
+              this.#state.captureBackupTask(taskId, taken.success, Date.now())
+            )
+          : null
       const restarted = window
-        ? yield* window.arrive(taskId)
+        ? yield* window.arrive(
+            taskId,
+            Result.getOrNull(taken),
+            Result.isFailure(taken) ? taken.failure : undefined
+          )
         : stopped.length > 0 && !final
           ? yield* this.#startApps(taskId, stopped)
           : []
-      if (Result.isFailure(archived))
-        return yield* Effect.fail(archived.failure)
+      if (Result.isFailure(taken)) return yield* Effect.fail(taken.failure)
+      if (recorded && Result.isFailure(recorded)) {
+        return yield* Effect.fail(recorded.failure)
+      }
       progress.phase = "finalizing"
-      return yield* storeCreatedBackup(
-        this.#config,
+      return yield* this.#deliver(
+        taskId,
         input,
         {
-          bytes: archived.success.bytes,
-          checksumSha256: archived.success.checksumSha256,
-          consistency,
-          filename: backupArtifactFilename(input.backupId, "tar_archive"),
-          warnings: [...archived.success.warnings, ...restarted].slice(
-            0,
-            1_000
-          ),
+          ...taken.success,
+          warnings: [...taken.success.warnings, ...restarted].slice(0, 1_000),
         },
         progress,
-        signal,
-        this.#accessFor(input.taskId)
+        signal
       ).pipe(Effect.ensuring(Fiber.interrupt(progressFiber)))
-    }).pipe(
-      Effect.onError(() =>
-        promiseEffect(() =>
-          rm(backupArchivePath(this.#config, input.backupId), { force: true })
-        ).pipe(Effect.ignore)
-      )
-    )
+    })
   }
 
   /**
@@ -1562,6 +1762,194 @@ export class BackupManager {
     })
   }
 
+  /**
+   * What follows once a create has taken its backup: it is stored in each
+   * place its task names, and the task ends.
+   *
+   * What it took is recorded first, and each copy as it is settled
+   * (`captureBackupTask`), so a Relay that restarts sends what is left
+   * rather than take the backup again. A copy for a bucket needs a request
+   * its Hearth signs. With that Hearth away the task is set aside with its
+   * archive, `waiting`, and the worker goes on to other work: it is claimed
+   * again when the Hearth connects, or a minute on, and only sent then.
+   * The backups one Hearth has still to be sent take at most
+   * `backupOutboxBytes` together. Past that the copy fails, as it did
+   * before anything could wait.
+   */
+  #deliver(
+    taskId: string,
+    input: BackupCreateTaskInput,
+    taken: BackupArchiveCreateTaskResult,
+    progress: BackupProgress,
+    signal: AbortSignal
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const record = (captured: BackupArchiveCreateTaskResult) =>
+        this.#state.captureBackupTask(taskId, captured, Date.now())
+      if (!(yield* record(taken))) {
+        return yield* backupFailure(
+          "task_state_changed",
+          "create.capture",
+          "The backup task was no longer running when its backup was taken"
+        )
+      }
+      const stored = yield* storeCreatedBackup(
+        this.#config,
+        input,
+        taken,
+        progress,
+        signal,
+        this.#accessFor(taskId),
+        record
+      )
+      let result = stored.result
+      if (stored.waiting.length > 0) {
+        const now = Date.now()
+        // Each waits out its own minute: one whose Hearth won't answer
+        // for it never holds back another's.
+        const free = yield* promiseEffect(async () => {
+          const filesystem = await statfs(
+            dirname(backupArchivePath(this.#config, input.backupId))
+          )
+          return Number(BigInt(filesystem.bavail) * BigInt(filesystem.bsize))
+        }).pipe(Effect.orElseSucceed(() => null))
+        const parked = yield* this.#state.parkBackupTask(
+          taskId,
+          now + HEARTH_RETRY_MS,
+          WAITING_FOR_HEARTH,
+          now,
+          this.#config.backupOutboxBytes,
+          free
+        )
+        if (parked === "gone") {
+          return yield* backupFailure(
+            "task_state_changed",
+            "create.wait",
+            "The backup task was no longer running when it had to wait for Hearth"
+          )
+        }
+        if (parked === "parked") {
+          yield* Effect.annotateCurrentSpan({
+            "backup.copies.waiting": stored.waiting.length,
+          })
+          return "waiting" as const
+        }
+        const reason =
+          "Hearth couldn't be reached, and this Relay has no room for another backup to wait for it (KILN_RELAY_BACKUP_OUTBOX, or its disk)"
+        result = {
+          ...result,
+          artifacts: [
+            ...(result.artifacts ?? []),
+            ...stored.waiting.map((artifactId) => ({
+              artifactId,
+              error: reason,
+              status: "failed" as const,
+            })),
+          ],
+        }
+        if (stored.available === 0) {
+          return yield* RelayBackupError.make({
+            code: "hearth_unreachable",
+            operation: "create.store",
+            reason,
+          })
+        }
+        // Recorded as every copy is, then unlinked, then the task ended:
+        // a Relay that stops between any two finds each copy settled, and
+        // has neither a file to send nor one left over.
+        yield* record(result)
+        yield* dropUnkeptArchive(this.#config, input)
+      }
+      const completed = yield* this.#state.completeBackupTask(
+        taskId,
+        result,
+        Date.now()
+      )
+      if (!completed) {
+        return yield* backupFailure(
+          "task_state_changed",
+          "create.complete",
+          "The backup task was no longer running when its backup was stored"
+        )
+      }
+      return "done" as const
+    })
+  }
+
+  /** Sends what a create took earlier, without taking it again. */
+  #resumeCreate(
+    task: RelayBackupTask,
+    taken: BackupArchiveCreateTaskResult,
+    signal: AbortSignal
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      if (task.input.kind !== "create") return "done" as const
+      const input = task.input
+      // What it took must still be there, unless every copy is settled and
+      // none is kept here: a disk that came back without it must not have
+      // the backup reported as stored on this Relay, or sent from nothing.
+      const settled = new Set(
+        (taken.artifacts ?? []).map((copy) => copy.artifactId)
+      )
+      const needed = [input.destination, ...(input.replicas ?? [])].some(
+        (destination) =>
+          destination.kind !== "restic" &&
+          (backupDestinationFor(destination.kind).retainsFullBackupLocally ||
+            destination.artifactId === undefined ||
+            !settled.has(destination.artifactId))
+      )
+      if (needed) {
+        const present = yield* promiseEffect(() =>
+          stat(backupArchivePath(this.#config, input.backupId))
+        ).pipe(
+          Effect.map((file) => file.isFile() && file.size === taken.bytes),
+          Effect.orElseSucceed(() => false)
+        )
+        if (!present) {
+          return yield* backupFailure(
+            "backup_archive_missing",
+            "create.resume",
+            "What this backup took is no longer on its Relay"
+          )
+        }
+      }
+      const progress: BackupProgress = {
+        completed: 0,
+        currentArtifactId: null,
+        currentPath: null,
+        phase: "uploading",
+        total: taken.bytes,
+      }
+      const progressFiber = yield* Effect.forkChild(
+        Effect.sleep("500 millis").pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              this.#state
+                .updateBackupTaskProgress(
+                  task.taskId,
+                  progress.completed,
+                  progress.total || null,
+                  progress.phase,
+                  progress.currentPath,
+                  progress.currentArtifactId,
+                  Date.now()
+                )
+                .pipe(Effect.asVoid)
+            )
+          ),
+          Effect.forever
+        )
+      )
+      return yield* this.#deliver(
+        task.taskId,
+        input,
+        taken,
+        progress,
+        signal
+      ).pipe(Effect.ensuring(Fiber.interrupt(progressFiber)))
+    })
+  }
+
   #execute(
     task: RelayBackupTask,
     signal: AbortSignal,
@@ -1867,29 +2255,13 @@ export class BackupManager {
       }
       const input = task.input
       if (input.artifactKind === "tar_archive" && input.mode === "full") {
-        const result = yield* this.#createTar(
+        return yield* this.#createTar(
           task.taskId,
           input,
           signal,
           lockedApps,
           window
         )
-        const completed = yield* this.#state.completeBackupTask(
-          task.taskId,
-          result,
-          Date.now()
-        )
-        if (!completed) {
-          yield* promiseEffect(() =>
-            rm(backupArchivePath(this.#config, input.backupId), { force: true })
-          ).pipe(Effect.ignore)
-          return yield* backupFailure(
-            "task_state_changed",
-            "create.complete",
-            "The backup task was no longer running when the archive completed"
-          )
-        }
-        return
       }
       if (
         input.target.kind === "platform" &&
@@ -1932,7 +2304,7 @@ export class BackupManager {
         )
         yield* promiseEffect(() => rm(destination, { force: true }))
         progress.phase = "dumping"
-        const result = yield* Effect.tryPromise({
+        return yield* Effect.tryPromise({
           try: () =>
             createEncryptedPlatformBackup(
               this.#config,
@@ -1951,38 +2323,10 @@ export class BackupManager {
         }).pipe(
           Effect.withSpan("Backups.platform.dump"),
           Effect.flatMap((created) =>
-            storeCreatedBackup(
-              this.#config,
-              input,
-              created,
-              progress,
-              createSignal,
-              this.#accessFor(input.taskId)
-            )
-          ),
-          Effect.onError(() =>
-            promiseEffect(() => rm(destination, { force: true })).pipe(
-              Effect.ignore
-            )
+            this.#deliver(task.taskId, input, created, progress, createSignal)
           ),
           Effect.ensuring(Fiber.interrupt(progressFiber))
         )
-        const completed = yield* this.#state.completeBackupTask(
-          task.taskId,
-          result,
-          Date.now()
-        )
-        if (!completed) {
-          yield* promiseEffect(() => rm(destination, { force: true })).pipe(
-            Effect.ignore
-          )
-          return yield* backupFailure(
-            "task_state_changed",
-            "create.complete",
-            "The backup task was no longer running when the platform bundle completed"
-          )
-        }
-        return
       }
       if (
         input.target.kind === "database" &&
@@ -2036,7 +2380,7 @@ export class BackupManager {
           })
         )
         yield* promiseEffect(() => rm(destination, { force: true }))
-        const result = yield* Effect.tryPromise({
+        return yield* Effect.tryPromise({
           try: () =>
             createCompressedDatabaseBackup(
               this.#databases!,
@@ -2061,7 +2405,7 @@ export class BackupManager {
           // What starting the Apps again left to say is said on it too.
           Effect.flatMap((created) =>
             window && input.consistency === "stopped"
-              ? window.arrive(task.taskId).pipe(
+              ? window.arrive(task.taskId, created).pipe(
                   Effect.map((restarted) => ({
                     ...created,
                     warnings: [...created.warnings, ...restarted],
@@ -2070,38 +2414,10 @@ export class BackupManager {
               : Effect.succeed(created)
           ),
           Effect.flatMap((created) =>
-            storeCreatedBackup(
-              this.#config,
-              input,
-              created,
-              progress,
-              createSignal,
-              this.#accessFor(input.taskId)
-            )
-          ),
-          Effect.onError(() =>
-            promiseEffect(() => rm(destination, { force: true })).pipe(
-              Effect.ignore
-            )
+            this.#deliver(task.taskId, input, created, progress, createSignal)
           ),
           Effect.ensuring(Fiber.interrupt(progressFiber))
         )
-        const completed = yield* this.#state.completeBackupTask(
-          task.taskId,
-          result,
-          Date.now()
-        )
-        if (!completed) {
-          yield* promiseEffect(() => rm(destination, { force: true })).pipe(
-            Effect.ignore
-          )
-          return yield* backupFailure(
-            "task_state_changed",
-            "create.complete",
-            "The backup task was no longer running when the dump completed"
-          )
-        }
-        return
       }
       if (
         input.destination.kind === "restic" &&
@@ -2248,7 +2564,7 @@ export class BackupManager {
           Effect.forever
         )
       )
-      const result = yield* Effect.tryPromise({
+      return yield* Effect.tryPromise({
         try: async () =>
           createPortableInstanceBackup(
             this.#config,
@@ -2276,37 +2592,10 @@ export class BackupManager {
         ),
         Effect.withSpan("Backups.archive"),
         Effect.flatMap((archived) =>
-          storeCreatedBackup(
-            this.#config,
-            input,
-            archived,
-            progress,
-            createSignal,
-            this.#accessFor(input.taskId)
-          )
-        ),
-        Effect.onError(() =>
-          promiseEffect(() =>
-            rm(backupArchivePath(this.#config, input.backupId), { force: true })
-          ).pipe(Effect.ignore)
+          this.#deliver(task.taskId, input, archived, progress, createSignal)
         ),
         Effect.ensuring(Fiber.interrupt(progressFiber))
       )
-      const completed = yield* this.#state.completeBackupTask(
-        task.taskId,
-        result,
-        Date.now()
-      )
-      if (!completed) {
-        yield* promiseEffect(() =>
-          rm(backupArchivePath(this.#config, input.backupId), { force: true })
-        ).pipe(Effect.ignore)
-        return yield* backupFailure(
-          "task_state_changed",
-          "create.complete",
-          "The backup task was no longer running when the archive completed"
-        )
-      }
     })
   }
 }
@@ -2318,9 +2607,21 @@ export class BackupManager {
  * `leave` counts a backup that won't arrive, as one that failed first.
  */
 interface StoppedWindow {
-  readonly arrive: (taskId: string) => Effect.Effect<ReadonlyArray<string>>
+  /**
+   * A member is done taking its backup, with what it took or null if it
+   * couldn't: it waits here until every member is, and gets back what
+   * starting the Apps again left to say. It fails when what the batch took
+   * couldn't be recorded, which fails the batch.
+   */
+  readonly arrive: (
+    taskId: string,
+    taken: BackupArchiveCreateTaskResult | null,
+    /** Why it took nothing, when it didn't. */
+    failure?: unknown
+  ) => Effect.Effect<ReadonlyArray<string>, RelayStateError>
   readonly begin: Effect.Effect<void, unknown>
-  readonly leave: (taskId: string) => Effect.Effect<void>
+  /** `failure`: why it ended without a backup, when it failed. */
+  readonly leave: (taskId: string, failure?: unknown) => Effect.Effect<void>
   readonly lockedApps: ReadonlySet<string>
 }
 
@@ -2556,13 +2857,25 @@ async function instanceBackupManifest(
   }
 }
 
+/**
+ * Stores what a create took in each place its task names.
+ *
+ * `taken.artifacts` are the copies an earlier attempt already settled,
+ * which are left as they are; each one settled here is passed to `settled`
+ * as it is, so a restart goes on from there. A copy for a bucket whose
+ * Hearth can't be asked for access is neither stored nor failed: it is
+ * `waiting`, and the archive is kept for it.
+ */
 function storeCreatedBackup(
   config: RelayConfig,
   input: BackupCreateTaskInput,
-  result: BackupArchiveCreateTaskResult,
+  taken: BackupArchiveCreateTaskResult,
   progress: BackupProgress,
   signal: AbortSignal,
-  access: BackupStorageAccess
+  access: BackupStorageAccess,
+  settled: (
+    taken: BackupArchiveCreateTaskResult
+  ) => Effect.Effect<unknown, RelayStateError>
 ) {
   return Effect.gen(function* () {
     progress.phase = "uploading"
@@ -2570,22 +2883,31 @@ function storeCreatedBackup(
     progress.currentPath = null
     const destinations = [input.destination, ...(input.replicas ?? [])]
     progress.completed = 0
-    progress.total = result.bytes
-    const outcomes: NonNullable<BackupArchiveCreateTaskResult["artifacts"]> = []
-    let available = 0
+    progress.total = taken.bytes
+    const outcomes = [...(taken.artifacts ?? [])]
+    const waiting: Array<string> = []
+    let available = outcomes.filter(
+      (outcome) => outcome.status === "available"
+    ).length
     let lastFailure: unknown = null
     let lastUploadedArtifactId: string | null = null
     for (const destination of destinations) {
-      signal.throwIfAborted()
+      // A failure the task ends with: thrown, it would be a defect that
+      // stops the worker.
+      if (signal.aborted) return yield* Effect.fail(backupAbortError(signal))
       if (destination.kind === "restic") continue
+      const copy = destination.artifactId
+      if (copy && outcomes.some((outcome) => outcome.artifactId === copy)) {
+        continue
+      }
       progress.completed = 0
-      progress.currentArtifactId = destination.artifactId ?? null
+      progress.currentArtifactId = copy ?? null
       const uploaded = yield* Effect.result(
         destination.kind === "s3"
           ? uploadBackupArtifact(
               config,
               { ...input, destination },
-              result,
+              taken,
               signal,
               (bytes) => {
                 progress.completed = Math.min(
@@ -2606,42 +2928,35 @@ function storeCreatedBackup(
                   progress.completed + bytes
                 )
               },
-              result,
+              result: taken,
               signal,
             })
       )
       if (Result.isSuccess(uploaded)) {
         available += 1
         progress.completed = progress.total
-        lastUploadedArtifactId = destination.artifactId ?? null
-        if (destination.artifactId) {
-          outcomes.push({
-            artifactId: destination.artifactId,
-            error: null,
-            status: "available",
-          })
+        lastUploadedArtifactId = copy ?? null
+        if (copy) {
+          outcomes.push({ artifactId: copy, error: null, status: "available" })
         }
-      } else if (destination.artifactId) {
+      } else if (copy && isHearthUnreachable(uploaded.failure)) {
+        // Its Hearth being away says nothing of the copy.
+        waiting.push(copy)
+        continue
+      } else if (copy) {
         outcomes.push({
-          artifactId: destination.artifactId,
+          artifactId: copy,
           error: backupErrorMessage(uploaded.failure),
           errorCode: backupFailureCode(uploaded.failure),
           status: "failed",
         })
       }
       if (Result.isFailure(uploaded)) lastFailure = uploaded.failure
+      if (copy) yield* settled({ ...taken, artifacts: [...outcomes] })
     }
-    if (
-      !destinations.some(
-        (destination) =>
-          destination.kind !== "restic" &&
-          backupDestinationFor(destination.kind).retainsFullBackupLocally
-      )
-    ) {
-      yield* promiseEffect(() =>
-        rm(backupArchivePath(config, input.backupId), { force: true })
-      ).pipe(Effect.ignore)
-    }
+    const result = { ...taken, artifacts: outcomes }
+    if (waiting.length > 0) return { available, result, waiting }
+    yield* dropUnkeptArchive(config, input)
     if (available === 0) {
       // Says why, so the task is classified by the destination's failure.
       return yield* RelayBackupError.make({
@@ -2651,22 +2966,36 @@ function storeCreatedBackup(
         cause: lastFailure,
       })
     }
-    signal.throwIfAborted()
+    if (signal.aborted) return yield* Effect.fail(backupAbortError(signal))
     progress.phase = "finalizing"
     progress.currentArtifactId = lastUploadedArtifactId
     yield* Effect.annotateCurrentSpan({
       "backup.artifacts.stored": available,
       "backup.artifacts.failed": outcomes.length - available,
     })
-    return { ...result, artifacts: outcomes }
+    return { available, result, waiting }
   }).pipe(
     Effect.withSpan("Backups.store", {
       attributes: {
-        "backup.bytes": result.bytes,
+        "backup.bytes": taken.bytes,
         "backup.destinations": 1 + (input.replicas?.length ?? 0),
       },
     })
   )
+}
+
+// A staged archive is the Relay's own copy when its task keeps one here,
+// and is in the way otherwise.
+function dropUnkeptArchive(config: RelayConfig, input: BackupCreateTaskInput) {
+  return [input.destination, ...(input.replicas ?? [])].some(
+    (destination) =>
+      destination.kind !== "restic" &&
+      backupDestinationFor(destination.kind).retainsFullBackupLocally
+  )
+    ? Effect.void
+    : promiseEffect(() =>
+        rm(backupArchivePath(config, input.backupId), { force: true })
+      ).pipe(Effect.ignore)
 }
 
 function uploadBackupArtifact(

@@ -284,7 +284,8 @@ lifecycle lock, which its build takes again when it runs:
   holds is skipped until the next check.
 
 Exports, prunes, and backup deletes touch only stored artifacts and take no
-lock.
+lock. Nor does sending a backup that was taken earlier and waited for
+Hearth: it reads the archive, and changes nothing the backup was taken of.
 
 ### Crash recovery and the quota stop
 

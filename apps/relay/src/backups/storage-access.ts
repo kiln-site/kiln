@@ -67,6 +67,14 @@ export function backupStorageAccessThrough(
   })
 }
 
+/**
+ * Whether a failure is only that Hearth couldn't be asked: nothing was
+ * refused, so what was to be sent can wait for it.
+ */
+export function isHearthUnreachable(cause: unknown): boolean {
+  return cause instanceof RelayBackupError && cause.code === "hearth_unreachable"
+}
+
 function hearthUnreachable(
   request: BackupStorageAccessRequest,
   cause?: unknown

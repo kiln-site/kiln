@@ -145,7 +145,9 @@ export const BackupTaskFeedback = React.memo(function BackupTaskFeedback({
         </p>
       </TooltipTrigger>
       <TooltipContent className="max-w-sm whitespace-normal" side="bottom">
-        {backup.taskPhase ? `${backupTaskPhaseLabel(backup.taskPhase)} · ` : ""}
+        {backup.taskPhase
+          ? `${backupTaskPhaseLabel(backup.taskPhase, backup.taskStatus)} · `
+          : ""}
         {backup.taskCurrentPath ? `${backup.taskCurrentPath} · ` : ""}
         {error}
       </TooltipContent>
@@ -1497,6 +1499,9 @@ function backupTaskPhaseLabel(
   status?: Backup["taskStatus"]
 ): string {
   if (!phase) return status === "queued" ? "Queued" : "Working"
+  // Taken, and set aside on its Relay until Hearth can open the bucket it
+  // goes to, as while the two were out of touch.
+  if (phase === "uploading" && status === "queued") return "Waiting to upload"
   switch (phase) {
     case "preparing":
       return "Preparing"

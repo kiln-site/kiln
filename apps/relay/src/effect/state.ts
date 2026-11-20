@@ -13,6 +13,7 @@ import {
 } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import type {
+  BackupArchiveCreateTaskResult,
   BackupFailureCode,
   BackupTaskInput,
   BackupTaskPhase,
@@ -31,6 +32,7 @@ import type {
 import {
   BACKUP_EXPORT_TTL_MIN_MS,
   backupTargetSchema,
+  backupArchiveCreateTaskResultSchema,
   backupTaskInputSchema,
   backupTaskResultSchema,
   isLegacyBackupDestinationId,
@@ -757,6 +759,85 @@ export class RelayStateStore extends Context.Service<
     readonly claimNextBackupTask: (
       now: number
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
+    /**
+     * Records what a running create has taken, and which of its copies are
+     * stored so far, before any is sent anywhere. From then on a restart
+     * or a Hearth that is away leaves it to send what it took, not to take
+     * it again. False when the task is no longer running.
+     */
+    readonly captureBackupTask: (
+      taskId: string,
+      captured: BackupArchiveCreateTaskResult,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
+    /**
+     * As `captureBackupTask`, for every backup a stopped batch took, or
+     * none; and in the same step, the members that failed in its window
+     * are recorded as failed. A Relay that stops just after can then
+     * never take one of those again in a window of its own beside what
+     * the rest took in this one.
+     */
+    readonly captureBackupTasks: (
+      captured: ReadonlyArray<{
+        readonly captured: BackupArchiveCreateTaskResult
+        readonly taskId: string
+      }>,
+      now: number,
+      failed?: ReadonlyArray<{
+        readonly error: string
+        readonly errorCode: BackupFailureCode | null
+        readonly taskId: string
+      }>
+    ) => Effect.Effect<void, RelayStateError>
+    /**
+     * The creates that ended failed or cancelled with what they took still
+     * recorded, or in the last day: their archives are still to remove, or
+     * may be. The record is kept
+     * through the ending so a Relay that stops before the file is gone
+     * removes it when it starts, and is cleared once it is
+     * (`clearBackupCapture`).
+     */
+    readonly endedBackupCaptures: (now: number) => Effect.Effect<
+      ReadonlyArray<{ readonly backupId: string; readonly taskId: string }>,
+      RelayStateError
+    >
+    readonly clearBackupCapture: (
+      taskId: string
+    ) => Effect.Effect<void, RelayStateError>
+    /** What a create has taken and still has to send, if anything. */
+    readonly backupTaskCapture: (
+      taskId: string
+    ) => Effect.Effect<BackupArchiveCreateTaskResult | null, RelayStateError>
+    /**
+     * Sets aside a running create that has taken its backup and can't send
+     * it yet, to be claimed again from `resumeAt`: `parked`. It is `full`
+     * instead, and left running, when the backups its Hearth has taken and
+     * not yet sent would together pass `capBytes`: one decision, so two
+     * that finish together can't both take the last of the room. `gone`
+     * when the task is no longer running.
+     */
+    readonly parkBackupTask: (
+      taskId: string,
+      resumeAt: number,
+      reason: string,
+      now: number,
+      capBytes: number,
+      /**
+       * What is free where archives are staged. One set aside for the
+       * first time must leave room for another its size: waiting backups
+       * mustn't take the room the next backup is taken in.
+       */
+      freeBytes?: number | null
+    ) => Effect.Effect<"full" | "gone" | "parked", RelayStateError>
+    /**
+     * Moves when the creates waiting to send to one Hearth are claimed
+     * again, as at once when it connects. `hearth` null is those stored
+     * before a task kept which Hearth sent it.
+     */
+    readonly rescheduleWaitingBackupTasks: (
+      hearth: string | null,
+      resumeAt: number
+    ) => Effect.Effect<number, RelayStateError>
     /** Puts back a claimed task that never started, as when a pause withdrew it. */
     readonly returnBackupTask: (
       taskId: string,
@@ -783,11 +864,17 @@ export class RelayStateStore extends Context.Service<
       result: BackupTaskResult,
       now: number
     ) => Effect.Effect<boolean, RelayStateError>
+    /**
+     * Cancels a create that is queued or running. `onlyRunning` leaves a
+     * queued one be, as a run's deadline must: one it has just set aside
+     * to wait for Hearth is no longer its to stop.
+     */
     readonly cancelBackupTask: (
       taskId: string,
       now: number,
       reason?: string,
-      errorCode?: BackupFailureCode | null
+      errorCode?: BackupFailureCode | null,
+      onlyRunning?: boolean
     ) => Effect.Effect<boolean, RelayStateError>
     /**
      * Claims the queued backups of a stopped batch, which run in the stopped
@@ -983,9 +1070,17 @@ export class RelayStateStore extends Context.Service<
     readonly pairClient: (
       input: PairRelayClientInput
     ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Revokes a Hearth client. The backups it has still to be answered for
+     * become `successor`'s: the client that revoked it, as a Hearth does
+     * the key it replaces, or nobody's in particular (null), which any
+     * Hearth with full access answers for. Left with the revoked client
+     * they would wait for good on one that can never answer.
+     */
     readonly revokeClient: (
       clientId: string,
-      revokedAt: number
+      revokedAt: number,
+      successor?: string | null
     ) => Effect.Effect<boolean, RelayStateError>
     readonly revokeInvitation: (
       invitationId: string,
@@ -2059,6 +2154,21 @@ const migrations = SqliteMigrator.fromRecord({
         UPDATE relay_backup_tasks SET input_json = ${kept}
         WHERE task_id = ${row.id}
       `
+    }
+  }),
+  // A create keeps what it took (`captured_json`) from before it sends
+  // any of it until it ends, and when to try sending again
+  // (`resume_at`) while its Hearth is away.
+  "52_backup_capture": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{ name: string }>`
+      SELECT name FROM pragma_table_info('relay_backup_tasks')
+    `
+    if (!columns.some((column) => column.name === "captured_json")) {
+      yield* sql`ALTER TABLE relay_backup_tasks ADD COLUMN captured_json TEXT`
+    }
+    if (!columns.some((column) => column.name === "resume_at")) {
+      yield* sql`ALTER TABLE relay_backup_tasks ADD COLUMN resume_at INTEGER`
     }
   }),
 })
@@ -3408,6 +3518,8 @@ const makeRelayStateStore = Effect.gen(function* () {
                 SELECT task_id AS taskId, input_json AS inputJson
                 FROM relay_backup_tasks
                 WHERE status = 'queued' AND input_refresh_required = 0
+                  -- One waiting to send what it took, until it is due.
+                  AND (resume_at IS NULL OR resume_at <= ${now})
                   -- A prune waits while deletes are queued, so a batch of
                   -- them shares one; other work keeps its place in line.
                   AND (
@@ -3420,7 +3532,10 @@ const makeRelayStateStore = Effect.gen(function* () {
                         AND deletion.input_refresh_required = 0
                     )
                   )
-                ORDER BY created_at ASC, task_id ASC
+                -- Work not yet started comes first, a restore among it:
+                -- a backlog of backups to send never holds one up.
+                ORDER BY (captured_json IS NOT NULL) ASC,
+                  created_at ASC, task_id ASC
                 LIMIT 1
               `
               const row = rows[0]
@@ -3454,7 +3569,8 @@ const makeRelayStateStore = Effect.gen(function* () {
                     updated_at = ${now},
                     error = NULL,
                     error_code = NULL,
-                    phase = 'preparing',
+                    phase = CASE WHEN captured_json IS NULL
+                      THEN 'preparing' ELSE 'uploading' END,
                     current_artifact_id = NULL,
                     current_path = NULL,
                     finished_at = NULL
@@ -3477,6 +3593,8 @@ const makeRelayStateStore = Effect.gen(function* () {
               FROM relay_backup_tasks
               WHERE status = 'queued' AND input_refresh_required = 0
                 AND kind = 'create'
+                -- One already taken only has to be sent, on its own.
+                AND captured_json IS NULL
                 AND json_extract(input_json, '$.batch.id') = ${batchId}
               ORDER BY created_at ASC, task_id ASC
             `
@@ -3516,6 +3634,172 @@ const makeRelayStateStore = Effect.gen(function* () {
             AND json_extract(input_json, '$.target.kind') = 'database'
           LIMIT 1
         `.pipe(Effect.map((rows) => rows.length > 0))
+      ),
+    captureBackupTask: (taskId, captured, now) =>
+      run(
+        "capture_backup_task",
+        sql<{ taskId: string }>`
+          UPDATE relay_backup_tasks
+          SET captured_json = ${encodeBackupCapture(captured)},
+              updated_at = ${now}
+          WHERE task_id = ${taskId} AND kind = 'create'
+            AND status = 'running'
+          RETURNING task_id AS taskId
+        `.pipe(Effect.map((rows) => rows.length > 0))
+      ),
+    captureBackupTasks: (captured, now, failed = []) =>
+      run(
+        "capture_backup_tasks",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            for (const entry of captured) {
+              yield* sql`
+                UPDATE relay_backup_tasks
+                SET captured_json = ${encodeBackupCapture(entry.captured)},
+                    updated_at = ${now}
+                WHERE task_id = ${entry.taskId} AND kind = 'create'
+                  AND status = 'running'
+              `
+            }
+            for (const entry of failed) {
+              const [row] = yield* sql<{ inputJson: string }>`
+                SELECT input_json AS inputJson
+                FROM relay_backup_tasks
+                WHERE task_id = ${entry.taskId} AND status = 'running'
+                LIMIT 1
+              `
+              if (!row) continue
+              yield* sql`
+                UPDATE relay_backup_tasks
+                SET status = 'failed',
+                    input_json = ${scrubBackupTaskInputJson(row.inputJson)},
+                    result_json = NULL,
+                    resume_at = NULL,
+                    current_artifact_id = NULL,
+                    error = ${entry.error.slice(0, 4_096)},
+                    error_code = ${entry.errorCode},
+                    finished_at = ${now},
+                    updated_at = ${now}
+                WHERE task_id = ${entry.taskId} AND status = 'running'
+              `
+            }
+          })
+        )
+      ),
+    endedBackupCaptures: (now) =>
+      run(
+        "ended_backup_captures",
+        sql<{ backupId: string; taskId: string }>`
+          SELECT task_id AS taskId, backup_id AS backupId
+          FROM relay_backup_tasks
+          WHERE kind = 'create' AND status IN ('failed', 'cancelled')
+            AND (
+              captured_json IS NOT NULL
+              -- Or ended lately having perhaps written an archive it never
+              -- recorded, as one cancelled while its batch was being taken.
+              OR finished_at > ${now - 24 * 60 * 60 * 1_000}
+            )
+        `
+      ),
+    clearBackupCapture: (taskId) =>
+      run(
+        "clear_backup_capture",
+        sql`
+          UPDATE relay_backup_tasks SET captured_json = NULL
+          WHERE task_id = ${taskId} AND status IN ('failed', 'cancelled')
+        `.pipe(Effect.asVoid)
+      ),
+    backupTaskCapture: (taskId) =>
+      run(
+        "backup_task_capture",
+        sql<{ captured: string | null }>`
+          SELECT captured_json AS captured
+          FROM relay_backup_tasks
+          WHERE task_id = ${taskId} AND kind = 'create'
+            AND status IN ('queued', 'running')
+          LIMIT 1
+        `.pipe(
+          Effect.flatMap((rows) => {
+            const stored = rows[0]?.captured
+            return stored ? decodeBackupCapture(stored) : Effect.succeed(null)
+          })
+        )
+      ),
+    parkBackupTask: (
+      taskId,
+      resumeAt,
+      reason,
+      now,
+      capBytes,
+      freeBytes = null
+    ) =>
+      run(
+        "park_backup_task",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const own = (yield* sql<{
+              bytes: number
+              hearth: string | null
+              placed: number
+            }>`
+              SELECT json_extract(captured_json, '$.bytes') AS bytes,
+                client_id AS hearth, resume_at IS NOT NULL AS placed
+              FROM relay_backup_tasks
+              WHERE task_id = ${taskId} AND kind = 'create'
+                AND status = 'running' AND captured_json IS NOT NULL
+              LIMIT 1
+            `)[0]
+            if (!own) return "gone" as const
+            // Every archive that has a place among those waiting for that
+            // Hearth: set aside before, and still to be sent, one being
+            // sent right now among them. `resume_at` stays set from the
+            // first time a create is set aside until it ends, so it keeps
+            // its place while it tries again. One that has yet to be set
+            // aside has no place, and two that finish together aren't each
+            // turned away by the other.
+            const others = (yield* sql<{ bytes: number | null }>`
+              SELECT SUM(json_extract(captured_json, '$.bytes')) AS bytes
+              FROM relay_backup_tasks
+              WHERE kind = 'create' AND status IN ('queued', 'running')
+                AND captured_json IS NOT NULL AND resume_at IS NOT NULL
+                AND client_id IS ${own.hearth}
+                AND task_id <> ${taskId}
+            `)[0]
+            if ((others?.bytes ?? 0) + own.bytes > capBytes) {
+              return "full" as const
+            }
+            if (!own.placed && freeBytes !== null && freeBytes < own.bytes) {
+              return "full" as const
+            }
+            yield* sql`
+              UPDATE relay_backup_tasks
+              SET status = 'queued',
+                  phase = 'uploading',
+                  resume_at = ${resumeAt},
+                  error = ${reason.slice(0, 2_048)},
+                  current_artifact_id = NULL,
+                  current_path = NULL,
+                  updated_at = ${now}
+              WHERE task_id = ${taskId}
+            `
+            return "parked" as const
+          })
+        )
+      ),
+    rescheduleWaitingBackupTasks: (hearth, resumeAt) =>
+      run(
+        "reschedule_waiting_backup_tasks",
+        sql<{ taskId: string }>`
+          UPDATE relay_backup_tasks
+          SET resume_at = ${resumeAt}
+          WHERE kind = 'create' AND status = 'queued'
+            AND captured_json IS NOT NULL
+            -- One a restart put back, never set aside, is due as it is,
+            -- and has no place among the waiting to be given one here.
+            AND resume_at IS NOT NULL
+            AND client_id IS ${hearth}
+          RETURNING task_id AS taskId
+        `.pipe(Effect.map((rows) => rows.length))
       ),
     returnBackupTask: (taskId, now) =>
       run(
@@ -3617,7 +3901,8 @@ const makeRelayStateStore = Effect.gen(function* () {
       taskId,
       now,
       reason = "Cancelled by user",
-      errorCode = null
+      errorCode = null,
+      onlyRunning = false
     ) =>
       run(
         "cancel_backup_task",
@@ -3629,6 +3914,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               WHERE task_id = ${taskId}
                 AND kind = 'create'
                 AND status IN ('queued', 'running')
+                AND (${onlyRunning ? 1 : 0} = 0 OR status = 'running')
               LIMIT 1
             `
             if (!rows[0]) return false
@@ -3637,6 +3923,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET status = 'cancelled',
                   input_json = ${scrubBackupTaskInputJson(rows[0].inputJson)},
                   result_json = NULL,
+                  resume_at = NULL,
                   current_artifact_id = NULL,
                   error = ${reason.slice(0, 2_048)},
                   error_code = ${errorCode},
@@ -3668,6 +3955,8 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET status = 'succeeded',
                   input_json = ${scrubBackupTaskInputJson(rows[0].inputJson)},
                   result_json = ${JSON.stringify(result)},
+                  captured_json = NULL,
+                  resume_at = NULL,
                   bytes_completed = ${bytes},
                   bytes_total = ${bytes},
                   error = NULL,
@@ -3749,6 +4038,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               SET status = 'failed',
                   input_json = ${scrubBackupTaskInputJson(rows[0].inputJson)},
                   result_json = NULL,
+                  resume_at = NULL,
                   current_artifact_id = NULL,
                   error = ${error.slice(0, 4_096)},
                   error_code = ${errorCode},
@@ -3773,6 +4063,20 @@ const makeRelayStateStore = Effect.gen(function* () {
             `
             const count = rows[0]?.count ?? 0
             if (count === 0) return 0
+            // A create that had taken its backup sends what it took: taken
+            // again it would be a backup of a later moment, and for a
+            // stopped one would stop its Apps again.
+            yield* sql`
+              UPDATE relay_backup_tasks
+              SET status = 'queued',
+                  phase = 'uploading',
+                  current_artifact_id = NULL,
+                  current_path = NULL,
+                  updated_at = ${now},
+                  error = 'Relay restarted before the backup it took was sent'
+              WHERE status = 'running' AND kind = 'create'
+                AND captured_json IS NOT NULL
+            `
             yield* sql`
               UPDATE relay_backup_tasks
               SET status = 'queued',
@@ -4623,7 +4927,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    revokeClient: (clientId, revokedAt) =>
+    revokeClient: (clientId, revokedAt, successor = null) =>
       run(
         "revoke_client",
         sql.withTransaction(
@@ -4642,6 +4946,12 @@ const makeRelayStateStore = Effect.gen(function* () {
             `
             // A revoked Hearth no longer holds the Relay paused.
             yield* sql`DELETE FROM relay_pause_holds WHERE client_id = ${clientId}`
+            yield* sql`
+              UPDATE relay_backup_tasks
+              SET client_id = ${successor}
+              WHERE client_id = ${clientId}
+                AND status IN ('queued', 'running')
+            `
             return true
           })
         )
@@ -5076,6 +5386,25 @@ function decodeAuditDetails(value: string) {
 function decodeBackupTaskInput(value: string) {
   return Effect.try({
     try: () => backupTaskInputSchema.parse(JSON.parse(value)),
+    catch: (cause) => RelayStateError.make({ operation: "decode_json", cause }),
+  })
+}
+
+// What a create took, as it is stored: its warnings cut to what
+// `backupArchiveCreateTaskResultSchema` reads back, since one that can't be
+// read is a backup that can't be sent.
+function encodeBackupCapture(captured: BackupArchiveCreateTaskResult) {
+  return JSON.stringify({
+    ...captured,
+    warnings: captured.warnings
+      .slice(0, 1_000)
+      .map((warning) => warning.slice(0, 1_024)),
+  })
+}
+
+function decodeBackupCapture(value: string) {
+  return Effect.try({
+    try: () => backupArchiveCreateTaskResultSchema.parse(JSON.parse(value)),
     catch: (cause) => RelayStateError.make({ operation: "decode_json", cause }),
   })
 }

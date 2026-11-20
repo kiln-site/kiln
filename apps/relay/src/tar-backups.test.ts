@@ -440,6 +440,205 @@ it("dumps a database of a stopped batch while the Apps of its volumes are stoppe
   })
 })
 
+// A Relay that stops while the Apps start again must find the backup taken:
+// taking it again would stop them a second time, for a later moment.
+it("records what a stopped backup took before its Apps start again", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "site",
+  })
+  const archive = createInput(
+    { id: volumeId, kind: "volume" },
+    {
+      consistency: "stopped",
+      destination: { artifactId: randomUUID(), kind: "s3" as const },
+    }
+  )
+  let running = true
+  let takenAsTheyStart: unknown = null
+  const manager = await backups(harness, volumes, {
+    apps: {
+      isRunning: async () => running,
+      start: async () => {
+        takenAsTheyStart = await Effect.runPromise(
+          harness.state.backupTaskCapture(archive.taskId)
+        )
+        running = true
+      },
+      stop: async () => {
+        running = false
+      },
+    },
+  })
+
+  await runTask(manager, archive)
+
+  expect(takenAsTheyStart).toMatchObject({ consistency: "stopped" })
+})
+
+// One of a stopped batch fails while the other is taken. A Relay that stops
+// as the Apps start again must find both settled: the failed one still to
+// run would be taken alone in a window of its own, and the two would not
+// be of the same moment.
+it("records a stopped batch's failed member as failed with what the rest took, before its Apps start again", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "site",
+  })
+  const batch = { id: randomUUID(), size: 2 }
+  const archive = createInput(
+    { id: volumeId, kind: "volume" },
+    {
+      batch,
+      consistency: "stopped",
+      destination: { artifactId: randomUUID(), kind: "s3" as const },
+    }
+  )
+  const dump = createInput(
+    { id: "d".repeat(12), kind: "database" },
+    { artifactKind: "database_dump", batch, consistency: "stopped" }
+  )
+  let running = true
+  let asTheyStart: { dump?: string; taken: unknown } | null = null
+  const manager = await backups(harness, volumes, {
+    apps: {
+      isRunning: async () => running,
+      start: async () => {
+        asTheyStart = await Effect.runPromise(
+          Effect.gen(function* () {
+            return {
+              dump: (yield* harness.state.getBackupTask(dump.taskId))?.status,
+              taken: yield* harness.state.backupTaskCapture(archive.taskId),
+            }
+          })
+        )
+        running = true
+      },
+      stop: async () => {
+        running = false
+      },
+    },
+    databases: {
+      backupTarget: async () => {
+        throw new Error("the database is gone")
+      },
+    } as unknown as DatabaseDriver,
+  })
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(archive)
+      yield* manager.enqueue(dump)
+      yield* manager.runPending()
+    })
+  )
+
+  expect(asTheyStart).toMatchObject({
+    dump: "failed",
+    taken: { consistency: "stopped" },
+  })
+  expect(await Effect.runPromise(manager.get(dump.taskId))).toMatchObject({
+    status: "failed",
+  })
+})
+
+// With Hearth away, a batch for a bucket is taken and waits to be sent. It
+// was taken in one stopped window, which must not open again: not when the
+// Relay restarts, and not when each backup's turn to be sent comes.
+it("stops the Apps of a stopped batch once, though its backups wait for Hearth and the Relay restarts", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "site",
+  })
+  let running = true
+  const seen: Array<string> = []
+  const instead = {
+    apps: {
+      isRunning: async () => running,
+      start: async () => {
+        running = true
+        seen.push("started")
+      },
+      stop: async () => {
+        running = false
+        seen.push("stopped")
+      },
+    },
+    databases: dumping(() => seen.push("dump")),
+  }
+  const manager = await backups(harness, volumes, instead)
+  const batch = { id: randomUUID(), size: 2 }
+  const inBucket = () => ({ artifactId: randomUUID(), kind: "s3" as const })
+  const archive = createInput(
+    { id: volumeId, kind: "volume" },
+    { batch, consistency: "stopped", destination: inBucket() }
+  )
+  const dump = createInput(
+    { id: "d".repeat(12), kind: "database" },
+    {
+      artifactKind: "database_dump",
+      batch,
+      consistency: "stopped",
+      destination: inBucket(),
+    }
+  )
+  const waiting = { phase: "uploading", status: "queued" }
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(archive)
+      yield* manager.enqueue(dump)
+      yield* manager.runPending()
+    })
+  )
+  expect(seen).toEqual(["stopped", "dump", "started"])
+  expect(await Effect.runPromise(manager.get(archive.taskId))).toMatchObject(
+    waiting
+  )
+  expect(await Effect.runPromise(manager.get(dump.taskId))).toMatchObject(
+    waiting
+  )
+
+  // The Relay restarts, and each backup's turn to be sent comes, with
+  // Hearth still away.
+  const restarted = await backups(harness, volumes, instead)
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* restarted.hearthConnected("a-hearth")
+      yield* restarted.runPending()
+    })
+  )
+
+  expect(seen).toEqual(["stopped", "dump", "started"])
+  expect(await Effect.runPromise(restarted.get(archive.taskId))).toMatchObject(
+    waiting
+  )
+  expect(await Effect.runPromise(restarted.get(dump.taskId))).toMatchObject(
+    waiting
+  )
+})
+
 // A schedule names the volumes its App used when it was last sent. One
 // that is gone by the time it runs is that backup's failure alone: the
 // rest of the batch is still taken, its Apps stopped once and started again.
