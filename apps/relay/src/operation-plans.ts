@@ -309,11 +309,14 @@ export function transferPackLocks(rootId: string): Array<LaneLock> {
 }
 
 /**
- * Installing a transfer writes a whole tree into a root, so it runs alone:
- * no SFTP session or upload can change the folder under it.
+ * Installing a transfer replaces what a root holds, so it runs alone: no
+ * SFTP session or upload can change the folder under it.
  */
 export function transferInstallLocks(rootId: string): Array<LaneLock> {
   if (isRelayFileRoot(rootId)) return [exclusive(laneKeys.hostFiles)]
+  // A database's dump is run into it, as an import is.
+  const databaseId = databaseIdFromFileRoot(rootId)
+  if (databaseId) return databaseLocks(databaseId)
   const appId = appIdFromFileRoot(rootId)
   if (appId) return appReplaceLocks(appId)
   return instanceReplaceLocks(rootId)

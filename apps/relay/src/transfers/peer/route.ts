@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { Clock, Effect, Option, Schema, Scope } from "effect"
 
 import {
-  fileTransferAction,
+  peerTransferAction,
   RelayPeerTransferGrantSchema,
   relayPeerTransferProofTranscript,
   type RelayPeerTransferGrant,
@@ -114,7 +114,7 @@ export function peerTransferRoute(
     if (
       !client ||
       !actionsForRole(client.role, client.actions).includes(
-        fileTransferAction(source.rootId, "download")
+        peerTransferAction(source.rootId, "serve")
       ) ||
       !verify(
         null,

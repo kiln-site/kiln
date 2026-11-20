@@ -137,6 +137,35 @@ export function fileTransferAction(
   return fileTransferActions[fileRootOwner(rootId).kind][direction]
 }
 
+/** A step of copying a root from one Relay to another. */
+export type PeerTransferStep = "pack" | "serve" | "install"
+
+const databasePeerTransferActions = {
+  install: "backup.restore",
+  pack: "backup.create",
+  serve: "backup.download",
+} as const satisfies Record<PeerTransferStep, string>
+
+/**
+ * The Relay action a step of copying a root to another Relay takes: packing
+ * it on the source, serving what was packed to the Relay that fetches it,
+ * and installing it on the destination. A folder's files move with the
+ * actions they do through a browser. A database is dumped and restored by
+ * the Relay itself, as its administrator and with no login from whoever
+ * asks, as its backups are: so each step takes what making, downloading
+ * and restoring a backup do, never what exporting or importing a dump with
+ * the database's own login does.
+ */
+export function peerTransferAction(
+  rootId: string,
+  step: PeerTransferStep
+): FileTransferAction | (typeof databasePeerTransferActions)[PeerTransferStep] {
+  if (databaseIdFromFileRoot(rootId) !== null) {
+    return databasePeerTransferActions[step]
+  }
+  return fileTransferAction(rootId, step === "install" ? "upload" : "download")
+}
+
 // Tailscale network members are named by kind: a game server as
 // `instance:<id>`, an App's service as `app:<appId>:<service>`, and a
 // database as `database:<id>`.

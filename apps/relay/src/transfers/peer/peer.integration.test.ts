@@ -7,10 +7,16 @@ import { Effect, ManagedRuntime, Schedule } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
+  databaseFileRootId,
   newInstanceId,
+  relayCreateDatabaseSchema,
   type RelayPeerTransferGrant,
 } from "@workspace/contracts"
 
+// Only the database case below reaches Docker.
+vi.mock("../../command.js", () => import("../../test/docker.js"))
+
+import type { DatabaseDriver } from "../../databases.js"
 import { fingerprint, type RelayIdentity } from "../../effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "../../effect/state.js"
 import { FilesystemDriver } from "../../files.js"
@@ -19,12 +25,19 @@ import {
   transferInstallLocks,
   transferPackLocks,
 } from "../../operation-plans.js"
+import { databaseBrick } from "../../test/database-bricks.js"
+import { fakeDocker } from "../../test/docker.js"
 import { testRelayConfig } from "../../test/fixtures.js"
+import { relayHarness, TEST_NAMESPACE } from "../../test/relay.js"
 import { TransferGate } from "../gate.js"
 import { fetchArtifactRange } from "./client.js"
 import { TransferPulls } from "./pulls.js"
 import { peerTransferRoute } from "./route.js"
-import type { TransferRootResolver } from "./roots.js"
+import {
+  databaseTransferRoot,
+  fileTransferRoot,
+  type TransferRootResolver,
+} from "./roots.js"
 import { TransferSources } from "./sources.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
@@ -97,6 +110,110 @@ describeLinux("transfers between Relays", () => {
   })
 })
 
+describe("a database copied between Relays", () => {
+  const oldId = "a".repeat(12)
+  const newId = "b".repeat(12)
+  const dump =
+    "CREATE TABLE players (name text);\nINSERT INTO players VALUES ('alex');\n"
+
+  // One Docker holds both databases; the dump still crosses from one
+  // Relay's transfers to another's, under a grant, as between two.
+  async function databases(source: Pick<TransferSide, "issuerActions"> = {}) {
+    const harness = await relayHarness()
+    const database = async (id: string, name: string) => {
+      await harness.databases.create(
+        relayCreateDatabaseSchema.parse({
+          databaseName: "kiln_app",
+          ...databaseBrick("postgres"),
+          id,
+          name,
+          password: "correct-horse-battery-staple-1",
+          username: "kiln_user",
+        })
+      )
+      const container = fakeDocker.container(
+        `${TEST_NAMESPACE}-kiln-db-${id}-database`
+      )
+      if (!container) throw new Error("The database has no container")
+      return container
+    }
+    const old = await database(oldId, "Old database")
+    const copy = await database(newId, "New database")
+    old.sqlDump = dump
+    const resolveRoot = databaseRoots(harness.databases)
+    return {
+      copy,
+      destination: await startDestination({
+        resolveRoot,
+        rootId: databaseFileRootId(newId),
+      }),
+      old,
+      source: await startSource({
+        ...source,
+        resolveRoot,
+        rootId: databaseFileRootId(oldId),
+      }),
+    }
+  }
+
+  it("runs the old database's dump into the new one, and leaves the old one as it was", async () => {
+    const { copy, destination, old, source } = await databases()
+
+    const artifact = await source.prepare("transfer-database-1")
+    const pull = await destination.pull(source, artifact, { path: "" })
+
+    expect(pull.error).toBeNull()
+    expect(pull.state).toBe("completed")
+    expect(copy.executedSql).toEqual([dump])
+    expect(old.executedSql).toEqual([])
+  })
+
+  it("copies a database whole or not at all", async () => {
+    const { copy, destination, source } = await databases()
+
+    // Naming paths, an empty one first among them, packs nothing.
+    await expect(
+      source.prepare("transfer-database-2", ["", "players"])
+    ).rejects.toThrow("copied whole")
+
+    // And a dump runs into the database itself, never a path under it.
+    const artifact = await source.prepare("transfer-database-3")
+    const pull = await destination.pull(source, artifact, { path: "players" })
+    expect(pull.state).toBe("failed")
+    expect(pull.error).toContain("copied whole")
+    expect(copy.executedSql).toEqual([])
+  })
+
+  it("serves no dump under a grant from a client that may only make backups", async () => {
+    // Making a backup isn't taking one away: a client that may only make
+    // them can pack a dump, and its grant fetches none.
+    const made = await databases({ issuerActions: ["backup.create"] })
+    const refused = await made.destination.pull(
+      made.source,
+      await made.source.prepare("transfer-database-4"),
+      { path: "" }
+    )
+    expect(refused.state).toBe("failed")
+    expect(refused.error).toContain("401")
+    expect(made.copy.executedSql).toEqual([])
+  })
+
+  it("serves a dump under a grant from a client that may download backups", async () => {
+    const { copy, destination, source } = await databases({
+      issuerActions: ["backup.download"],
+    })
+
+    const pull = await destination.pull(
+      source,
+      await source.prepare("transfer-database-5"),
+      { path: "" }
+    )
+
+    expect(pull.error).toBeNull()
+    expect(copy.executedSql).toEqual([dump])
+  })
+})
+
 interface ReadyArtifact {
   readonly sha256: string
   readonly size: number
@@ -105,7 +222,17 @@ interface ReadyArtifact {
 
 type Source = Awaited<ReturnType<typeof startSource>>
 
-async function startSource() {
+// A Relay's own transfers over one root: a game server's folder, unless
+// another is named.
+interface TransferSide {
+  /** What the client that signs the source's grants may do; all, unless named. */
+  readonly issuerActions?: ReadonlyArray<string>
+  readonly resolveRoot?: TransferRootResolver
+  readonly rootId?: string
+}
+
+async function startSource(side: TransferSide = {}) {
+  const rootId = side.rootId ?? "instance-1"
   const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-peer-source-"))
   const root = join(dataDirectory, "instances", "instance-1")
   await mkdir(root, { recursive: true })
@@ -121,16 +248,18 @@ async function startSource() {
   const now = Date.now()
   await runtime.runPromise(
     Effect.gen(function* () {
+      const actions = [...(side.issuerActions ?? ["*"])]
+      const role = side.issuerActions ? "custom" : "full_access"
       yield* state.createInvitation({
-        actions: ["*"],
+        actions,
         createdAt: now,
         expiresAt: now + 60_000,
         id: "invitation-1",
-        role: "full_access",
+        role,
         tokenHash: "hash-1",
       })
       yield* state.pairClient({
-        actions: ["*"],
+        actions,
         id: issuer,
         invitationId: "invitation-1",
         name: "Hearth",
@@ -139,7 +268,7 @@ async function startSource() {
         publicKey: issuerKeys.publicKey
           .export({ format: "pem", type: "spki" })
           .toString(),
-        role: "full_access",
+        role,
         sourceCidrs: [],
       })
     })
@@ -149,7 +278,7 @@ async function startSource() {
   const sources = new TransferSources({
     directory: join(dataDirectory, "transfers", "outgoing"),
     lanes,
-    resolveRoot: fileRoots(dataDirectory),
+    resolveRoot: side.resolveRoot ?? fileRoots(dataDirectory),
   })
   const route = peerTransferRoute({
     gate: new TransferGate(),
@@ -195,28 +324,27 @@ async function startSource() {
       transferId: string,
       paths: ReadonlyArray<string> = []
     ): Promise<ReadyArtifact> => {
-      await Effect.runPromise(
-        sources.prepare({ paths, rootId: "instance-1", transferId })
-      )
-      return vi.waitFor(
+      await Effect.runPromise(sources.prepare({ paths, rootId, transferId }))
+      const record = await vi.waitFor(
         () => {
-          const record = sources.get({ rootId: "instance-1", transferId })
-          if (
-            record?.state !== "ready" ||
-            !record.sha256 ||
-            record.size === null
-          ) {
-            throw new Error(`Transfer is ${record?.state}: ${record?.error}`)
+          const packed = sources.get({ rootId, transferId })
+          if (!packed || packed.state === "packing") {
+            throw new Error("The transfer is still packing")
           }
-          return { sha256: record.sha256, size: record.size, transferId }
+          return packed
         },
         { timeout: 10_000 }
       )
+      if (record.state !== "ready" || !record.sha256 || record.size === null) {
+        throw new Error(`Transfer is ${record.state}: ${record.error}`)
+      }
+      return { sha256: record.sha256, size: record.size, transferId }
     },
   }
 }
 
-async function startDestination() {
+async function startDestination(side: TransferSide = {}) {
+  const rootId = side.rootId ?? "instance-1"
   const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-peer-destination-"))
   const root = join(dataDirectory, "instances", "instance-1")
   await mkdir(root, { recursive: true })
@@ -226,7 +354,7 @@ async function startDestination() {
     directory: join(dataDirectory, "transfers", "incoming"),
     identity,
     lanes: new OperationLanes(),
-    resolveRoot: fileRoots(dataDirectory),
+    resolveRoot: side.resolveRoot ?? fileRoots(dataDirectory),
     retrySchedule: Schedule.recurs(3),
   })
   return {
@@ -241,16 +369,13 @@ async function startDestination() {
         pulls.start({
           endpoints: [{ caCertificatePem: null, url: source.url }],
           grant: source.grant(artifact, identity.fingerprint),
-          target: { path: target.path, rootId: "instance-1" },
+          target: { path: target.path, rootId },
           transferId: artifact.transferId,
         })
       )
       return vi.waitFor(
         () => {
-          const pull = pulls.get({
-            rootId: "instance-1",
-            transferId: artifact.transferId,
-          })
+          const pull = pulls.get({ rootId, transferId: artifact.transferId })
           if (pull?.state !== "completed" && pull?.state !== "failed") {
             throw new Error(`Pull is ${pull?.state}`)
           }
@@ -266,11 +391,24 @@ async function startDestination() {
 function fileRoots(dataDirectory: string): TransferRootResolver {
   const filesystem = new FilesystemDriver(testRelayConfig(dataDirectory))
   return (rootId) =>
-    Promise.resolve({
-      filesystem,
+    Promise.resolve(
+      fileTransferRoot(
+        filesystem,
+        { directory: rootId, id: rootId },
+        {
+          installLocks: transferInstallLocks(rootId),
+          packLocks: transferPackLocks(rootId),
+        }
+      )
+    )
+}
+
+// Database roots, as the Relay resolves them.
+function databaseRoots(databases: DatabaseDriver): TransferRootResolver {
+  return (rootId) =>
+    databaseTransferRoot(databases, rootId.slice("database:".length), {
       installLocks: transferInstallLocks(rootId),
       packLocks: transferPackLocks(rootId),
-      root: { directory: rootId, id: rootId },
     })
 }
 

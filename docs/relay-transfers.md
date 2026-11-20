@@ -99,7 +99,11 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
    missing or empty. Files keep their modes and belong to the root's owner.
 5. The destination deletes what it fetched once it's installed. Hearth
    discards the source's artifact once the pull ends, and cancelling a pull,
-   failed or not, deletes what it fetched. Artifacts nobody discards are
+   failed or not, deletes what it fetched. A pack that's already running
+   outlives a discard of its artifact, a database's dump as much as a
+   folder's: what it creates after the discard cleaned up is an archive no
+   record names, which never expires and can keep that transfer ID from
+   packing again. Artifacts nobody discards are
    deleted after a day; finished pulls' records after a week.
 
 `transfer.space` reports a Relay's free disk where it
@@ -107,16 +111,35 @@ keeps artifacts and where it keeps game servers' folders, and, asked about
 a root, the disk a copy of it takes, archived or unpacked, so Hearth can
 check a copy fits first. It walks the root as packing does, counting each
 name of a hard-linked file, and rounds each entry up to a filesystem block
-plus its archive header. Free disk needs `relay.read`; a root's size needs its download
-action.
+plus its archive header. Free disk needs `relay.read`; a folder's size needs
+its download action, and a database's what packing it does, `backup.create`.
 
 Copying needs the source root's download action and the destination
 root's upload action, for the person on Hearth and for Hearth's pairing on
 each Relay; no other Relay action is involved. Game servers, Apps' data,
-and host files can be copied. Databases move through their dumps. Each
-Relay's records are the truth about a transfer, so any Hearth process can
-report one. The process that started a transfer drives it between steps;
+and host files are copied as their files. Each Relay's records are the
+truth about a transfer, so any Hearth process can report one. The process that started a transfer drives it between steps;
 if it stops, the transfer stays where it was until it's started again.
+
+A Relay copies a database (`database:<id>`) as its dump, through the same
+steps. Packing dumps it, compressed, as a backup of it does, holding what a
+backup's read holds; installing runs that dump into the database the pull
+names, as restoring a backup into another database does, holding that
+database whole. It is copied whole, never by path, and both databases must
+be running. A dump of another engine's family is refused before any of it
+is imported, and an engine Kiln can't dump (Redis, Valkey) can't be
+copied. The Relay dumps and restores it as its administrator, with no
+login from whoever asks, so each step takes what a backup's does
+(`peerTransferAction`): `backup.create` to pack it on the source,
+`backup.download` of whoever signed the grant for the source to serve the
+dump, and `backup.restore` to install it on the destination. The
+`database.dump.*` actions, which export and import a dump with the
+database's own login, don't allow any of it. A Relay that restarts while a dump is being imported fails the
+pull, as it does one that was installing files, since the database may
+hold part of it. `transfer.space` reports a database's size on disk, which
+is more than its dump takes. Hearth doesn't ask for this yet: it refuses a
+database root when a transfer is started, advanced, reported or cancelled,
+and its preflight lists one as a problem.
 
 `preflightRelayTransfer` lists what would stop a copy and what fixes it:
 an offline or outdated Relay, a database root, or a pairing that can't

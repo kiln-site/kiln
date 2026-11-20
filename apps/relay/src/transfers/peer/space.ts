@@ -12,8 +12,11 @@ export const transferSpace = Effect.fn("RelayTransfer.space")(
   function* (input: {
     readonly dataDirectory: string
     readonly rootsDirectory: string
-    /** Measures the root asked about, if one was. */
-    readonly rootBytes: Effect.Effect<number, unknown> | null
+    /**
+     * Measures the root asked about, if one was: null when it can't be
+     * measured.
+     */
+    readonly rootBytes: Effect.Effect<number | null, unknown> | null
   }) {
     const [data, roots, dataDevice, rootsDevice, rootBytes] = yield* Effect.all(
       [
