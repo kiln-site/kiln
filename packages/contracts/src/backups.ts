@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { instanceIdSchema } from "./instance-id.js"
+
 import { relayTailscaleSubdomainSchema } from "./tailscale.js"
 
 const backupHttpsUrlSchema = z
@@ -376,7 +378,7 @@ const backupCreateTaskInputObjectSchema = z
         batchId: z.uuid().optional(),
         // The repository an incremental scheduled backup goes to.
         repositoryId: z.uuid().optional(),
-        storageId: z.uuid().nullable(),
+        storageId: instanceIdSchema.nullable(),
       })
       .strict()
       .optional(),

@@ -9,6 +9,7 @@ import {
   relayVolumeNameSchema,
   relayVolumeSchema,
   relayVolumesSchema,
+  instanceIdSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -225,7 +226,7 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
   .validator(
     volumeSchema.extend(deleteConfirmationSchema.shape).extend({
       createBackup: z.boolean().default(true),
-      storageId: z.uuid().nullable(),
+      storageId: instanceIdSchema.nullable(),
     })
   )
   .handler(async ({ data }) => {

@@ -1,15 +1,34 @@
 import { describe, expect, layer } from "@effect/vitest"
-import { migratedInstanceId, migratedTunnelId } from "@workspace/contracts"
+import {
+  migratedBackupDestinationId,
+  migratedInstanceId,
+  migratedTunnelId,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
+import { vi } from "vite-plus/test"
+
+import {
+  decryptWithKeyring,
+  encryptWithKeyring,
+  parseSecretKeyring,
+} from "../../keyring.mjs"
 
 import { databaseTableName } from "@/lib/database-config"
 import { migrations } from "@/migrations"
 import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { instanceIds } from "@/migrations/0058_instance_ids"
+import { backupDestinationIds } from "@/migrations/0092_backup_destination_ids"
 import { expandStoredSelections } from "@/lib/resource-permissions"
 import { describeMysql, testDatabaseClient } from "@/test/database"
-import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
+import {
+  insertBackup,
+  insertBackupStorage,
+  insertGrant,
+  insertRelay,
+  insertRows,
+  insertUser,
+} from "@/test/seed"
 
 import { applyMigrations } from "./migrations"
 
@@ -137,7 +156,9 @@ describeMysql("database migrations", () => {
             migrations.filter((migration) => migration.id <= 53)
           )
           const relay = "r".repeat(43)
-          const storage = "11111111-1111-4111-8111-111111111111"
+          // In the format destinations take now, which a later migration
+          // moves an older ID to: this one is about who chose it.
+          const storage = "d".repeat(12)
           const preferred = "a".repeat(40)
           const unset = "b".repeat(40)
           const chosen = "c".repeat(40)
@@ -2686,6 +2707,158 @@ describeMysql("database migrations", () => {
             { id: "a".repeat(12), kind: "app" },
             { id: "f".repeat(40), kind: "volume" },
           ])
+        }),
+      schemaBuildTimeout
+    )
+
+    // A destination's ID is in its backups, the schedules that back up to
+    // it and the keys it is encrypted with. Moving it to a 12-character ID
+    // has to carry all of them, or backups stop finding their bucket.
+    it.effect(
+      "gives a backup destination its 12-character ID everywhere it is named, its keys still readable",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const secrets = `1:${"k".repeat(32)}`
+          vi.stubEnv("BETTER_AUTH_SECRETS", secrets)
+          const keyring = parseSecretKeyring(secrets)
+          const old = "0f1e2d3c-4b5a-4978-8695-a4b3c2d1e0f9"
+          const next = yield* Effect.promise(() =>
+            migratedBackupDestinationId(old)
+          )
+          const relayId = "a".repeat(12)
+          const backupId = "11111111-1111-4111-8111-111111111111"
+          const purpose = (id: string, field: string) =>
+            `kiln-backup-storage:${id}:${field}`
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 91)
+          )
+          yield* insertUser("owner")
+          yield* insertRelay(relayId)
+          yield* insertBackupStorage(old, {
+            // A folder someone named after the destination.
+            object_prefix: `team/${old}`,
+            access_key_id_ciphertext: encryptWithKeyring(
+              "AKIAEXAMPLE",
+              keyring,
+              purpose(old, "access-key-id")
+            ),
+            secret_access_key_ciphertext: encryptWithKeyring(
+              "s3-secret",
+              keyring,
+              purpose(old, "secret-access-key")
+            ),
+          })
+          yield* insertBackup(backupId, {
+            object_key: `team/${old}/backup.zip`,
+            relay_id: relayId,
+            storage_id: old,
+          })
+          yield* insertRows("backup_artifact", {
+            backup_id: backupId,
+            created_at: 1,
+            destination_key: old,
+            id: "22222222-2222-4222-8222-222222222222",
+            status: "available",
+            storage_id: old,
+            updated_at: 1,
+          })
+          yield* insertRows("backup_repository", {
+            created_at: 1,
+            id: "33333333-3333-4333-8333-333333333333",
+            object_prefix: `team/${old}/restic/one`,
+            password_ciphertext: "repository-password",
+            relay_id: relayId,
+            storage_id: old,
+            storage_key: old,
+            target_id: "instance-one",
+            target_kind: "instance",
+          })
+          const scheduleId = "44444444-4444-4444-8444-444444444444"
+          yield* insertRows("schedule", {
+            created_at: 1,
+            created_by: "owner",
+            cron_expression: "0 3 * * *",
+            id: scheduleId,
+            name: "Nightly",
+            updated_at: 1,
+          })
+          yield* insertRows("schedule_action", {
+            action_config: JSON.stringify({
+              destination: { kind: "storage", storageId: old },
+              type: "backup",
+            }),
+            action_type: "backup",
+            created_at: 1,
+            id: "55555555-5555-4555-8555-555555555555",
+            position: 0,
+            schedule_id: scheduleId,
+          })
+
+          yield* applyMigrations(migrations)
+          // Again, as after a crash: there is nothing left to move.
+          yield* backupDestinationIds.run
+
+          const one = <T extends object>(name: string) =>
+            Effect.map(
+              sql<T>`SELECT * FROM ${sql(databaseTableName(name))}`,
+              (rows) => rows[0]!
+            )
+          const destination = yield* one<{
+            access_key_id_ciphertext: string
+            id: string
+            kind: string
+            secret_access_key_ciphertext: string
+          }>("backup_storage")
+          // Where things are in the bucket stays, even a folder that holds
+          // the old ID: the objects there don't move.
+          expect(destination).toMatchObject({
+            id: next,
+            kind: "s3",
+            object_prefix: `team/${old}`,
+          })
+          expect(next).toMatch(/^[a-f0-9]{12}$/u)
+          expect(
+            decryptWithKeyring(
+              destination.secret_access_key_ciphertext,
+              keyring,
+              purpose(next, "secret-access-key")
+            ).plaintext
+          ).toBe("s3-secret")
+          expect(
+            decryptWithKeyring(
+              destination.access_key_id_ciphertext,
+              keyring,
+              purpose(next, "access-key-id")
+            ).plaintext
+          ).toBe("AKIAEXAMPLE")
+          expect(yield* one("backup")).toMatchObject({
+            object_key: `team/${old}/backup.zip`,
+            storage_id: next,
+          })
+          expect(yield* one("backup_artifact")).toMatchObject({
+            destination_key: next,
+            storage_id: next,
+          })
+          expect(yield* one("backup_repository")).toMatchObject({
+            object_prefix: `team/${old}/restic/one`,
+            storage_id: next,
+            storage_key: next,
+          })
+          const step = yield* one<{ action_config: unknown }>("schedule_action")
+          expect(
+            typeof step.action_config === "string"
+              ? JSON.parse(step.action_config)
+              : step.action_config
+          ).toMatchObject({ destination: { storageId: next } })
+          // Reserved where instances are, so no Relay can come to hold it.
+          expect(
+            yield* sql<{ kind: string; legacy_id: string }>`
+              SELECT kind, legacy_id FROM kiln_instance_id WHERE id = ${next}
+            `
+          ).toEqual([{ kind: "destination", legacy_id: old }])
+          vi.unstubAllEnvs()
         }),
       schemaBuildTimeout
     )

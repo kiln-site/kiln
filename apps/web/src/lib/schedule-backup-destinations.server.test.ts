@@ -21,7 +21,7 @@ const user = {
   name: "User",
   twoFactorEnabled: false,
 } satisfies AuthenticatedUser
-const storageId = "a01d9771-607d-4c22-b492-fb49c36a8a32"
+const storageId = "d".repeat(12)
 const target: ScheduleTarget = {
   id: "server-a",
   relayId: "relay-a",
@@ -35,7 +35,7 @@ const otherTarget: ScheduleTarget = {
   name: "Database B",
 }
 const action = scheduleBackupActionSchema.parse({
-  id: storageId,
+  id: "a01d9771-607d-4c22-b492-fb49c36a8a32",
   type: "backup",
   destination: { kind: "storage", storageId },
 })

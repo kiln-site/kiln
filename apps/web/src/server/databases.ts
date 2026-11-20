@@ -26,6 +26,7 @@ import {
   relayDatabaseImportFileSchema,
   relayManagedDatabaseSchema,
   resourceLimitsInputSchema,
+  instanceIdSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
 import { Effect, Result } from "effect"
@@ -687,7 +688,7 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
   .validator(
     databaseInputSchema.extend(deleteConfirmationSchema.shape).extend({
       createBackup: z.boolean().default(true),
-      storageId: z.uuid().nullable(),
+      storageId: instanceIdSchema.nullable(),
     })
   )
   .handler(async ({ data }) => {

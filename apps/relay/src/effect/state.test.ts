@@ -5,7 +5,10 @@ import { SqliteClient } from "@effect/sql-sqlite-node"
 import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
-import type { BackupTaskInput } from "@workspace/contracts"
+import {
+  migratedBackupDestinationId,
+  type BackupTaskInput,
+} from "@workspace/contracts"
 
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
@@ -504,6 +507,92 @@ describe("Relay state", () => {
                   "instance.power.kill",
                 ]
               )
+            })
+          )
+        })
+      )
+  )
+})
+
+describe("Relay state from before destinations took 12-character IDs", () => {
+  it.effect(
+    "moves the destination its stored schedules and backups name to the ID Hearth gives it",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const old = "0f1e2d3c-4b5a-4978-8695-a4b3c2d1e0f9"
+          const next = yield* Effect.promise(() =>
+            migratedBackupDestinationId(old)
+          )
+          const schedule = {
+            actions: [
+              { destination: { kind: "local" }, type: "backup" },
+              {
+                destination: { kind: "storage", storageId: old },
+                type: "backup",
+              },
+              { command: "say hi", type: "console_command" },
+            ],
+            id: "14bb1e12-fab9-45f3-8f85-ae22d2f074e5",
+          }
+          const task = {
+            backupId: "43500000-0000-4000-8000-000000000011",
+            catalog: { name: "Nightly", storageId: old },
+            kind: "create",
+            taskId: "43500000-0000-4000-8000-000000000021",
+          }
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`
+                INSERT INTO relay_schedules
+                  (schedule_id, revision, enabled, next_run_at, definition_json)
+                VALUES (${schedule.id}, 1, 1, NULL, ${JSON.stringify(schedule)})
+              `
+              yield* sql`
+                INSERT INTO relay_backup_tasks
+                  (task_id, backup_id, kind, status, input_json, created_at,
+                   updated_at)
+                VALUES (${task.taskId}, ${task.backupId}, 'create', 'queued',
+                  ${JSON.stringify(task)}, 1, 1)
+              `
+              yield* sql`
+                DELETE FROM effect_sql_migrations WHERE migration_id >= 50
+              `
+            })
+          )
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              const [stored] = yield* sql<{ json: string }>`
+                SELECT definition_json AS json FROM relay_schedules
+              `
+              assert.deepStrictEqual(JSON.parse(stored!.json), {
+                ...schedule,
+                actions: [
+                  schedule.actions[0],
+                  {
+                    destination: { kind: "storage", storageId: next },
+                    type: "backup",
+                  },
+                  schedule.actions[2],
+                ],
+              })
+              const [queued] = yield* sql<{ json: string }>`
+                SELECT input_json AS json FROM relay_backup_tasks
+              `
+              assert.deepStrictEqual(JSON.parse(queued!.json), {
+                ...task,
+                catalog: { name: "Nightly", storageId: next },
+              })
             })
           )
         })

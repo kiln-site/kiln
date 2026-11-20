@@ -142,7 +142,7 @@ const at = 1_767_225_600_000
 const turnedOff = "a".repeat(12)
 const beingDeleted = "b".repeat(12)
 const capped = "c".repeat(12)
-const storageId = "11111111-1111-4111-8111-111111111111"
+const storageId = "d".repeat(12)
 
 const target = (id: string, kind: "app" | "instance" = "instance") => ({
   id,

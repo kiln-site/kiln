@@ -3,6 +3,7 @@ import { Result } from "effect"
 import { z } from "zod"
 
 import { appServiceNameSchema } from "./app-keys.js"
+import { instanceIdSchema } from "./instance-id.js"
 import {
   backupConsistencySchema,
   backupLocalDestinationSchema,
@@ -68,7 +69,7 @@ export const scheduleBackupActionSchema = z
       z
         .object({
           kind: z.literal("storage"),
-          storageId: z.uuid(),
+          storageId: instanceIdSchema,
         })
         .strict(),
     ]),

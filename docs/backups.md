@@ -127,8 +127,12 @@ safety checks.
 Relay-local storage is implicit and scoped to that Relay. Files live below a
 dedicated data directory using controlled UUID paths, never user-supplied
 paths. Hearth stores S3-compatible destinations with encrypted credentials.
+A destination's ID is 12 hexadecimal characters from the
+[instance directory](instance-ids.md), so it is never an instance's, and it
+says what kind of storage it is (`kind`; `s3` is the only kind so far).
 An owner ID of `null` makes a destination platform-wide; otherwise only that
-user can select it. Destination removal is blocked while cataloged artifacts
+user can select it (`backupDestinationUse` is the one rule for who may send
+a backup where). Destination removal is blocked while cataloged artifacts
 still depend on it.
 
 A full backup can go to several destinations at once: its task writes the
