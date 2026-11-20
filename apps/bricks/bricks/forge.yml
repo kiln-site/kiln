@@ -4,7 +4,7 @@ type: minecraft
 metadata:
   id: forge
   name: Forge
-  revision: 1
+  revision: 2
   summary: The long-standing Minecraft mod loader, installed by Forge's own installer.
   author: Kiln
   icon: ../icons/forge.svg
@@ -18,6 +18,14 @@ inputs:
     type: text
     default: "26.2"
     pattern: "^[0-9]+(?:\\.[0-9]+){1,2}$"
+    max: 32
+  - key: forge_version
+    label: Forge version
+    help: The Forge build to install, like 47.4.23. Leave it empty for the newest one for the Minecraft version.
+    type: text
+    optional: true
+    default: ""
+    pattern: "^(?:[0-9]+(?:\\.[0-9]+){1,3})?$"
     max: 32
   - key: java_version
     label: Java version
@@ -55,6 +63,9 @@ deploy:
     KILN_IMPLEMENTATION: forge
     KILN_VERSION: "{{ version }}"
     KILN_ARTIFACT_URL: "https://mcjarfiles.com/api/get-jar/modded/forge/{{ version }}"
+    # A Forge version pins the build, from Forge's own Maven.
+    KILN_ARTIFACT_BUILD: "{{ forge_version }}"
+    KILN_ARTIFACT_BUILD_URL: "https://maven.minecraftforge.net/net/minecraftforge/forge/{{ version }}-{{ forge_version }}/forge-{{ version }}-{{ forge_version }}-installer.jar"
     # The download is Forge's installer; the Ember runs it once.
     KILN_ARTIFACT_INSTALLER: forge
     KILN_ARTIFACT_FILE: "{{ server_jar_file }}"
