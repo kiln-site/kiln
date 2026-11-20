@@ -222,6 +222,7 @@ describe("the official Bricks", () => {
     expect(ids("game-server")).toEqual([
       "fabric",
       "folia",
+      "forge",
       "palworld",
       "paper",
       "velocity",
@@ -422,20 +423,20 @@ describe("the official Bricks", () => {
       catalogAt("catalog.yml").catalog(),
       catalogAt("bricks.yml").catalog(),
     ])
-    // Only game servers had v1 recipes.
-    const servers = v2.bricks.filter((brick) => brick.kind === "game-server")
-    expect(v1.bricks).toHaveLength(servers.length)
-    for (const brick of servers) {
-      const stored = v1.bricks.find(
-        (candidate) => candidate.metadata.id === brick.metadata.id
-      )!
+    // The v1 catalog is frozen: a Brick added since has no recipe there.
+    for (const stored of v1.bricks) {
+      const brick = v2.bricks.find(
+        (candidate) => candidate.metadata.id === stored.metadata.id
+      )
+      expect(brick, stored.metadata.id).toBeDefined()
+      if (!brick) continue
       const { source: _v2Source, ...current } = brick
       const { source: _v1Source, ...converted } = stored
       const now = resolveBrick(current, {})
       const before = resolveBrick(converted, {})
       // v1 asked for memory as a variable; v2 writes the limit itself.
       const { memory: _memory, ...values } = before.values
-      expect({ ...before, recipe: null, values }, brick.metadata.id).toEqual({
+      expect({ ...before, recipe: null, values }, stored.metadata.id).toEqual({
         ...now,
         recipe: null,
       })

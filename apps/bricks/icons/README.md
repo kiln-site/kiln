@@ -1,7 +1,7 @@
 # Brick icons
 
 These transparent, single-color SVG marks are rendered as masks by Hearth.
-The Paper, Folia, Fabric, and Velocity artwork is adapted from Modrinth's
+The Paper, Folia, Fabric, Forge, and Velocity artwork is adapted from Modrinth's
 open-source loader tag registry. Palworld uses a Kiln-designed Pal Sphere mark.
 
 The Docker, Umami, WordPress, PostgreSQL, MySQL, MariaDB and Redis marks are
