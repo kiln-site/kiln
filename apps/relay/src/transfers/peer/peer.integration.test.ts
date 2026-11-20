@@ -36,6 +36,21 @@ afterEach(async () => {
 })
 
 describeLinux("transfers between Relays", () => {
+  it("copies a folder to the Relay its grant names", async () => {
+    const source = await startSource()
+    await writeFile(join(source.root, "level.dat"), "the world")
+    const destination = await startDestination()
+    const artifact = await source.prepare("transfer-copy-1")
+
+    const pull = await destination.pull(source, artifact, { path: "copy" })
+
+    expect(pull.error).toBeNull()
+    expect(pull.state).toBe("completed")
+    expect(
+      await readFile(join(destination.root, "copy", "level.dat"), "utf8")
+    ).toBe("the world")
+  })
+
   it("refuses a grant presented by a Relay it doesn't name", async () => {
     const source = await startSource()
     await writeFile(join(source.root, "secret.txt"), "only for the peer")
@@ -48,7 +63,7 @@ describeLinux("transfers between Relays", () => {
         fetchArtifactRange({
           audience: source.identity.id,
           endpoint: { caCertificatePem: null, url: source.url },
-          grant: source.grant(artifact, named.identity.id),
+          grant: source.grant(artifact, named.identity.fingerprint),
           identity: other,
           offset: 0,
           transferId: artifact.transferId,
@@ -225,7 +240,7 @@ async function startDestination() {
       await Effect.runPromise(
         pulls.start({
           endpoints: [{ caCertificatePem: null, url: source.url }],
-          grant: source.grant(artifact, identity.id),
+          grant: source.grant(artifact, identity.fingerprint),
           target: { path: target.path, rootId: "instance-1" },
           transferId: artifact.transferId,
         })

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { generateKeyPairSync, randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
@@ -8,6 +8,7 @@ import { Database } from "@/effect/database"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { fileRootKey } from "@/lib/file-lanes"
+import { encryptPrivateKey } from "@/lib/relay-registry"
 import { exclusive } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
 import { testOperationsEngine } from "@/operations/test/engine"
@@ -26,6 +27,8 @@ import { advanceRelayTransferEffect } from "./relay-transfers.server"
 // destination hasn't started pulling it, and every change asked of them is
 // recorded.
 const relayChanges = vi.hoisted(() => [] as Array<string>)
+// What each destination was asked to pull.
+const pullsStarted = vi.hoisted(() => [] as Array<{ grant: string }>)
 // Called as the source's packed transfer is read, after the first check.
 const onSourceRead = vi.hoisted(() => ({ current: () => {} }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
@@ -47,13 +50,23 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       }
     }
     relayChanges.push(operation)
+    if (operation === "transfer.pull.start") {
+      pullsStarted.push(payload as { grant: string })
+      // Its record is read on the next look.
+      return null
+    }
     return {}
   },
 }))
+// Hearth signs each pull's grant with the key it's paired to the source
+// under.
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 afterAll(() => disposeAppRuntime())
 
 const relayId = "1".repeat(12)
+const otherRelayId = "2".repeat(12)
+const otherRelayFingerprint = "f".repeat(43)
 const sourceId = "a1".repeat(6)
 const destinationId = "b2".repeat(6)
 const user = {
@@ -73,13 +86,17 @@ const request = {
 
 // The person's grant on a game server, with just these permissions.
 const grants = new Map<string, string>()
-const allow = (instanceId: string, permissions: ReadonlyArray<string>) =>
+const allow = (
+  instanceId: string,
+  permissions: ReadonlyArray<string>,
+  onRelayId = relayId
+) =>
   Effect.gen(function* () {
     const id = randomUUID()
     grants.set(instanceId, id)
     yield* insertGrant({
       id,
-      relayId,
+      relayId: onRelayId,
       resourceId: instanceId,
       resourceType: "instance",
       userId: user.id,
@@ -158,6 +175,55 @@ describeMysql("Copying files between Relays", () => {
             )
           }
           assert.deepStrictEqual(relayChanges, [])
+        })
+    )
+
+    it.effect(
+      "has the destination pull under a grant that names it by its key",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relayChanges.length = 0
+          pullsStarted.length = 0
+          onSourceRead.current = () => {}
+          yield* insertUser(user.id, { emailVerifiedAt: new Date() })
+          yield* insertRelay(relayId, {
+            client_private_key_ciphertext: encryptPrivateKey(
+              generateKeyPairSync("ed25519")
+                .privateKey.export({ format: "pem", type: "pkcs8" })
+                .toString()
+            ),
+          })
+          yield* insertRelay(otherRelayId, {
+            fingerprint: otherRelayFingerprint,
+          })
+          yield* insertInstance(relayId, sourceId)
+          yield* insertInstance(otherRelayId, destinationId)
+          yield* allow(sourceId, ["instance.files.read"])
+          yield* allow(destinationId, ["instance.files.write"], otherRelayId)
+
+          yield* advanceRelayTransferEffect(
+            user,
+            {
+              destination: {
+                path: "",
+                relayId: otherRelayId,
+                rootId: destinationId,
+              },
+              source: request.source,
+            },
+            "transfer-two"
+          )
+
+          // The source lets only the Relay whose key has this fingerprint
+          // fetch, so a grant that named it any other way fetches nothing.
+          assert.strictEqual(pullsStarted.length, 1)
+          const [encoded] = pullsStarted[0]!.grant.split(".")
+          const grant = JSON.parse(
+            Buffer.from(encoded!, "base64url").toString("utf8")
+          ) as { audience: string; peer: string }
+          assert.strictEqual(grant.peer, otherRelayFingerprint)
+          assert.strictEqual(grant.audience, relayId)
         })
     )
   })

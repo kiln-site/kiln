@@ -122,9 +122,11 @@ export class TransferPulls {
         "kiln.file_root.id": input.target.rootId,
       })
       const grant = yield* decodeGrant(input.grant)
+      // A grant names the Relay that may fetch by its key's fingerprint,
+      // which the source checks each request's key against.
       if (
         grant.transferId !== input.transferId ||
-        grant.peer !== this.#options.identity.id
+        grant.peer !== this.#options.identity.fingerprint
       ) {
         return yield* Effect.fail(
           new Error("The transfer grant is for another Relay or transfer")

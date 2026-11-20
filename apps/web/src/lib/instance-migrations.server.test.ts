@@ -458,7 +458,8 @@ const seed = Effect.gen(function* () {
     client_private_key_ciphertext: encryptPrivateKey(oldRelayKey),
     name: "Old",
   })
-  yield* insertRelay(newRelay, { name: "New" })
+  // Named in each pull's grant by its key's fingerprint.
+  yield* insertRelay(newRelay, { fingerprint: "n".repeat(43), name: "New" })
   for (const [id, name] of [
     [survival, "Survival"],
     [creative, "Creative"],
