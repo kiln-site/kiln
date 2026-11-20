@@ -35,6 +35,10 @@ import {
   BackupStorageError,
   CredentialError,
 } from "@/effect/errors"
+import {
+  backupDestinationRefusal,
+  backupDestinationUse,
+} from "@/backups/destinations/use"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
@@ -616,11 +620,11 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
     const storage = storageId ? lockedStorage.get(storageId) : undefined
     if (
       storageId &&
-      (!storage ||
-        !storage.enabled ||
-        Boolean(storage.deleting) ||
-        (storage.owner_user_id !== null &&
-          storage.owner_user_id !== input.createdBy))
+      // Kiln's own goes only to a shared one, which the request checked.
+      backupDestinationUse(
+        storage ? { ...storage, ownerUserId: storage.owner_user_id } : null,
+        { platformTarget: false, userId: input.createdBy }
+      ) === "unavailable"
     ) {
       return yield* BackupStorageError.make({
         code: "storage_unavailable",
@@ -3581,26 +3585,20 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
               LIMIT 1`,
           [input.storageId]
         ))[0]
-        if (!storage) {
+        const use = backupDestinationUse(
+          storage ? { ...storage, ownerUserId: storage.owner_user_id } : null,
+          {
+            platformTarget: input.targetKind === "platform",
+            userId: input.requestedBy,
+          }
+        )
+        if (!storage || use === "unavailable" || use === "platform_only") {
           return yield* BackupStorageError.make({
             code: "storage_unavailable",
             operation: "backup.copy",
-            reason: "The backup destination is unavailable",
-          })
-        }
-        if (
-          input.targetKind === "platform"
-            ? storage.owner_user_id !== null
-            : storage.owner_user_id !== null &&
-              storage.owner_user_id !== input.requestedBy
-        ) {
-          return yield* BackupStorageError.make({
-            code: "storage_unavailable",
-            operation: "backup.copy",
-            reason:
-              input.targetKind === "platform"
-                ? "Kiln platform backups require platform-owned destinations"
-                : "The backup destination is unavailable",
+            reason: backupDestinationRefusal(
+              use === "platform_only" ? use : "unavailable"
+            ),
           })
         }
         const existing = (yield* transaction.queryRows<BackupArtifactRow>(

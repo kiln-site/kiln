@@ -33,6 +33,10 @@ import {
 } from "@/effect/backups"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
+import {
+  backupDestinationRefusal,
+  backupDestinationUse,
+} from "@/backups/destinations/use"
 import { prepareBackupDestinationDownload } from "@/backups/destinations"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -934,21 +938,14 @@ async function validateRequestedStorage(
           "backups.loadSelectedStorage",
           loadBackupStorageEffect(storageId)
         )
-        if (
-          !storage ||
-          !storage.enabled ||
-          storage.deleting ||
-          (platformOnly
-            ? storage.ownerUserId !== null
-            : storage.ownerUserId !== null && storage.ownerUserId !== userId)
-        ) {
-          throw new Error(
-            platformOnly
-              ? "Kiln platform backups require platform-owned destinations"
-              : "Backup destination is unavailable"
-          )
+        const use = backupDestinationUse(storage, {
+          platformTarget: platformOnly,
+          userId,
+        })
+        if (use === "unavailable" || use === "platform_only") {
+          throw new Error(backupDestinationRefusal(use))
         }
-        if (storage.ownerUserId !== null) {
+        if (use === "personal") {
           await requirePersonalStoragePermission?.()
         }
       })

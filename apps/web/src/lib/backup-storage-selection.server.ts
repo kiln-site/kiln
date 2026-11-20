@@ -1,6 +1,10 @@
 import type { BackupTargetKind } from "@workspace/contracts"
 
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
+import {
+  backupDestinationRefusal,
+  backupDestinationUse,
+} from "@/backups/destinations/use"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { runAppEffect } from "@/effect/runtime"
@@ -21,16 +25,15 @@ export async function requireBackupStorageSelection(input: {
         "backups.loadSelectedStorage",
         loadBackupStorageEffect(storageId)
       )
-      if (
-        !storage ||
-        !storage.enabled ||
-        storage.deleting ||
-        (storage.ownerUserId !== null && storage.ownerUserId !== input.user.id)
-      ) {
-        throw new Error("Backup destination is unavailable")
+      const use = backupDestinationUse(storage, {
+        platformTarget: false,
+        userId: input.user.id,
+      })
+      if (use === "unavailable" || use === "platform_only") {
+        throw new Error(backupDestinationRefusal(use))
       }
       // A personal destination is the user's to download from.
-      if (storage.ownerUserId !== null) {
+      if (use === "personal") {
         await requireBackupTargetPermission(
           input.user,
           input.relayId,

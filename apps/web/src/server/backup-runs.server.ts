@@ -8,6 +8,10 @@ import {
 
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import {
+  backupDestinationRefusal,
+  backupDestinationUse,
+} from "@/backups/destinations/use"
+import {
   reserveBackupBatchEffect,
   type BackupCreateReservation,
 } from "@/effect/backups"
@@ -80,28 +84,28 @@ async function requireRunStorage(
   user: AuthenticatedUser,
   data: BackupRunInput
 ): Promise<void> {
+  // Kiln's own backup, when the run takes one, decides for the whole run.
+  const platformTarget = data.targets.some(
+    (target) => target.kind === "platform"
+  )
   let personal = false
   for (const storageId of new Set(data.storageIds)) {
     if (storageId === null) continue
-    const storage = await runAppEffect(
-      "backups.loadSelectedStorage",
-      loadBackupStorageEffect(storageId)
+    const use = backupDestinationUse(
+      await runAppEffect(
+        "backups.loadSelectedStorage",
+        loadBackupStorageEffect(storageId)
+      ),
+      { platformTarget, userId: user.id }
     )
-    if (
-      !storage ||
-      !storage.enabled ||
-      storage.deleting ||
-      (storage.ownerUserId !== null && storage.ownerUserId !== user.id)
-    ) {
-      throw new Error("Backup destination is unavailable")
+    if (use === "unavailable" || use === "platform_only") {
+      throw new Error(backupDestinationRefusal(use))
     }
-    personal ||= storage.ownerUserId !== null
+    personal ||= use === "personal"
   }
   if (!personal) return
   for (const target of data.targets) {
-    if (target.kind === "platform") {
-      throw new Error("Kiln platform backups require platform-owned destinations")
-    }
+    if (target.kind === "platform") continue
     await requireRunTargetPermission(user, target, "backup.download")
   }
 }
