@@ -142,14 +142,21 @@ export interface MigratedKind {
    */
   reserveId: (createKey: string) => Effect.Effect<string, unknown, Database>
   /**
-   * Makes the copy, stopped, from what the old one was built from. Asked
-   * again, it resumes the same copy, under the migration's key.
+   * Reads what the copy is built from, failing when the old one has nothing
+   * to build one from, and answers with making the copy, stopped, from
+   * exactly that: what changes on the old one afterwards, as while the
+   * copy's room is checked, isn't taken. Making it again resumes the same
+   * copy, under the migration's key.
    */
-  create: (
+  prepare: (
+    relays: {
+      readonly destination: PersistedRelay
+      readonly source: PersistedRelay
+    },
     migration: Migration,
     actor: AuthenticatedUser,
     options: ServerMigrationOptions
-  ) => Effect.Effect<void, unknown, Database>
+  ) => Effect.Effect<Effect.Effect<void, unknown, Database>, unknown>
   /** The file root one's files are under, which its Relay packs or fills. */
   root: (instanceId: string) => string
   /**
@@ -286,8 +293,12 @@ const servers: MigratedKind = {
   reserveId: reserveServerInstanceIdEffect,
   // From the exact Brick the old server was built from, with its settings,
   // and its limits unless the copy was given its own.
-  create: Effect.fnUntraced(function* (migration, actor, options) {
-    const [source, destination] = yield* relays(migration)
+  prepare: Effect.fnUntraced(function* (
+    { destination, source },
+    migration,
+    actor,
+    options
+  ) {
     const instance = yield* snapshotInstance(
       source,
       migration.source.instanceId,
@@ -298,48 +309,50 @@ const servers: MigratedKind = {
         `${migration.source.name} has no Brick to build its copy from`
       )
     }
-    const recipe = yield* promiseEffect(() =>
-      loadInstanceRecipe(source, instance)
-    )
-    const diskLimitBytes =
-      (options.limits ?? instance.pendingLimits ?? instance.limits).diskBytes ??
-      DEFAULT_INSTANCE_DISK_LIMIT_BYTES
-    const create = yield* Effect.try({
-      try: () =>
-        relayCreateInstanceSchema.parse({
-          diskLimitBytes,
-          ...relayResourceLimitsRequest(
-            options.limits ?? instance.pendingLimits ?? instance.limits
-          ),
-          name: migration.destination.name,
-          recipe: recipe.brickSource,
-          recipeDefinition: brickRecipeDefinition(recipe.brick),
-          start: false,
-          variables: instance.variables ?? {},
-        }),
-      catch: (cause) => cause,
-    })
-    // A move takes the old server's domains along, so the copy isn't given
-    // one of its own when it's provisioned.
-    if (migration.mode === "migrate" && options.moveDomain) {
-      yield* setInstanceDomainOptOutEffect(
-        destination.id,
-        migration.destination.instanceId,
-        true
+    return Effect.gen(function* () {
+      const recipe = yield* promiseEffect(() =>
+        loadInstanceRecipe(source, instance)
       )
-    }
-    // Whoever copies a server owns the copy while it's built, so they may
-    // fill it; a finished move hands it to the old server's owner.
-    yield* promiseEffect(() =>
-      provisionServer({
-        create,
-        idempotencyKey: migration.createKey,
-        instanceId: migration.destination.instanceId,
-        ownerId: actor.id,
-        relay: destination,
-        requestedBy: actor.id,
+      const diskLimitBytes =
+        (options.limits ?? instance.pendingLimits ?? instance.limits)
+          .diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
+      const create = yield* Effect.try({
+        try: () =>
+          relayCreateInstanceSchema.parse({
+            diskLimitBytes,
+            ...relayResourceLimitsRequest(
+              options.limits ?? instance.pendingLimits ?? instance.limits
+            ),
+            name: migration.destination.name,
+            recipe: recipe.brickSource,
+            recipeDefinition: brickRecipeDefinition(recipe.brick),
+            start: false,
+            variables: instance.variables ?? {},
+          }),
+        catch: (cause) => cause,
       })
-    )
+      // A move takes the old server's domains along, so the copy isn't
+      // given one of its own when it's provisioned.
+      if (migration.mode === "migrate" && options.moveDomain) {
+        yield* setInstanceDomainOptOutEffect(
+          destination.id,
+          migration.destination.instanceId,
+          true
+        )
+      }
+      // Whoever copies a server owns the copy while it's built, so they may
+      // fill it; a finished move hands it to the old server's owner.
+      yield* promiseEffect(() =>
+        provisionServer({
+          create,
+          idempotencyKey: migration.createKey,
+          instanceId: migration.destination.instanceId,
+          ownerId: actor.id,
+          relay: destination,
+          requestedBy: actor.id,
+        })
+      )
+    })
   }),
   root: (instanceId) => instanceId,
   // A full archive, to the destinations settled when it was asked for.

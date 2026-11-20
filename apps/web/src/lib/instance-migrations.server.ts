@@ -683,7 +683,18 @@ const createDestination = (
 ) =>
   Effect.gen(function* () {
     const kind = kindOf(input)
-    const destination = yield* relay(input.destination.relayId)
+    const [source, destination] = yield* Effect.all(
+      [relay(input.source.relayId), relay(input.destination.relayId)],
+      { concurrency: 2 }
+    )
+    // Read before its room is checked, so the copy is made from what the
+    // old instance was then, whatever is changed on it meanwhile.
+    const create = yield* kind.prepare(
+      { destination, source },
+      input,
+      actor,
+      options
+    )
     // Before anything is made or changed: a copy that can't fit stops here.
     // One the Relay already made, before a restart cut this short, holds its
     // limits already.
@@ -692,7 +703,7 @@ const createDestination = (
     ) {
       yield* requireRoom(input, actor, options, true)
     }
-    yield* kind.create(input, actor, options)
+    yield* create
   })
 
 const provisioned = (input: ServerMigrationInput) =>
