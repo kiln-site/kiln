@@ -157,8 +157,16 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
         })
         continue
       }
-      const action = peerTransferAction(rootId, direction)
-      if (relay.role !== "full_access" && !relay.actions.includes(action)) {
+      // The source packs and then serves what it packed, under a grant
+      // Hearth signs; the destination installs.
+      const steps =
+        direction === "download"
+          ? (["pack", "serve"] as const)
+          : (["install"] as const)
+      const action = steps
+        .map((step) => peerTransferAction(rootId, step))
+        .find((needed) => !relay.actions.includes(needed))
+      if (relay.role !== "full_access" && action) {
         problems.push({
           code: "hearth_access",
           message: `Hearth isn't allowed to ${direction} files on ${relay.name}`,

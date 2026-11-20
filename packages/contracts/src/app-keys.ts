@@ -137,22 +137,33 @@ export function fileTransferAction(
   return fileTransferActions[fileRootOwner(rootId).kind][direction]
 }
 
+/** A step of copying a root from one Relay to another. */
+export type PeerTransferStep = "pack" | "serve" | "install"
+
+const databasePeerTransferActions = {
+  install: "backup.restore",
+  pack: "backup.create",
+  serve: "backup.download",
+} as const satisfies Record<PeerTransferStep, string>
+
 /**
- * The Relay action that copies a root to or from another Relay. A folder's
- * files move with the actions they do through a browser. A database is
- * dumped and restored by the Relay itself, as its administrator and with no
- * login from whoever asks, as its backups are: so copying one takes what
- * backing one up and restoring one do, never what exporting or importing a
- * dump with its own login does.
+ * The Relay action a step of copying a root to another Relay takes: packing
+ * it on the source, serving what was packed to the Relay that fetches it,
+ * and installing it on the destination. A folder's files move with the
+ * actions they do through a browser. A database is dumped and restored by
+ * the Relay itself, as its administrator and with no login from whoever
+ * asks, as its backups are: so each step takes what making, downloading
+ * and restoring a backup do, never what exporting or importing a dump with
+ * the database's own login does.
  */
 export function peerTransferAction(
   rootId: string,
-  direction: "download" | "upload"
-): FileTransferAction | "backup.create" | "backup.restore" {
+  step: PeerTransferStep
+): FileTransferAction | (typeof databasePeerTransferActions)[PeerTransferStep] {
   if (databaseIdFromFileRoot(rootId) !== null) {
-    return direction === "download" ? "backup.create" : "backup.restore"
+    return databasePeerTransferActions[step]
   }
-  return fileTransferAction(rootId, direction)
+  return fileTransferAction(rootId, step === "install" ? "upload" : "download")
 }
 
 // Tailscale network members are named by kind: a game server as

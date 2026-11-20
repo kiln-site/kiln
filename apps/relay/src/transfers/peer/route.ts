@@ -114,7 +114,7 @@ export function peerTransferRoute(
     if (
       !client ||
       !actionsForRole(client.role, client.actions).includes(
-        peerTransferAction(source.rootId, "download")
+        peerTransferAction(source.rootId, "serve")
       ) ||
       !verify(
         null,

@@ -99,10 +99,11 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
    missing or empty. Files keep their modes and belong to the root's owner.
 5. The destination deletes what it fetched once it's installed. Hearth
    discards the source's artifact once the pull ends, and cancelling a pull,
-   failed or not, deletes what it fetched. Discarding an artifact that's
-   still being packed doesn't stop the pack, which runs on once its turn has
-   come: it finishes and leaves an archive no record names, a database's
-   dump as much as a folder's, until that transfer ID packs again. Artifacts nobody discards are
+   failed or not, deletes what it fetched. A pack that's already running
+   outlives a discard of its artifact, a database's dump as much as a
+   folder's: what it creates after the discard cleaned up is an archive no
+   record names, which never expires and can keep that transfer ID from
+   packing again. Artifacts nobody discards are
    deleted after a day; finished pulls' records after a week.
 
 `transfer.space` reports a Relay's free disk where it
@@ -128,10 +129,12 @@ database whole. It is copied whole, never by path, and both databases must
 be running. A dump of another engine's family is refused before any of it
 is imported, and an engine Kiln can't dump (Redis, Valkey) can't be
 copied. The Relay dumps and restores it as its administrator, with no
-login from whoever asks, so a pairing needs `backup.create` on the source
-and `backup.restore` on the destination (`peerTransferAction`), not the
-`database.dump.*` actions that export and import a dump with the
-database's own login. A Relay that restarts while a dump is being imported fails the
+login from whoever asks, so each step takes what a backup's does
+(`peerTransferAction`): `backup.create` to pack it on the source,
+`backup.download` of whoever signed the grant for the source to serve the
+dump, and `backup.restore` to install it on the destination. The
+`database.dump.*` actions, which export and import a dump with the
+database's own login, don't allow any of it. A Relay that restarts while a dump is being imported fails the
 pull, as it does one that was installing files, since the database may
 hold part of it. `transfer.space` reports a database's size on disk, which
 is more than its dump takes. Hearth doesn't ask for this yet: it refuses a

@@ -111,7 +111,14 @@ describeLinux("transfers between Relays", () => {
 })
 
 describe("a database copied between Relays", () => {
-  it("runs the old database's dump into the new one, and leaves the old one as it was", async () => {
+  const oldId = "a".repeat(12)
+  const newId = "b".repeat(12)
+  const dump =
+    "CREATE TABLE players (name text);\nINSERT INTO players VALUES ('alex');\n"
+
+  // One Docker holds both databases; the dump still crosses from one
+  // Relay's transfers to another's, under a grant, as between two.
+  async function databases(source: Pick<TransferSide, "issuerActions"> = {}) {
     const harness = await relayHarness()
     const database = async (id: string, name: string) => {
       await harness.databases.create(
@@ -130,29 +137,80 @@ describe("a database copied between Relays", () => {
       if (!container) throw new Error("The database has no container")
       return container
     }
-    const old = await database("a".repeat(12), "Old database")
-    const copy = await database("b".repeat(12), "New database")
-    old.sqlDump =
-      "CREATE TABLE players (name text);\nINSERT INTO players VALUES ('alex');\n"
-    // One Docker holds both databases; the dump still crosses from one
-    // Relay's transfers to another's, under a grant, as between two.
+    const old = await database(oldId, "Old database")
+    const copy = await database(newId, "New database")
+    old.sqlDump = dump
     const resolveRoot = databaseRoots(harness.databases)
-    const source = await startSource({
-      resolveRoot,
-      rootId: databaseFileRootId("a".repeat(12)),
-    })
-    const destination = await startDestination({
-      resolveRoot,
-      rootId: databaseFileRootId("b".repeat(12)),
-    })
+    return {
+      copy,
+      destination: await startDestination({
+        resolveRoot,
+        rootId: databaseFileRootId(newId),
+      }),
+      old,
+      source: await startSource({
+        ...source,
+        resolveRoot,
+        rootId: databaseFileRootId(oldId),
+      }),
+    }
+  }
+
+  it("runs the old database's dump into the new one, and leaves the old one as it was", async () => {
+    const { copy, destination, old, source } = await databases()
 
     const artifact = await source.prepare("transfer-database-1")
     const pull = await destination.pull(source, artifact, { path: "" })
 
     expect(pull.error).toBeNull()
     expect(pull.state).toBe("completed")
-    expect(copy.executedSql).toEqual([old.sqlDump])
+    expect(copy.executedSql).toEqual([dump])
     expect(old.executedSql).toEqual([])
+  })
+
+  it("copies a database whole or not at all", async () => {
+    const { copy, destination, source } = await databases()
+
+    // Naming paths, an empty one first among them, packs nothing.
+    await expect(
+      source.prepare("transfer-database-2", ["", "players"])
+    ).rejects.toThrow("copied whole")
+
+    // And a dump runs into the database itself, never a path under it.
+    const artifact = await source.prepare("transfer-database-3")
+    const pull = await destination.pull(source, artifact, { path: "players" })
+    expect(pull.state).toBe("failed")
+    expect(pull.error).toContain("copied whole")
+    expect(copy.executedSql).toEqual([])
+  })
+
+  it("serves no dump under a grant from a client that may only make backups", async () => {
+    // Making a backup isn't taking one away: a client that may only make
+    // them can pack a dump, and its grant fetches none.
+    const made = await databases({ issuerActions: ["backup.create"] })
+    const refused = await made.destination.pull(
+      made.source,
+      await made.source.prepare("transfer-database-4"),
+      { path: "" }
+    )
+    expect(refused.state).toBe("failed")
+    expect(refused.error).toContain("401")
+    expect(made.copy.executedSql).toEqual([])
+  })
+
+  it("serves a dump under a grant from a client that may download backups", async () => {
+    const { copy, destination, source } = await databases({
+      issuerActions: ["backup.create", "backup.download"],
+    })
+
+    const pull = await destination.pull(
+      source,
+      await source.prepare("transfer-database-5"),
+      { path: "" }
+    )
+
+    expect(pull.error).toBeNull()
+    expect(copy.executedSql).toEqual([dump])
   })
 })
 
@@ -167,6 +225,8 @@ type Source = Awaited<ReturnType<typeof startSource>>
 // A Relay's own transfers over one root: a game server's folder, unless
 // another is named.
 interface TransferSide {
+  /** What the client that signs the source's grants may do; all, unless named. */
+  readonly issuerActions?: ReadonlyArray<string>
   readonly resolveRoot?: TransferRootResolver
   readonly rootId?: string
 }
@@ -188,16 +248,18 @@ async function startSource(side: TransferSide = {}) {
   const now = Date.now()
   await runtime.runPromise(
     Effect.gen(function* () {
+      const actions = [...(side.issuerActions ?? ["*"])]
+      const role = side.issuerActions ? "custom" : "full_access"
       yield* state.createInvitation({
-        actions: ["*"],
+        actions,
         createdAt: now,
         expiresAt: now + 60_000,
         id: "invitation-1",
-        role: "full_access",
+        role,
         tokenHash: "hash-1",
       })
       yield* state.pairClient({
-        actions: ["*"],
+        actions,
         id: issuer,
         invitationId: "invitation-1",
         name: "Hearth",
@@ -206,7 +268,7 @@ async function startSource(side: TransferSide = {}) {
         publicKey: issuerKeys.publicKey
           .export({ format: "pem", type: "spki" })
           .toString(),
-        role: "full_access",
+        role,
         sourceCidrs: [],
       })
     })
@@ -263,20 +325,20 @@ async function startSource(side: TransferSide = {}) {
       paths: ReadonlyArray<string> = []
     ): Promise<ReadyArtifact> => {
       await Effect.runPromise(sources.prepare({ paths, rootId, transferId }))
-      return vi.waitFor(
+      const record = await vi.waitFor(
         () => {
-          const record = sources.get({ rootId, transferId })
-          if (
-            record?.state !== "ready" ||
-            !record.sha256 ||
-            record.size === null
-          ) {
-            throw new Error(`Transfer is ${record?.state}: ${record?.error}`)
+          const packed = sources.get({ rootId, transferId })
+          if (!packed || packed.state === "packing") {
+            throw new Error("The transfer is still packing")
           }
-          return { sha256: record.sha256, size: record.size, transferId }
+          return packed
         },
         { timeout: 10_000 }
       )
+      if (record.state !== "ready" || !record.sha256 || record.size === null) {
+        throw new Error(`Transfer is ${record.state}: ${record.error}`)
+      }
+      return { sha256: record.sha256, size: record.size, transferId }
     },
   }
 }
