@@ -15,6 +15,15 @@ if [[ -n "${installation_marker}" ]]; then
   rm -f -- "${installation_marker}"
 fi
 
+# A Brick that pins a build names where that build is downloaded from.
+artifact_url=${KILN_ARTIFACT_URL}
+artifact_label="${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown}"
+if [[ -n "${KILN_ARTIFACT_BUILD:-}" ]]; then
+  : "${KILN_ARTIFACT_BUILD_URL:?KILN_ARTIFACT_BUILD_URL is required with KILN_ARTIFACT_BUILD}"
+  artifact_url=${KILN_ARTIFACT_BUILD_URL}
+  artifact_label+=" build ${KILN_ARTIFACT_BUILD}"
+fi
+
 installer="${KILN_ARTIFACT_INSTALLER:-}"
 if [[ -n "${installer}" && "${installer}" != forge ]]; then
   echo "[Kiln Ember] KILN_ARTIFACT_INSTALLER must be empty or forge" >&2
@@ -24,15 +33,15 @@ fi
 download_artifact() {
   local destination=$1
   local temporary=".${destination}.download"
-  echo "[Kiln Ember] downloading ${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown}"
+  echo "[Kiln Ember] downloading ${artifact_label}"
   if curl --fail --location --no-progress-meter --retry 2 --retry-all-errors \
     --connect-timeout 15 --max-time 300 \
-    --output "${temporary}" "${KILN_ARTIFACT_URL}"; then
+    --output "${temporary}" "${artifact_url}"; then
     mv -- "${temporary}" "${destination}"
   else
     local status=$?
     rm -f -- "${temporary}"
-    echo "[Kiln Ember] failed to download ${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown} after 3 attempts. Server startup failed. Swap to a different Brick in Startup, or contact support if this keeps happening." >&2
+    echo "[Kiln Ember] failed to download ${artifact_label} after 3 attempts. Server startup failed. Swap to a different Brick in Startup, or contact support if this keeps happening." >&2
     exit "${status}"
   fi
   if [[ -n "${KILN_ARTIFACT_SHA256:-}" ]]; then
@@ -53,10 +62,10 @@ if [[ "${installer}" == forge ]]; then
   if [[ ! -s "${KILN_ARTIFACT_FILE}" && -z "$(forge_arguments_file)" ]]; then
     forge_installer=.kiln-forge-installer.jar
     download_artifact "${forge_installer}"
-    echo "[Kiln Ember] installing ${KILN_IMPLEMENTATION:-forge} ${KILN_VERSION:-unknown}"
+    echo "[Kiln Ember] installing ${artifact_label}"
     if ! java -jar "${forge_installer}" --installServer; then
       rm -f -- "${forge_installer}"
-      echo "[Kiln Ember] the Forge installer failed for ${KILN_VERSION:-unknown}; see ${forge_installer}.log. Server startup failed." >&2
+      echo "[Kiln Ember] the Forge installer failed for ${artifact_label}; see ${forge_installer}.log. Server startup failed." >&2
       exit 1
     fi
     # Its start scripts and JVM arguments file are Kiln's to manage here.
@@ -71,7 +80,7 @@ if [[ "${installer}" == forge ]]; then
         fi
       done
       if [[ -z "${forge_jar}" ]]; then
-        echo "[Kiln Ember] the Forge installer left no server to start for ${KILN_VERSION:-unknown}. Server startup failed." >&2
+        echo "[Kiln Ember] the Forge installer left no server to start for ${artifact_label}. Server startup failed." >&2
         exit 1
       fi
       mv -- "${forge_jar}" "${KILN_ARTIFACT_FILE}"
@@ -214,7 +223,7 @@ if [[ "${installer}" == forge ]]; then
   fi
 fi
 
-echo "[Kiln Ember] starting ${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown} with Java $(java -version 2>&1 | head -1)"
+echo "[Kiln Ember] starting ${artifact_label} with Java $(java -version 2>&1 | head -1)"
 exec java \
   "${java_memory_args[@]}" \
   "${extra_java_args[@]}" \
