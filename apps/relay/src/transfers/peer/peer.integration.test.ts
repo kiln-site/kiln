@@ -200,7 +200,7 @@ describe("a database copied between Relays", () => {
 
   it("serves a dump under a grant from a client that may download backups", async () => {
     const { copy, destination, source } = await databases({
-      issuerActions: ["backup.create", "backup.download"],
+      issuerActions: ["backup.download"],
     })
 
     const pull = await destination.pull(

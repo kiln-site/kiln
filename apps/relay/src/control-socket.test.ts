@@ -341,19 +341,23 @@ describe("Relay control socket", () => {
       })
     }
 
-    const keeper = await relay.connect(
-      await relay.pair({
-        role: "custom",
-        actions: ["backup.create", "backup.restore"],
-      })
-    )
-    for (const [operation, payload] of copies) {
-      const sent = sendRequest(keeper.socket, operation, payload)
-      expect(await keeper.inbox.next()).toMatchObject({
-        payload: { ok: true },
-        replyTo: sent,
-        type: "response",
-      })
+    // Each end takes its own: making a backup packs one, and restoring a
+    // backup installs one, and neither does the other.
+    for (const [action, allowed] of [
+      ["backup.create", "transfer.source.prepare"],
+      ["backup.restore", "transfer.pull.start"],
+    ] as const) {
+      const client = await relay.connect(
+        await relay.pair({ role: "custom", actions: [action] })
+      )
+      for (const [operation, payload] of copies) {
+        const sent = sendRequest(client.socket, operation, payload)
+        expect(await client.inbox.next()).toMatchObject(
+          operation === allowed
+            ? { payload: { ok: true }, replyTo: sent, type: "response" }
+            : { code: "forbidden", replyTo: sent, type: "error" }
+        )
+      }
     }
   })
 

@@ -111,8 +111,8 @@ keeps artifacts and where it keeps game servers' folders, and, asked about
 a root, the disk a copy of it takes, archived or unpacked, so Hearth can
 check a copy fits first. It walks the root as packing does, counting each
 name of a hard-linked file, and rounds each entry up to a filesystem block
-plus its archive header. Free disk needs `relay.read`; a root's size needs its download
-action.
+plus its archive header. Free disk needs `relay.read`; a folder's size needs
+its download action, and a database's what packing it does, `backup.create`.
 
 Copying needs the source root's download action and the destination
 root's upload action, for the person on Hearth and for Hearth's pairing on
