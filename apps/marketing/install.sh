@@ -37,6 +37,7 @@ volume="kiln-relay-data"
 mode="platform"
 url=""
 port="3000"
+port_given=0
 relay_host=""
 join=""
 game_host=""
@@ -55,6 +56,8 @@ proxy=""
 public_route=""
 # Whether this install may have the Relay connect to Kiln itself by default.
 connects_itself=1
+# A platform backup to restore Kiln from, instead of installing it new.
+restore=""
 
 usage() {
   cat <<'EOF'
@@ -89,6 +92,11 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
                      (default: this machine's public IP)
   --join LINK        Join the Kiln whose Add Relay dialog gave this link,
                      instead of printing an invitation (implies --node)
+  --restore FILE     Restore Kiln from a platform backup (.kiln) instead of
+                     installing it new, on a machine without Kiln. Asks for
+                     the recovery code, or reads it from KILN_RECOVERY_CODE.
+                     Kiln opens at the backup's address unless --url says
+                     otherwise
   --cli              Install only the kiln command-line tool, to manage
                      Kiln from this computer (Linux or macOS). With
                      --nightly, the newest nightly; with --url, it shows
@@ -109,7 +117,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --url) url="${2:?--url needs a value}"; shift 2 ;;
     --proxy) proxy="${2:?--proxy needs a value}"; shift 2 ;;
-    --port) port="${2:?--port needs a value}"; shift 2 ;;
+    --port) port="${2:?--port needs a value}"; port_given=1; shift 2 ;;
     --game-host) game_host="${2:?--game-host needs a value}"; shift 2 ;;
     --relay-host) relay_host="${2:?--relay-host needs a value}"; shift 2 ;;
     --join) join="${2:?--join needs a value}"; mode="node"; shift 2 ;;
@@ -120,6 +128,7 @@ while [ "$#" -gt 0 ]; do
     --namespace) namespace="${2:?--namespace needs a value}"; shift 2 ;;
     --nightly) channel="latest-nightly"; shift ;;
     --node) mode="node"; shift ;;
+    --restore) restore="${2:?--restore needs a value}"; shift 2 ;;
     --cli) cli=1; shift ;;
     --skip-docker-install) install_docker_allowed=0; shift ;;
     -y | --yes) assume_yes=1; shift ;;
@@ -134,6 +143,19 @@ if [ "$cli" -eq 1 ]; then
     exit 1
   }
   mode="cli"
+fi
+
+if [ -n "$restore" ]; then
+  [ "$mode" = "platform" ] || {
+    printf 'kiln: --restore restores Kiln itself; add a Relay without it.\n' >&2
+    exit 1
+  }
+  [ -f "$restore" ] || {
+    printf 'kiln: there is no backup at %s.\n' "$restore" >&2
+    exit 1
+  }
+  # Docker mounts it by its full path.
+  restore="$(cd "$(dirname "$restore")" && pwd)/$(basename "$restore")"
 fi
 
 # The link from Hearth's Add Relay dialog: its address, then #kj1. and a
@@ -282,6 +304,25 @@ step_pid=""
 on_exit() {
   code=$?
   if [ -n "$step_pid" ]; then kill_tree "$step_pid"; fi
+  # A restore that fails or stops before Kiln is ready isn't resumed: what
+  # it set up goes, and running this again starts it over.
+  if [ "$code" -ne 0 ] && [ "${restoring:-0}" -eq 1 ]; then
+    restoring=0
+    abandoned=0
+    abandon_restore || abandoned=$?
+    case $abandoned in
+      0)
+        say "  Nothing was kept, so this machine is as it was. Fix what stopped"
+        say "  it, then run this again." ;;
+      1)
+        say "  Kiln's backup is restored; Kiln itself didn't finish starting."
+        say "  See why with \`docker exec $container kiln-relay platform status\`." ;;
+      *)
+        say "  This couldn't read what the restore left, so it removed nothing."
+        say "  See \`docker exec $container kiln-relay platform status\`." ;;
+    esac
+    say ""
+  fi
   if [ -n "${sudo_keeper:-}" ]; then kill "$sudo_keeper" 2>/dev/null || true; fi
   if [ -n "${cli_work:-}" ]; then rm -rf "$cli_work"; fi
   if [ "$fancy" -eq 1 ]; then printf '\033[?25h'; fi
@@ -643,6 +684,26 @@ wait_healthy() {
   dk inspect --format '{{.Name}} {{.Config.Image}} healthy' "$name"
 }
 
+# Waits for Kiln's first start after a restore to bring Hearth up, and stops
+# with the reason when restoring the backup fails, rather than wait it out.
+wait_restored() {
+  waited=0
+  until [ "$(dk inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$hearth" 2>/dev/null)" = "healthy" ]; do
+    if [ "$(dk inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" != "true" ]; then
+      dk logs --tail 40 "$container" 2>&1 || true
+      stop "Kiln's Relay stopped. Its last lines are in the install log."
+    fi
+    if [ $((waited % 10)) -eq 0 ]; then
+      problem=$(dk exec "$container" kiln-relay platform status 2>/dev/null | sed -n 's/^Problem *//p' | head -n 1)
+      [ -z "$problem" ] || stop "$problem"
+    fi
+    waited=$((waited + 2))
+    [ "$waited" -lt 3600 ] || stop "This is taking too long. The Relay's last lines are in the install log."
+    sleep 2
+  done
+  dk inspect --format '{{.Name}} {{.Config.Image}} healthy' "$hearth"
+}
+
 # Where `docker run` writes the ID of the container it created, so a run
 # that fails after creating it, as when a port is taken, removes that one
 # container and no other: not a Relay another install started meanwhile.
@@ -690,6 +751,46 @@ start_platform_relay() {
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
     "$image" || remove_unstarted
   remove_relay_cidfile
+}
+
+# Kiln's recovery code, from KILN_RECOVERY_CODE or typed without showing.
+ask_recovery_code() {
+  recovery_code=${KILN_RECOVERY_CODE:-}
+  [ -z "$recovery_code" ] || return 0
+  has_terminal ||
+    fail "Restoring needs Kiln's recovery code: set KILN_RECOVERY_CODE, or run this in a terminal."
+  asked=1
+  printf '  Recovery code (kiln-rk-…): ' >/dev/tty
+  stty -echo </dev/tty 2>/dev/null || true
+  read -r recovery_code </dev/tty || recovery_code=""
+  stty echo </dev/tty 2>/dev/null || true
+  printf '\n' >/dev/tty
+  [ -n "$recovery_code" ] || fail "Restoring needs Kiln's recovery code."
+}
+
+# Takes the backup's Relay identity and Kiln's record into a new Relay's
+# data, before its first start restores the backup. The code goes on
+# standard input, so it's in no process list or log. Run as a step, in a
+# subshell: the address Kiln opens at goes to $restored_url_file. Named for
+# no container, the Relay finds its own, so Kiln's Hearth comes from the same
+# release as this image unless --hearth-image says otherwise.
+restore_backup() {
+  # Labeled as a restore's, so running this again knows to start over one
+  # that stopped before Kiln was ready (restore_state).
+  dk volume create --label io.kiln.restore=staging "$volume" >/dev/null
+  restored=$(printf '%s\n' "$recovery_code" | dk run --rm -i --entrypoint kiln-relay \
+    --volume /var/run/docker.sock:/var/run/docker.sock \
+    --volume "$volume:/data" \
+    --volume "$restore:/restore.kiln:ro" \
+    --env KILN_RELAY_MODE=platform \
+    ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
+    ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
+    "$image" platform restore /restore.kiln ${url:+--url "$url"} 2>&1) || {
+    printf '%s\n' "$restored"
+    stop "$(printf '%s\n' "$restored" | sed -n 's/^.*[Ee]rror: //p' | tail -n 1)"
+  }
+  printf '%s\n' "$restored"
+  printf '%s\n' "$restored" | sed -n 's/^KILN_URL=//p' | tail -n 1 >"$restored_url_file"
 }
 
 start_node_relay() {
@@ -988,6 +1089,82 @@ relay_feature() {
     [ "$feature" != "$1" ] || return 0
   done
   return 1
+}
+
+# What a restore left in the Relay's volume this installer labeled:
+# "restored" once the Relay recorded the backup as in, "unfinished
+# <installation ID>" before (the ID is empty if it stopped before writing
+# Kiln's record, or before writing anything, as for a wrong recovery code),
+# or nothing for another volume or one it can't read, which is never taken
+# for an unfinished restore.
+restore_state() {
+  [ "$(dk volume inspect --format '{{index .Labels "io.kiln.restore"}}' "$volume" 2>/dev/null)" = "staging" ] || return 0
+  dk run --rm --network none --volume "$volume:/data:ro" "$image" \
+    -e 'const fs = require("fs"); fs.readdirSync("/data"); if (!fs.existsSync("/data/platform")) { process.stdout.write("unfinished ") } else { fs.readdirSync("/data/platform"); if (fs.existsSync("/data/platform/restored.json")) { process.stdout.write("restored") } else { let id = ""; try { id = JSON.parse(fs.readFileSync("/data/platform/installation.json", "utf8")).installationId } catch {} process.stdout.write("unfinished " + id) } }' \
+    2>>"$log_file" | grep -Ex 'restored|unfinished [A-Za-z0-9._-]*' || true
+}
+
+# Removes what a restore that never finished set up, and only what it can
+# show it owns, or fails when there's no such restore here (its backup is
+# in: 1, or its volume can't be read: 2). Its Relay is stopped first, so nothing
+# finishes the import meanwhile. What it owns: the containers using its
+# labeled Relay volume, what its Relay labeled with the restore's
+# installation ID, and Traefik when this run saw none before the restore.
+# Anything else is left, and named.
+abandon_restore() {
+  state=$(restore_state)
+  case "$state" in
+    unfinished*) ;;
+    restored) return 1 ;;
+    *) return 2 ;;
+  esac
+  relays=$(dk ps -aq --filter "volume=$volume" 2>/dev/null || true)
+  for id in $relays; do dk stop "$id" >/dev/null 2>&1 || true; done
+  # Asked again once nothing can write to it: the import may have finished.
+  state=$(restore_state)
+  case "$state" in
+    unfinished*) ;;
+    restored)
+      for id in $relays; do dk start "$id" >/dev/null 2>&1 || true; done
+      return 1 ;;
+    *) return 2 ;;
+  esac
+  attempt=${state#unfinished}
+  attempt=${attempt# }
+  log "removing what the restore of installation ${attempt:-?} set up"
+  for id in $(dk ps -aq --filter "volume=$volume" 2>/dev/null); do
+    dk rm -f "$id" >/dev/null 2>&1 || true
+  done
+  if [ -n "$attempt" ]; then
+    for id in $(dk ps -aq --filter "label=io.kiln.installation=$attempt" 2>/dev/null); do
+      dk rm -f "$id" >/dev/null 2>&1 || true
+    done
+    for name in $(dk volume ls -q --filter "label=io.kiln.installation=$attempt" 2>/dev/null); do
+      dk volume rm "$name" >/dev/null 2>&1 || true
+    done
+    for id in $(dk network ls -q --filter "label=io.kiln.installation=$attempt" 2>/dev/null); do
+      dk network rm "$id" >/dev/null 2>&1 || true
+    done
+  fi
+  if [ "${traefik_before:-1}" -eq 0 ] &&
+    [ "$(dk container inspect --format '{{index .Config.Labels "kiln.relay.infrastructure"}}' "${prefix}kiln-traefik" 2>/dev/null)" = "traefik" ]; then
+    dk rm -f "${prefix}kiln-traefik" >/dev/null 2>&1 || true
+  fi
+  dk volume rm "$volume" >/dev/null 2>&1 || true
+  left=$(platform_leftovers)
+  [ -z "$left" ] || say "  Left in place, as this can't tell they were the restore's:$left"
+}
+
+# Kiln's services already on this machine, which would stop a restore's
+# Relay starting its own.
+platform_leftovers() {
+  for name in "$hearth" "$database" "${prefix}kiln-hearth-cache" "${prefix}kiln-traefik"; do
+    ! dk container inspect "$name" >/dev/null 2>&1 || printf ' %s' "$name"
+  done
+  for name in "$database" "${prefix}kiln-hearth-data"; do
+    ! dk volume inspect "$name" >/dev/null 2>&1 || printf ' %s (volume)' "$name"
+  done
+  ! dk network inspect "${prefix}kiln-platform" >/dev/null 2>&1 || printf ' %s (network)' "${prefix}kiln-platform"
 }
 
 # Downloads the release and starts the Relay here afresh from it. A Relay
@@ -1382,8 +1559,9 @@ log "public address: $address"
 # A Relay container that never started, left by an install that failed
 # before it could, isn't a Relay; its volume, if any, stays. Removed by the
 # ID inspected, and not forced, so Docker refuses if another install
-# started it meanwhile.
-if docker_reachable; then
+# started it meanwhile. A restore removes only what it can show it owns, so
+# it leaves one to its own check (restore_state).
+if [ -z "$restore" ] && docker_reachable; then
   unstarted=$(dk inspect --format '{{if eq .State.Status "created"}}{{.Id}}{{end}}' "$container" 2>/dev/null || true)
   if [ -n "$unstarted" ]; then
     log "removing $container, which never started"
@@ -1394,7 +1572,15 @@ fi
 # Already here: the Relay starts afresh from the downloaded image, keeping
 # its settings and data, so running this again updates and restarts it.
 # Then it joins Kiln, or this says where it's at.
-if docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
+# Kiln here already: refused, unless it's a restore this started that never
+# finished, which is started over once the release is downloaded.
+existing=0
+if [ -n "$restore" ] && docker_reachable &&
+  { dk container inspect "$container" >/dev/null 2>&1 || dk volume inspect "$volume" >/dev/null 2>&1; }; then
+  existing=1
+fi
+
+if [ -z "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
   say "  A Relay is already installed here. It restarts with this"
   say "  release, keeping its settings and data."
   say ""
@@ -1440,11 +1626,13 @@ if [ "$mode" = "node" ]; then
   choose_node_proxy
 else
   choose_proxy
-  choose_url
+  # A restore opens at the backup's address unless --url says otherwise.
+  [ -n "$restore" ] || choose_url
   case "$url" in
-    http://* | https://*) ;;
+    "" | http://* | https://*) ;;
     *) fail "The address must start with http:// or https://" ;;
   esac
+  [ -z "$restore" ] || ask_recovery_code
 fi
 [ "$asked" -eq 0 ] || say ""
 
@@ -1455,7 +1643,9 @@ if [ "$docker_missing" -eq 1 ]; then
 fi
 step "Checking Docker" check_docker
 check_memory
-check_ports
+# A Kiln already here holds its own ports: it's refused, or a restore that
+# never finished is removed first, so they're free again.
+[ "${existing:-0}" -eq 1 ] || check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
 
@@ -1538,9 +1728,41 @@ if [ "$mode" = "node" ]; then
   exit 0
 fi
 
+if [ -n "$restore" ]; then
+  if [ "$existing" -eq 1 ]; then
+    case "$(restore_state)" in
+      unfinished*) ;;
+      *) fail "Kiln is already installed here. Restore it onto a machine without Kiln, or use --namespace to restore beside it." ;;
+    esac
+    log "starting over a restore that didn't finish"
+    abandon_restore || true
+  fi
+  # Kiln's services from another installation would stop the Relay
+  # starting this one's; said now, not after waiting on them.
+  others=$(platform_leftovers)
+  [ -z "$others" ] ||
+    fail "This machine has Kiln's services from another installation:$others. Remove them, or use --namespace to restore beside them."
+  traefik_before=0
+  restoring=1
+  restored_url_file=$(mktemp)
+  step "Opening the backup" restore_backup
+  [ -n "$url" ] || url=$(cat "$restored_url_file")
+  rm -f "$restored_url_file"
+  [ -n "$url" ] || fail "The backup didn't say where Kiln opens; run this again with --url."
+  # Kiln opened at its own port, as http://host:8080, opens there again.
+  if [ "$port_given" -eq 0 ]; then
+    restored_port=$(printf '%s\n' "$url" | sed -n -E 's#^http://[^/]*:([0-9]+)/?$#\1#p')
+    [ -z "$restored_port" ] || port=$restored_port
+  fi
+fi
 step "Starting Kiln's Relay" start_platform_relay
 step "Setting up the database" wait_healthy "$database" 600
-step "Starting Kiln" wait_healthy "$hearth" 900
+if [ -n "$restore" ]; then
+  step "Restoring Kiln" wait_restored
+  restoring=0
+else
+  step "Starting Kiln" wait_healthy "$hearth" 900
+fi
 https_ok=1
 case "$url" in
   https://*)
@@ -1551,6 +1773,19 @@ case "$url" in
     fi
     ;;
 esac
+
+if [ -n "$restore" ]; then
+  say ""
+  say "  ${green}${bold}Kiln is restored$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
+  say ""
+  say "  Sign in as before at:"
+  say "  $arrow $bold$url$reset"
+  say ""
+  say "  ${dim}Game servers and Apps that ran on this machine come back from$reset"
+  say "  ${dim}their own backups. Install log: $log_file$reset"
+  say ""
+  return 0
+fi
 
 setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file" || true)
 [ -n "$setup" ] || fail "Kiln started, but didn't give a setup link."

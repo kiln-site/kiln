@@ -494,17 +494,23 @@ export const removeDeletedInstanceEffect = Effect.fn(
 /**
  * Reconciles a Relay's records with a fresh snapshot when Hearth starts. The
  * snapshot was read moments before this commits, so servers Hearth created
- * or deleted on the Relay in between keep their outcome.
+ * or deleted on the Relay in between keep their outcome. Unless `prune` is
+ * off, records the snapshot doesn't list are removed; with it off, it says
+ * how many it kept.
  */
 export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
-  function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
+  function* (
+    relayId: string,
+    instances: ReadonlyArray<DirectoryInstance>,
+    options: { readonly prune: boolean } = { prune: true }
+  ) {
     yield* Effect.annotateCurrentSpan({
       "relay.id": relayId,
       "instance.count": instances.length,
     })
     const database = yield* Database
     const lifecycle = relayLifecycle(relayId)
-    yield* lifecycle.writes.withPermit(
+    return yield* lifecycle.writes.withPermit(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis
         const refused = yield* claimServerIdsEffect(
@@ -530,26 +536,38 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
               [relayId]
             )
           : []
-        yield* database.transaction("instances.registry.sync", (transaction) =>
-          Effect.gen(function* () {
-            if (listed.length)
+        const unlisted = `WHERE relay_id = ?
+            ${kept.length ? `AND instance_id NOT IN (${kept.map(() => "?").join(", ")})` : ""}
+            AND (
+              provisioning_reserved_until IS NULL
+              OR provisioning_reserved_until <= ?
+            )`
+        return yield* database.transaction(
+          "instances.registry.sync",
+          (transaction) =>
+            Effect.gen(function* () {
+              if (listed.length)
+                yield* transaction.execute(
+                  ...upsertInstancesStatement(relayId, listed, now, {
+                    id: relay?.created_by ?? null,
+                    standIn: true,
+                  })
+                )
+              if (!options.prune) {
+                const [row] = yield* transaction.queryRows<
+                  RowDataPacket & { missing: number | string }
+                >(
+                  `SELECT COUNT(*) AS missing FROM ${databaseTable("instance")} ${unlisted}`,
+                  [relayId, ...kept, now]
+                )
+                return { missing: Number(row?.missing ?? 0) }
+              }
               yield* transaction.execute(
-                ...upsertInstancesStatement(relayId, listed, now, {
-                  id: relay?.created_by ?? null,
-                  standIn: true,
-                })
+                `DELETE FROM ${databaseTable("instance")} ${unlisted}`,
+                [relayId, ...kept, now]
               )
-            yield* transaction.execute(
-              `DELETE FROM ${databaseTable("instance")}
-                WHERE relay_id = ?
-                  ${kept.length ? `AND instance_id NOT IN (${kept.map(() => "?").join(", ")})` : ""}
-                  AND (
-                    provisioning_reserved_until IS NULL
-                    OR provisioning_reserved_until <= ?
-                  )`,
-              [relayId, ...kept, now]
-            )
-          })
+              return { missing: 0 }
+            })
         )
       })
     )
@@ -558,10 +576,11 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
 
 export function syncInstanceRegistry(
   relayId: string,
-  instances: ReadonlyArray<DirectoryInstance>
-): Promise<void> {
+  instances: ReadonlyArray<DirectoryInstance>,
+  options: { readonly prune: boolean }
+): Promise<{ readonly missing: number }> {
   return runAppEffect(
     "instances.registry.sync",
-    syncInstanceRegistryEffect(relayId, instances)
+    syncInstanceRegistryEffect(relayId, instances, options)
   )
 }

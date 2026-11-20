@@ -215,6 +215,7 @@ import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
+import { restorePlatformFromBackup } from "./platform-restore.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
 import { HostPackages } from "./host-packages.js"
@@ -369,6 +370,17 @@ await mkdir(`${config.dataDirectory}/network`, {
   mode: 0o700,
 })
 initializeRelayRuntime(config)
+// `platform restore` replaces the Relay's identity and TLS authority, so it
+// runs before they're loaded: one stopped halfway can leave a pair that
+// wouldn't load, which running it again replaces.
+if (process.argv[2] === "platform" && process.argv[3] === "restore") {
+  await recoverPromise(
+    () => runPlatformRestore(process.argv.slice(2)),
+    reportCliFailure
+  )
+  await disposeRelayRuntime()
+  process.exit()
+}
 const startupCore = await runRelayEffect(
   "relay.startup",
   Effect.gen(function* () {
@@ -900,7 +912,7 @@ if (
   cliArguments[0] === "platform" ||
   cliArguments[0] === "platform-backup"
 ) {
-  await runRelayCli(cliArguments)
+  await recoverPromise(() => runRelayCli(cliArguments), reportCliFailure)
   await disposeRelayRuntime()
   // With the code a command set, such as a join that didn't pair.
   process.exit()
@@ -1275,6 +1287,86 @@ async function loadStartupWebRoutes() {
     "relay.startup.webRoutes.recovered",
     startup.state.listWebRoutes()
   )
+}
+
+/**
+ * Kiln's recovery code from standard input: typed at a terminal without
+ * showing it, or the first line of what's piped in.
+ */
+async function readRecoveryCode(): Promise<string> {
+  const input = process.stdin
+  if (!input.isTTY) {
+    let text = ""
+    for await (const chunk of input) {
+      text += String(chunk)
+      if (text.includes("\n")) break
+    }
+    return text.split("\n")[0]?.trim() ?? ""
+  }
+  process.stderr.write("Recovery code: ")
+  input.setRawMode(true)
+  input.resume()
+  return new Promise((resolveCode, rejectCode) => {
+    let typed = ""
+    const finish = (error: Error | null) => {
+      input.off("data", onData)
+      input.setRawMode(false)
+      input.pause()
+      process.stderr.write("\n")
+      if (error) rejectCode(error)
+      else resolveCode(typed.trim())
+    }
+    const onData = (chunk: Buffer) => {
+      for (const character of chunk.toString("utf8")) {
+        if (character === "\r" || character === "\n") return finish(null)
+        if (character === "\u0003") return finish(new Error("Cancelled"))
+        if (character === "\u007f") typed = typed.slice(0, -1)
+        else typed += character
+      }
+    }
+    input.on("data", onData)
+  })
+}
+
+// A command's failure as its message alone: Node's report of an uncaught
+// error leads with the bundled line that threw, longer than a pipe carries
+// before the Relay exits, so the installer would never see why.
+function reportCliFailure(cause: unknown): void {
+  console.error(
+    `Error: ${cause instanceof Error ? cause.message : String(cause)}`
+  )
+  process.exitCode = 1
+}
+
+async function runPlatformRestore(
+  arguments_: ReadonlyArray<string>
+): Promise<void> {
+  const [, , source] = arguments_
+  const urlIndex = arguments_.indexOf("--url")
+  if (!source || source.startsWith("--")) {
+    throw new Error(
+      "Usage: kiln-relay platform restore <backup.kiln> [--url <address>]; the recovery code is read from standard input"
+    )
+  }
+  const code = await readRecoveryCode()
+  const restored = await runRelayEffect(
+    "relay.cli.platform.restore",
+    Effect.gen(function* () {
+      return yield* restorePlatformFromBackup({
+        code,
+        config,
+        engine: new DockerEngine(config.dockerSocket),
+        source,
+        state: yield* RelayStateStore,
+        url: urlIndex > 0 ? (arguments_[urlIndex + 1] ?? null) : null,
+      })
+    })
+  )
+  console.log(
+    `Restored Kiln ${restored.previousInstallationId} as installation ${restored.installationId}. Start the Relay with KILN_RELAY_MODE=platform and this KILN_URL: it restores the backup into a new database and starts Hearth.`
+  )
+  // On a line of its own, for the installer.
+  console.log(`KILN_URL=${restored.url}`)
 }
 
 async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {

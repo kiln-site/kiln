@@ -683,7 +683,18 @@ export async function initializeRelayFromEnvironment(): Promise<PersistedRelay |
 export async function maintainPersistedRelayConnections(): Promise<void> {
   const persisted = await listPersistedRelays()
   const relays = persisted.filter((relay) => relay.enabled)
-  const { relayRpc } = await import("@/lib/relay-connection")
+  const [{ relayRpc }, { firstStartAfterRestore }] = await Promise.all([
+    import("@/lib/relay-connection"),
+    import("@/lib/platform-restore.server"),
+  ])
+  // Restored from a backup onto a new machine, a Relay has none of its old
+  // game servers yet. Their records, which their backups restore into, stay
+  // through every start until each is back or someone removes it.
+  const restore = await firstStartAfterRestore()
+  // Heard once every Relay has synced without a record it doesn't list. A
+  // paused Relay isn't synced, so it counts as one that wasn't.
+  let unsynced = persisted.length - relays.length
+  let missing = 0
   // A paused Relay must hear it's paused, even if it was away when it was
   // paused and Hearth restarted since: this connects to it, and the
   // connection keeps telling it.
@@ -708,15 +719,34 @@ export async function maintainPersistedRelayConnections(): Promise<void> {
       // own create and delete paths add and remove records, and the live
       // directory worker only refreshes them.
       if (Result.isSuccess(freshSnapshot)) {
-        await syncInstanceRegistry(relay.id, freshSnapshot.success.instances)
+        const synced = await Effect.runPromise(
+          Effect.result(
+            Effect.tryPromise(() =>
+              syncInstanceRegistry(
+                relay.id,
+                freshSnapshot.success.instances,
+                { prune: !restore.restored }
+              )
+            )
+          )
+        )
+        if (Result.isSuccess(synced)) {
+          missing += synced.success.missing
+          return
+        }
+        unsynced++
         return
       }
+      unsynced++
       const fallback = await cachedRelaySnapshotFallback(relay.id)
       if (fallback) {
         await backfillInstanceSourceNames(relay.id, fallback.instances)
       }
     })
   )
+  if (restore.restored && unsynced === 0 && missing === 0) {
+    await restore.heard()
+  }
 }
 
 async function cachedRelaySnapshotFallback(relayId: string) {

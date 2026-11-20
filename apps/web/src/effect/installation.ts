@@ -7,7 +7,10 @@ import { SqlClient } from "effect/sql"
 import { KilnInstallationIdSchema } from "@workspace/contracts"
 
 import { databaseTableName } from "@/lib/database-config"
-import { configuredKilnInstallationId } from "@/lib/environment"
+import {
+  configuredKilnInstallationId,
+  configuredPreviousInstallationIds,
+} from "@/lib/environment"
 
 import { databaseClientConfig } from "./database"
 
@@ -49,6 +52,13 @@ export function loadedKilnInstallationId(): string | null {
  * Relays. `KILN_INSTALLATION_ID` wins and is saved, so the installation
  * keeps it if the variable is later removed. Otherwise Hearth keeps the ID
  * it saved, or generates one on its first start.
+ *
+ * Kiln restored from a backup comes back under a new ID. On its first start
+ * Hearth's platform backups and their settings move from the IDs it was
+ * restored from (`KILN_PREVIOUS_INSTALLATION_IDS`) to the new one, so they
+ * stay listed, kept, and restorable, and its schedules are sent to its
+ * Relays again. It's loaded again after an import of a Kiln export, whose
+ * rows may be from before the restore.
  */
 export function loadInstallationId(): Promise<string> {
   return Effect.runPromise(
@@ -67,6 +77,50 @@ export const ensureInstallationId = Effect.fn("Installation.ensure")(
     const id = yield* sql.withTransaction(
       Effect.gen(function* () {
         if (configured) {
+          const previous = configuredPreviousInstallationIds()
+          const [current] = yield* sql<{ setting_value: unknown }>`
+            SELECT setting_value FROM ${sql(table)}
+            WHERE id = ${installationSettingId}
+            FOR UPDATE
+          `
+          const saved = decodeInstallationSetting(current?.setting_value).pipe(
+            Option.map(({ id }) => id),
+            Option.getOrNull
+          )
+          if (saved !== configured && saved && previous.includes(saved)) {
+            yield* sql`
+              UPDATE ${sql(databaseTableName("backup"))}
+              SET target_id = ${configured}, updated_at = ${now}
+              WHERE target_kind = 'platform'
+                AND target_id IN ${sql.in(previous)}
+            `
+            // One policy per Relay and target: the newest earlier ID's wins,
+            // and any older one left behind goes.
+            for (const id of [...previous].reverse()) {
+              yield* sql`
+                UPDATE IGNORE ${sql(databaseTableName("backup_policy"))}
+                SET target_id = ${configured}, updated_at = ${now}
+                WHERE target_kind = 'platform' AND target_id = ${id}
+              `
+            }
+            yield* sql`
+              DELETE FROM ${sql(databaseTableName("backup_policy"))}
+              WHERE target_kind = 'platform'
+                AND target_id IN ${sql.in(previous)}
+            `
+            // Kiln's own Relay came back without the schedules Hearth sent
+            // it, though Hearth's rows say it has them: they're owed again,
+            // and sent by the next sweep. Another Relay that kept them takes
+            // the same revision again.
+            yield* sql`
+              UPDATE ${sql(databaseTableName("schedule_deployment"))}
+              SET status = 'pending', updated_at = ${now}
+              WHERE status = 'applied'
+            `
+            yield* Effect.logInfo(
+              `Kiln was restored from a backup: installation ${configured} replaces ${saved}`
+            )
+          }
           yield* sql`
             INSERT INTO ${sql(table)}
               (id, user_id, setting_key, setting_value, created_at, updated_at)

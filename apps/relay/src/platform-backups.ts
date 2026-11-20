@@ -9,7 +9,7 @@ import {
 import { createReadStream, createWriteStream } from "node:fs"
 import { mkdir, open, rm, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
-import { Transform } from "node:stream"
+import { Transform, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { createGunzip, createGzip } from "node:zlib"
 import { Effect, Result } from "effect"
@@ -22,8 +22,12 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
-import type { PlatformRecovery } from "./platform-recovery.js"
+import {
+  decodePlatformRecovery,
+  type PlatformRecovery,
+} from "./platform-recovery.js"
 import { provenDatabaseContainer, provenHearthRunning } from "./platform.js"
+import { readPlatformState } from "./platform-state.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 import {
   DockerEngine,
@@ -226,6 +230,82 @@ export async function inspectEncryptedPlatformBackup(
   return opened.manifest
 }
 
+/**
+ * A platform backup's manifest and recovery section, once the whole backup
+ * has been authenticated with `recoveryKey`; the section is null in format 1.
+ * Nothing decrypted is written anywhere.
+ */
+export async function readPlatformBackupRecovery(
+  recoveryKey: string,
+  source: string
+): Promise<{
+  manifest: PlatformBackupManifest
+  recovery: PlatformRecovery | null
+}> {
+  const opened = await openPlatformBackup(source)
+  const key = await derivePlatformKey(recoveryKey, opened.salt)
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    opened.initializationVector
+  )
+  decipher.setAAD(opened.manifestBytes)
+  decipher.setAuthTag(opened.tag)
+  const section = sectionReader(opened.manifest.formatVersion === 2)
+  await pipeline(
+    createReadStream(source, { start: opened.payloadOffset }),
+    decipher,
+    section.writable
+  )
+  const text = section.text()
+  if (text === null) return { manifest: opened.manifest, recovery: null }
+  return {
+    manifest: opened.manifest,
+    recovery: await Effect.runPromise(decodePlatformRecovery(text)),
+  }
+}
+
+/**
+ * Keeps the recovery section from the start of a decrypted payload and lets
+ * the rest pass to nowhere, so the whole payload is still authenticated.
+ */
+function sectionReader(present: boolean) {
+  let header = Buffer.alloc(0)
+  let body: Buffer | null = null
+  let expected = 0
+  const writable = new Writable({
+    write(chunk: Buffer, _encoding, done) {
+      if (!present || (body && body.byteLength >= expected)) return done()
+      if (!body) {
+        header = Buffer.concat([header, chunk])
+        if (header.byteLength < PLATFORM_RECOVERY_LENGTH_BYTES) return done()
+        expected = header.readUInt32BE(0)
+        if (expected <= 0 || expected > MAX_PLATFORM_RECOVERY_BYTES) {
+          return done(
+            new Error("The Kiln platform backup's recovery section is invalid")
+          )
+        }
+        body = header.subarray(PLATFORM_RECOVERY_LENGTH_BYTES)
+      } else {
+        body = Buffer.concat([body, chunk])
+      }
+      done()
+    },
+  })
+  return {
+    text: () => {
+      if (!present) return null
+      if (!body || body.byteLength < expected) {
+        throw new Error(
+          "The Kiln platform backup's recovery section is cut short"
+        )
+      }
+      return body.subarray(0, expected).toString("utf8")
+    },
+    writable,
+  }
+}
+
 export async function restoreEncryptedPlatformBackup(
   config: RelayConfig,
   source: string,
@@ -237,7 +317,14 @@ export async function restoreEncryptedPlatformBackup(
     throw new Error("Stop Hearth before restoring a Kiln platform backup")
   }
   const opened = await openPlatformBackup(source)
-  if (opened.manifest.installationId !== installationId) {
+  // Or to one this installation was restored from.
+  const previous =
+    (await Effect.runPromise(readPlatformState(config.dataDirectory)))
+      ?.previousInstallationIds ?? []
+  if (
+    opened.manifest.installationId !== installationId &&
+    !previous.includes(opened.manifest.installationId)
+  ) {
     throw new Error("The platform backup belongs to another Kiln installation")
   }
   const key = await derivePlatformKey(recoveryKey, opened.salt)
@@ -527,8 +614,11 @@ function platformHeader(
 
 const PLATFORM_DUMP =
   'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump --user=root --single-transaction --skip-lock-tables --no-tablespaces --routines --events --triggers --add-drop-database --databases "$MYSQL_DATABASE"'
+// The database is created first if it's missing, as after an import that
+// stopped between the dump's DROP DATABASE and CREATE DATABASE: the client
+// can't connect to it otherwise, and the dump recreates it anyway.
 const PLATFORM_IMPORT =
-  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root "$MYSQL_DATABASE"'
+  'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --user=root -e "CREATE DATABASE IF NOT EXISTS \\`$MYSQL_DATABASE\\`"; exec mysql --user=root "$MYSQL_DATABASE"'
 
 function startPlatformClient(
   config: RelayConfig,

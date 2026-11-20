@@ -446,17 +446,85 @@ hand) writes format 1 backups, which hold only Hearth's database. Hearth still
 offers its code, if the Relay beside it has `KILN_PLATFORM_BACKUP_KEY`, and the
 operator's own environment file must be kept too: restoring needs both.
 
+### Restoring on a new machine
+
+Download Kiln's newest platform backup (`backup-<id>.kiln`) from its backup
+destination, such as your S3 bucket's console, onto a machine without Kiln,
+then run the installer with it:
+
+```sh
+curl -fsSL https://kiln.site/install | sh -s -- --restore ./backup-<id>.kiln
+```
+
+It asks for the recovery code (or reads `KILN_RECOVERY_CODE`) and opens Kiln
+at the backup's address unless `--url` gives another; point that address's DNS
+at the new machine. Use the same `--namespace` as the lost machine, if it had
+one: Hearth reaches its Relay by that name. With Compose, restore into the Relay's volume before its
+first start, then start it:
+
+```sh
+docker volume create kiln-relay-data
+docker run --rm -i --entrypoint kiln-relay \
+  --volume /var/run/docker.sock:/var/run/docker.sock \
+  --volume kiln-relay-data:/data \
+  --volume "$PWD/backup-<id>.kiln:/restore.kiln:ro" \
+  --env KILN_RELAY_MODE=platform \
+  ghcr.io/kiln-site/relay:latest platform restore /restore.kiln
+docker compose up -d
+```
+
+Use the lost machine's Compose file and environment, `KILN_RELAY_HOST`
+included: Hearth reaches its Relay at the address it had.
+
+`kiln-relay platform restore` opens the backup with the code, so a wrong code
+or a damaged backup stops it before anything is written. The new Relay takes
+the lost one's identity, TLS authority, and the Hearths it trusted, and its
+first start restores the backup into a new database and starts Hearth, so the
+restored Hearth reconnects to it as the Relay it knew, and other Relays
+reconnect on their own. Sign in as before. Game servers and Apps that ran on
+the lost machine keep their records, and come back from their own backups.
+Don't run the lost machine again beside the new one: both would be the same
+Relay, and its Hearth still holds the credentials your other Relays accept.
+Wipe it instead.
+
+A restore that fails or is stopped before Kiln is up starts over rather than
+resuming: the machine had nothing else on it. The installer removes what it
+set up (and nothing else) and says why it stopped; fix that and run it again.
+With Compose, run `docker compose exec kiln-relay kiln-relay platform status`.
+A `Problem` line means the restore failed before the backup was in: remove the
+Relay and what it started for Kiln, by the installation ID `kiln-relay
+platform restore` printed, and restore again. `Restoring` means the backup
+isn't in yet; if it stays, the Relay's logs (`docker compose logs kiln-relay`)
+say what's holding it, such as Kiln's services from another installation on
+this machine. With neither, the backup is in: don't remove anything; Hearth's
+logs say why it hasn't started.
+
+```sh
+docker compose down -v
+id=<installation ID>
+docker rm -f $(docker ps -aq --filter "label=io.kiln.installation=$id")
+docker volume rm $(docker volume ls -q --filter "label=io.kiln.installation=$id")
+docker network rm $(docker network ls -q --filter "label=io.kiln.installation=$id")
+```
+
+The restored Kiln gets a new installation ID, so its telemetry, labels, and
+new backups tell it apart from the lost machine; Kiln → Info shows when it was
+restored and the ID it came from. It keeps every ID it had before: Kiln's
+backups made under them stay listed and still restore, and the same recovery
+code opens them, so there's nothing to save again. New backups go under the
+new ID in S3 (`kiln/<installation ID>/…`), so S3 credentials limited to the old
+ID's prefix need widening. Its schedules are sent to its Relays again, so
+scheduled backups carry on.
+
 ### Recovery kits
 
-Before format 2, a Relay in platform mode restored from a **recovery kit**: its
-whole installation record, every secret included. A kit still restores a
-format 1 backup, which doesn't carry Kiln's secrets itself:
+A format 1 backup doesn't carry what restores it on a new machine. It restores
+with a **recovery kit** instead: a Relay in platform mode's whole installation
+record, every secret included, exported before it was lost:
 
 ```sh
 docker exec kiln-relay kiln-relay platform export-kit > kiln-recovery.json
 ```
-
-### Restoring
 
 To restore a format 1 backup on a new host, import the kit into the new Relay's
 data volume before the Relay's first start, so it doesn't install a new
@@ -482,10 +550,11 @@ docker exec kiln-relay kiln-relay platform-backup restore /data/restore.kiln \
 docker exec kiln-relay kiln-relay platform start-hearth
 ```
 
-The new Relay has a new identity, and the restored Hearth still lists the old
-one at the same address. Remove the old Relay from **Relays** first, then pair
-the new one there with the invitation `kiln-relay platform pair` prints, which
-also lets that Hearth restart and repair Kiln's services.
+A kit doesn't carry the Relay's identity, so the new Relay is a stranger to the
+restored Hearth, which still lists the old one at the same address; pair it
+with the invitation `kiln-relay platform pair` prints. Take a format 2 backup
+once Kiln runs a version that writes them, so a later restore needs only the
+code.
 
 When only the database volume is lost on the same host, run
 `kiln-relay platform recover --confirm <installation-id>`, restore a platform

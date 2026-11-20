@@ -969,6 +969,15 @@ export class RelayStateStore extends Context.Service<
     readonly pairClient: (
       input: PairRelayClientInput
     ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Puts back the Hearths a lost Relay trusted, as a platform backup
+     * carried them, onto the new Relay that takes its identity.
+     */
+    readonly restoreClients: (
+      clients: ReadonlyArray<
+        Omit<RelayClientRecord, "lastAddress" | "lastSeenAt">
+      >
+    ) => Effect.Effect<void, RelayStateError>
     readonly revokeClient: (
       clientId: string,
       revokedAt: number
@@ -4458,6 +4467,39 @@ const makeRelayStateStore = Effect.gen(function* () {
               WHERE id = ${input.invitationId} AND consumed_at IS NULL
             `
           })
+        )
+      ),
+    restoreClients: (clients) =>
+      run(
+        "restore_clients",
+        sql.withTransaction(
+          Effect.forEach(
+            clients,
+            (client) => sql`
+              INSERT INTO relay_clients (
+                id,
+                name,
+                public_key,
+                role,
+                actions_json,
+                origins_json,
+                source_cidrs_json,
+                created_at,
+                invitation_id
+              ) VALUES (
+                ${client.id},
+                ${client.name},
+                ${client.publicKey},
+                ${client.role},
+                ${JSON.stringify(client.actions)},
+                ${JSON.stringify(client.origins)},
+                ${JSON.stringify(client.sourceCidrs)},
+                ${client.createdAt},
+                ${client.invitationId}
+              )
+            `,
+            { discard: true }
+          )
         )
       ),
     revokeClient: (clientId, revokedAt) =>
