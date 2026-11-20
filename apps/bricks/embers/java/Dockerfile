@@ -9,12 +9,16 @@ RUN apt-get update \
 # load javax.script during bootstrap, and Pterodactyl yolks avoid this class of
 # crash by shipping a full Temurin JDK. Extra jdk.* modules cover TLS, locales,
 # Spark, and the incubator Vector API used by the Purpur egg when present.
+# Forge's coremods run JavaScript: jdk.dynalink backs the Nashorn library it
+# ships from 1.17, and Java 11's own Nashorn runs them before that.
 RUN compression=2; \
   if jlink --help | grep -q 'zip-[0-9]'; then compression=zip-6; fi; \
-  modules="java.se,jdk.attach,jdk.charsets,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.httpserver,jdk.jfr,jdk.localedata,jdk.management,jdk.naming.dns,jdk.net,jdk.security.auth,jdk.security.jgss,jdk.unsupported,jdk.xml.dom,jdk.zipfs"; \
-  if java --list-modules | grep -q '^jdk.incubator.vector@'; then \
-    modules="${modules},jdk.incubator.vector"; \
-  fi; \
+  modules="java.se,jdk.attach,jdk.charsets,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.dynalink,jdk.httpserver,jdk.jfr,jdk.localedata,jdk.management,jdk.naming.dns,jdk.net,jdk.security.auth,jdk.security.jgss,jdk.unsupported,jdk.xml.dom,jdk.zipfs"; \
+  for optional in jdk.incubator.vector jdk.scripting.nashorn; do \
+    if java --list-modules | grep -q "^${optional}@"; then \
+      modules="${modules},${optional}"; \
+    fi; \
+  done; \
   jlink \
   --add-modules "${modules}" \
   --no-header-files \

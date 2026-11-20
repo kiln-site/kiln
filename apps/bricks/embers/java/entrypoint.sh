@@ -15,23 +15,74 @@ if [[ -n "${installation_marker}" ]]; then
   rm -f -- "${installation_marker}"
 fi
 
-if [[ ! -s "${KILN_ARTIFACT_FILE}" ]]; then
-  temporary=".${KILN_ARTIFACT_FILE}.download"
+installer="${KILN_ARTIFACT_INSTALLER:-}"
+if [[ -n "${installer}" && "${installer}" != forge ]]; then
+  echo "[Kiln Ember] KILN_ARTIFACT_INSTALLER must be empty or forge" >&2
+  exit 64
+fi
+
+download_artifact() {
+  local destination=$1
+  local temporary=".${destination}.download"
   echo "[Kiln Ember] downloading ${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown}"
   if curl --fail --location --no-progress-meter --retry 2 --retry-all-errors \
     --connect-timeout 15 --max-time 300 \
     --output "${temporary}" "${KILN_ARTIFACT_URL}"; then
-    mv -- "${temporary}" "${KILN_ARTIFACT_FILE}"
+    mv -- "${temporary}" "${destination}"
   else
-    status=$?
+    local status=$?
     rm -f -- "${temporary}"
     echo "[Kiln Ember] failed to download ${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown} after 3 attempts. Server startup failed. Swap to a different Brick in Startup, or contact support if this keeps happening." >&2
     exit "${status}"
   fi
-fi
+  if [[ -n "${KILN_ARTIFACT_SHA256:-}" ]]; then
+    printf '%s  %s\n' "${KILN_ARTIFACT_SHA256}" "${destination}" | sha256sum --check --status
+  fi
+}
 
-if [[ -n "${KILN_ARTIFACT_SHA256:-}" ]]; then
-  printf '%s  %s\n' "${KILN_ARTIFACT_SHA256}" "${KILN_ARTIFACT_FILE}" | sha256sum --check --status
+# Forge 1.17 and newer start from the argument file its installer writes.
+forge_arguments_file() {
+  local files=(libraries/net/minecraftforge/forge/*/unix_args.txt)
+  if [[ -f "${files[-1]}" ]]; then
+    printf '%s' "${files[-1]}"
+  fi
+}
+
+if [[ "${installer}" == forge ]]; then
+  # The artifact is Forge's installer, run once to lay the server out.
+  if [[ ! -s "${KILN_ARTIFACT_FILE}" && -z "$(forge_arguments_file)" ]]; then
+    forge_installer=.kiln-forge-installer.jar
+    download_artifact "${forge_installer}"
+    echo "[Kiln Ember] installing ${KILN_IMPLEMENTATION:-forge} ${KILN_VERSION:-unknown}"
+    if ! java -jar "${forge_installer}" --installServer; then
+      rm -f -- "${forge_installer}"
+      echo "[Kiln Ember] the Forge installer failed for ${KILN_VERSION:-unknown}; see ${forge_installer}.log. Server startup failed." >&2
+      exit 1
+    fi
+    # Its start scripts and JVM arguments file are Kiln's to manage here.
+    rm -f -- "${forge_installer}" "${forge_installer}.log" run.sh run.bat user_jvm_args.txt
+    if [[ -z "$(forge_arguments_file)" ]]; then
+      # Before 1.17 the installer leaves a server jar to start instead.
+      forge_jar=""
+      for candidate in forge-*.jar; do
+        if [[ -f "${candidate}" && "${candidate}" != *-installer.jar ]]; then
+          forge_jar=${candidate}
+          break
+        fi
+      done
+      if [[ -z "${forge_jar}" ]]; then
+        echo "[Kiln Ember] the Forge installer left no server to start for ${KILN_VERSION:-unknown}. Server startup failed." >&2
+        exit 1
+      fi
+      mv -- "${forge_jar}" "${KILN_ARTIFACT_FILE}"
+    fi
+  fi
+else
+  if [[ ! -s "${KILN_ARTIFACT_FILE}" ]]; then
+    download_artifact "${KILN_ARTIFACT_FILE}"
+  elif [[ -n "${KILN_ARTIFACT_SHA256:-}" ]]; then
+    printf '%s  %s\n' "${KILN_ARTIFACT_SHA256}" "${KILN_ARTIFACT_FILE}" | sha256sum --check --status
+  fi
 fi
 
 if [[ "${KILN_SERVER_KIND:-minecraft}" == "minecraft" ]]; then
@@ -155,9 +206,17 @@ else
   java_memory_args+=("-XX:MaxRAMPercentage=${KILN_JAVA_MAX_RAM_PERCENTAGE:-75.0}")
 fi
 
+launch_args=(-jar "${KILN_ARTIFACT_FILE}")
+if [[ "${installer}" == forge ]]; then
+  forge_arguments=$(forge_arguments_file)
+  if [[ -n "${forge_arguments}" ]]; then
+    launch_args=("@${forge_arguments}")
+  fi
+fi
+
 echo "[Kiln Ember] starting ${KILN_IMPLEMENTATION:-server} ${KILN_VERSION:-unknown} with Java $(java -version 2>&1 | head -1)"
 exec java \
   "${java_memory_args[@]}" \
   "${extra_java_args[@]}" \
-  -jar "${KILN_ARTIFACT_FILE}" \
+  "${launch_args[@]}" \
   "${server_args[@]}"
