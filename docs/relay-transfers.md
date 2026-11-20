@@ -113,10 +113,22 @@ action.
 Copying needs the source root's download action and the destination
 root's upload action, for the person on Hearth and for Hearth's pairing on
 each Relay; no other Relay action is involved. Game servers, Apps' data,
-and host files can be copied. Databases move through their dumps. Each
-Relay's records are the truth about a transfer, so any Hearth process can
-report one. The process that started a transfer drives it between steps;
+and host files are copied as their files. Each Relay's records are the
+truth about a transfer, so any Hearth process can report one. The process that started a transfer drives it between steps;
 if it stops, the transfer stays where it was until it's started again.
+
+A Relay copies a database (`database:<id>`) as its dump, through the same
+steps. Packing dumps it, compressed, as a backup of it does, holding what a
+backup's read holds; installing runs that dump into the database the pull
+names, as restoring a backup into another database does, holding that
+database whole. It is copied whole, never by path, and both databases must
+be running. A dump of another engine's family is refused before any of it
+is imported, and an engine Kiln can't dump (Redis, Valkey) can't be
+copied. A Relay that restarts while a dump is being imported fails the
+pull, as it does one that was installing files, since the database may
+hold part of it. `transfer.space` reports a database's size on disk, which
+is more than its dump takes. Hearth doesn't ask for this yet: its preflight
+still refuses a database root.
 
 `preflightRelayTransfer` lists what would stop a copy and what fixes it:
 an offline or outdated Relay, a database root, or a pairing that can't

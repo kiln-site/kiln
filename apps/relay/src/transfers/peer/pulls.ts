@@ -264,11 +264,7 @@ export class TransferPulls {
       )
       yield* options.lanes.run(
         { label: "transfer.pull.install", locks: target.installLocks },
-        target.filesystem.installTransferArchive(
-          target.root,
-          record.pull.target.path,
-          this.#partPath(transferId)
-        )
+        target.install(record.pull.target.path, this.#partPath(transferId))
       )
       yield* this.#removePart(transferId)
       yield* this.#update(transferId, { error: null, state: "completed" })

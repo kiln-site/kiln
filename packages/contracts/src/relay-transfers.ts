@@ -1,10 +1,11 @@
 /**
- * Transfers between Relays. Hearth asks the source Relay to pack files
- * under one of its file roots into an artifact, signs a grant naming that
- * artifact and the destination Relay, and asks the destination to pull it.
- * The destination fetches the artifact straight from the source with Range
- * requests, so an interrupted pull resumes, checks its SHA-256 against the
- * grant, and installs it. Hearth never carries the bytes.
+ * Transfers between Relays. Hearth asks the source Relay to pack one of its
+ * roots into an artifact, signs a grant naming that artifact and the
+ * destination Relay, and asks the destination to pull it. The destination
+ * fetches the artifact straight from the source with Range requests, so an
+ * interrupted pull resumes, checks its SHA-256 against the grant, and
+ * installs it. A file root is packed as an archive of its files, and a
+ * database as its dump. Hearth never carries the bytes.
  */
 import { Schema } from "effect"
 
@@ -71,9 +72,15 @@ export function relayPeerTransferProofTranscript(input: {
 /** `transfer.source.prepare`: pack files under a root into an artifact. */
 export const RelayTransferSourcePrepareSchema = Schema.Struct({
   transferId: TransferId,
-  /** A file root: a game server's ID, `app:<appId>`, or the Relay's own. */
+  /**
+   * A file root (a game server's ID, `app:<appId>`, or the Relay's own), or
+   * a database, `database:<databaseId>`.
+   */
   rootId: Schema.String.check(Schema.isMaxLength(128)),
-  /** Paths under the root to pack; none packs the whole root. */
+  /**
+   * Paths under the root to pack; none packs the whole root. A database is
+   * always packed whole.
+   */
   paths: Schema.Array(RelativePath).check(Schema.isMaxLength(5_000)),
 })
 export type RelayTransferSourcePrepare =
@@ -127,7 +134,7 @@ export const RelayTransferPullStartSchema = Schema.Struct({
     rootId: Schema.String.check(Schema.isMaxLength(128)),
     /**
      * The folder to install into, which must be missing or empty; empty
-     * for the root itself.
+     * for the root itself, as it must be for a database.
      */
     path: RelativePath,
   }),

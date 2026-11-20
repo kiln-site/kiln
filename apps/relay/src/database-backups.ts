@@ -34,14 +34,46 @@ export async function createCompressedDatabaseBackup(
   progress: DatabaseBackupProgress,
   signal: AbortSignal = new AbortController().signal
 ): Promise<BackupArchiveCreateTaskResult> {
+  const dump = await dumpCompressedDatabase(
+    databases,
+    input.target.id,
+    destination,
+    { maxBytes: input.maxBytes, progress, signal }
+  )
+  return {
+    ...dump,
+    filename: backupArtifactFilename(input.backupId, "database_dump"),
+    warnings: [],
+  }
+}
+
+/**
+ * Dumps a running database, compressed, into `destination`, a file not
+ * there yet, and reports its size and SHA-256. A dump that fails leaves no
+ * file. A backup of a database is this, and so is what another Relay
+ * fetches to copy one.
+ */
+export async function dumpCompressedDatabase(
+  databases: DatabaseDriver,
+  databaseId: string,
+  destination: string,
+  options: {
+    /** The most the stored dump may take; unlimited when null or left out. */
+    readonly maxBytes?: number | null
+    readonly progress?: DatabaseBackupProgress
+    readonly signal?: AbortSignal
+  } = {}
+): Promise<{ bytes: number; checksumSha256: string }> {
+  const signal = options.signal ?? new AbortController().signal
+  const { progress } = options
   signal.throwIfAborted()
-  const database = await databases.backupTarget(input.target.id)
+  const database = await databases.backupTarget(databaseId)
   const child = await startDatabaseClient(databases, database, "export")
   const stderr = collectProcessErrors(child)
   const sourceMeter = byteMeter((bytes) => {
-    progress.completed = bytes
+    if (progress) progress.completed = bytes
   })
-  const storedLimit = byteMeter(undefined, input.maxBytes)
+  const storedLimit = byteMeter(undefined, options.maxBytes)
   const writing = pipeline(
     child.stdout,
     sourceMeter,
@@ -74,12 +106,7 @@ export async function createCompressedDatabaseBackup(
   for await (const chunk of createReadStream(destination, { signal })) {
     digest.update(chunk)
   }
-  return {
-    bytes: metadata.size,
-    checksumSha256: digest.digest("hex"),
-    filename: backupArtifactFilename(input.backupId, "database_dump"),
-    warnings: [],
-  }
+  return { bytes: metadata.size, checksumSha256: digest.digest("hex") }
 }
 
 const DUMP_HEADER_BYTES = 64 * 1024

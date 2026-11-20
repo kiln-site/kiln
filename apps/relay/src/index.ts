@@ -156,7 +156,11 @@ import { TransferGate } from "./transfers/gate.js"
 import { peerTransferRoute } from "./transfers/peer/route.js"
 import { TransferPulls } from "./transfers/peer/pulls.js"
 import { transferSpace } from "./transfers/peer/space.js"
-import type { TransferRootResolver } from "./transfers/peer/roots.js"
+import {
+  databaseTransferRoot,
+  fileTransferRoot,
+  type TransferRootResolver,
+} from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
@@ -1054,17 +1058,20 @@ const backupManager = await runRelayEffect(
   })
 )
 const backupFiber = forkRelayEffect("relay.backups.worker", backupManager.run())
-// Files copied between Relays: artifacts this Relay packs for others, and
-// pulls it makes from them. Game servers, Apps' data, and the host's files
-// can be transferred; databases move through their dumps.
+// What is copied between Relays: artifacts this Relay packs for others, and
+// pulls it makes from them. A game server's, an App's and the host's files
+// are packed as they are; a database is packed as its dump.
 const transferRoot: TransferRootResolver = async (rootId) => {
+  const locks = (lockedId: string) => ({
+    installLocks: transferInstallLocks(lockedId),
+    packLocks: transferPackLocks(lockedId),
+  })
   if (isRelayFileRoot(rootId)) {
-    return {
-      filesystem: hostFilesystem,
-      installLocks: transferInstallLocks(rootId),
-      packLocks: transferPackLocks(rootId),
-      root: await hostFileRoot(rootId),
-    }
+    return fileTransferRoot(
+      hostFilesystem,
+      await hostFileRoot(rootId),
+      locks(rootId)
+    )
   }
   // A volume moves with the App that owns it, or stays with its Relay.
   if (appVolumeFromFileRoot(rootId)) {
@@ -1072,23 +1079,18 @@ const transferRoot: TransferRootResolver = async (rootId) => {
   }
   const appId = appIdFromFileRoot(rootId)
   if (appId) {
-    return {
-      filesystem: appFilesystem,
-      installLocks: transferInstallLocks(rootId),
-      packLocks: transferPackLocks(rootId),
-      root: await apps.fileRoot(appId),
-    }
+    return fileTransferRoot(
+      appFilesystem,
+      await apps.fileRoot(appId),
+      locks(rootId)
+    )
   }
-  if (databaseIdFromFileRoot(rootId) !== null) {
-    throw new Error("Databases move between Relays through their dumps")
+  const databaseId = databaseIdFromFileRoot(rootId)
+  if (databaseId !== null) {
+    return databaseTransferRoot(databases, databaseId, locks(rootId))
   }
   const root = await requiredFileRoot(rootId)
-  return {
-    filesystem,
-    installLocks: transferInstallLocks(root.id),
-    packLocks: transferPackLocks(root.id),
-    root,
-  }
+  return fileTransferRoot(filesystem, root, locks(root.id))
 }
 const transferSources = new TransferSources({
   directory: join(config.dataDirectory, "transfers", "outgoing"),
@@ -3356,7 +3358,7 @@ async function executeControlRequest(
               : yield* Effect.tryPromise(() => transferRoot(input.rootId ?? ""))
           return yield* transferSpace({
             dataDirectory: config.dataDirectory,
-            rootBytes: target ? target.filesystem.rootBytes(target.root) : null,
+            rootBytes: target ? target.bytes : null,
             rootsDirectory: config.rootDirectory,
           })
         })

@@ -174,11 +174,7 @@ export class TransferSources {
       )
       const packed = yield* options.lanes.run(
         { label: "transfer.source.pack", locks: target.packLocks },
-        target.filesystem.packTransferArchive(
-          target.root,
-          paths,
-          this.#artifactPath(record.transferId)
-        )
+        target.pack(paths, this.#artifactPath(record.transferId))
       )
       yield* Effect.annotateCurrentSpan({
         "kiln.transfer.bytes": packed.size,
