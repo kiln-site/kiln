@@ -71,6 +71,7 @@ import { kilnInstallationId } from "@/effect/installation"
 import { kilnPublicUrl } from "@/lib/environment"
 import {
   cancelCreateForDelete,
+  carryOutBackupDelete,
   dispatchBackupTask,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
@@ -346,15 +347,22 @@ export async function deleteBackupHandler(
   if (reservation.kind === "removed") {
     return { forgotten: false as const, relayAccepted: true }
   }
-  const dispatched = await Promise.allSettled([
-    reservation.kind === "waiting"
-      ? cancelCreateForDelete(relay, reservation.createTaskId, user.id)
-      : dispatchBackupTask(relay, reservation.dispatch, user.id),
-  ])
-  return {
-    forgotten: false as const,
-    relayAccepted: dispatched[0]?.status === "fulfilled",
+  // Still being made: its create is asked to stop, and the delete follows
+  // it on the Relay.
+  if (reservation.kind === "waiting") {
+    const [stopped] = await Promise.allSettled([
+      cancelCreateForDelete(relay, reservation.createTaskId, user.id),
+    ])
+    return {
+      forgotten: false as const,
+      relayAccepted: stopped.status === "fulfilled",
+    }
   }
+  const carried = await carryOutBackupDelete(relay, reservation, {
+    subject: user.id,
+  })
+  if (carried.kept) throw new Error(carried.kept)
+  return { forgotten: false as const, relayAccepted: carried.sent }
 }
 
 export async function renameBackupHandler(

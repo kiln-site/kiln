@@ -1,4 +1,4 @@
-import type { Effect } from "effect"
+import { Data, type Effect } from "effect"
 
 import type {
   BackupCreateTaskInput,
@@ -118,7 +118,25 @@ export type BackupDestinationTaskDriver<
     requireEnabled: boolean
     storageId: string | null
   }) => Effect.Effect<ResticRepositoryLocation, unknown, Database>
+  /**
+   * Deletes a stored copy of a full backup, where Hearth holds what opens
+   * the destination, as a bucket's keys. Absent where only the copy's Relay
+   * can reach it, as on its own disk.
+   */
+  deleteStoredFull?: (
+    input: StoredBackupDestination
+  ) => Effect.Effect<void, BackupCopyKept, Database>
 }
+
+/**
+ * A destination kept a copy Hearth asked it to delete. `answered` tells a
+ * destination that refused this copy, and may still give up another, from
+ * one that never answered, which isn't worth asking again straight away.
+ */
+export class BackupCopyKept extends Data.TaggedError("BackupCopyKept")<{
+  readonly answered: boolean
+  readonly reason: string
+}> {}
 
 export function defineBackupDestination<
   const TDefinition extends BackupDestinationDefinition,

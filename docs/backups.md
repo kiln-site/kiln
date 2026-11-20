@@ -179,7 +179,10 @@ with one signed request for one object, good for ten minutes, or a refusal
 - it is written only while it has yet to be stored;
 - it is read only once stored, and while a restore of its backup is under
   way, so a Relay can't read back old backups whenever it likes;
-- it is deleted only while Hearth is deleting its backup;
+- it is deleted only while Hearth is deleting its backup. Hearth deletes a
+  stored copy itself, so a Relay asks only for a copy that was never
+  recorded as stored, or for a backup that was still being made when its
+  delete was asked for (see [Who deletes a copy](#who-deletes-a-copy));
 - its destination can still be used that way: enabled and not being deleted
   for an upload, and one being deleted still gives up what a restore reads.
 
@@ -431,6 +434,53 @@ holds it until that ends.
 A delete that doesn't finish leaves each artifact as valid as it was: one
 being deleted is available again, a failed one stays failed, and the backup
 follows its artifacts.
+
+### Who deletes a copy
+
+Hearth holds every bucket's keys, so it deletes a stored copy in a bucket
+itself. Two things keep that safe, and neither is new:
+
+- **A stored copy is never written again.** Hearth signs an upload only for
+  a copy that has yet to be stored, so once a copy is `available` nothing
+  can cross its delete.
+- **One operation at a time holds a backup.** A delete from the panel, the
+  CLI or retention holds the backup's lane (`backup:<id>`) while Hearth
+  deletes, so a second delete, or a restore, waits for it or is turned away.
+
+So a delete goes one of two ways, decided once, when it is first asked for
+(`hearthStartsDeleteSql`):
+
+- **A backup nothing is still making**, which is nearly every delete:
+  the operation deletes its stored copies in buckets one at a time,
+  recording what each bucket said as it answers, and only then sends its
+  Relay what is left (`carryOutBackupDelete`): a copy on the Relay's own
+  disk, or one never recorded as stored, which the Relay deletes with a
+  signed request as below. With nothing left the delete ends there, so a
+  backup kept only in a bucket is deleted whether or not its Relay is
+  connected. A bucket that keeps a copy ends the delete with what it said,
+  before the Relay is sent anything. Copies other buckets already gave up
+  are gone and recorded so; every other copy stays, and deleting the
+  backup again tries again.
+- **A backup still being made**: the whole delete is its Relay's, bucket
+  copies too, as it waits on the create above. Only the Relay's queue knows
+  when whatever might still write a copy has ended, and it runs the delete
+  after that, asking Hearth for one signed request for each bucket copy
+  (`backup.storage.access`). It stays the Relay's even if the create
+  finished first.
+
+Until Hearth has recorded what the buckets said, the delete is no Relay's:
+reconciliation doesn't send one that still has a stored bucket copy to
+delete. So only an operation holding the backup is ever at its bucket
+copies. One Hearth stopped in the middle of is found by the same rule
+(`interruptedBackupDeletesEffect`) and taken up again by the retention
+sweep, holding the backup as any delete does; a bucket answers a second
+delete of an object as it did the first.
+
+A destination that doesn't answer isn't asked again by retention in the
+same sweep, so one that is down costs a sweep one wait rather than one for
+each backup it holds; those deletes fail and the next sweep tries them
+again. A delete from the CLI is turned away, rather than kept waiting,
+while something else holds the backup.
 
 Every queued task is sent to its Relay on its own, so one Hearth can't send
 never holds up the rest. A task whose catalog record can't be made into a

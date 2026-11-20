@@ -2232,6 +2232,10 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
                OR (task.task_kind = 'delete'
                  AND dependency.status IN ('failed', 'cancelled')))
         ))
+        -- A delete with copies Hearth deletes itself isn't a Relay's yet:
+        -- the operation deleting the backup sends what is left once those
+        -- are gone (recordStoredCopyDeleteEffect).
+        AND NOT (${hearthStartsDeleteSql("task", "backup")})
       ORDER BY task.created_at ASC, task.id ASC`,
     [relayId]
   )
@@ -2626,14 +2630,53 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
 )
 
 /**
- * What deleting a backup does next: send its delete to the Relay, nothing
- * at all when only the catalog record held it, or wait for the create still
- * making it to end first.
+ * What deleting a backup does next: carry out its delete, nothing at all
+ * when only the catalog record held it, or wait for the create still making
+ * it to end first.
+ *
+ * `stored` are the copies Hearth deletes itself before its Relay is sent
+ * the rest (`hearthStartsDeleteSql`); none for a delete that is the Relay's
+ * from the start.
  */
 export type BackupDeleteReservation =
-  | { kind: "dispatch"; dispatch: BackupDeleteDispatch }
+  | {
+      kind: "dispatch"
+      dispatch: BackupDeleteDispatch
+      stored: Array<BackupDispatchArtifact>
+    }
   | { kind: "removed" }
   | { kind: "waiting"; createTaskId: string }
+
+/**
+ * Who starts a delete, as SQL true of the deletes Hearth starts.
+ *
+ * A stored copy of a full backup in a destination Hearth holds the keys of,
+ * a bucket, is Hearth's to delete: it is never written again
+ * (`grantBackupStorageAccessEffect`), so nothing can cross its delete, and
+ * no Relay is needed for it. Hearth deletes those first, in the operation
+ * that holds the backup, and only then is its Relay sent the rest. So while
+ * one is left the delete is no Relay's, and one that an operation didn't
+ * see through is found by this too (`interruptedBackupDeletesEffect`).
+ *
+ * A delete asked for while its backup was still being made is the Relay's
+ * throughout, bucket copies and all: only the Relay's queue knows when
+ * whatever might still write a copy has ended. It waited on that create
+ * (`depends_on_task_id`), which is how the two are told apart for good. So
+ * is one a Relay already has (`relay_updated_at_ms`).
+ */
+const hearthStartsDeleteSql = (task: string, backup: string) =>
+  `${task}.task_kind = 'delete' AND ${task}.depends_on_task_id IS NULL
+   AND ${task}.relay_updated_at_ms IS NULL
+   AND ${backup}.backup_mode = 'full'
+   AND EXISTS (
+     SELECT 1 FROM ${databaseTable("backup_artifact")} copy
+      WHERE copy.backup_id = ${backup}.id
+        AND copy.status = 'available'
+        AND copy.storage_id IS NOT NULL)`
+
+// The same, of one copy among a delete's, read with it.
+const hearthDeletesCopy = (artifact: BackupArtifactRow) =>
+  artifact.status === "available" && artifact.storage_id !== null
 
 interface DeletableBackupRow extends BackupRow {
   repository_present: number | boolean
@@ -2643,6 +2686,7 @@ interface BackupTaskStateRow extends RowDataPacket {
   depends_on_task_id: string | null
   dependency_status: BackupTaskStatus | null
   id: string
+  relay_updated_at_ms: number | string | null
   status: BackupTaskStatus
   task_kind: BackupRow["task_kind"]
 }
@@ -2729,6 +2773,7 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
         }
         const tasks = yield* transaction.queryRows<BackupTaskStateRow>(
           `SELECT task.id, task.task_kind, task.status, task.depends_on_task_id,
+                  task.relay_updated_at_ms,
                   dependency.status AS dependency_status
              FROM ${databaseTable("backup_task")} task
              LEFT JOIN ${databaseTable("backup_task")} dependency
@@ -2762,15 +2807,19 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
             reason: "Wait for the copy of this backup to finish",
           })
         }
-        yield* refuseIfFinalDeletionInProgress(transaction, {
-          operation: "backup.delete",
-          relayId: backup.relay_id,
-          targetId: backup.target_id,
-          targetKind: backup.target_kind,
-        })
         const pending = [...tasks]
           .reverse()
           .find((task) => task.task_kind === "delete" && active(task))
+        // A delete already accepted goes on, whatever has begun since: it
+        // is taken up again here after Hearth stops in the middle of one.
+        if (!pending) {
+          yield* refuseIfFinalDeletionInProgress(transaction, {
+            operation: "backup.delete",
+            relayId: backup.relay_id,
+            targetId: backup.target_id,
+            targetKind: backup.target_kind,
+          })
+        }
         // Without its repository Hearth has no password to read or forget
         // the snapshot with, and never will: the record is all that's left.
         if (
@@ -2897,11 +2946,167 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
             taskId,
           },
           kind: "dispatch",
+          stored:
+            backup.backup_mode === "full" &&
+            !pending?.depends_on_task_id &&
+            (pending?.relay_updated_at_ms ?? null) === null
+              ? artifacts.filter(hearthDeletesCopy).map(dispatchArtifact)
+              : [],
         } satisfies BackupDeleteReservation
       })
     )
   }
 )
+
+/** How deleting one copy went, whoever deleted it. */
+export interface BackupCopyDeleteOutcome {
+  artifactId: string
+  error: string | null
+  errorCode: string | null
+  status: "deleted" | "failed"
+}
+
+/**
+ * Records what a destination said of a stored copy Hearth deleted itself,
+ * for the operation that holds the backup, and says where that leaves the
+ * delete. Each copy is recorded as it is answered, so a copy that is gone
+ * is never listed again, whatever becomes of the rest:
+ *
+ * - `failed`: the destination kept the copy. The delete ends there, with
+ *   what it said, and what is left of the backup is as valid as it was:
+ *   nothing is sent to its Relay, so a copy on the Relay's disk stays too;
+ * - `deleted`: no copy is left anywhere. The delete ends and the backup is
+ *   gone, whether or not its Relay is connected;
+ * - `open`: copies are left. The delete stays queued, and once none of
+ *   them is Hearth's to delete it is sent to the Relay like any other.
+ *
+ * While a stored copy of Hearth's is left no Relay is sent the delete
+ * (`hearthStartsDeleteSql`), so it is always Hearth that ends one here.
+ */
+export const recordStoredCopyDeleteEffect = Effect.fn(
+  "backups.recordStoredCopyDelete"
+)(function* (input: {
+  backupId: string
+  outcome: BackupCopyDeleteOutcome
+  taskId: string
+}) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction(
+    "backup_record_stored_copy_delete",
+    (transaction) =>
+      Effect.gen(function* () {
+        const [task] = yield* transaction.queryRows<
+          RowDataPacket & {
+            backup_status: BackupRow["status"]
+            status: BackupTaskStatus
+          }
+        >(
+          `SELECT task.status, backup.status AS backup_status
+             FROM ${databaseTable("backup_task")} task
+             JOIN ${databaseTable("backup")} backup
+               ON backup.id = task.backup_id
+            WHERE task.id = ? AND task.backup_id = ?
+              AND task.task_kind = 'delete'
+            FOR UPDATE`,
+          [input.taskId, input.backupId]
+        )
+        // Ended some other way meanwhile, as when its Relay was forgotten.
+        if (
+          !task ||
+          task.status !== "queued" ||
+          task.backup_status !== "deleting"
+        ) {
+          return "unchanged" as const
+        }
+        yield* applyDeleteOutcome(transaction, {
+          at: now,
+          backupId: input.backupId,
+          now,
+          outcome: input.outcome,
+        })
+        const kept = input.outcome.status === "failed" ? input.outcome : null
+        if (kept) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup_task")}
+                SET status = 'failed', error = ?, error_code = ?,
+                    started_at = COALESCE(started_at, ?), finished_at = ?,
+                    updated_at = ?
+              WHERE id = ?`,
+            [
+              kept.error?.slice(0, 4_096) ?? null,
+              kept.errorCode,
+              now,
+              now,
+              now,
+              input.taskId,
+            ]
+          )
+          yield* restoreStatusAfterFailedDelete(transaction, {
+            backupId: input.backupId,
+            code: kept.errorCode,
+            now,
+            reason: kept.error,
+          })
+          return "failed" as const
+        }
+        const [left] = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("backup_artifact")}
+            WHERE backup_id = ? AND status <> 'deleted'
+            LIMIT 1`,
+          [input.backupId]
+        )
+        if (left) return "open" as const
+        yield* removeBackupRecord(transaction, {
+          backupId: input.backupId,
+          now,
+          requestedBy: null,
+          taskId: input.taskId,
+        })
+        return "deleted" as const
+      })
+  )
+})
+
+/**
+ * Deletes Hearth started and didn't see through, as when it stopped in the
+ * middle of one: queued, and still with a stored copy that is Hearth's to
+ * delete. Each is carried out again as deleting the backup again would, by
+ * whoever takes hold of the backup, which waits for an operation that is
+ * still at it. So one read without holding its backup may be a delete
+ * still under way, and is asked of again once the backup is held
+ * (`backupId`). Only those of the Relays named are read, so ones on a
+ * Relay that is left alone never crowd out the rest.
+ */
+export const interruptedBackupDeletesEffect = Effect.fn(
+  "backups.interruptedDeletes"
+)(function* (input: {
+  backupId?: string
+  limit: number
+  relayIds: ReadonlyArray<string>
+}) {
+  if (input.relayIds.length === 0) return []
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { backup_id: string; relay_id: string }
+  >(
+    "backup_interrupted_deletes",
+    `SELECT backup.id AS backup_id, backup.relay_id
+       FROM ${databaseTable("backup_task")} task
+       JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+      WHERE task.status = 'queued' AND backup.status = 'deleting'
+        AND ${hearthStartsDeleteSql("task", "backup")}
+        AND backup.relay_id IN (${input.relayIds.map(() => "?").join(", ")})
+        ${input.backupId === undefined ? "" : "AND backup.id = ?"}
+      ORDER BY task.created_at ASC, task.id ASC
+      LIMIT ${Math.trunc(input.limit)}`,
+    [...input.relayIds, ...(input.backupId === undefined ? [] : [input.backupId])]
+  )
+  return rows.map((row) => ({
+    backupId: row.backup_id,
+    relayId: row.relay_id,
+  }))
+})
 
 // Deletes a backup's record and everything it lists, with nothing to ask a
 // Relay: its delete task, the one already queued or a new one, ends here.

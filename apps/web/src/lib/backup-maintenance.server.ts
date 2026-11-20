@@ -7,12 +7,18 @@ import {
   expiredBackupsEffect,
   scheduledBackupRelayIdsEffect,
 } from "@/effect/backup-retention"
-import { reserveBackupDeleteEffect } from "@/effect/backups"
+import {
+  interruptedBackupDeletesEffect,
+  reserveBackupDeleteEffect,
+} from "@/effect/backups"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
 import { backupKey } from "@/lib/backup-lanes"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
-import { listPersistedRelaysEffect } from "@/lib/relay-registry"
+import {
+  listPersistedRelaysEffect,
+  type PersistedRelay,
+} from "@/lib/relay-registry"
 import { outsideOperation } from "@/operations/current"
 import { exclusive } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
@@ -64,16 +70,77 @@ const catalogScheduledBackups = Effect.fn("backupMaintenance.catalog")(
   }
 )
 
+// Deletes one backup as Hearth's own work, holding it as a person deleting
+// or restoring it does, so it waits for them rather than racing them.
+// Whether a delete started: one no longer deletable, such as mid-restore,
+// doesn't, and a later sweep looks again.
+const deleteBackup = (
+  name: "backup.delete.resume" | "backup.retention.delete",
+  relay: PersistedRelay,
+  backupId: string,
+  unanswering?: Set<string>
+) =>
+  inLanes(
+    name,
+    "Deleting this backup",
+    [exclusive(backupKey(backupId))],
+    Effect.gen(function* () {
+      // Taken up again only if it still wants it: the operation it waited
+      // for here may have seen the delete through, or ended it.
+      if (name === "backup.delete.resume") {
+        const [interrupted] = yield* interruptedBackupDeletesEffect({
+          backupId,
+          limit: 1,
+          relayIds: [relay.id],
+        })
+        if (!interrupted) return false
+      }
+      const reservation = yield* reserveBackupDeleteEffect({
+        backupId,
+        requestedBy: null,
+        taskId: randomUUID(),
+      })
+      publishBackupChange(relay.id, backupId)
+      // Neither expires a backup still being made, so none waits on a
+      // create.
+      if (reservation.kind === "dispatch") {
+        const { carryOutBackupDelete } = yield* promiseEffect(
+          () => import("@/lib/backup-reconciliation")
+        )
+        yield* promiseEffect(() =>
+          carryOutBackupDelete(relay, reservation, { unanswering })
+        )
+      }
+      return true
+    })
+  ).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`Couldn't delete backup ${backupId} yet`, cause).pipe(
+        Effect.as(false)
+      )
+    )
+  )
+
 const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
   function* () {
-    const expired = yield* expiredBackupsEffect(yield* Clock.currentTimeMillis)
-    if (expired.length === 0) return
     const relays = new Map(
       (yield* listPersistedRelaysEffect()).map((relay) => [relay.id, relay])
     )
-    const { dispatchBackupTask } = yield* promiseEffect(
-      () => import("@/lib/backup-reconciliation")
-    )
+    // Deletes Hearth stopped in the middle of, before more are started.
+    const interrupted = yield* interruptedBackupDeletesEffect({
+      limit: MAX_DELETES_PER_SWEEP,
+      relayIds: [...relays.values()].flatMap((relay) =>
+        relay.enabled ? [relay.id] : []
+      ),
+    })
+    for (const backup of interrupted) {
+      const relay = relays.get(backup.relayId)
+      if (relay) yield* deleteBackup("backup.delete.resume", relay, backup.backupId)
+    }
+    // Destinations that didn't answer in this sweep, which it doesn't ask
+    // again: one that is down costs it one wait.
+    const unanswering = new Set<string>()
+    const expired = yield* expiredBackupsEffect(yield* Clock.currentTimeMillis)
     // Only deletes that start count, so ones a disabled Relay or a restore
     // holds up never crowd out the rest.
     let started = 0
@@ -81,38 +148,16 @@ const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
       if (started >= MAX_DELETES_PER_SWEEP) break
       const relay = relays.get(backup.relayId)
       if (!relay?.enabled) continue
-      // Holding the backup, as a person deleting or restoring it does, so
-      // retention waits for them rather than racing them.
-      yield* inLanes(
-        "backup.retention.delete",
-        "Deleting this backup",
-        [exclusive(backupKey(backup.backupId))],
-        Effect.gen(function* () {
-          // Fails when it's no longer deletable, such as mid-restore; a later
-          // sweep looks again.
-          const reservation = yield* reserveBackupDeleteEffect({
-            backupId: backup.backupId,
-            requestedBy: null,
-            taskId: randomUUID(),
-          })
-          started += 1
-          publishBackupChange(relay.id, backup.backupId)
-          // Undelivered, the delete waits queued; the Relay's next
-          // reconciliation sends it. Retention only expires finished
-          // backups, so none waits on a create.
-          if (reservation.kind === "dispatch")
-            yield* promiseEffect(() =>
-              dispatchBackupTask(relay, reservation.dispatch)
-            )
-        })
-      ).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `Retention couldn't delete backup ${backup.backupId} yet`,
-            cause
-          )
+      if (
+        yield* deleteBackup(
+          "backup.retention.delete",
+          relay,
+          backup.backupId,
+          unanswering
         )
-      )
+      ) {
+        started += 1
+      }
     }
   }
 )

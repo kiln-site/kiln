@@ -86,11 +86,15 @@ import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
+import { backupKey } from "@/lib/backup-lanes"
 import {
+  carryOutBackupDelete,
   dispatchBackupTask,
   cancelCreateForDelete,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
+import { exclusive } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import {
   instanceDeletionNameEffect,
   requireDeleteConfirmationEffect,
@@ -639,40 +643,57 @@ export const deleteCliBackupEffect = Effect.fn("cli.api.backups.delete")(
       "backup.delete"
     )
     const relay = yield* requiredRelay(backup.relayId)
-    const reservation = yield* mapCliBackupFailure(
-      reserveBackupDeleteEffect({
-        backupId: backup.id,
-        requestedBy: principal.user.id,
-        taskId: randomUUID(),
-      }),
-      "Hearth could not reserve backup deletion."
-    )
-    yield* Effect.sync(() => publishBackupChange(relay.id, backup.id))
-    // Only the record went: another backup still shares the archive, or
-    // nothing can read what it named any more. A backup still being made
-    // is deleted once its create, asked to stop, has ended.
-    const relayAccepted =
-      reservation.kind === "removed"
-        ? true
-        : reservation.kind === "waiting"
-          ? yield* Effect.tryPromise(() =>
-              cancelCreateForDelete(
-                relay,
-                reservation.createTaskId,
-                cliRelaySubject(principal)
-              )
+    const subject = cliRelaySubject(principal)
+    // Holding the backup, as deleting it in the panel does, so two deletes
+    // of it never run at once. Turned away rather than kept waiting when
+    // something else holds it: what was just checked of the person asking
+    // is still so when it runs.
+    const deleted = yield* mapCliBackupFailure(
+      inLanes(
+        "backup.delete.cli",
+        "Deleting this backup",
+        [exclusive(backupKey(backup.id))],
+        Effect.gen(function* () {
+          const reservation = yield* reserveBackupDeleteEffect({
+            backupId: backup.id,
+            requestedBy: principal.user.id,
+            taskId: randomUUID(),
+          })
+          publishBackupChange(relay.id, backup.id)
+          // Only the record went: another backup still shares the archive,
+          // or nothing can read what it named any more.
+          if (reservation.kind === "removed") {
+            return { kept: null, sent: true }
+          }
+          // Still being made: deleted once its create, asked to stop, has
+          // ended.
+          if (reservation.kind === "waiting") {
+            const sent = yield* Effect.tryPromise(() =>
+              cancelCreateForDelete(relay, reservation.createTaskId, subject)
             ).pipe(
               Effect.as(true),
               Effect.catch(() => Effect.succeed(false))
             )
-          : yield* enqueueCliBackupEffect(
-              principal,
-              relay,
-              reservation.dispatch
-            )
+            return { kept: null, sent }
+          }
+          return yield* Effect.tryPromise(() =>
+            carryOutBackupDelete(relay, reservation, { subject })
+          )
+        }),
+        { onlyIfFree: true }
+      ),
+      "Hearth could not delete the backup."
+    )
+    if (deleted.kept) {
+      return yield* CliAccessError.make({
+        code: "conflict",
+        message: deleted.kept,
+        retryable: false,
+      })
+    }
     return cliDeleteBackupResponseSchema.parse({
       backupId: backup.id,
-      relayAccepted,
+      relayAccepted: deleted.sent,
     })
   }
 )

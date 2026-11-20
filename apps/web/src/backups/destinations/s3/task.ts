@@ -3,9 +3,11 @@ import { Effect } from "effect"
 import type { ResticRepositoryLocation } from "@workspace/contracts"
 
 import {
+  BackupCopyKept,
   invalidBackupDestination,
   type BackupDestinationTaskDriver,
 } from "../types"
+import { deleteS3BackupObject, s3Failure } from "./client"
 import { loadBackupStorageCredentialEffect } from "./storage"
 
 // A task names the copy and nothing in the bucket: no key, path or signed
@@ -32,6 +34,21 @@ export const s3BackupDestinationTaskDriver = {
         kind: "s3" as const,
       }
     }),
+  deleteStoredFull: (input) =>
+    Effect.gen(function* () {
+      const storage = yield* storedCopy(input, false)
+      yield* deleteS3BackupObject(storage, input.objectKey ?? "")
+    }).pipe(
+      Effect.mapError((cause) => {
+        const failure = s3Failure(cause)
+        return new BackupCopyKept({
+          answered: failure?.answered ?? true,
+          reason:
+            failure?.said ??
+            (cause instanceof Error ? cause.message : String(cause)),
+        })
+      })
+    ),
   prepareFullRestore: (input) =>
     Effect.gen(function* () {
       yield* storedCopy(input, false, true)

@@ -56,6 +56,17 @@ export function prepareFullBackupDeleteDestination(
     : backupDestinationTaskDrivers.s3.prepareFullDelete(input)
 }
 
+/**
+ * Deletes a stored copy of a full backup that Hearth can reach itself, as
+ * one in a bucket, whose keys it holds. Null for a copy only its Relay can
+ * reach, on the Relay's own disk.
+ */
+export function deleteStoredFullBackupCopy(input: StoredBackupDestination) {
+  return input.storageId === null
+    ? null
+    : backupDestinationTaskDrivers.s3.deleteStoredFull(input)
+}
+
 export function prepareFullBackupRestoreSource(
   input: StoredBackupDestination & {
     bytes: number

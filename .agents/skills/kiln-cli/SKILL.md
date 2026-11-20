@@ -318,8 +318,10 @@ UUID:
 kiln backup delete <backup-id> --confirm <backup-id>
 ```
 
-Create, restore, and delete require a full-access CLI credential and the
-matching backup permission. Relay owns the durable single-worker queue, so a
+A delete fails with the destination's reason when a bucket won't give up
+the backup's copy, and the backup is kept; it is refused while another
+change to the same backup is under way. Create, restore, and delete require
+a full-access CLI credential and the matching backup permission. Relay owns the durable single-worker queue, so a
 successful reservation can report that it will resume after Relay reconnects.
 Platform restores remain an offline Hearth operation and are not exposed as a
 CLI restore command.

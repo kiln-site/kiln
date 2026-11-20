@@ -16,7 +16,7 @@ import {
 } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { NodeHttpHandler } from "@smithy/node-http-handler"
-import { Effect, Result, Schedule } from "effect"
+import { Effect, Predicate, Result, Schedule } from "effect"
 
 import {
   backupArtifactFilename,
@@ -459,6 +459,30 @@ export function signS3BackupAccess(
   )
 }
 
+/**
+ * Deletes one object of a bucket, as Hearth does for a stored copy of a
+ * backup: it holds the bucket's keys, so no Relay is asked to. A bucket
+ * answers a delete of an object that isn't there as it does one that was,
+ * so deleting again after a lost answer succeeds. Tried no more than the
+ * client itself tries a request: a delete that failed is asked for again.
+ */
+export function deleteS3BackupObject(
+  credential: S3BackupCredential,
+  objectKey: string
+) {
+  return withS3Client(credential, (client) =>
+    s3Request("storage.deleteObject", (signal) =>
+      client.send(
+        new DeleteObjectCommand({
+          Bucket: credential.bucket,
+          Key: objectKey,
+        }),
+        { abortSignal: signal }
+      )
+    ).pipe(Effect.asVoid)
+  )
+}
+
 export function signS3BackupDownload(
   credential: S3BackupCredential,
   objectKey: string,
@@ -684,6 +708,34 @@ function deleteS3PrefixPages(client: S3Client, bucket: string, prefix: string) {
             cause
           ),
   })
+}
+
+/**
+ * What a failed request to a bucket came to, or null for a failure that
+ * wasn't one: whether the bucket answered at all, and what it said, as
+ * "HTTP 403: AccessDenied: …", or what went wrong reaching it. Provider
+ * text, so bounded.
+ */
+export function s3Failure(
+  error: unknown
+): { answered: boolean; said: string | null } | null {
+  if (!(error instanceof BackupStorageError)) return null
+  if (error.code !== "s3_request_failed") return null
+  const cause = error.cause
+  if (!Predicate.isObject(cause)) return { answered: false, said: null }
+  const status = s3FailureStatus(cause)
+  const said = [
+    status === null ? null : `HTTP ${status}`,
+    Predicate.isString(cause.name) && cause.name !== "Error"
+      ? cause.name
+      : null,
+    Predicate.isString(cause.message) ? cause.message : null,
+  ]
+    .filter(Predicate.isNotNull)
+    .join(": ")
+    .replaceAll(/[\p{Cc}]+/gu, " ")
+    .trim()
+  return { answered: status !== null, said: said ? said.slice(0, 512) : null }
 }
 
 function s3FailureStatus(cause: unknown): number | null {

@@ -3,17 +3,26 @@ import { Effect } from "effect"
 import { logException } from "@workspace/telemetry"
 
 import {
+  backupFailureCodeFromMessage,
   relayBackupTaskSchema,
   type RelayBackupTask,
 } from "@workspace/contracts"
 
 import {
+  BackupCopyKept,
+  deleteStoredFullBackupCopy,
+} from "@/backups/destinations"
+import {
   cancelUnsentCreateEffect,
   createsOfDeletedBackupsEffect,
   listDispatchableBackupTasksEffect,
   reconcileBackupTaskEffect,
+  recordStoredCopyDeleteEffect,
   settleUndispatchableBackupTaskEffect,
+  type BackupCopyDeleteOutcome,
+  type BackupDeleteReservation,
   type BackupDispatch,
+  type BackupDispatchArtifact,
 } from "@/effect/backups"
 import { isDeadlock } from "@/effect/database-deadlocks"
 import { BackupStorageError, CredentialError } from "@/effect/errors"
@@ -58,6 +67,141 @@ export function dispatchBackupTask(
   return runAppEffect(
     "Backups.dispatch",
     dispatchBackupTaskEffect(relay, input, subject)
+  )
+}
+
+/**
+ * Carries out a delete of a backup nothing is still making, for the
+ * operation that reserved it and holds the backup.
+ *
+ * Hearth first deletes the stored copies it reaches itself, those in a
+ * bucket, whose keys it holds, one at a time. Nothing writes a stored copy
+ * again, so no upload can cross its delete, and holding the backup keeps a
+ * second delete out. What each bucket said is recorded as it answers, and
+ * only once they all have is the Relay sent what is left: a copy on its
+ * own disk, or one that was never stored. With nothing left the delete
+ * ends here, whether or not the Relay is connected, and a bucket that
+ * keeps a copy ends it with what it said.
+ *
+ * `unanswering` are destinations that didn't answer earlier in the same
+ * pass, as retention's, which aren't asked again in it: one that is down
+ * costs a pass one wait, not one for every backup it holds.
+ */
+export function carryOutBackupDelete(
+  relay: PersistedRelay,
+  reservation: Extract<BackupDeleteReservation, { kind: "dispatch" }>,
+  options: { subject?: string; unanswering?: Set<string> } = {}
+): Promise<{
+  /** What a destination said as it kept a copy, which ended the delete. */
+  kept: string | null
+  /** Whether what was left for the Relay, if anything, reached it. */
+  sent: boolean
+}> {
+  return runAppEffect(
+    "Backups.carryOutDelete",
+    carryOutBackupDeleteEffect(relay, reservation, options)
+  )
+}
+
+const carryOutBackupDeleteEffect = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  { dispatch, stored }: Extract<BackupDeleteReservation, { kind: "dispatch" }>,
+  options: { subject?: string; unanswering?: Set<string> }
+) {
+  yield* Effect.annotateCurrentSpan(dispatchAttributes(relay, dispatch))
+  for (const copy of stored) {
+    const outcome = yield* deleteStoredCopy(
+      relay,
+      dispatch.backupId,
+      copy,
+      options.unanswering
+    )
+    const next = yield* recordStoredCopyDeleteEffect({
+      backupId: dispatch.backupId,
+      outcome,
+      taskId: dispatch.taskId,
+    })
+    publishBackupChange(relay.id, dispatch.backupId)
+    if (next !== "open") return { kept: outcome.error, sent: true }
+  }
+  const gone = new Set(stored.map((copy) => copy.artifactId))
+  const rest = {
+    ...dispatch,
+    artifacts: dispatch.artifacts.filter(
+      (artifact) => !gone.has(artifact.artifactId)
+    ),
+  }
+  // Undelivered, what is left waits queued: the Relay's next reconciliation
+  // sends it.
+  const sent = yield* dispatchBackupTaskEffect(
+    relay,
+    rest,
+    options.subject
+  ).pipe(
+    Effect.withSpan("Backups.dispatch"),
+    Effect.as(true),
+    Effect.catch(() => Effect.succeed(false))
+  )
+  return { kept: null, sent }
+})
+
+// How long one copy's delete may take, the client's own tries and all.
+const STORED_COPY_DELETE_TIMEOUT = "1 minute"
+
+// One copy, in a span of its own, so a bucket that is slow or refuses shows
+// in the delete's trace. Its failure is the copy's outcome.
+const deleteStoredCopy = (
+  relay: PersistedRelay,
+  backupId: string,
+  copy: BackupDispatchArtifact,
+  unanswering: Set<string> | undefined
+) => {
+  const destination = copy.storageId ?? ""
+  const unanswered = new BackupCopyKept({
+    answered: false,
+    reason: "the destination didn't answer in time",
+  })
+  const attempt = unanswering?.has(destination)
+    ? Effect.fail(unanswered)
+    : (
+        deleteStoredFullBackupCopy({ ...copy, relayId: relay.id }) ??
+        Effect.fail(
+          new BackupCopyKept({
+            answered: true,
+            reason: "only its Relay can reach it",
+          })
+        )
+      ).pipe(
+        Effect.timeoutOrElse({
+          duration: STORED_COPY_DELETE_TIMEOUT,
+          orElse: () => Effect.fail(unanswered),
+        })
+      )
+  return attempt.pipe(
+    Effect.withSpan("Backups.deleteCopy", {
+      attributes: {
+        "relay.id": relay.id,
+        "backup.id": backupId,
+        "backup.artifact.id": copy.artifactId,
+        "backup.storage.id": destination,
+      },
+    }),
+    Effect.as<BackupCopyDeleteOutcome>({
+      artifactId: copy.artifactId,
+      error: null,
+      errorCode: null,
+      status: "deleted",
+    }),
+    Effect.catch((kept) => {
+      if (!kept.answered) unanswering?.add(destination)
+      const error = `The backup's copy could not be deleted from its destination: ${kept.reason}`
+      return Effect.succeed<BackupCopyDeleteOutcome>({
+        artifactId: copy.artifactId,
+        error,
+        errorCode: backupFailureCodeFromMessage(error),
+        status: "failed",
+      })
+    })
   )
 }
 
