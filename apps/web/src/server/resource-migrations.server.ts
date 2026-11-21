@@ -28,6 +28,7 @@ import {
   type MigrationWarnings,
 } from "@/lib/resource-migration-kinds/kind.server"
 import {
+  destinationPermissions,
   migratedKind,
   requireMigrationPermissions,
 } from "@/lib/resource-migration-kinds/registry.server"
@@ -128,6 +129,11 @@ export async function previewResourceMigrationHandler(
     data
   )
   const relays = (await listPersistedRelays()).filter((item) => item.enabled)
+  // Asked once: the same for every Relay it could go to.
+  const creates = destinationPermissions(kind, {
+    id: data.id,
+    relayId: relay.id,
+  })
   const roots = await runAppEffect(
     "resourceMigrations.preview.roots",
     kind.sourceRoots(relay.id, data.id)
@@ -152,7 +158,7 @@ export async function previewResourceMigrationHandler(
         },
         user,
       })
-      if (!kind.permissions.create.every(there.allows)) return null
+      if (!(await creates).every(there.allows)) return null
       const [problems, takenNames, space] = await Promise.all([
         transferProblems(relay, candidate, roots),
         kind.takenNames(candidate, user.id),
@@ -180,7 +186,7 @@ export async function previewResourceMigrationHandler(
     copyAccess: authorization.allows("access.read"),
     delete:
       authorization.allows(kind.permissions.delete) &&
-      authorization.allows("backup.create"),
+      (kind.finalBackup === false || authorization.allows("backup.create")),
     linkBackups: authorization.allows("backup.download"),
     network: network !== undefined && authorization.allows(network),
     power:
@@ -288,7 +294,7 @@ export async function startResourceMigrationHandler(
       password: data.confirmation?.password ?? "",
       user,
     })
-    if (kind.kind !== "app") {
+    if (kind.kind !== "app" && kind.finalBackup !== false) {
       await requireBackupStorageSelection({
         relayId: relay.id,
         storageIds: [options.deleteSource.storageId],
@@ -308,7 +314,7 @@ export async function startResourceMigrationHandler(
   }
   if ((await kind.takenNames(destination, user.id)).includes(data.name)) {
     throw new Error(
-      `A ${kind.noun} on ${destination.name} is already named ${data.name}`
+      `${destination.name} already has ${/^[aeiou]/iu.test(kind.noun) ? "an" : "a"} ${kind.noun} named ${data.name}`
     )
   }
   const room = await checkMigrationRoom({

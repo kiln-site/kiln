@@ -14,6 +14,7 @@ import { AppProfile } from "@/components/app/app-profile"
 import { AppWebRouteSettings } from "@/components/app/app-settings"
 import { AppVolumesSection } from "@/components/app/app-volumes-section"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
+import { ResourceMigrationSection } from "@/components/resource-migration-section"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import {
   InfoDangerAction,
@@ -59,6 +60,20 @@ function AppInfoContent({ app }: { app: App }) {
           />
         ) : null}
         <AppWebRouteSettings app={app} canManage={canManage} />
+        {/* Copying it reads its settings, secrets among them, and its files. */}
+        {app.permissions.includes("app.manage") &&
+        app.permissions.includes("instance.files.read") &&
+        !app.provisioning ? (
+          <ResourceMigrationSection
+            relayConnected={appRelayAvailable(app)}
+            resource={{
+              id: app.id,
+              kind: "app",
+              name: app.name,
+              relayId: app.relayId,
+            }}
+          />
+        ) : null}
         {app.permissions.includes("app.delete") ? (
           <AppDangerZone app={app} />
         ) : null}
