@@ -10,7 +10,7 @@ import {
   settleBucketCopyEffect,
   waitingBucketCopiesEffect,
 } from "@/effect/backups"
-import { runAppEffect } from "@/effect/runtime"
+import { forkAppEffect } from "@/effect/runtime"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 
 // A full backup's copy in a bucket counts once Hearth has seen it there, at
@@ -218,7 +218,9 @@ export function requestBucketCopyChecks(after = NEXT_LOOK_MS): void {
   lookTimer = setTimeout(() => {
     lookTimer = undefined
     looking = true
-    void runAppEffect(
+    // A fiber of its own: stopped with the app, as on shutdown, it leaves
+    // no promise to reject.
+    forkAppEffect(
       "BucketCopies.check",
       checkBucketCopiesEffect().pipe(
         Effect.tap(({ more }) =>

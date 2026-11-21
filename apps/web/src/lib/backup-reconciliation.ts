@@ -19,7 +19,7 @@ import {
 import { isDeadlock } from "@/effect/database-deadlocks"
 import { BackupStorageError, CredentialError } from "@/effect/errors"
 import { promiseEffect } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import {
   publishBackupChange,
   publishBackupChanges,
@@ -442,7 +442,9 @@ export function scheduleBackupReconciliation(
   const timer = setTimeout(() => {
     reconciliationTimers.delete(relay.id)
     reconciling.add(relay.id)
-    void runAppEffect(
+    // A fiber of its own: stopped with the app, as on shutdown, it leaves
+    // no promise to reject.
+    forkAppEffect(
       "Backups.reconcileRelay",
       reconcileRelayBackupsEffect(relay, subject).pipe(
         Effect.catch((cause) =>
