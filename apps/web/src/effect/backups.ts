@@ -1007,6 +1007,7 @@ export const scheduledBackupAdmissionEffect = Effect.fn(
   )
 })
 
+// Answers whether it cataloged one.
 const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   relayId: string,
@@ -1018,19 +1019,19 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     task.input.kind !== "create" ||
     task.input.reason !== "scheduled"
   ) {
-    return
+    return false
   }
   const input = task.input
   const catalog = input.catalog
   const artifactId = input.destination.artifactId
-  if (!catalog || !artifactId) return
+  if (!catalog || !artifactId) return false
   // A full backup a Relay made on its own is on its own disk. One to a
   // bucket is Hearth's to take (`reserveScheduledBucketBackupsEffect`), so
   // a Relay reporting one is either from before that, made with keys it no
   // longer has, or naming an object Hearth never chose; recorded, Hearth
   // would sign restores and deletes of whatever object it named. Neither is
   // taken, and nothing a Relay says of a bucket is.
-  if (input.mode === "full" && input.destination.kind !== "local") return
+  if (input.mode === "full" && input.destination.kind !== "local") return false
   // An incremental one names the repository Hearth sent with its schedule;
   // one from before that is found by its target and destination. Without
   // its repository's password a snapshot can't be restored, so one whose
@@ -1064,7 +1065,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       : []
   const repositoryId = repositoryRows[0]?.id ?? null
   const orphaned = input.mode === "incremental" && !repositoryId
-  yield* catalogScheduledBackup(transaction, {
+  return yield* catalogScheduledBackup(transaction, {
     artifactId,
     artifactKind: input.artifactKind,
     backupId: input.backupId,
@@ -1367,8 +1368,14 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         )
         let knownTask = knownTasks[0]
         if (!knownTask && relayId) {
-          yield* adoptScheduledBackupTask(transaction, relayId, task, now)
-          changed = true
+          // Only one it cataloged is news: one it leaves out, as a bucket
+          // backup from before this release, is reported again each pass.
+          changed = yield* adoptScheduledBackupTask(
+            transaction,
+            relayId,
+            task,
+            now
+          )
           const adoptedTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
             `SELECT task.id, task.status, task.bytes_completed,
                       backup.status AS backup_status, backup.backup_mode,

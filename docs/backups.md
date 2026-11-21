@@ -366,8 +366,8 @@ never reaches a Relay, and that a Relay can reach no object in a bucket
 that Hearth didn't choose for one of its own backups. Its access key ID
 does, inside every signed URL, as for a manual backup or a download link;
 it can sign nothing on its own. Backups cataloged before this release from a
-Relay's own report keep the object it named, and a run's retry never
-matches one. Incremental backups still carry the keys. Nor
+Relay's own report keep the object it named; a run's retry matches one
+only at the object Hearth would choose itself. Incremental backups still carry the keys. Nor
 is it yet a defence against a Relay that lies to Hearth about its own
 work, which Hearth trusts elsewhere too
 ([#1011](https://github.com/kiln-site/kiln/issues/1011)).

@@ -2,6 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import {
   backupArtifactFilename,
   backupTaskInputSchema,
+  relayBackupTaskSchema,
 } from "@workspace/contracts"
 import {
   relayScheduleProjectionSchema,
@@ -16,6 +17,7 @@ import { afterAll, vi } from "vite-plus/test"
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
 import { createAppRecordEffect } from "@/effect/managed-apps"
+import { reconcileBackupTaskEffect } from "@/effect/backups"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { reconcileRelayBackups } from "@/lib/backup-reconciliation"
 import { listPersistedRelays } from "@/lib/relay-registry"
@@ -514,6 +516,12 @@ describeMysql("A schedule's backups to a bucket", () => {
             ]),
             [[null, null]]
           )
+          // The one it leaves out isn't news when it is reported again, as
+          // the Relay reports it on every pass.
+          const inBucket = relayBackupTaskSchema.parse(
+            relay.tasks.get("00000001-0000-4000-8000-000000000002")
+          )
+          assert.isFalse(yield* reconcileBackupTaskEffect(inBucket, relayId))
         }),
       60_000
     )
