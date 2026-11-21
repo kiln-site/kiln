@@ -280,6 +280,8 @@ function answers(token: string): Promise<boolean> {
     socket.once("error", () => finish(false))
     socket.once("close", () => finish(false))
     socket.once("data", (reply) => finish(reply[0] === MESSAGE_PING))
-    socket.write(Buffer.concat([Buffer.from(token), Buffer.from([MESSAGE_PING])]))
+    socket.write(
+      Buffer.concat([Buffer.from(token), Buffer.from([MESSAGE_PING])])
+    )
   })
 }

@@ -138,7 +138,9 @@ async function dumpFamily(source: string): Promise<DumpFamily | null> {
       gunzip.destroy()
     }
   )
-  const header = Buffer.concat(chunks).subarray(0, DUMP_HEADER_BYTES).toString("utf8")
+  const header = Buffer.concat(chunks)
+    .subarray(0, DUMP_HEADER_BYTES)
+    .toString("utf8")
   if (/^-- (?:MySQL|MariaDB) dump /mu.test(header)) return "mysql"
   if (/^-- PostgreSQL database dump/mu.test(header)) return "postgres"
   return null
@@ -158,7 +160,8 @@ export async function restoreCompressedDatabaseBackup(
   // Read before anything is imported: a dump one engine's tools wrote
   // doesn't load into another's, and may have changed it partway first.
   const family = await dumpFamily(source)
-  const target: DumpFamily = database.engine === "postgres" ? "postgres" : "mysql"
+  const target: DumpFamily =
+    database.engine === "postgres" ? "postgres" : "mysql"
   if (family && family !== target) {
     throw RelayBackupError.make({
       code: "database_engine_mismatch",

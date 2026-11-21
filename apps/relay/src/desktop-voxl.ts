@@ -264,10 +264,7 @@ export class VoxlDesktop implements DesktopBackend {
 
   // The streamer for `desktop`, started if it isn't. Runs in the desktop's
   // lane, with `relay.desktop.attach`.
-  async #ensure(
-    desktop: X11Desktop,
-    closeStreams: () => void
-  ): Promise<void> {
+  async #ensure(desktop: X11Desktop, closeStreams: () => void): Promise<void> {
     const image = this.#config.desktopImage
     // voxl joins the Relay's network namespace, so it must be the Relay's
     // current container.
@@ -383,7 +380,9 @@ export class VoxlDesktop implements DesktopBackend {
       await new Promise((resolve) => setTimeout(resolve, 150))
     }
     await Effect.runPromise(
-      this.#helper.engine.removeContainer(id, { force: true }).pipe(Effect.ignore)
+      this.#helper.engine
+        .removeContainer(id, { force: true })
+        .pipe(Effect.ignore)
     )
     throw new DesktopUnavailableError("The desktop streamer didn't start")
   }

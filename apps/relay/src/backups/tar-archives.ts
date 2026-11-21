@@ -219,6 +219,44 @@ export async function restoreTarBackup(options: {
 }
 
 /**
+ * Fills a source with what an archive holds, in place of what it held, as
+ * a copy of a volume is made from another's archive. Staged like a restore,
+ * so a fill that can't read its archive changes nothing, but with no
+ * journal or fence: one that stops while swapping leaves part of the files,
+ * for whoever asked to remove with what it was filling. Nothing may run on
+ * the source meanwhile.
+ */
+export async function fillFromTarArchive(options: {
+  readonly archive: string
+  readonly config: RelayConfig
+  readonly engine: DockerEngine
+  readonly signal: AbortSignal
+  readonly source: TarSource
+}): Promise<void> {
+  const { config, engine, source } = options
+  const staging = tarRestoreStagingName(randomUUID())
+  await runStep(config, engine, source, "reserve", staging, null)
+  const root = await Effect.runPromise(
+    Effect.tryPromise({
+      try: () =>
+        withHelper(config, engine, source, { readOnly: false }, (helper) =>
+          stage(engine, helper, options.archive, staging, options.signal)
+        ),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.tryPromise(() =>
+          runStep(config, engine, source, "discard", staging, null)
+        ).pipe(Effect.ignore)
+      )
+    )
+  )
+  await runStep(config, engine, source, "clear", staging, null)
+  await runStep(config, engine, source, "install", staging, root)
+  if (root?.xattrs) await restoreRootXattrs(config, engine, source, root)
+}
+
+/**
  * Settles a restore a stopped Relay or a failed swap left midway, as its
  * journal records it. One still staging is undone, leaving the files as they
  * were; one that had begun clearing or installing is finished, and its

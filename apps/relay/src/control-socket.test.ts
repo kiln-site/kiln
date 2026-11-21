@@ -407,10 +407,7 @@ describe("Relay control socket", () => {
     }
 
     // An App's deploy carries its configuration, so it takes configuring too.
-    expect(await allowed(["instance.deploy"])).toEqual([
-      "instance",
-      "database",
-    ])
+    expect(await allowed(["instance.deploy"])).toEqual(["instance", "database"])
     expect(await allowed(["instance.deploy", "app.manage"])).toEqual([
       "instance",
       "database",

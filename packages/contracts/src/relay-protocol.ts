@@ -121,6 +121,7 @@ export const relayControlOperations = [
   "app.provision.cancel",
   "app.delete",
   "app.volumes.write",
+  "app.volumes.keep",
   "app.deployment.abort",
   "instance.image.check",
   "backup.task.enqueue",
@@ -248,6 +249,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.provision.cancel",
   "app.delete",
   "app.volumes.write",
+  "app.volumes.keep",
   "backup.task.enqueue",
   "backup.task.cancel",
   "backup.restore.resolve",
@@ -387,6 +389,7 @@ export function relayControlOperationChanges(
     case "app.delete":
     case "app.deployment.abort":
     case "app.volumes.write":
+    case "app.volumes.keep":
     case "backup.task.enqueue":
     case "backup.task.cancel":
     case "backup.restore.resolve":

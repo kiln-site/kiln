@@ -693,6 +693,9 @@ export const relayVolumeMountSchema = z.object({
 // or one of its containers mounts it now.
 export const relayVolumeUserSchema = z.object({
   appId: volumeAppIdSchema,
+  // The key the App's Compose file declares the volume under, when it is
+  // the volume Kiln keeps for that key; null for any other use of it.
+  composeKey: z.string().nullable(),
   configured: z.boolean(),
   mounted: z.boolean(),
 })
@@ -895,6 +898,18 @@ export const hearthTerminalOutputSchema = z.object({
 export const appIdSchema = instanceIdSchema
 
 export const appNameSchema = relayDatabaseNameSchema
+
+// The volumes an App's Compose file will find under these keys, made before
+// its first deployment and named as the App's: what a copy of an App is
+// given to be filled before it ever runs.
+export const relayAppVolumesKeepSchema = z.strictObject({
+  appId: volumeAppIdSchema,
+  keys: z.array(z.string().min(1).max(255)).max(32),
+  name: appNameSchema,
+})
+export const relayAppVolumesKeptSchema = z.array(
+  z.strictObject({ id: relayVolumeIdSchema, key: z.string() })
+)
 
 // GitHub builds a Dockerfile or runs a Compose file from a repository. Hearth
 // keeps which repository; the Relay gets the commit to deploy with each

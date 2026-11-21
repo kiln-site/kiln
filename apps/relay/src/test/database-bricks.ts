@@ -6,10 +6,7 @@ import { parse } from "yaml"
 
 // The official database Bricks, read from the catalog Kiln ships, so tests
 // create a database from what a real one is created from.
-const bricksDirectory = resolve(
-  import.meta.dirname,
-  "../../../bricks/bricks"
-)
+const bricksDirectory = resolve(import.meta.dirname, "../../../bricks/bricks")
 
 /**
  * The Brick an engine's database is created from, as Hearth sends it with

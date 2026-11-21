@@ -76,6 +76,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
           sizeBytes: null,
           users: users.map((appId) => ({
             appId,
+            composeKey: null,
             configured: true,
             mounted: false,
           })),

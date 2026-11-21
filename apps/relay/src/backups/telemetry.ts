@@ -74,7 +74,10 @@ export function recordResticSnapshot(
   return Effect.all(
     [
       Metric.update(
-        Metric.withAttributes(snapshotBytes, { ...attributes, kind: "processed" }),
+        Metric.withAttributes(snapshotBytes, {
+          ...attributes,
+          kind: "processed",
+        }),
         input.bytesProcessed
       ),
       Metric.update(

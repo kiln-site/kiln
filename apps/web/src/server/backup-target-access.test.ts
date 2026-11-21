@@ -48,6 +48,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
           sizeBytes: null,
           users: relay.volumeUsers.map((appId) => ({
             appId,
+            composeKey: null,
             configured: true,
             mounted: false,
           })),

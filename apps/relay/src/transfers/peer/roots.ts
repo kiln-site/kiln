@@ -1,13 +1,23 @@
+import { randomUUID } from "node:crypto"
+
 import { databaseEngineSupportsLogicalBackups } from "@workspace/contracts"
 import { Effect } from "effect"
 
+import {
+  createTarBackup,
+  fillFromTarArchive,
+  type TarProgress,
+} from "../../backups/tar-archives.js"
+import type { RelayConfig } from "../../config.js"
 import {
   dumpCompressedDatabase,
   restoreCompressedDatabaseBackup,
 } from "../../database-backups.js"
 import type { DatabaseDriver } from "../../databases.js"
+import type { DockerEngine } from "../../docker-engine.js"
 import type { FileRoot, FilesystemDriver } from "../../files.js"
 import type { LaneLock } from "../../operation-lanes.js"
+import type { RelayVolumes } from "../../volumes.js"
 
 /** The lane locks a transfer takes on a root, each way. */
 export interface TransferRootLocks {
@@ -22,7 +32,8 @@ export interface TransferRootLocks {
 
 /**
  * What a transfer packs from or installs into, as its kind does each: a
- * folder as an archive of its files, a database as its dump.
+ * folder as an archive of its files, a database as its dump, a volume as
+ * the archive a backup of it is.
  */
 export interface TransferRoot extends TransferRootLocks {
   /**
@@ -33,7 +44,11 @@ export interface TransferRoot extends TransferRootLocks {
     paths: ReadonlyArray<string>,
     artifact: string
   ) => Effect.Effect<
-    { readonly entries: number; readonly sha256: string; readonly size: number },
+    {
+      readonly entries: number
+      readonly sha256: string
+      readonly size: number
+    },
     unknown
   >
   /** Installs an artifact another Relay packed, at `path` under the root. */
@@ -118,5 +133,111 @@ export async function databaseTransferRoot(
           size: dump.bytes,
         }))
       ),
+  }
+}
+
+/**
+ * A volume, which moves as the archive a backup of it is: packing archives
+ * it through Docker as it is, in use or not, and installing fills the
+ * volume it names with that archive in place of what it held. It is copied
+ * whole, and nothing may be running on the one it's installed into. Named
+ * as an App's, it is one only while that App may have it.
+ */
+export function volumeTransferRoot(
+  options: {
+    readonly config: RelayConfig
+    readonly engine: DockerEngine
+    readonly volumes: RelayVolumes
+  },
+  volume: { readonly appId: string | null; readonly volumeId: string },
+  locks: TransferRootLocks
+): TransferRoot {
+  const { config, engine, volumes } = options
+  const { appId, volumeId } = volume
+  const whole = (named: boolean) =>
+    named
+      ? Effect.fail(new Error("A volume is copied whole, not by path"))
+      : Effect.void
+  const required =
+    appId === null
+      ? volumes
+          .find(volumeId)
+          .pipe(
+            Effect.flatMap((found) =>
+              found
+                ? Effect.succeed(found)
+                : Effect.fail(new Error("Volume not found on this Relay"))
+            )
+          )
+      : volumes.appVolume(appId, volumeId)
+  return {
+    ...locks,
+    // As Docker measures it, which this waits for when a measure is due.
+    bytes: volumes.size(volumeId),
+    install: (path, artifact) =>
+      Effect.gen(function* () {
+        yield* whole(path !== "")
+        const found = yield* required
+        const running = found.mounts.filter((mount) => mount.running)
+        if (running.length > 0) {
+          return yield* Effect.fail(
+            new Error(
+              `${running[0]!.container} is running on this volume; stop it before copying into the volume`
+            )
+          )
+        }
+        yield* Effect.tryPromise({
+          try: (signal) =>
+            fillFromTarArchive({
+              archive: artifact,
+              config,
+              engine,
+              signal,
+              source: { kind: "volume", name: found.dockerName },
+            }),
+          catch: (cause) => cause,
+        })
+      }),
+    pack: (paths, artifact) =>
+      Effect.gen(function* () {
+        yield* whole(paths.length > 0)
+        const found = yield* required
+        const progress: TarProgress = { completed: 0, currentPath: null }
+        const archived = yield* Effect.tryPromise({
+          try: (signal) =>
+            createTarBackup({
+              config,
+              engine,
+              exclude: [],
+              // The archive is a backup's, so it says what one would; no
+              // backup has its ID.
+              manifest: {
+                artifactKind: "tar_archive",
+                backupId: randomUUID(),
+                consistency: "live",
+                createdAt: new Date().toISOString(),
+                formatVersion: 1,
+                mode: "full",
+                target: { id: volumeId, kind: "volume" },
+                volume: {
+                  dockerName: found.dockerName,
+                  kind: "kiln",
+                  name: found.name,
+                },
+              },
+              maxBytes: null,
+              partial: artifact,
+              progress,
+              signal,
+              source: { kind: "volume", name: found.dockerName },
+            }),
+          catch: (cause) => cause,
+        })
+        return {
+          entries: 1,
+          sha256: archived.checksumSha256,
+          size: archived.bytes,
+        }
+      }),
   }
 }

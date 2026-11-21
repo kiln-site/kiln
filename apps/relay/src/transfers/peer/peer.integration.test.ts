@@ -7,16 +7,20 @@ import { Effect, ManagedRuntime, Schedule } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
+  appVolumeFileRootId,
+  appVolumeFromFileRoot,
   databaseFileRootId,
   newInstanceId,
+  volumeTransferRootId,
   relayCreateDatabaseSchema,
   type RelayPeerTransferGrant,
 } from "@workspace/contracts"
 
-// Only the database case below reaches Docker.
+// Only the database and volume cases below reach Docker.
 vi.mock("../../command.js", () => import("../../test/docker.js"))
 
 import type { DatabaseDriver } from "../../databases.js"
+import { DockerEngine } from "../../docker-engine.js"
 import { fingerprint, type RelayIdentity } from "../../effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "../../effect/state.js"
 import { FilesystemDriver } from "../../files.js"
@@ -37,8 +41,10 @@ import {
   databaseTransferRoot,
   fileTransferRoot,
   type TransferRootResolver,
+  volumeTransferRoot,
 } from "./roots.js"
 import { TransferSources } from "./sources.js"
+import { composeVolumeId, RelayVolumes } from "../../volumes.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 const issuer = "hearth-peer-test"
@@ -211,6 +217,139 @@ describe("a database copied between Relays", () => {
 
     expect(pull.error).toBeNull()
     expect(copy.executedSql).toEqual([dump])
+  })
+})
+
+describe("a volume copied between Relays", () => {
+  const oldId = "a".repeat(40)
+  const newId = "b".repeat(40)
+
+  // One Docker holds both volumes; the archive still crosses from one
+  // Relay's transfers to another's, under a grant, as between two.
+  async function volumes() {
+    const harness = await relayHarness()
+    // The helpers run the Relay's own image, found through its container.
+    harness.config.selfContainer = "kiln-relay"
+    fakeDocker.images.set("kiln-relay:test", {})
+    fakeDocker.addContainer({ image: "kiln-relay:test", name: "kiln-relay" })
+    const engine = new DockerEngine(harness.config.dockerSocket)
+    const relayVolumes = new RelayVolumes(
+      harness.config,
+      engine,
+      harness.state,
+      () => harness.lifecycle.hostDataDirectory()
+    )
+    const volume = (id: string, madeAs = "Data") =>
+      fakeDocker.addVolume({
+        labels: {
+          "kiln.relay.owner": TEST_NAMESPACE,
+          "kiln.resource.kind": "volume",
+          "kiln.volume.id": id,
+          "kiln.volume.name": madeAs,
+        },
+        name: `${TEST_NAMESPACE}-kiln-${id.slice(0, 8)}-data`,
+      })
+    const old = volume(oldId)
+    old.files.set("pgdata/PG_VERSION", "16")
+    old.files.set("pgdata/base/1", "rows")
+    old.symlinks.set("current", "pgdata")
+    old.owners.set("", { gid: 999, mode: 0o700, uid: 999 })
+    old.owners.set("pgdata/base/1", { gid: 999, mode: 0o600, uid: 999 })
+    const copy = volume(newId)
+    // Volume roots, as the Relay resolves them: the Relay's, or an App's.
+    const resolveRoot: TransferRootResolver = (rootId) => {
+      const appVolume = appVolumeFromFileRoot(rootId)
+      return Promise.resolve(
+        volumeTransferRoot(
+          { config: harness.config, engine, volumes: relayVolumes },
+          {
+            appId: appVolume?.appId ?? null,
+            volumeId: appVolume?.volumeId ?? rootId.slice("volume:".length),
+          },
+          {
+            installLocks: transferInstallLocks(rootId),
+            packLocks: transferPackLocks(rootId),
+          }
+        )
+      )
+    }
+    return {
+      copy,
+      resolveRoot,
+      volume,
+      destination: await startDestination({
+        resolveRoot,
+        rootId: volumeTransferRootId(newId),
+      }),
+      old,
+      source: await startSource({
+        resolveRoot,
+        rootId: volumeTransferRootId(oldId),
+      }),
+    }
+  }
+
+  const held = (volume: { files: Map<string, string> }) =>
+    Object.fromEntries(volume.files)
+
+  it("fills the new volume with the old one's files, owners and links, in place of what it held", async () => {
+    const { copy, destination, old, source } = await volumes()
+    copy.files.set("stale", "from before")
+    const before = held(old)
+
+    const artifact = await source.prepare("transfer-volume-1")
+    const pull = await destination.pull(source, artifact, { path: "" })
+
+    expect(pull.error).toBeNull()
+    expect(pull.state).toBe("completed")
+    expect(held(copy)).toEqual(before)
+    expect(Object.fromEntries(copy.symlinks)).toEqual({ current: "pgdata" })
+    expect(copy.owners.get("")).toEqual({ gid: 999, mode: 0o700, uid: 999 })
+    expect(copy.owners.get("pgdata/base/1")).toEqual({
+      gid: 999,
+      mode: 0o600,
+      uid: 999,
+    })
+    expect(held(old)).toEqual(before)
+  })
+
+  it("copies nothing into a volume something is running on", async () => {
+    const { copy, destination, source } = await volumes()
+    copy.files.set("live", "in use")
+    fakeDocker.addContainer({
+      image: "kiln-relay:test",
+      mounts: [{ destination: "/data", source: copy.name, type: "volume" }],
+      name: "busy",
+      running: true,
+    })
+
+    const artifact = await source.prepare("transfer-volume-2")
+    const pull = await destination.pull(source, artifact, { path: "" })
+
+    expect(pull.state).toBe("failed")
+    expect(pull.error).toContain("running on this volume")
+    expect(held(copy)).toEqual({ live: "in use" })
+  })
+
+  it("packs a volume as an App's only for the App it is kept for", async () => {
+    const { resolveRoot, volume } = await volumes()
+    const appId = "c".repeat(12)
+    // The volume Kiln keeps for its Compose file's `uploads`, named after
+    // the App and the key when it was made.
+    const kept = volume(composeVolumeId(appId, "uploads"), "Blog uploads")
+    kept.files.set("photo", "pixels")
+    const as = (owner: string) =>
+      startSource({
+        resolveRoot,
+        rootId: appVolumeFileRootId(owner, composeVolumeId(appId, "uploads")),
+      })
+
+    await expect(
+      (await as("d".repeat(12))).prepare("transfer-volume-3")
+    ).rejects.toThrow("doesn't use that volume")
+    await expect(
+      (await as(appId)).prepare("transfer-volume-4")
+    ).resolves.toMatchObject({ transferId: "transfer-volume-4" })
   })
 })
 

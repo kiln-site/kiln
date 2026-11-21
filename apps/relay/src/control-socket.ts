@@ -1873,6 +1873,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "app.read"
     case "app.provision.prepare":
     case "app.provision.claim":
+    // Making a new App's volumes is part of making it.
+    case "app.volumes.keep":
       return "app.create"
     case "app.provision.cancel":
     case "app.delete":
@@ -1927,9 +1929,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // it would.
     case "transfer.space": {
       const rootId = objectString(request.payload, "rootId")
-      return rootId === null
-        ? "relay.read"
-        : peerTransferAction(rootId, "pack")
+      return rootId === null ? "relay.read" : peerTransferAction(rootId, "pack")
     }
     case "transfer.pull.start":
       return peerTransferAction(

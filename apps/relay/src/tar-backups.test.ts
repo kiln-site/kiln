@@ -430,9 +430,10 @@ it("dumps a database of a stopped batch while the Apps of its volumes are stoppe
   )
 
   expect(seen).toEqual(["stopped", "dump, stopped", "started"])
-  expect(
-    await Effect.runPromise(manager.get(archive.taskId))
-  ).toMatchObject({ result: { consistency: "stopped" }, status: "succeeded" })
+  expect(await Effect.runPromise(manager.get(archive.taskId))).toMatchObject({
+    result: { consistency: "stopped" },
+    status: "succeeded",
+  })
   expect(await Effect.runPromise(manager.get(dump.taskId))).toMatchObject({
     status: "succeeded",
   })

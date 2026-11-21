@@ -88,11 +88,7 @@ async function harness(
   const lanes = new OperationLanes()
   const desktop = new Desktop(
     [
-      new ScreenSharingDesktop(
-        config,
-        { runScript: async () => "" },
-        lanes
-      ),
+      new ScreenSharingDesktop(config, { runScript: async () => "" }, lanes),
       new VoxlDesktop(config, { runScript: voxlScript }),
     ],
     config,

@@ -141,6 +141,31 @@ is more than its dump takes. Hearth asks the person for the same as their
 Relays ask of it: `backup.create` and `backup.download` on the database
 it's copied from, and `backup.restore` on the one it's copied into.
 
+A Relay copies a Kiln volume as the archive a backup of it is
+(`apps/relay/src/backups/tar-archives.ts`), read through Docker with each
+file's owner, mode, links and extended attributes. It is named as the
+Relay's (`volume:<volume ID>`), or as an App's
+(`app:<App ID>:volume:<volume ID>`), which is one only while that App uses
+the volume, or it is the one the Relay keeps for a key of the App's
+Compose file, deployed yet or not. Packing reads it as it is, beside what
+uses it, as a live backup does. Installing stages the archive inside the
+volume, checking every entry as a restore does, then swaps it in for what
+the volume held; nothing may be running on it, and it holds the volume
+alone, and an App's whole when named as one. It is copied whole, never by
+path. The Relay archives and fills it as its backups do, so as the Relay's
+it takes what a backup's steps do (`backup.create`, `backup.download`,
+`backup.restore`), on Hearth too, where a volume's backups are the
+Relay's; as an App's it takes the App's file actions, as its other files
+do. `transfer.space` reports what Docker last measured of it, waiting for
+a measure only when it has none.
+
+The Relay makes the volumes an App's Compose file will keep its keys on
+when Hearth asks with `app.volumes.keep`, before the App first deploys, so
+a copy of the App can be filled before it runs. They are named as the
+App's from then on; the key each is kept for is read back from the name
+the Relay made it with and the ID only that App and key give it, and each
+volume's users say so (`composeKey`).
+
 `preflightRelayTransfer` lists what would stop a copy and what fixes it:
 an offline or outdated Relay, or a pairing that can't move data in or out. A pull that can't reach its source reports why in
 its `error` while it waits to try again.

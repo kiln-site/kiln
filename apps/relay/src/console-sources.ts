@@ -113,7 +113,10 @@ export function consoleSources(
           session: (signal) =>
             docker.containerConsoleSession(
               id,
-              tunnelContainer(id, stream === "coredns" ? "coredns" : "tailscale"),
+              tunnelContainer(
+                id,
+                stream === "coredns" ? "coredns" : "tailscale"
+              ),
               signal
             ),
         }

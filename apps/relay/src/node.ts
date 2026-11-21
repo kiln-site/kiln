@@ -50,9 +50,7 @@ export async function nodeSnapshot(
     id: config.nodeId,
     name: config.nodeName || hostname(),
     version: relayVersion,
-    capabilities: [
-      "schedule-continue-on-failure",
-    ],
+    capabilities: ["schedule-continue-on-failure"],
     canProvisionInstances: config.canProvisionInstances,
     platform: platform(),
     arch: arch(),

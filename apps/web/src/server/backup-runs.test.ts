@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import {
-  relayInstanceSchema,
-  relaySnapshotSchema,
-} from "@workspace/contracts"
+import { relayInstanceSchema, relaySnapshotSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
@@ -63,6 +60,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       sizeBytes: null,
       users: users.map((appId) => ({
         appId,
+        composeKey: null,
         configured: true,
         mounted: false,
       })),

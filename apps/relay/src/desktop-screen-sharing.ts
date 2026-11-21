@@ -35,10 +35,7 @@ const MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 type ScreenSharingConfig = Pick<
   RelayConfig,
-  | "desktopImage"
-  | "dockerSocket"
-  | "resourceNamespace"
-  | "screenSharingAddress"
+  "desktopImage" | "dockerSocket" | "resourceNamespace" | "screenSharingAddress"
 >
 
 export class ScreenSharingDesktop implements DesktopBackend {
