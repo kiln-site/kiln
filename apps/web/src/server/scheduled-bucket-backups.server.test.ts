@@ -12,6 +12,7 @@ import { afterAll, vi } from "vite-plus/test"
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
 import { disposeAppRuntime } from "@/effect/runtime"
+import { reconcileRelayBackups } from "@/lib/backup-reconciliation"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   deployScheduleToRelay,
@@ -386,6 +387,90 @@ describeMysql("A schedule's backups to a bucket", () => {
 
           assert.isTrue(refused.every(({ taken }) => !taken))
           assert.lengthOf(yield* backups(), 0)
+        }),
+      60_000
+    )
+
+    it.effect(
+      "records nothing of a bucket from a backup a Relay says it made itself",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          // A Relay reports two scheduled backups Hearth never heard of: one
+          // in the bucket, at an object of another Relay's, and one on its
+          // disk that names the bucket.
+          const made = (part: number, destination: Record<string, unknown>) => {
+            const backupId = `0000000${part}-0000-4000-8000-000000000001`
+            const taskId = `0000000${part}-0000-4000-8000-000000000002`
+            relay.tasks.set(taskId, {
+              backupId,
+              bytesCompleted: 0,
+              bytesTotal: null,
+              createdAt: at,
+              currentArtifactId: null,
+              currentPath: null,
+              error: null,
+              errorCode: null,
+              finishedAt: null,
+              input: {
+                artifactKind: "archive",
+                backupId,
+                catalog: { name: "Nightly", storageId },
+                destination: {
+                  artifactId: `0000000${part}-0000-4000-8000-000000000003`,
+                  ...destination,
+                },
+                exclude: [],
+                kind: "create",
+                maxBytes: null,
+                mode: "full",
+                reason: "scheduled",
+                target: { id: server, kind: "instance" },
+                taskId,
+              },
+              inputRefreshRequired: false,
+              kind: "create",
+              phase: null,
+              result: null,
+              startedAt: null,
+              status: "queued",
+              taskId,
+              updatedAt: at,
+            })
+            return backupId
+          }
+          made(1, {
+            bucket: "kiln-backups",
+            endpoint: "https://s3.example.test",
+            kind: "s3",
+            objectKey: `team/kiln/kiln-test/${otherRelayId}/instance/${otherServer}/x/backup.zip`,
+            region: "us-east-1",
+          })
+          const onDisk = made(2, { kind: "local" })
+          const [persisted] = (yield* Effect.promise(
+            listPersistedRelays
+          )).filter(({ id }) => id === relayId)
+
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          const [cataloged, ...rest] = yield* backups()
+          assert.lengthOf(rest, 0)
+          assert.deepInclude(cataloged, {
+            id: onDisk,
+            object_key: null,
+            storage_id: null,
+          })
+          const copies = yield* selectRows<{
+            object_key: string | null
+            storage_id: string | null
+          }>("backup_artifact")
+          assert.deepStrictEqual(
+            copies.map(({ object_key, storage_id }) => [
+              object_key,
+              storage_id,
+            ]),
+            [[null, null]]
+          )
         }),
       60_000
     )

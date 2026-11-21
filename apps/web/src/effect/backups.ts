@@ -1024,6 +1024,13 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   const catalog = input.catalog
   const artifactId = input.destination.artifactId
   if (!catalog || !artifactId) return
+  // A full backup a Relay made on its own is on its own disk. One to a
+  // bucket is Hearth's to take (`reserveScheduledBucketBackupsEffect`), so
+  // a Relay reporting one is either from before that, made with keys it no
+  // longer has, or naming an object Hearth never chose; recorded, Hearth
+  // would sign restores and deletes of whatever object it named. Neither is
+  // taken, and nothing a Relay says of a bucket is.
+  if (input.mode === "full" && input.destination.kind !== "local") return
   // An incremental one names the repository Hearth sent with its schedule;
   // one from before that is found by its target and destination. Without
   // its repository's password a snapshot can't be restored, so one whose
@@ -1078,11 +1085,11 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     mode: input.mode,
     name: catalog.name,
     now,
-    objectKey:
-      input.destination.kind === "s3" ? input.destination.objectKey : null,
+    objectKey: null,
     relayId,
     repositoryId,
-    storageId: catalog.storageId,
+    // A full one is on the Relay's disk, whatever the Relay says.
+    storageId: input.mode === "full" ? null : catalog.storageId,
     targetId: input.target.id,
     targetKind: input.target.kind,
     taskId: input.taskId,
@@ -1237,9 +1244,10 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             taskId: scheduledBackupTaskId(backup.backupId),
           })
           // Its IDs are the run's own, so rows already holding them are
-          // this backup's, cataloged before. Anything else holding one is
-          // refused rather than passed off as this backup: without its own
-          // task and copy, nothing would ever be sent.
+          // this backup's, cataloged before: a full backup of this target to
+          // this destination, with its own task and copy. Anything else
+          // holding one is refused rather than passed off as this backup,
+          // which would answer "taken" for a copy that never goes there.
           const [held] = yield* transaction.queryRows<
             {
               reason: string
@@ -1255,11 +1263,14 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
                  ON task.backup_id = backup.id AND task.id = ?
                JOIN ${databaseTable("backup_artifact")} artifact
                  ON artifact.backup_id = backup.id AND artifact.id = ?
-              WHERE backup.id = ?`,
+                AND artifact.storage_id <=> backup.storage_id
+              WHERE backup.id = ? AND backup.backup_mode = 'full'
+                AND backup.storage_id <=> ?`,
             [
               scheduledBackupTaskId(backup.backupId),
               scheduledBackupArtifactId(backup.backupId),
               backup.backupId,
+              input.storageId,
             ]
           )
           if (

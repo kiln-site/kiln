@@ -9,14 +9,21 @@ import {
   type ScheduledBucketBackupRequest,
 } from "@workspace/contracts/schedules"
 
-import { reserveScheduledBucketBackupsEffect } from "@/effect/backups"
+import {
+  listDispatchableBackupTasksEffect,
+  reserveScheduledBucketBackupsEffect,
+  type BackupDispatch,
+} from "@/effect/backups"
 import { BackupStorageError } from "@/effect/errors"
 import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import { backupStorageSettingsKey, backupTargetKey } from "@/lib/backup-lanes"
 import { publishBackupChanges } from "@/lib/backup-realtime.server"
-import { scheduleBackupReconciliation } from "@/lib/backup-reconciliation"
+import {
+  dispatchBackupTask,
+  scheduleBackupReconciliation,
+} from "@/lib/backup-reconciliation"
 import { scheduleSettingsKey } from "@/lib/schedule-lanes"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 import { shared } from "@/operations/lanes"
@@ -181,13 +188,43 @@ const takeBackups = operation<Ask>()({
       backups: context.backups,
       relayId: input.relayId,
       storageId: context.storageId,
-    }).pipe(Effect.as(context.relay)),
+    }).pipe(
+      Effect.as({
+        backupIds: context.backups.map(({ backupId }) => backupId),
+        relay: context.relay,
+      })
+    ),
   publish: ({ context, input }) =>
     publishBackupChanges(
       input.relayId,
       context.backups.map(({ backupId }) => backupId)
     ),
 })
+
+// Sends the tasks of the backups just taken, each on its own, all at once.
+// One that fails is left for the Relay's next pass.
+const sendTaken = (relay: PersistedRelay, backupIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const taken = new Set(backupIds)
+    const dispatches = (yield* listDispatchableBackupTasksEffect(
+      relay.id
+    )).filter(
+      (task): task is BackupDispatch =>
+        task.kind !== "undispatchable" && taken.has(task.backupId)
+    )
+    yield* Effect.forEach(
+      dispatches,
+      (task) =>
+        promiseEffect(() => dispatchBackupTask(relay, task)).pipe(
+          Effect.catch(() => Effect.void)
+        ),
+      { concurrency: "unbounded", discard: true }
+    )
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Sending a schedule's taken backups failed", cause)
+    )
+  )
 
 /**
  * Answers a Relay that asked Hearth to take a step's bucket backups: taken,
@@ -200,8 +237,11 @@ export function takeScheduledBucketBackups(
   return runAppEffect(
     "ScheduledBackups.take",
     runOperation(takeBackups, { relayId, request }, { user: null }).pipe(
-      Effect.map((relay: PersistedRelay): ScheduledBucketBackupReply => {
-        // Sent as every queued backup is, on the Relay's next pass.
+      Effect.map(({ backupIds, relay }): ScheduledBucketBackupReply => {
+        // Sent at once and together, as a manual run's are, so a stopped
+        // batch reaches the Relay whole; any not sent now go on the
+        // Relay's next pass, as every queued backup does.
+        forkAppEffect("ScheduledBackups.dispatch", sendTaken(relay, backupIds))
         scheduleBackupReconciliation(relay)
         return { taken: true }
       }),
