@@ -358,6 +358,7 @@ export class DatabaseDriver {
       provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
       status: provisioningStatus("awaiting_claim", "database"),
       supportsImportExport: databaseEngineSupportsLogicalBackups(brick.engine),
+      variables: publicAnswers(brick),
     })
   }
 
@@ -510,12 +511,7 @@ export class DatabaseDriver {
     // an answer it refuses, leaves nothing behind.
     const brick = resolvedBrick(input)
     const createdAt = new Date().toISOString()
-    const labels = databaseRecoveryLabels(
-      this.#config,
-      input,
-      brick,
-      createdAt
-    )
+    const labels = databaseRecoveryLabels(this.#config, input, brick, createdAt)
     const container = databaseResourceName(this.#config, input.id, "database")
     const network = labels["kiln.database.network"]
     const volume = labels["kiln.database.volume"]
@@ -678,9 +674,7 @@ export class DatabaseDriver {
     // Pulled before anything stops, so a registry that can't be reached
     // leaves the database running.
     await onPhase("pulling_image")
-    await Effect.runPromise(
-      this.#engine.pullImage(image, { timeout: 300_000 })
-    )
+    await Effect.runPromise(this.#engine.pullImage(image, { timeout: 300_000 }))
     // Which image it ran and which it will, to tell an update from a
     // redeploy of the same release, and to find the old one again.
     const pulled = await Effect.runPromise(
@@ -1277,8 +1271,7 @@ export class DatabaseDriver {
       ids.map((id) => {
         const container = containers.find(
           (candidate) =>
-            instanceIdFrom(candidate.Config.Labels?.["kiln.database.id"]) ===
-            id
+            instanceIdFrom(candidate.Config.Labels?.["kiln.database.id"]) === id
         )
         const labels = container?.Config.Labels ?? {}
         const source = labels["kiln.brick.source"]
@@ -1446,6 +1439,7 @@ export class DatabaseDriver {
           : null,
       status,
       supportsImportExport: databaseEngineSupportsLogicalBackups(engine),
+      variables: savedAnswers(labels),
     })
   }
 
@@ -2005,8 +1999,11 @@ function newRevision(
   if (resolved.internalPort !== spec.internalPort) {
     throw refused(`it listens on port ${resolved.internalPort}`)
   }
-  const { "kiln.database.command": _command, "kiln.database.ready": _ready, ...rest } =
-    labels
+  const {
+    "kiln.database.command": _command,
+    "kiln.database.ready": _ready,
+    ...rest
+  } = labels
   return {
     environment: {
       ...resolved.environment,
@@ -2039,6 +2036,23 @@ function newRevision(
 }
 
 // A Brick's answers a label can keep: none of its secrets.
+// Its Brick's answers that aren't secret, as its container's label keeps
+// them; none for one made before databases ran Bricks.
+function savedAnswers(
+  labels: Record<string, string | undefined>
+): Record<string, BrickVariableValue> {
+  return Result.getOrElse(
+    Result.try(
+      () =>
+        JSON.parse(labels["kiln.brick.variables"] ?? "{}") as Record<
+          string,
+          BrickVariableValue
+        >
+    ),
+    () => ({})
+  )
+}
+
 function publicAnswers(
   brick: ResolvedDatabaseBrick
 ): Record<string, BrickVariableValue> {
@@ -2094,7 +2108,9 @@ function databaseImage(container: DatabaseContainerInspect): string {
 
 // An image's ID as people compare them: its first 12 hex digits.
 function shortImageId(id: string | null): string {
-  return id === null ? "an unknown image" : id.replace(/^sha256:/u, "").slice(0, 12)
+  return id === null
+    ? "an unknown image"
+    : id.replace(/^sha256:/u, "").slice(0, 12)
 }
 
 async function waitUntilReady(

@@ -268,6 +268,16 @@ export const relayManagedDatabaseSchema = z
     brickId: z.string().min(1).max(64).optional(),
     // Which revision of its Brick's recipe it was made from.
     brickRevision: z.number().int().min(1).optional(),
+    /**
+     * Its Brick's answers that aren't secret, such as its version, which a
+     * copy of it is made with.
+     */
+    variables: z
+      .record(
+        z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
+        brickInputValueSchema
+      )
+      .default({}),
   })
   .strict()
 

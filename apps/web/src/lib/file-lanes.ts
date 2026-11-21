@@ -1,14 +1,21 @@
-import { appIdFromFileRoot, isRelayFileRoot } from "@workspace/contracts"
+import {
+  appIdFromFileRoot,
+  databaseIdFromFileRoot,
+  isRelayFileRoot,
+} from "@workspace/contracts"
 
 import { partKey, relayKey, resourceKey } from "@/operations/lanes"
 
 /**
- * What a file root's files belong to (docs/hearth-operations.md): its game
- * server, the App whose folder it is, or its Relay's host files. A change to
- * files holds it shared; its Relay orders the writes themselves.
+ * What a root belongs to (docs/hearth-operations.md): its game server, the
+ * App whose folder it is, the database whose dumps it holds, or its Relay's
+ * host files. A change to it holds it shared; its Relay orders the writes
+ * themselves.
  */
 export function fileRootKey(relayId: string, rootId: string): string {
   if (isRelayFileRoot(rootId)) return partKey(relayKey(relayId), "host-files")
+  const databaseId = databaseIdFromFileRoot(rootId)
+  if (databaseId !== null) return resourceKey("database", relayId, databaseId)
   const appId = appIdFromFileRoot(rootId)
   return appId
     ? resourceKey("app", relayId, appId)

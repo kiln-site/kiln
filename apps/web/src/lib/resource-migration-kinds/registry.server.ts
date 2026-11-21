@@ -8,11 +8,12 @@ import {
   type MigratedKind,
   type Migration,
 } from "@/lib/resource-migration-kinds/kind.server"
+import { databases } from "@/lib/resource-migration-kinds/databases.server"
 import { servers } from "@/lib/resource-migration-kinds/servers.server"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 
 /** Every kind that can be moved or duplicated. */
-export const migratedKinds: ReadonlyArray<MigratedKind> = [servers]
+export const migratedKinds: ReadonlyArray<MigratedKind> = [servers, databases]
 
 export function migratedKind(kind: MigratedKindName): MigratedKind {
   const found = migratedKinds.find((candidate) => candidate.kind === kind)

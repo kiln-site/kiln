@@ -33,6 +33,7 @@ import {
 } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
+import { ResourceMigrationSection } from "@/components/resource-migration-section"
 
 // The database's details, in the order every kind's Info page has: what it
 // is and the engine it runs, its container with its usage and limits, then
@@ -45,7 +46,10 @@ export function DatabaseInfoPage() {
   const available = databaseRelayAvailable(database)
   const canExport = can("database.dump.export")
   const canImport = can("database.dump.import")
-  const canRestore = useDatabaseBackupRestore(database)
+  const canRestore = useDatabaseBackupPermissions(database, backupRestore)
+  // Its Relay copies it as it backs it up, so copying it takes those.
+  const canCopy =
+    useDatabaseBackupPermissions(database, backupCopy) && can("database.read")
   // As the Viewer tab is offered.
   const canView =
     databaseEngineSupportsBrowsing(database.engine) && can("database.data.read")
@@ -93,6 +97,17 @@ export function DatabaseInfoPage() {
         canViewNetwork={can("database.network.read")}
         database={database}
       />
+      {canCopy && !database.provisioning ? (
+        <ResourceMigrationSection
+          relayConnected={available}
+          resource={{
+            id: database.id,
+            kind: "database",
+            name: database.name,
+            relayId: database.relayId,
+          }}
+        />
+      ) : null}
       {can("database.delete") ? (
         <DatabaseDangerZone
           canWipe={database.hasCredentials}
@@ -103,12 +118,22 @@ export function DatabaseInfoPage() {
   )
 }
 
+const backupRestore = ["backup.restore"] as const
+const backupCopy = ["backup.create", "backup.download"] as const
+
 // Backup permissions come from access grants, not the database's own list.
-function useDatabaseBackupRestore(database: ManagedDatabase): boolean {
+function useDatabaseBackupPermissions(
+  database: ManagedDatabase,
+  permissions: ReadonlyArray<
+    "backup.create" | "backup.download" | "backup.restore"
+  >
+): boolean {
   const select = React.useCallback(
     (capabilities: NavigationAccessCapabilities) =>
-      canAccessDatabasePermission(capabilities, database, "backup.restore"),
-    [database]
+      permissions.every((permission) =>
+        canAccessDatabasePermission(capabilities, database, permission)
+      ),
+    [database, permissions]
   )
   const { data = false } = useQuery({
     ...accessCapabilitiesQueryOptions(),
