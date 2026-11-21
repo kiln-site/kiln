@@ -9,11 +9,20 @@ import { SqlClient } from "effect/sql"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { RelayBackupTask } from "@workspace/contracts"
-import type { RelayScheduleProjection } from "@workspace/contracts/schedules"
+import {
+  scheduledBackupId,
+  scheduledBackupTaskId,
+  type RelayScheduleProjection,
+  type ScheduledBucketBackupRequest,
+} from "@workspace/contracts/schedules"
 
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 
-import { ScheduleManager, type ScheduleManagerOptions } from "./schedules.js"
+import {
+  askHearthForBucketBackups,
+  ScheduleManager,
+  type ScheduleManagerOptions,
+} from "./schedules.js"
 
 const directories: Array<string> = []
 const managers: Array<ScheduleManager> = []
@@ -66,6 +75,8 @@ async function manager(
     listAppIds: ScheduleManagerOptions["listAppIds"]
     findInstance: (instanceId: string) => Promise<object | null>
     findVolume: ScheduleManagerOptions["findVolume"]
+    getBackup: ScheduleManagerOptions["getBackup"]
+    takeBucketBackups: ScheduleManagerOptions["takeBucketBackups"]
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
     listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
     runContainerCommand: ScheduleManagerOptions["runContainerCommand"]
@@ -82,7 +93,7 @@ async function manager(
       }),
     findInstance: overrides.findInstance ?? (async () => null),
     findVolume: overrides.findVolume ?? (async () => null),
-    getBackup: async () => null,
+    getBackup: overrides.getBackup ?? (async () => null),
     listAppIds: overrides.listAppIds ?? (async () => new Set()),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
@@ -97,6 +108,11 @@ async function manager(
     runPower: overrides.runPower ?? (async () => undefined),
     sendConsoleCommand: overrides.sendConsoleCommand ?? (async () => undefined),
     stateDirectory: directory,
+    takeBucketBackups:
+      overrides.takeBucketBackups ??
+      (async () => {
+        throw new Error("not used")
+      }),
   }
   const filename = join(directory, "relay.sqlite")
   const start = async () => {
@@ -766,6 +782,133 @@ describe("Relay scheduled volume backups", () => {
     )
     expect(names.get(media)).toBe(`Nightly ${media}`)
     expect(names.get(uploads)).toBe(`Nightly ${uploads}`)
+  })
+})
+
+describe("Relay scheduled backups to a bucket", () => {
+  const nightly: RelayScheduleProjection = {
+    ...projection,
+    actions: [
+      {
+        destination: { kind: "storage", storageId: "d".repeat(12) },
+        executions: [
+          {
+            destination: { kind: "s3" },
+            mode: "full",
+            targetId: "server-a",
+            targetKind: "instance",
+          },
+        ],
+        id: "c5a1b9d2-3e4f-4a6b-8c7d-9e0f1a2b3c4d",
+        mode: "full",
+        name: "Nightly",
+        type: "backup",
+      },
+    ],
+  }
+  // The Hearths connected to the Relay, each answering what it is asked,
+  // and the Relay's backup queue: what Hearth sends it, and what the Relay
+  // queues itself, which for a bucket should be nothing.
+  const hearths = (
+    answer: (request: ScheduledBucketBackupRequest) => ReadonlyArray<unknown>
+  ) => {
+    const asked: Array<ScheduledBucketBackupRequest> = []
+    const sent = new Map<string, RelayBackupTask>()
+    const own: Array<string> = []
+    return {
+      asked,
+      options: {
+        enqueueBackup: async (input) => {
+          own.push(input.taskId)
+          return { status: "succeeded", taskId: input.taskId } as never
+        },
+        findInstance: async () => ({}),
+        getBackup: async (taskId) => sent.get(taskId) ?? null,
+        takeBucketBackups: (request) =>
+          askHearthForBucketBackups(async (_operation, payload) => {
+            asked.push(payload)
+            return answer(payload).map((reply) => ({ payload: reply }))
+          }, request),
+      } satisfies Parameters<typeof manager>[0],
+      own,
+      // Hearth sends the task of the backup it took.
+      send: ({
+        actionId,
+        members,
+        scheduledAt,
+        scheduleId,
+      }: ScheduledBucketBackupRequest) => {
+        const backupId = scheduledBackupId({
+          ...members[0]!,
+          actionId,
+          scheduledAt,
+          scheduleId,
+        })
+        const taskId = scheduledBackupTaskId(backupId)
+        sent.set(taskId, {
+          backupId,
+          status: "succeeded",
+          taskId,
+        } as unknown as RelayBackupTask)
+      },
+    }
+  }
+
+  it("asks Hearth to take the backup, and waits for the task Hearth sends", async () => {
+    // One Hearth doesn't know the schedule; the other takes the backup, and
+    // its task arrives a little later, as a manual backup's does.
+    const hearth = hearths((request) => {
+      setTimeout(() => hearth.send(request), 5_000)
+      return [
+        { reason: "Not this Hearth's schedule", taken: false },
+        { taken: true },
+      ]
+    })
+    const { schedules } = await manager(hearth.options)
+    await schedules.apply(nightly)
+
+    await runNow(schedules)
+
+    await advanceUntil(
+      async () =>
+        expect((await latestRun(schedules))?.status).toBe("succeeded"),
+      1_000
+    )
+    expect(hearth.asked).toMatchObject([
+      {
+        actionId: nightly.actions[0]!.id,
+        members: [{ targetId: "server-a", targetKind: "instance" }],
+        scheduleId: nightly.id,
+      },
+    ])
+    expect(hearth.own).toEqual([])
+  })
+
+  it("fails the step, making no backup of its own, when no Hearth takes it", async () => {
+    const hearth = hearths(() => [])
+    const { schedules } = await manager(hearth.options)
+    await schedules.apply(nightly)
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("failed")
+    )
+    expect(hearth.own).toEqual([])
+  })
+
+  it("fails the step, rather than wait for good, when the task Hearth took never arrives", async () => {
+    const hearth = hearths(() => [{ taken: true }])
+    const { schedules } = await manager(hearth.options)
+    await schedules.apply(nightly)
+
+    await runNow(schedules)
+
+    await advanceUntil(
+      async () => expect((await latestRun(schedules))?.status).toBe("failed"),
+      30_000
+    )
+    expect(hearth.own).toEqual([])
   })
 })
 

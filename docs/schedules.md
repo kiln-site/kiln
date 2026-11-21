@@ -114,9 +114,11 @@ each Relay what it holds and what it has run, and sends again any part the
 Relay is missing or holds an older version of; the backup sweep does the
 same every ten minutes. Until a change arrives, the Relay runs what it last
 had, so a change made while a Relay is unreachable, a deletion included,
-takes effect when it's back. A backup step to S3, or an incremental one,
-carries its destination's keys or repository password, which the Relay
-keeps with the schedule so its backups run without Hearth.
+takes effect when it's back. An incremental backup step carries its
+repository's keys and password, which the Relay keeps with the schedule so
+its backups run without Hearth. A full backup step to a bucket carries
+nothing of the bucket: Hearth takes each one when the Relay says it is due
+(see [Backups](backups.md#scheduled-backups)).
 
 Schedules are saved and run in UTC, whatever the Relay's own `TZ`. Hearth
 shows their times in each viewer's browser time zone. The editor's Hourly,

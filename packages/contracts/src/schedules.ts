@@ -8,9 +8,7 @@ import {
   backupConsistencySchema,
   backupLocalDestinationSchema,
   backupModeSchema,
-  backupObjectKeySchema,
   backupResticDestinationSchema,
-  backupS3CredentialSchema,
 } from "./backups.js"
 
 export const scheduleActionTypeSchema = z.enum([
@@ -290,11 +288,11 @@ export const scheduleDefinitionSchema = scheduleInputSchema
 
 export type ScheduleDefinition = z.infer<typeof scheduleDefinitionSchema>
 
-export const relayScheduleS3DestinationSchema = backupS3CredentialSchema
-  .safeExtend({
-    kind: z.literal("s3"),
-    objectKeyPrefix: backupObjectKeySchema,
-  })
+// A full backup to a bucket carries nothing of the bucket: its keys stay
+// with Hearth, which the Relay asks to take the backup when it is due
+// (`scheduledBucketBackupRequestSchema`).
+export const relayScheduleS3DestinationSchema = z
+  .object({ kind: z.literal("s3") })
   .strict()
 
 // One target's scheduled backup, as Hearth admitted it when it last sent
@@ -540,6 +538,85 @@ export function scheduleDeterministicUuid(
   const value = hash.join("")
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
 }
+
+/** The backup one run of a schedule's step takes of one thing. */
+export function scheduledBackupId(input: {
+  actionId: string
+  scheduledAt: number
+  scheduleId: string
+  targetId: string
+  targetKind: string
+}) {
+  return scheduleDeterministicUuid(
+    "schedule-backup",
+    input.scheduleId,
+    input.scheduledAt,
+    input.targetKind,
+    input.targetId,
+    input.actionId
+  )
+}
+
+/** The task that makes a scheduled backup. */
+export function scheduledBackupTaskId(backupId: string) {
+  return scheduleDeterministicUuid("task", backupId)
+}
+
+/** A scheduled backup's one copy. */
+export function scheduledBackupArtifactId(backupId: string) {
+  return scheduleDeterministicUuid("artifact", backupId)
+}
+
+/**
+ * A Relay asking Hearth to take the full backups one run of a step sends to
+ * a bucket: Hearth holds the bucket's keys, so it catalogs each and sends
+ * its task as it sends a manual backup's. The Relay says which step of
+ * which schedule is due and what of it; where they go, and whether they
+ * may, Hearth reads from its own schedule.
+ */
+export const scheduledBucketBackupRequestSchema = z
+  .object({
+    actionId: scheduleActionIdSchema,
+    /** The batch they are cataloged as: volumes, and what stops with them. */
+    batchId: z.uuid().optional(),
+    members: z
+      .array(
+        z
+          .object({
+            targetId: z.string().min(1).max(120),
+            targetKind: z.enum(["instance", "database", "relay", "volume"]),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(SCHEDULED_APP_BACKUP_GROUP_MAX),
+    /**
+     * The revision of the schedule the run was started with. A run is
+     * planned whole when it starts, so one whose schedule was saved since is
+     * refused rather than taken by settings it wasn't planned under.
+     */
+    revision: z.number().int().positive(),
+    // A time a `Date` holds, which names the backup.
+    scheduledAt: z.number().int().nonnegative().max(8_640_000_000_000_000),
+    scheduleId: z.uuid(),
+  })
+  .strict()
+
+export type ScheduledBucketBackupRequest = z.infer<
+  typeof scheduledBucketBackupRequestSchema
+>
+
+/** Hearth's answer: it took them all, or none and why. */
+export const scheduledBucketBackupReplySchema = z.discriminatedUnion("taken", [
+  z.object({ taken: z.literal(true) }).strict(),
+  z
+    .object({ reason: z.string().min(1).max(300), taken: z.literal(false) })
+    .strict(),
+])
+
+export type ScheduledBucketBackupReply = z.infer<
+  typeof scheduledBucketBackupReplySchema
+>
 
 export function resolveScheduleBackupName(
   template: string,

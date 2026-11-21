@@ -6,7 +6,6 @@ import type { Fiber } from "effect"
 import { z } from "zod"
 
 import {
-  backupArtifactFilename,
   type BackupTaskInput,
   type RelayBackupTask,
 } from "@workspace/contracts"
@@ -18,6 +17,10 @@ import {
   scheduleActionSupportsTarget,
   SCHEDULED_APP_BACKUP_GROUP_MAX,
   scheduledAppBackupGroup,
+  scheduledBackupArtifactId,
+  scheduledBackupId,
+  scheduledBackupTaskId,
+  scheduledBucketBackupReplySchema,
   scheduleDeterministicUuid,
   scheduleRunSchema,
   scheduleStableId,
@@ -26,6 +29,7 @@ import {
   type RelayScheduleProjection,
   type ScheduleActionAttempt,
   type ScheduleActionType,
+  type ScheduledBucketBackupRequest,
   type ScheduleRun,
   type ScheduleTarget,
 } from "@workspace/contracts/schedules"
@@ -65,6 +69,8 @@ interface TargetExecutionState {
 const scheduleBatchSize = 32
 const scheduledBackupPollIntervalMs = 500
 const scheduledBackupWaitTimeoutMs = 6 * 60 * 60 * 1_000
+// How long a step waits for Hearth to send a bucket backup it took.
+const scheduledBucketBackupArrivalTimeoutMs = 3 * 60 * 1_000
 const maximumTimerDurationMs = 2_147_483_647
 const targetExecutionConcurrency = 8
 // How many times a command's record is tried again before it's refused.
@@ -88,6 +94,13 @@ export interface ScheduleManagerOptions {
     effect: Effect.Effect<void, never>
   ) => Fiber.Fiber<void, unknown>
   readonly getBackup: (taskId: string) => Promise<RelayBackupTask | null>
+  /**
+   * Asks Hearth to take a step's full backups to a bucket, whose keys only
+   * Hearth holds. It rejects, saying why, when no Hearth takes them.
+   */
+  readonly takeBucketBackups: (
+    request: ScheduledBucketBackupRequest
+  ) => Promise<void>
   readonly listAppIds: () => Promise<ReadonlySet<string>>
   readonly listDatabaseIds: () => Promise<ReadonlySet<string>>
   // Read per run: Hearth can give the Relay its installation ID at any time.
@@ -917,6 +930,28 @@ export class ScheduleManager {
         )
         return
       }
+      if (backupExecution(action, target)?.destination?.kind === "s3") {
+        const member = { targetId: target.id, targetKind: target.kind }
+        await this.#options.takeBucketBackups({
+          actionId: action.id,
+          members: [member],
+          revision: schedule.revision,
+          scheduledAt,
+          scheduleId: schedule.id,
+        })
+        await Effect.runPromise(
+          this.#waitForBucketBackup(
+            scheduledBackupId({
+              ...member,
+              actionId: action.id,
+              scheduledAt,
+              scheduleId: schedule.id,
+            })
+          ),
+          signal ? { signal } : undefined
+        )
+        return
+      }
       const input = this.#targetBackup(schedule, action, target, scheduledAt)
       const queued = await this.#options.enqueueBackup(input)
       await Effect.runPromise(
@@ -948,21 +983,20 @@ export class ScheduleManager {
     if (!deployedDestination) {
       throw new Error("Scheduled backup destination is not deployed")
     }
-    const backupId = scheduleDeterministicUuid(
-      "schedule-backup",
-      schedule.id,
+    const backupId = scheduledBackupId({
+      actionId: action.id,
       scheduledAt,
-      target.kind,
-      target.id,
-      action.id
-    )
+      scheduleId: schedule.id,
+      targetId: target.id,
+      targetKind: target.kind,
+    })
     const runId = scheduleStableId(
       schedule.id,
       scheduledAt,
       this.#options.relayId
     )
-    const taskId = scheduleDeterministicUuid("task", backupId)
-    const artifactId = scheduleDeterministicUuid("artifact", backupId)
+    const taskId = scheduledBackupTaskId(backupId)
+    const artifactId = scheduledBackupArtifactId(backupId)
     const targetKind = target.kind === "relay" ? "platform" : target.kind
     const artifactKind =
       action.mode === "incremental"
@@ -974,9 +1008,7 @@ export class ScheduleManager {
             : ("platform_bundle" as const)
     const destination = scheduledBackupDestination(
       deployedDestination,
-      backupId,
-      artifactId,
-      artifactKind
+      artifactId
     )
     return {
       artifactKind,
@@ -1101,6 +1133,56 @@ export class ScheduleManager {
       [...(whole ? ["stopped"] : []), ...apps, ...volumeTargets].join(","),
       action.id
     )
+    // Each target answers for its own: one of another's that fails, as of
+    // a volume that is gone, fails that target's step and not this one's.
+    const own = (_: unknown, index: number) => {
+      const execution = executions[index]
+      if (!execution)
+        return databases[index - executions.length]!.id === target.id
+      return target.kind === "volume"
+        ? execution.targetId === target.id
+        : target.kind === "app" && execution.appIds?.includes(target.id)
+    }
+    // Full backups to a bucket are Hearth's to take: it holds the bucket's
+    // keys. Each target of a batch asks for all of it, by the same IDs, so
+    // Hearth takes it once, and each waits for its own to arrive.
+    if (executions.some(({ destination }) => destination?.kind === "s3")) {
+      const asked = [
+        ...executions.map(({ targetId }) => ({
+          targetId,
+          targetKind: "volume" as const,
+        })),
+        ...databases.map(({ id }) => ({
+          targetId: id,
+          targetKind: "database" as const,
+        })),
+      ]
+      await this.#options.takeBucketBackups({
+        actionId: action.id,
+        batchId,
+        members: asked,
+        revision: schedule.revision,
+        scheduledAt,
+        scheduleId: schedule.id,
+      })
+      await Effect.runPromise(
+        Effect.all(
+          asked.filter(own).map((member) =>
+            this.#waitForBucketBackup(
+              scheduledBackupId({
+                ...member,
+                actionId: action.id,
+                scheduledAt,
+                scheduleId: schedule.id,
+              })
+            )
+          ),
+          { concurrency: "unbounded", discard: true }
+        ),
+        signal ? { signal } : undefined
+      )
+      return
+    }
     const stopped = action.consistency === "stopped"
     const batch =
       stopped && members >= 2 ? { batch: { id: batchId, size: members } } : {}
@@ -1108,14 +1190,13 @@ export class ScheduleManager {
       // The App a volume's backup is named for: the first of those that
       // use it, whichever App asks.
       const of = [...(execution.appIds ?? [])].sort()[0] ?? execution.targetId
-      const backupId = scheduleDeterministicUuid(
-        "schedule-backup",
-        schedule.id,
+      const backupId = scheduledBackupId({
+        actionId: action.id,
         scheduledAt,
-        execution.targetKind,
-        execution.targetId,
-        action.id
-      )
+        scheduleId: schedule.id,
+        targetId: execution.targetId,
+        targetKind: execution.targetKind,
+      })
       return {
         artifactKind: "tar_archive",
         backupId,
@@ -1139,9 +1220,7 @@ export class ScheduleManager {
         ...batch,
         destination: scheduledBackupDestination(
           execution.destination!,
-          backupId,
-          scheduleDeterministicUuid("artifact", backupId),
-          "tar_archive"
+          scheduledBackupArtifactId(backupId)
         ),
         exclude: [],
         kind: "create",
@@ -1149,7 +1228,7 @@ export class ScheduleManager {
         mode: "full",
         reason: "scheduled",
         target: { id: execution.targetId, kind: "volume" },
-        taskId: scheduleDeterministicUuid("task", backupId),
+        taskId: scheduledBackupTaskId(backupId),
       }
     })
     // A database of the batch is dumped within its stopped window.
@@ -1169,23 +1248,48 @@ export class ScheduleManager {
     const queued = await Promise.all(
       [...volumes, ...dumps].map((input) => this.#options.enqueueBackup(input))
     )
-    // Each target answers for its own: one of another's that fails, as of
-    // a volume that is gone, fails that target's step and not this one's.
-    const own = queued.filter((_, index) => {
-      const execution = executions[index]
-      if (!execution)
-        return databases[index - executions.length]!.id === target.id
-      return target.kind === "volume"
-        ? execution.targetId === target.id
-        : target.kind === "app" && execution.appIds?.includes(target.id)
-    })
     await Effect.runPromise(
       Effect.all(
-        own.map((task) => this.#waitForBackup(task)),
+        queued.filter(own).map((task) => this.#waitForBackup(task)),
         { concurrency: "unbounded", discard: true }
       ),
       signal ? { signal } : undefined
     )
+  }
+
+  // A bucket backup Hearth took arrives as a manual one does, sent by
+  // Hearth, so there is nothing to wait on until it has. One that hasn't
+  // within a few minutes fails its step; Hearth still sends it when it can.
+  #waitForBucketBackup(backupId: string) {
+    const taskId = scheduledBackupTaskId(backupId)
+    const getBackup = this.#options.getBackup
+    const arrived = Effect.gen(function* () {
+      for (;;) {
+        const task = yield* Effect.tryPromise({
+          try: () => getBackup(taskId),
+          catch: (cause) =>
+            new ScheduledBackupWaitError({
+              cause,
+              message: "Could not inspect the scheduled backup",
+              taskId,
+            }),
+        })
+        if (task) return task
+        yield* Effect.sleep(`${scheduledBackupPollIntervalMs} millis`)
+      }
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: `${scheduledBucketBackupArrivalTimeoutMs} millis`,
+        orElse: () =>
+          Effect.fail(
+            new ScheduledBackupWaitError({
+              message: "Hearth took the backup but hasn't sent it yet",
+              taskId,
+            })
+          ),
+      })
+    )
+    return arrived.pipe(Effect.flatMap((task) => this.#waitForBackup(task)))
   }
 
   #waitForBackup(initial: RelayBackupTask) {
@@ -1532,8 +1636,9 @@ function backupRefusal(
   return executions.find((execution) => execution?.refusal)?.refusal ?? null
 }
 
-// Where a scheduled backup goes: its local or S3 destination, with the
-// artifact's identity and, on S3, its object key.
+// Where a backup the Relay makes on its own goes, its disk or a restic
+// repository, with the artifact's identity. A full backup to a bucket is
+// Hearth's to take, never made here.
 function scheduledBackupDestination(
   deployed: NonNullable<
     Extract<
@@ -1541,22 +1646,38 @@ function scheduledBackupDestination(
       { type: "backup" }
     >["executions"][number]["destination"]
   >,
-  backupId: string,
-  artifactId: string,
-  artifactKind: Extract<BackupTaskInput, { kind: "create" }>["artifactKind"]
+  artifactId: string
 ) {
-  return deployed.kind === "s3"
-    ? {
-        accessKeyId: deployed.accessKeyId,
-        allowPrivateNetwork: deployed.allowPrivateNetwork,
-        artifactId,
-        bucket: deployed.bucket,
-        endpoint: deployed.endpoint,
-        forcePathStyle: deployed.forcePathStyle,
-        kind: "s3" as const,
-        objectKey: `${deployed.objectKeyPrefix}/${backupId}/${backupArtifactFilename(backupId, artifactKind)}`,
-        region: deployed.region,
-        secretAccessKey: deployed.secretAccessKey,
-      }
-    : { ...deployed, artifactId }
+  if (deployed.kind === "s3") {
+    throw new Error("A bucket's full backups are Hearth's to take")
+  }
+  return { ...deployed, artifactId }
+}
+
+/**
+ * Asks every connected Hearth to take a step's bucket backups. The one
+ * whose schedule it is takes them; its word only lets the step wait, since
+ * each backup still arrives as a task that Hearth is allowed to send.
+ */
+export async function askHearthForBucketBackups(
+  requestClients: (
+    operation: "schedule.backup.take",
+    payload: ScheduledBucketBackupRequest,
+    timeoutMs: number
+  ) => Promise<ReadonlyArray<{ payload: unknown }>>,
+  request: ScheduledBucketBackupRequest
+): Promise<void> {
+  const replies = (
+    await requestClients("schedule.backup.take", request, 30_000)
+  ).flatMap(({ payload }) => {
+    const reply = scheduledBucketBackupReplySchema.safeParse(payload)
+    return reply.success ? [reply.data] : []
+  })
+  if (replies.some(({ taken }) => taken)) return
+  const refused = replies.find((reply) => !reply.taken)
+  throw new Error(
+    refused && !refused.taken
+      ? refused.reason
+      : "Hearth didn't answer in time to take this backup; it may still take it and send it here"
+  )
 }

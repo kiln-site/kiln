@@ -600,6 +600,154 @@ describe("Relay state from before destinations took 12-character IDs", () => {
   )
 })
 
+describe("Relay state from when schedules came with a bucket's keys", () => {
+  it.effect(
+    "drops the keys its stored schedules and waiting backups hold, and nothing else",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const execution = { mode: "full", targetKind: "instance" }
+          const keyed = "51000000-0000-4000-8000-000000000001"
+          const signed = "51000000-0000-4000-8000-000000000002"
+          const copy = {
+            artifactId: "51000000-0000-4000-8000-000000000003",
+            kind: "s3",
+            objectKey: "team/kiln/kiln/relay/instance/server-a/x/backup.zip",
+          }
+          const schedule = {
+            actions: [
+              {
+                executions: [
+                  {
+                    ...execution,
+                    destination: {
+                      accessKeyId: "AKIAKILNTESTKEY",
+                      allowPrivateNetwork: false,
+                      bucket: "kiln-backups",
+                      endpoint: "https://s3.example.test",
+                      forcePathStyle: false,
+                      kind: "s3",
+                      objectKeyPrefix: "team/kiln/kiln/relay/instance/server-a",
+                      region: "us-east-1",
+                      secretAccessKey: "kiln-test-secret-access-key",
+                    },
+                    targetId: "server-a",
+                  },
+                  {
+                    ...execution,
+                    destination: { kind: "local" },
+                    targetId: "server-b",
+                  },
+                ],
+                type: "backup",
+              },
+              { command: "say hi", type: "console_command" },
+            ],
+            id: "14bb1e12-fab9-45f3-8f85-ae22d2f074e5",
+          }
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`
+              INSERT INTO relay_schedules
+                (schedule_id, revision, enabled, next_run_at, definition_json)
+              VALUES (${schedule.id}, 1, 1, NULL, ${JSON.stringify(schedule)})
+            `
+              // A scheduled backup still to be made with the bucket's keys,
+              // and a manual one Hearth signed an upload for.
+              for (const [taskId, destination] of [
+                [
+                  keyed,
+                  {
+                    ...copy,
+                    accessKeyId: "AKIAKILNTESTKEY",
+                    secretAccessKey: "kiln-test-secret-access-key",
+                  },
+                ],
+                [
+                  signed,
+                  {
+                    ...copy,
+                    headers: {},
+                    uploadUrl: "https://s3.example.test/signed",
+                  },
+                ],
+              ] as const) {
+                const input = {
+                  artifactKind: "archive",
+                  backupId: taskId,
+                  destination,
+                  kind: "create",
+                  reason: taskId === keyed ? "scheduled" : "manual",
+                  taskId,
+                }
+                yield* sql`
+                INSERT INTO relay_backup_tasks
+                  (task_id, backup_id, kind, status, input_json, created_at,
+                   updated_at)
+                VALUES (${taskId}, ${taskId}, 'create', 'queued',
+                  ${JSON.stringify(input)}, 1, 1)
+              `
+              }
+              yield* sql`
+              DELETE FROM effect_sql_migrations WHERE migration_id >= 51
+            `
+            })
+          )
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+
+          const tasks = yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{ id: string; json: string; status: string }>`
+              SELECT task_id AS id, input_json AS json, status
+              FROM relay_backup_tasks ORDER BY task_id
+            `
+            })
+          )
+          // The keyed one fails, keeping nothing of the keys; the signed one
+          // is left to run.
+          assert.deepStrictEqual(
+            tasks.map(({ id, status }) => [id, status]),
+            [
+              [keyed, "failed"],
+              [signed, "queued"],
+            ]
+          )
+          assert.notInclude(tasks[0]!.json, "AKIAKILNTESTKEY")
+          assert.notInclude(tasks[0]!.json, "kiln-test-secret-access-key")
+          assert.include(tasks[1]!.json, "https://s3.example.test/signed")
+
+          const [stored] = yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{ json: string }>`
+              SELECT definition_json AS json FROM relay_schedules
+            `
+            })
+          )
+          const [bucket, disk] = schedule.actions[0]!.executions!
+          assert.deepStrictEqual(JSON.parse(stored!.json), {
+            ...schedule,
+            actions: [
+              {
+                executions: [{ ...bucket, destination: { kind: "s3" } }, disk],
+                type: "backup",
+              },
+              schedule.actions[1],
+            ],
+          })
+        })
+      )
+  )
+})
+
 /** Gives each test its own SQLite file so tests never share rows or run order. */
 function stateTest(
   name: string,

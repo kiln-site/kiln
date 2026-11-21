@@ -48,6 +48,7 @@ import type {
   RelaySystemUpdate,
 } from "@workspace/contracts"
 import { hearthTerminalOutputSchema } from "@workspace/contracts"
+import { scheduledBucketBackupRequestSchema } from "@workspace/contracts/schedules"
 
 import {
   hearthDialUrl,
@@ -2067,6 +2068,30 @@ class RelayConnection {
         yield* sendSocketEffect(socket, {
           id: randomUUID(),
           payload: deliverTerminalOutput(this.#relay.id, output),
+          replyTo: request.id,
+          type: "response",
+          v: 1,
+        })
+      })
+    }
+    // A schedule's backup to a bucket, whose keys only Hearth holds.
+    if (request.operation === "schedule.backup.take") {
+      return Effect.gen({ self: this }, function* () {
+        const asked = yield* Effect.try({
+          try: () => scheduledBucketBackupRequestSchema.parse(request.payload),
+          catch: asError,
+        })
+        const { takeScheduledBucketBackups } = yield* Effect.tryPromise({
+          try: () => import("@/server/scheduled-bucket-backups.server"),
+          catch: asError,
+        })
+        const payload = yield* Effect.tryPromise({
+          try: () => takeScheduledBucketBackups(this.#relay.id, asked),
+          catch: asError,
+        })
+        yield* sendSocketEffect(socket, {
+          id: randomUUID(),
+          payload,
           replyTo: request.id,
           type: "response",
           v: 1,
