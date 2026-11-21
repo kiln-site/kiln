@@ -2,6 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import { backupTaskInputSchema } from "@workspace/contracts"
 import {
   relayScheduleProjectionSchema,
+  scheduledBackupArtifactId,
   scheduledBackupId,
   scheduledBackupTaskId,
   type ScheduleDefinition,
@@ -23,7 +24,7 @@ import {
 } from "@/server/schedule-deployment.server"
 import { takeScheduledBucketBackups } from "@/server/scheduled-bucket-backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertBackup, insertRelay, selectRows } from "@/test/seed"
+import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 
 // The Relay is the only boundary. It takes a schedule and a backup task as
 // a Relay does, refusing what it can't parse, and keeps what it was sent.
@@ -535,6 +536,52 @@ describeMysql("A schedule's backups to a bucket", () => {
             relay_id: otherRelayId,
           })
           assert.lengthOf(yield* selectRows("backup_task"), 0)
+        }),
+      60_000
+    )
+
+    it.effect(
+      "signs no object Hearth didn't choose, though a row from before has the run's IDs",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          // A release before this one cataloged a scheduled bucket backup
+          // from the Relay's report, at the object the Relay named.
+          const member: Member = { targetId: server, targetKind: "instance" }
+          const backupId = idOf(member)
+          const reported = `team/kiln/kiln-test/${otherRelayId}/instance/${otherServer}/x/backup.zip`
+          yield* insertBackup(backupId, {
+            backup_mode: "full",
+            object_key: reported,
+            reason: "scheduled",
+            relay_id: relayId,
+            status: "queued",
+            storage_id: storageId,
+            target_id: server,
+          })
+          yield* insertRows("backup_artifact", {
+            backup_id: backupId,
+            created_at: at,
+            destination_key: storageId,
+            id: scheduledBackupArtifactId(backupId),
+            object_key: reported,
+            status: "queued",
+            storage_id: storageId,
+            updated_at: at,
+          })
+          yield* insertRows("backup_task", {
+            backup_id: backupId,
+            created_at: at,
+            id: scheduledBackupTaskId(backupId),
+            status: "queued",
+            task_kind: "create",
+            updated_at: at,
+          })
+
+          const refused = yield* ask(relayId, { members: [member] })
+
+          assert.isFalse(refused.taken)
+          assert.strictEqual(relay.tasks.size, 0)
         }),
       60_000
     )

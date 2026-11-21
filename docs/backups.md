@@ -365,7 +365,9 @@ What this promises, for full backups, is that the bucket's secret key
 never reaches a Relay, and that a Relay can reach no object in a bucket
 that Hearth didn't choose for one of its own backups. Its access key ID
 does, inside every signed URL, as for a manual backup or a download link;
-it can sign nothing on its own. Incremental backups still carry the keys. Nor
+it can sign nothing on its own. Backups cataloged before this release from a
+Relay's own report keep the object it named, and a run's retry never
+matches one. Incremental backups still carry the keys. Nor
 is it yet a defence against a Relay that lies to Hearth about its own
 work, which Hearth trusts elsewhere too
 ([#1011](https://github.com/kiln-site/kiln/issues/1011)).
@@ -381,9 +383,12 @@ The step waits for its task to arrive and finish. What that leaves:
   takes a backup by settings it wasn't planned under, and the next run
   takes the saved ones. What isn't the schedule's, a target's limits or
   which volumes an App uses, is read as Hearth is asked, as a Relay reads
-  them from the schedule it last had. While the target is being deployed or
-  deleted, or the destination or schedule saved, Hearth refuses
-  (`onlyIfFree`), saying what, as it refuses a person.
+  them from the schedule it last had. While what it backs up is being
+  deleted or replaced, or the destination or schedule saved, Hearth refuses
+  (`onlyIfFree`), saying what, as it refuses a person. An App's deployment
+  isn't among those: as for a manual backup, the Relay holds a stopped
+  backup and the deployment's build apart in its own lanes, by the App's
+  lifecycle lock, and a live backup runs beside it.
 - Hearth takes all of what one ask names or none: a volume an App has let
   go of since the schedule was sent refuses the rest with it, until the
   schedule is sent again.
@@ -391,8 +396,9 @@ The step waits for its task to arrive and finish. What that leaves:
   task. Hearth goes on with one it started, so a backup can be taken and
   turn up after its step failed; a step with no answer says Hearth may
   still take it.
-- A stopped batch's tasks are sent together, and the Relay waits five
-  seconds for a scheduled batch to be whole (see
+- A stopped batch's tasks are sent together, sixteen at a time, by the
+  ask that took them (another of the batch's asks sends nothing), and the
+  Relay waits five seconds for a scheduled batch to be whole (see
   [Formats and live consistency](#formats-and-live-consistency)). Any not
   sent then go on Hearth's next pass, a task after another; a batch still
   short after the wait is failed whole, with nothing stopped.

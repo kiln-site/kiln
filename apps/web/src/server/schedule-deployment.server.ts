@@ -696,6 +696,8 @@ function scheduledFullBackupDestination(
 export async function scheduledBucketBackupStep(
   scheduleId: string,
   actionId: string,
+  /** The revision the run was started with; another is "stale". */
+  revision: number,
   relay: PersistedRelay,
   asked: ReadonlyArray<{ targetId: string; targetKind: string }>
 ) {
@@ -720,6 +722,8 @@ export async function scheduledBucketBackupStep(
     ),
   ])
   const schedule = schedules[0]
+  // Refused before what it backs up is read, which may ask the Relay.
+  if (schedule && schedule.revision !== revision) return "stale" as const
   const stored = scheduleActionSchema.safeParse(
     jsonValue(actions[0]?.action_config)
   )
@@ -756,7 +760,6 @@ export async function scheduledBucketBackupStep(
   return step?.type === "backup"
     ? {
         action: step,
-        revision: schedule.revision,
         scheduleName: schedule.name,
         storageId: action.destination.storageId,
       }

@@ -1097,7 +1097,8 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
 })
 
 // A scheduled backup's catalog rows: the backup, its one copy, and the
-// task that makes it. One already cataloged is left as it is.
+// task that makes it. One already cataloged is left as it is. Answers
+// whether it was new.
 const catalogScheduledBackup = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   backup: {
@@ -1123,7 +1124,7 @@ const catalogScheduledBackup = Effect.fnUntraced(function* (
   }
 ) {
   const status = backup.error === null ? "queued" : "failed"
-  yield* transaction.execute(
+  const made = yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup")}
       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
        backup_mode, reason, status, name, object_key, repository_id,
@@ -1179,6 +1180,7 @@ const catalogScheduledBackup = Effect.fnUntraced(function* (
       backup.now,
     ]
   )
+  return made.affectedRows > 0
 })
 
 /**
@@ -1187,7 +1189,8 @@ const catalogScheduledBackup = Effect.fnUntraced(function* (
  * the bucket's keys, so the Relay asks it to take them rather than making
  * them itself. Where each goes is Hearth's to say, from the destination its
  * schedule names. Asked again for the same run, as each target of a batch
- * asks, it changes nothing.
+ * asks, it changes nothing. Answers the backups it made, which only the ask
+ * that made them sends.
  */
 export const reserveScheduledBucketBackupsEffect = Effect.fn(
   "backups.reserveScheduledBucket"
@@ -1207,7 +1210,7 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.transaction(
+  return yield* database.transaction(
     "backup_reserve_scheduled_bucket",
     (transaction) =>
       Effect.gen(function* () {
@@ -1221,33 +1224,38 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             reason: "The backup destination is unavailable",
           })
         }
+        const made: Array<string> = []
         for (const backup of input.backups) {
-          yield* catalogScheduledBackup(transaction, {
+          const objectKey = backupObjectKey({
+            artifactKind: backup.artifactKind,
+            backupId: backup.backupId,
+            installationId: kilnInstallationId(),
+            objectPrefix: storage.object_prefix,
+            relayId: input.relayId,
+            targetId: backup.targetId,
+            targetKind: backup.targetKind,
+          })
+          const isNew = yield* catalogScheduledBackup(transaction, {
             ...backup,
             artifactId: scheduledBackupArtifactId(backup.backupId),
             createdAt: now,
             error: null,
             mode: "full",
             now,
-            objectKey: backupObjectKey({
-              artifactKind: backup.artifactKind,
-              backupId: backup.backupId,
-              installationId: kilnInstallationId(),
-              objectPrefix: storage.object_prefix,
-              relayId: input.relayId,
-              targetId: backup.targetId,
-              targetKind: backup.targetKind,
-            }),
+            objectKey,
             relayId: input.relayId,
             repositoryId: null,
             storageId: input.storageId,
             taskId: scheduledBackupTaskId(backup.backupId),
           })
+          if (isNew) made.push(backup.backupId)
           // Its IDs are the run's own, so rows already holding them are
           // this backup's, cataloged before: a full backup of this target to
-          // this destination, with its own task and copy. Anything else
-          // holding one is refused rather than passed off as this backup,
-          // which would answer "taken" for a copy that never goes there.
+          // this destination, at the object Hearth chooses for it, with its
+          // own task and copy. Anything else holding one is refused rather
+          // than passed off as this backup: it would answer "taken" for a
+          // copy that never goes there, or have Hearth sign an object it
+          // didn't choose, as one a Relay reported before this release.
           const [held] = yield* transaction.queryRows<
             {
               reason: string
@@ -1264,13 +1272,16 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
                JOIN ${databaseTable("backup_artifact")} artifact
                  ON artifact.backup_id = backup.id AND artifact.id = ?
                 AND artifact.storage_id <=> backup.storage_id
+                AND artifact.object_key <=> ?
               WHERE backup.id = ? AND backup.backup_mode = 'full'
-                AND backup.storage_id <=> ?`,
+                AND backup.storage_id <=> ? AND backup.object_key <=> ?`,
             [
               scheduledBackupTaskId(backup.backupId),
               scheduledBackupArtifactId(backup.backupId),
+              objectKey,
               backup.backupId,
               input.storageId,
+              objectKey,
             ]
           )
           if (
@@ -1286,6 +1297,7 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             })
           }
         }
+        return made
       })
   )
 })

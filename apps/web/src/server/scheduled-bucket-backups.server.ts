@@ -81,19 +81,18 @@ const admit = Effect.fn("ScheduledBackups.admit")(function* ({
     scheduledBucketBackupStep(
       request.scheduleId,
       request.actionId,
+      request.revision,
       relay,
       request.members
     )
   )
+  if (step === "stale") return yield* refuse(stalePlan)
   if (!step) {
     return yield* refuse(
       "Hearth has no step sending this Relay's backups to a bucket here"
     )
   }
   const { action, scheduleName, storageId } = step
-  if (step.revision !== request.revision) {
-    return yield* refuse(stalePlan)
-  }
   const stopped = action.consistency === "stopped"
   const batchId = request.batchId ?? null
   const members = new Map(
@@ -210,15 +209,12 @@ const takeBackups = operation<Ask>()({
       if (schedule?.revision !== input.request.revision) {
         return yield* refuse(stalePlan)
       }
-      yield* reserveScheduledBucketBackupsEffect({
+      const made = yield* reserveScheduledBucketBackupsEffect({
         backups: context.backups,
         relayId: input.relayId,
         storageId: context.storageId,
       })
-      return {
-        backupIds: context.backups.map(({ backupId }) => backupId),
-        relay: context.relay,
-      }
+      return { backupIds: made, relay: context.relay }
     }),
   publish: ({ context, input }) =>
     publishBackupChanges(
@@ -227,8 +223,10 @@ const takeBackups = operation<Ask>()({
     ),
 })
 
-// Sends the tasks of the backups just taken, each on its own, all at once.
-// One that fails is left for the Relay's next pass.
+// Sends the tasks of the backups just made, each on its own, together, so a
+// stopped batch reaches the Relay whole. A Relay's control connection takes
+// 32 requests at once, which other work shares, so a large batch goes 16 at
+// a time. One that fails is left for the Relay's next pass.
 const sendTaken = (relay: PersistedRelay, backupIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const taken = new Set(backupIds)
@@ -244,7 +242,7 @@ const sendTaken = (relay: PersistedRelay, backupIds: ReadonlyArray<string>) =>
         promiseEffect(() => dispatchBackupTask(relay, task)).pipe(
           Effect.catch(() => Effect.void)
         ),
-      { concurrency: "unbounded", discard: true }
+      { concurrency: 16, discard: true }
     )
   }).pipe(
     Effect.catch((cause) =>
