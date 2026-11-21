@@ -19,7 +19,14 @@ import {
   statfs,
   writeFile,
 } from "node:fs/promises"
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path"
 import { constants as zlibConstants } from "node:zlib"
 import { logException } from "@workspace/telemetry"
 import { Deferred, Effect, Fiber, Option, Queue, Result, Schema } from "effect"
@@ -55,6 +62,7 @@ import {
   restoreCompressedDatabaseBackup,
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
+import { collectPlatformRecovery } from "./platform-recovery.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
@@ -1381,10 +1389,9 @@ export class BackupManager {
       }
     }).pipe(
       Effect.catch((cause) =>
-        Effect.logWarning(
-          "Couldn't settle unfinished volume restores",
-          { cause }
-        )
+        Effect.logWarning("Couldn't settle unfinished volume restores", {
+          cause,
+        })
       )
     )
   }
@@ -1709,33 +1716,34 @@ export class BackupManager {
             "Stop the server before restoring a backup"
           )
         }
-        const result = yield* (input.source.kind === "restic"
-          ? runResticRestore(
-              this.#config,
-              this.#restic,
-              input,
-              instance,
-              createSignal,
-              beginInstall
-            )
-          : Effect.tryPromise({
-              try: () =>
-                restorePortableInstanceBackup(
-                  this.#config,
-                  { ...input, kind: "restore" },
-                  instance,
-                  beginInstall
-                ),
-              catch: (cause) =>
-                cause instanceof RelayBackupError
-                  ? cause
-                  : RelayBackupError.make({
-                      code: "restore_failed",
-                      operation: "restore",
-                      reason: backupErrorMessage(cause),
-                      cause,
-                    }),
-            })
+        const result = yield* (
+          input.source.kind === "restic"
+            ? runResticRestore(
+                this.#config,
+                this.#restic,
+                input,
+                instance,
+                createSignal,
+                beginInstall
+              )
+            : Effect.tryPromise({
+                try: () =>
+                  restorePortableInstanceBackup(
+                    this.#config,
+                    { ...input, kind: "restore" },
+                    instance,
+                    beginInstall
+                  ),
+                catch: (cause) =>
+                  cause instanceof RelayBackupError
+                    ? cause
+                    : RelayBackupError.make({
+                        code: "restore_failed",
+                        operation: "restore",
+                        reason: backupErrorMessage(cause),
+                        cause,
+                      }),
+              })
         ).pipe(
           Effect.withSpan("Backups.restore.files", {
             attributes: {
@@ -1870,23 +1878,32 @@ export class BackupManager {
         )
         yield* promiseEffect(() => rm(destination, { force: true }))
         progress.phase = "dumping"
-        const result = yield* Effect.tryPromise({
-          try: () =>
-            createEncryptedPlatformBackup(
-              this.#config,
-              input,
-              destination,
-              progress,
-              createSignal
-            ),
-          catch: (cause) =>
-            RelayBackupError.make({
-              code: "platform_backup_failed",
-              operation: "create.platform",
-              reason: backupErrorMessage(cause),
-              cause,
-            }),
-        }).pipe(
+        const platformFailure = (cause: unknown) =>
+          RelayBackupError.make({
+            code: "platform_backup_failed",
+            operation: "create.platform",
+            reason: backupErrorMessage(cause),
+            cause,
+          })
+        const result = yield* collectPlatformRecovery(
+          this.#config,
+          this.#state
+        ).pipe(
+          Effect.mapError(platformFailure),
+          Effect.flatMap((recovery) =>
+            Effect.tryPromise({
+              try: () =>
+                createEncryptedPlatformBackup(
+                  this.#config,
+                  input,
+                  destination,
+                  progress,
+                  createSignal,
+                  recovery
+                ),
+              catch: platformFailure,
+            })
+          ),
           Effect.withSpan("Backups.platform.dump"),
           Effect.flatMap((created) =>
             storeCreatedBackup(
@@ -3344,10 +3361,10 @@ function runResticForget(
       prune: !repositoryExists
         ? undefined
         : resticPruneFor(config, {
-        repository: destination.repository,
-        repositoryPassword: password,
-        target: input.target,
-      }),
+            repository: destination.repository,
+            repositoryPassword: password,
+            target: input.target,
+          }),
       result: {
         artifacts: input.destination.artifactId
           ? [

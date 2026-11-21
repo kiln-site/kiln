@@ -292,12 +292,21 @@ by installation-scoped Docker labels; a Hearth database outside the Relay's
 Docker isn't backed up, so no connection credentials pass through the Relay's
 task journal.
 
-The bundle is a backup of Kiln's Hearth catalog, not its deployment
-configuration. Operators must retain the Compose environment, TLS material,
-and platform recovery key separately; rotating or losing application encryption
-secrets can make restored secret-bearing catalog values unusable.
-A Relay in platform mode keeps that configuration itself and exports it as a
-recovery kit (`kiln-relay platform export-kit`); see
+A Relay in platform mode writes format 2, which also carries, inside the same
+encryption, what restoring on a new machine needs beyond the dump: the keyring
+Hearth encrypts its stored secrets with (every version of
+`BETTER_AUTH_SECRETS`), Hearth's address, and the platform Relay's identity,
+its TLS authority, and the Hearths it trusts, so the restored Hearth reconnects
+to the same Relay. It also lists the installation IDs Kiln was restored from
+before, so each restore knows every ID its backups were made under. The backup and its platform backup key alone then restore
+Kiln. Format 1, which a Hearth run by hand still writes, holds only the dump:
+restoring it on a new machine also needs that Hearth's environment, or a
+recovery kit from before format 2. Every Kiln restores both.
+
+Neither format holds Hearth's deployment configuration, such as its email
+settings or signup policy, which come from where Kiln is installed. A Relay in
+platform mode also keeps its configuration itself and exports it as a recovery
+kit (`kiln-relay platform export-kit`); see
 [Self-hosting](self-hosting.md#recovery).
 
 Game-server archives, tar archives, and platform bundles each carry a

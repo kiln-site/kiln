@@ -31,6 +31,14 @@ const PlatformNamesSchema = Schema.Struct({
 export const PlatformStateSchema = Schema.Struct({
   formatVersion: Schema.Literal(PLATFORM_STATE_FORMAT_VERSION),
   installationId: Schema.String,
+  /**
+   * The installations this one was restored from, oldest first. A restore
+   * gives Kiln a new installation ID, so it's known the machine changed;
+   * backups made under these IDs still restore here.
+   */
+  previousInstallationIds: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([]))
+  ),
   createdAt: Schema.String,
   /**
    * `installing` until Hearth first reports healthy, then `ready`.

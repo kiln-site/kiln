@@ -269,6 +269,7 @@ export function newPlatformState(
     names: platformNames(config),
     ownerInvitationIds: [],
     phase: "installing",
+    previousInstallationIds: [],
     relay: { host: config.advertisedHost, port: config.port },
     secrets: {
       authSecrets: inputs.authSecrets ?? `1:${platformSecret()}`,
