@@ -18,7 +18,7 @@ import { logException } from "@workspace/telemetry"
 import {
   RelayInventoryLookupSchema,
   backupRestoreResolveSchema,
-  backupTaskIdSchema,
+  backupTaskCancelRequestSchema,
   decodeRelayJoinLink,
   relayInstallationReplaceInputSchema,
   backupTaskInputSchema,
@@ -3303,7 +3303,7 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.backups.cancel",
         backupManager
-          .cancel(backupTaskIdSchema.parse(requiredString(payload, "taskId")))
+          .cancel(backupTaskCancelRequestSchema.parse(request.payload))
           .pipe(Effect.map((task) => (task ? sendBackupTask(task) : task)))
       )
     case "backup.restore.resolve": {

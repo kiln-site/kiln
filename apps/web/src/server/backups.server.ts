@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
 import {
-  relayBackupTaskSchema,
   relaySnapshotSchema,
   relayVolumesSchema,
   type AccessGrantScopeType,
@@ -73,6 +72,8 @@ import {
   cancelCreateForDelete,
   dispatchBackupTask,
   reconcileRelayBackups,
+  relayHoldsTask,
+  relayTaskReply,
 } from "@/lib/backup-reconciliation"
 import {
   activeRelay,
@@ -268,15 +269,29 @@ export async function cancelBackupHandler(
     throw new Error("You do not have permission to cancel this backup")
   }
   const relay = await requireBackupRelay(backup.relayId)
-  const task = relayBackupTaskSchema.parse(
-    await relayRpc(
-      relay,
-      "backup.task.cancel",
-      { taskId: backup.taskId },
-      15_000,
-      user.id
-    )
+  const target = { id: backup.targetId, kind: backup.targetKind }
+  const reply = await relayRpc(
+    relay,
+    "backup.task.cancel",
+    { backupId: backup.id, target, taskId: backup.taskId },
+    15_000,
+    user.id
   )
+  const task = await runAppEffect(
+    "backups.cancelReply",
+    relayTaskReply(reply, backup.taskId)
+  )
+  // Another task under its ID: the Relay left that alone, and this backup's
+  // create isn't one it has to stop.
+  if (
+    !relayHoldsTask(task, {
+      backupId: backup.id,
+      kind: "create",
+      target,
+    })
+  ) {
+    throw new Error("This backup is no longer being created")
+  }
   await runAppEffect(
     "backups.reconcileCancel",
     reconcileBackupTaskEffect(task, relay.id)

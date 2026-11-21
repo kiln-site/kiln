@@ -43,6 +43,7 @@ import {
   type BackupFailureCode,
   type BackupResticCreateTaskResult,
   type BackupRestoreTaskInput,
+  type BackupTaskCancelRequest,
   type BackupTarget,
   type BackupUnfinishedRestore,
   type BackupTaskInput,
@@ -336,11 +337,21 @@ export class BackupManager {
       )
   }
 
-  cancel(taskId: string) {
+  /**
+   * Stops the create Hearth names, if this Relay holds that create: for that
+   * backup and resource. Answers with the task it holds under the ID.
+   */
+  cancel(request: BackupTaskCancelRequest) {
     return Effect.gen({ self: this }, function* () {
-      const cancelled = yield* this.#state.cancelBackupTask(taskId, Date.now())
-      if (cancelled) this.#activeCreates.get(taskId)?.abort()
-      return yield* this.#state.getBackupTask(taskId)
+      const cancelled = yield* this.#state.cancelBackupTask(
+        request.taskId,
+        Date.now(),
+        undefined,
+        null,
+        { backupId: request.backupId, target: request.target }
+      )
+      if (cancelled) this.#activeCreates.get(request.taskId)?.abort()
+      return yield* this.#state.getBackupTask(request.taskId)
     })
   }
 
@@ -3298,11 +3309,13 @@ function runResticForget(
     const repositoryExists = yield* Effect.tryPromise({
       try: async () => {
         if (destination.createTaskId) {
+          // Its create's snapshot, which carries both: a task ID alone
+          // could be another backup's in the same repository.
           const snapshots = await restic.snapshotsByTag({
             location,
             password,
             signal,
-            tag: `task:${destination.createTaskId}`,
+            tag: `task:${destination.createTaskId},backup:${input.backupId}`,
           })
           for (const snapshot of snapshots) {
             await restic.forget({

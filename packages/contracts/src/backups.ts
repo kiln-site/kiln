@@ -917,6 +917,22 @@ export const backupTaskResultSchema = z.union([
   backupOperationTaskResultSchema,
 ])
 
+/**
+ * Hearth asking a Relay to stop a create: the task, with the backup and the
+ * resource Hearth sent it for. A Relay holding another task under that ID
+ * leaves it alone and answers with what it holds.
+ */
+export const backupTaskCancelRequestSchema = z
+  .object({
+    backupId: backupIdSchema,
+    target: backupTargetSchema,
+    taskId: backupTaskIdSchema,
+  })
+  .strict()
+export type BackupTaskCancelRequest = z.infer<
+  typeof backupTaskCancelRequestSchema
+>
+
 export const relayBackupTaskSchema = z
   .object({
     backupId: backupIdSchema,
