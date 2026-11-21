@@ -23,6 +23,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import {
   TargetPicker,
+  TargetPickerList,
   type PickerGroup,
   type PickerTarget,
 } from "@/components/target-picker"
@@ -68,6 +69,7 @@ export function BackupConfigurationDialog({
   initialMode = "incremental",
   initialName,
   initialTargetKeys,
+  inlineTargets,
   onOpenChange,
   onSubmit,
   open,
@@ -84,12 +86,7 @@ export function BackupConfigurationDialog({
    * An App's or a volume's backup, always a full archive, offers taking it
    * live or with what uses it stopped, in place of the mode.
    */
-  consistencyChoice?: {
-    /** What stopping it does, when it's more than one target's. */
-    stoppedDescription?: string
-    /** Why it can't be stopped, as without permission to stop its Apps. */
-    stoppedUnavailable: string | null
-  }
+  consistencyChoice?: ConsistencyChoice
   description?: React.ReactNode
   error?: string
   /** Rows that stand for several of `targets`: Apps and groups. */
@@ -103,6 +100,21 @@ export function BackupConfigurationDialog({
    * unsaid, the only target there is, if there is only one.
    */
   initialTargetKeys?: ReadonlyArray<string> | undefined
+  /**
+   * Lists the targets in place, every one shown, for a step of a schedule
+   * whose targets are already chosen: it picks which of them it backs up.
+   * It may save with none, which its row then warns of. Whether they can be
+   * taken stopped is the step's to say, from what is ticked.
+   */
+  inlineTargets?: {
+    /** Every one ticked also takes targets added to the schedule later. */
+    coversLater: boolean
+    consistencyChoiceFor: (
+      chosen: ReadonlyArray<BackupConfigurationTarget>
+    ) => ConsistencyChoice | undefined
+    /** Beneath the list, as what was left out and why. */
+    note?: React.ReactNode
+  }
   onOpenChange: (open: boolean) => void
   onSubmit: (configuration: BackupConfiguration) => void
   open: boolean
@@ -120,6 +132,13 @@ export function BackupConfigurationDialog({
   const openingKeys = (): ReadonlyArray<string> =>
     initialTargetKeys ?? (targets.length === 1 ? [targets[0]!.key] : [])
   const [selectedKeys, setSelectedKeys] = React.useState(openingKeys)
+  // It stays mounted while closed, so each opening starts from what is
+  // chosen then, as a schedule step's targets changed since.
+  const [wasOpen, setWasOpen] = React.useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setSelectedKeys(openingKeys())
+  }
   const [destinationKeys, setDestinationKeys] = React.useState<Array<string>>(
     () => [...(initialDestinationKeys ?? ["local"])]
   )
@@ -151,9 +170,11 @@ export function BackupConfigurationDialog({
       }),
     []
   )
-  const consistencyChoice = showTarget
-    ? chosenConsistencyChoice(chosen)
-    : fixedConsistencyChoice
+  const consistencyChoice = inlineTargets
+    ? inlineTargets.consistencyChoiceFor(chosen)
+    : showTarget
+      ? chosenConsistencyChoice(chosen)
+      : fixedConsistencyChoice
   const effectiveConsistency =
     consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
   // A game server's choice. Chosen with anything else, each is a full
@@ -195,7 +216,8 @@ export function BackupConfigurationDialog({
     [destinationKeysInUse]
   )
   const showMode = !consistencyChoice && (showTarget ? onlyInstances : true)
-  const tooMany = chosen.length > MAX_TARGETS
+  // A schedule's step takes as many as the schedule; one run, MAX_TARGETS.
+  const tooMany = !inlineTargets && chosen.length > MAX_TARGETS
 
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
@@ -250,7 +272,34 @@ export function BackupConfigurationDialog({
               onChange={(event) => setName(event.currentTarget.value)}
             />
           </label>
-          {showTarget ? (
+          {inlineTargets ? (
+            <div>
+              <span className="mb-2 block text-xs font-medium">
+                Targets{" "}
+                <span className="font-normal text-muted-foreground">
+                  {chosen.length} of {targets.length}
+                </span>
+              </span>
+              <TargetPickerList
+                ariaLabel="Backup targets"
+                emptyMessage="No available targets"
+                groups={groups}
+                selectedKeys={selectedKeySet}
+                targets={targets}
+                onToggle={toggleTargets}
+              />
+              {inlineTargets.note}
+              <p className="type-meta mt-1.5 text-muted-foreground">
+                {!inlineTargets.coversLater
+                  ? "It backs up only the ticked targets."
+                  : targets.length === 0
+                    ? "It backs up targets added to the schedule later, and an App once it uses a volume."
+                    : chosen.length === targets.length
+                      ? "With every one ticked, it also backs up targets added to the schedule later, and an App once it uses a volume."
+                      : "It backs up only the ticked targets."}
+              </p>
+            </div>
+          ) : showTarget ? (
             <div>
               <span className="mb-2 block text-xs font-medium">Targets</span>
               <TargetPicker
@@ -315,7 +364,8 @@ export function BackupConfigurationDialog({
             disabled={
               pending ||
               !name.trim() ||
-              (showTarget && (chosen.length === 0 || tooMany))
+              (showTarget &&
+                ((chosen.length === 0 && !inlineTargets) || tooMany))
             }
             type="button"
             onClick={() =>
@@ -531,6 +581,13 @@ function BackupDestinationChoice({
       </span>
     </label>
   )
+}
+
+interface ConsistencyChoice {
+  /** What stopping it does, when it's more than one target's. */
+  stoppedDescription?: string | undefined
+  /** Why it can't be stopped, as without permission to stop its Apps. */
+  stoppedUnavailable: string | null
 }
 
 const noTargets: ReadonlyArray<BackupConfigurationTarget> = []
