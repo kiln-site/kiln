@@ -3463,6 +3463,7 @@ export const waitingBucketCopiesEffect = Effect.fn(
   now: number
   perDestination: number
   resting: ReadonlyArray<string>
+  restingCopies: ReadonlyArray<string>
 }) {
   const database = yield* Database
   type Row = RowDataPacket & {
@@ -3516,12 +3517,24 @@ export const waitingBucketCopiesEffect = Effect.fn(
               .map(() => "?")
               .join(", ")})`
           : ""
+      }${
+        input.restingCopies.length > 0
+          ? ` AND artifact.id NOT IN (${input.restingCopies
+              .map(() => "?")
+              .join(", ")})`
+          : ""
       }`
     )}) waiting
       WHERE place <= ?
       ORDER BY seen_by ASC, artifact_id ASC
       LIMIT ?`,
-    [input.now, ...input.resting, input.perDestination, input.limit]
+    [
+      input.now,
+      ...input.resting,
+      ...input.restingCopies,
+      input.perDestination,
+      input.limit,
+    ]
   )
   const rows = [...late, ...due]
   // More are waiting than this look took, of a destination or in all.

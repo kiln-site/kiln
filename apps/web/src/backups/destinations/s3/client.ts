@@ -361,7 +361,19 @@ export function headS3BackupObject(
       Effect.catchIf(
         (error) => s3FailureStatus(error.cause) === 404,
         () => Effect.succeed({ kind: "missing" as const })
-      )
+      ),
+      // However the bucket's connection is set, one look waits so long.
+      Effect.timeoutOrElse({
+        duration: "15 seconds",
+        orElse: () =>
+          Effect.fail(
+            backupStorageError(
+              "s3_request_failed",
+              "storage.head",
+              "The bucket didn't answer in time"
+            )
+          ),
+      })
     )
   )
 }

@@ -134,12 +134,11 @@ export function startBackupMaintenance(): void {
       catalogScheduledBackups().pipe(logFailure("backupMaintenance.catalog"))
     ),
     // Bucket copies still waiting to be seen, as after a restart or a
-    // bucket that couldn't be asked.
+    // bucket that couldn't be asked: the sweep wakes the look, and doesn't
+    // wait on the buckets.
     Effect.andThen(
       Effect.promise(() => import("@/lib/bucket-copy-checks.server")).pipe(
-        Effect.flatMap(({ checkBucketCopiesEffect }) =>
-          checkBucketCopiesEffect()
-        ),
+        Effect.map(({ requestBucketCopyChecks }) => requestBucketCopyChecks()),
         logFailure("backupMaintenance.bucketCopies")
       )
     ),

@@ -15,7 +15,10 @@ import {
 import { Database } from "@/effect/database"
 import { finalBackupStateEffect } from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
-import { checkBucketCopiesEffect } from "@/lib/bucket-copy-checks.server"
+import {
+  checkBucketCopiesEffect,
+  requestBucketCopyChecks,
+} from "@/lib/bucket-copy-checks.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 
@@ -240,6 +243,66 @@ const state = Effect.gen(function* () {
   )
   return { backup, copies }
 })
+
+// More backups' bucket copies on `storage`, uploaded and waiting to be seen
+// by `seenBy`, each answered with `answer(index)`.
+const waitingCopies = (
+  count: number,
+  storage: string,
+  seenBy: number,
+  answer: (index: number) => number | { status: number }
+) =>
+  Effect.gen(function* () {
+    for (let index = 0; index < count; index += 1) {
+      const id = `${String(seeded).padStart(8, "0")}-${storage.slice(0, 4)}-4000-8000-${String(index).padStart(12, "0")}`
+      const key = `${objectKey}.${storage}.${index}`
+      yield* insertBackup(id, {
+        backup_mode: "full",
+        relay_id: relayId,
+        status: "running",
+        storage_id: storage,
+        target_id: target.id,
+      })
+      yield* insertRows("backup_artifact", {
+        id: id.replace("-4000-", "-4001-"),
+        backup_id: id,
+        bytes: uploaded,
+        destination_key: storage,
+        object_key: key,
+        seen_by: seenBy + index,
+        status: "running",
+        storage_id: storage,
+        created_at: now,
+        updated_at: now,
+      })
+      yield* insertRows("backup_task", {
+        id: id.replace("-4000-", "-4002-"),
+        backup_id: id,
+        task_kind: "create",
+        status: "succeeded",
+        created_at: now,
+        updated_at: now,
+      })
+      bucket.objects.set(key, answer(index))
+    }
+  })
+
+// Looks as the worker does, one after another while one says more could be
+// reached.
+const lookUntilDone = Effect.gen(function* () {
+  for (let look = 0; look < 30; look += 1) {
+    const { more } = yield* checkBucketCopiesEffect()
+    if (!more) return
+  }
+})
+
+const copyStatuses = (storage: string) =>
+  Effect.map(
+    selectRows<{ id: string; status: string; storage_id: string | null }>(
+      "backup_artifact"
+    ),
+    (rows) => rows.filter(({ storage_id }) => storage_id === storage)
+  )
 
 describeMysql("Bucket copies Hearth looks for", () => {
   layer(TestDatabase)((it) => {
@@ -558,59 +621,84 @@ describeMysql("Bucket copies Hearth looks for", () => {
         })
     )
 
-    it.effect("sees a backlog of one destination's copies in one check", () =>
+    it.effect("sees a backlog of one destination's copies, a bounded look at a time", () =>
       Effect.gen(function* () {
         yield* seed()
         // Ninety backups' bucket copies, all uploaded and all there.
-        for (let index = 0; index < 90; index += 1) {
-          const id = `${String(seeded).padStart(8, "0")}-4444-4000-8000-${String(index).padStart(12, "0")}`
-          yield* insertBackup(id, {
-            backup_mode: "full",
-            relay_id: relayId,
-            status: "running",
-            storage_id: storageId,
-            target_id: target.id,
-          })
-          yield* insertRows("backup_artifact", {
-            id: id.replace("-4444-", "-5555-"),
-            backup_id: id,
-            bytes: uploaded,
-            destination_key: storageId,
-            object_key: `${objectKey}.${index}`,
-            seen_by: now + 60 * 60_000,
-            status: "running",
-            storage_id: storageId,
-            created_at: now,
-            updated_at: now,
-          })
-          yield* insertRows("backup_task", {
-            id: id.replace("-4444-", "-6666-"),
-            backup_id: id,
-            task_kind: "create",
-            status: "succeeded",
-            created_at: now,
-            updated_at: now,
-          })
-          bucket.objects.set(`${objectKey}.${index}`, uploaded)
-        }
+        yield* waitingCopies(90, storageId, now + 60 * 60_000, () => uploaded)
 
-        // One check, as one wake-up makes, sees them all.
-        yield* checkBucketCopiesEffect()
+        yield* lookUntilDone
 
-        const copies = (yield* selectRows<{ status: string; storage_id: string | null }>(
-          "backup_artifact"
-        )).filter(({ storage_id }) => storage_id === storageId)
-        assert.isTrue(copies.length >= 90)
-        assert.deepStrictEqual(
-          [...new Set(copies.map(({ status }) => status))].sort(),
-          // The seeded backup's own copy wasn't reported, so it never waited.
-          ["available", "running"]
+        const seen = (yield* copyStatuses(storageId)).filter(
+          ({ status }) => status === "available"
         )
-        assert.strictEqual(
-          copies.filter(({ status }) => status === "available").length,
-          90
-        )
+        assert.lengthOf(seen, 90)
       })
+    )
+
+    it.effect(
+      "sees a backlog through the looks one wake-up starts",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* waitingCopies(90, storageId, now + 60 * 60_000, () => uploaded)
+          vi.useFakeTimers({ now, toFake: ["setTimeout", "clearTimeout", "Date"] })
+
+          // One wake-up, as a report or the sweep gives; each look asks for
+          // the next while it leaves copies another could reach.
+          requestBucketCopyChecks()
+          let seen = 0
+          // Each tick passes a look's wait for the next, then lets the look's
+          // own reads and writes, which take real time, finish.
+          for (let tick = 0; tick < 400 && seen < 90; tick += 1) {
+            yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_100))
+            yield* Effect.promise(
+              () => new Promise((resolve) => setImmediate(resolve))
+            )
+            seen = (yield* copyStatuses(storageId)).filter(
+              ({ status }) => status === "available"
+            ).length
+          }
+
+          assert.strictEqual(seen, 90)
+        }).pipe(Effect.ensuring(Effect.sync(() => vi.useRealTimers()))),
+      60_000
+    )
+
+    it.effect(
+      "looks for a copy behind others the bucket refuses to show",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          // Ten older copies the bucket answers 403 for, one at a time, and
+          // an eleventh it shows.
+          yield* waitingCopies(11, storageId, now + 60 * 60_000, (index) =>
+            index < 10 ? { status: 403 } : uploaded
+          )
+
+          yield* lookUntilDone
+
+          const copies = yield* copyStatuses(storageId)
+          const last = copies.find(({ id }) => id.endsWith("000000000010"))
+          assert.strictEqual(last?.status, "available")
+        })
+    )
+
+    it.effect(
+      "gives a copy past its deadline that Hearth never looked for one look",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          // Waiting since before a long backlog, now past its hour, and there.
+          yield* waitingCopies(1, storageId, now - 1_000, () => uploaded)
+
+          yield* checkBucketCopiesEffect()
+
+          const [copy] = (yield* copyStatuses(storageId)).filter(({ id }) =>
+            id.endsWith("000000000000")
+          )
+          assert.strictEqual(copy?.status, "available")
+        })
     )
 
     it.effect("keeps a backup waiting whose delete failed", () =>

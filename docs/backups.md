@@ -185,16 +185,21 @@ within the backup's reservation; otherwise, or when the bucket has no object
 there, it fails, saying why. A copy on the Relay's own disk counts at once,
 so a backup with one is available while its bucket copy waits; one whose
 delete fails, or ends with its bucket copy kept, while that copy waits is
-running again, not failed. A look takes at most ten of one destination's
-copies, so a bucket that can't be asked never fills one, and another look
-follows at once while one settled something and left more waiting, so a
-backlog of healthy copies is seen well inside its hour; a check stops once
-a look settles nothing. A bucket Hearth can't ask is left alone a while,
-longer each time up to ten minutes. A
+running again, not failed. Each wake makes one bounded look: at most a
+hundred copies, ten of any one destination, four looked for at once, each
+waiting at most fifteen seconds for the bucket. A look that left copies
+another could reach asks for the next a second later, so a backlog is seen
+a look at a time, and the sweep only wakes the looks rather than waiting on
+buckets. An answer that says nothing of a copy leaves it to be looked for
+again, after thirty seconds and longer each time up to ten minutes: a bucket
+that can't be reached rests whole, while a refusal (403), which can be of
+one object, rests that copy alone. A
 copy still unseen an hour after it first waited, by Hearth's clock
-(`seen_by`, migration 95), fails with the last answer Hearth had: a refusal
-(403) says the copy may be missing or Hearth's key not allowed to read it.
-One look runs at a time, whether the sweep or a pass asked for it. A look
+(`seen_by`, migration 95), fails with the last answer Hearth had, so the
+hour bounds retries; one Hearth never got to look for first has one look
+before it can fail. A refusal (403) says the copy may be missing or
+Hearth's key not allowed to read it. One look runs at a time, whoever asked
+for it. A look
 settles a copy only as it was when looked for, and only while it is still
 its Relay's upload: a newer report of another size is looked for again, and
 a copy Hearth's copy worker has taken over meanwhile is the worker's. A copy
