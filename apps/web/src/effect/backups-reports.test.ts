@@ -207,6 +207,68 @@ describeMysql("Relay backup reports", () => {
       })
     )
 
+    it.effect("apply a create or delete only for the resource Hearth sent it for", () =>
+      Effect.gen(function* () {
+        yield* fresh
+        yield* seedRunning
+        const before = yield* backupState
+        const elsewhere = { id: "d".repeat(12), kind: "instance" as const }
+
+        // Its create reported finished, naming another game server.
+        assert.isFalse(
+          yield* reconcileBackupTaskEffect(
+            relayBackupTaskSchema.parse({
+              ...finishedCreate,
+              input: { ...finishedCreate.input, target: elsewhere },
+            }),
+            relayOne
+          )
+        )
+        assert.deepStrictEqual(yield* backupState, before)
+
+        // Made, then a delete Hearth queued reported done for another one.
+        yield* reconcileBackupTaskEffect(finishedCreate, relayOne)
+        const deleteTaskId = "66666666-6666-4666-8666-6666666666d6"
+        yield* insertRows("backup_task", {
+          id: deleteTaskId,
+          backup_id: backupId,
+          task_kind: "delete",
+          status: "queued",
+          created_at: now,
+          updated_at: now,
+        })
+        assert.isFalse(
+          yield* reconcileBackupTaskEffect(
+            relayBackupTaskSchema.parse({
+              backupId,
+              bytesCompleted: 0,
+              bytesTotal: null,
+              createdAt: now,
+              error: null,
+              finishedAt: now + 5,
+              input: {
+                backupId,
+                destination: { artifactId, kind: "local" },
+                kind: "delete",
+                target: elsewhere,
+                taskId: deleteTaskId,
+              },
+              inputRefreshRequired: false,
+              kind: "delete",
+              result: { artifacts: [], warnings: [] },
+              startedAt: now,
+              status: "succeeded",
+              taskId: deleteTaskId,
+              updatedAt: now + 5,
+            }),
+            relayOne
+          )
+        )
+        const [backup] = (yield* backupState).backups
+        assert.strictEqual(backup?.status, "available")
+      })
+    )
+
     it.effect("leave a copy Hearth is making elsewhere to the copy", () =>
       Effect.gen(function* () {
         yield* fresh
@@ -264,17 +326,26 @@ describeMysql("Relay backup reports", () => {
         yield* fresh
         yield* seedRunning
         yield* reconcileBackupTaskEffect(finishedCreate, relayOne)
-        const restoreTaskId = "55555555-5555-4555-8555-5555555555c5"
-        // Restored where it was taken from: the task names no other target.
-        yield* insertRows("backup_task", {
-          id: restoreTaskId,
-          backup_id: backupId,
-          task_kind: "restore",
-          status: "queued",
-          created_at: now,
-          updated_at: now,
-        })
-        const restored = (into: { id: string; kind: "instance" }) =>
+        // Two restores where it was taken from: the tasks name no other
+        // target.
+        const restores = [
+          "55555555-5555-4555-8555-5555555555c5",
+          "55555555-5555-4555-8555-5555555555c6",
+        ] as const
+        for (const id of restores) {
+          yield* insertRows("backup_task", {
+            id,
+            backup_id: backupId,
+            task_kind: "restore",
+            status: "queued",
+            created_at: now,
+            updated_at: now,
+          })
+        }
+        const restored = (
+          taskId: string,
+          into: { id: string; kind: "instance" }
+        ) =>
           relayBackupTaskSchema.parse({
             backupId,
             bytesCompleted: 2048,
@@ -291,33 +362,51 @@ describeMysql("Relay backup reports", () => {
                 kind: "local",
               },
               target: into,
-              taskId: restoreTaskId,
+              taskId,
             },
             inputRefreshRequired: false,
             kind: "restore",
             result: { artifacts: [], warnings: [] },
             startedAt: now,
             status: "succeeded",
-            taskId: restoreTaskId,
+            taskId,
             updatedAt: now + 5,
           })
-        const restoreStatus = Effect.map(
-          selectRows<{ id: string; status: string }>("backup_task"),
-          (rows) => rows.find(({ id }) => id === restoreTaskId)?.status
-        )
+        const statusOf = (taskId: string) =>
+          Effect.map(
+            selectRows<{ id: string; status: string }>("backup_task"),
+            (rows) => rows.find(({ id }) => id === taskId)?.status
+          )
 
         assert.isFalse(
           yield* reconcileBackupTaskEffect(
-            restored({ id: "d".repeat(12), kind: "instance" }),
+            restored(restores[0], { id: "d".repeat(12), kind: "instance" }),
             relayOne
           )
         )
-        assert.strictEqual(yield* restoreStatus, "queued")
-
+        assert.strictEqual(yield* statusOf(restores[0]), "queued")
         assert.isTrue(
-          yield* reconcileBackupTaskEffect(restored(target), relayOne)
+          yield* reconcileBackupTaskEffect(
+            restored(restores[0], target),
+            relayOne
+          )
         )
-        assert.strictEqual(yield* restoreStatus, "succeeded")
+        assert.strictEqual(yield* statusOf(restores[0]), "succeeded")
+
+        // A failure the Relay read back from a journal row it couldn't
+        // parse names no resource it knows, and still ends the task.
+        assert.isTrue(
+          yield* reconcileBackupTaskEffect(
+            relayBackupTaskSchema.parse({
+              ...restored(restores[1], { id: "unknown", kind: "instance" }),
+              error: "The Relay journal row could not be parsed",
+              result: null,
+              status: "failed",
+            }),
+            relayOne
+          )
+        )
+        assert.strictEqual(yield* statusOf(restores[1]), "failed")
       })
     )
 

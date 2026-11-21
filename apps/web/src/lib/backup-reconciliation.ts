@@ -160,12 +160,16 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
         continue
       }
       const relayTask = relayTasksById.get(task.taskId)
-      // The Relay holds another task under this one's ID: this one never
-      // arrived, and sending it would only be answered with that one. It
-      // is settled, saying so, rather than tried on every pass.
+      // The Relay holds another task under this one's ID, for another
+      // backup, kind or resource: this one never arrived, and sending it
+      // would only be refused. It is settled, saying so, rather than tried
+      // on every pass.
       if (
         relayTask &&
-        (relayTask.backupId !== task.backupId || relayTask.kind !== task.kind)
+        (relayTask.backupId !== task.backupId ||
+          relayTask.kind !== task.kind ||
+          relayTask.input.target.id !== task.target.id ||
+          relayTask.input.target.kind !== task.target.kind)
       ) {
         yield* settleUndispatchable(relay, task.taskId, task.backupId, {
           code: "task_identity_conflict",

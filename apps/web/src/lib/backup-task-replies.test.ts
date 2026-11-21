@@ -196,5 +196,38 @@ describeMysql("A Relay's answer about a backup task", () => {
           assert.strictEqual(byId.get(second.taskId)?.status, "queued")
         })
     )
+
+    it.effect(
+      "settles a task the Relay holds for another resource under its ID",
+      () =>
+        Effect.gen(function* () {
+          const persisted = yield* seed("queued")
+          // The first create listed as Hearth sent it but for another game
+          // server, waiting on fresh input.
+          relay.answer = (operation) => {
+            if (operation === "backup.task.list") {
+              const listed = createTask(first, "queued")
+              return [
+                {
+                  ...listed,
+                  input: {
+                    ...listed.input,
+                    target: { id: "d".repeat(12), kind: "instance" },
+                  },
+                  inputRefreshRequired: true,
+                },
+                createTask(second, "queued"),
+              ]
+            }
+            throw new Error(`Unexpected Relay request ${operation}`)
+          }
+
+          yield* Effect.promise(() => reconcileRelayBackups(persisted))
+
+          const byId = new Map((yield* tasks).map((task) => [task.id, task]))
+          assert.strictEqual(byId.get(first.taskId)?.status, "failed")
+          assert.strictEqual(byId.get(second.taskId)?.status, "queued")
+        })
+    )
   })
 })

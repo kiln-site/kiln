@@ -1465,14 +1465,23 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         // would otherwise delete the backup, and a snapshot reported for a
         // full backup would be recorded as one.
         if (knownTask.task_kind !== task.kind) return
-        // A restore reports on the restore Hearth sent: into the resource it
-        // named, or the backup's own when it named none.
+        // And it names the resource Hearth sent it for, as the task was
+        // dispatched: a restore's destination, or the backup's own target
+        // (an export is sent as its game server's). A failure with no result
+        // is the exception: the Relay could report it under the right
+        // target anyway, and one whose journal row it couldn't read names
+        // none it knows, yet must still end the task.
+        const sentFor =
+          task.kind === "export"
+            ? { id: knownTask.backup_target_id, kind: "instance" }
+            : {
+                id: knownTask.task_target_id ?? knownTask.backup_target_id,
+                kind: knownTask.task_target_kind ?? knownTask.backup_target_kind,
+              }
         if (
-          task.input.kind === "restore" &&
-          (task.input.target.kind !==
-            (knownTask.task_target_kind ?? knownTask.backup_target_kind) ||
-            task.input.target.id !==
-              (knownTask.task_target_id ?? knownTask.backup_target_id))
+          (task.input.target.id !== sentFor.id ||
+            task.input.target.kind !== sentFor.kind) &&
+          !(task.status === "failed" && task.result === null)
         ) {
           return
         }
