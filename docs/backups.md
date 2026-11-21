@@ -174,6 +174,25 @@ A full backup can go to several destinations at once: its task writes the
 primary and copies it to each replica, and the catalog keeps every copy. An
 incremental backup goes to exactly one.
 
+A full backup's copy in a bucket counts once Hearth has seen it there
+(`checkBucketCopiesEffect`, apps/web/src/lib/bucket-copy-checks.server.ts),
+not on its Relay's word. When the Relay reports one uploaded it waits, still
+running and shown as "Checking bucket", and Hearth looks for it in the
+background: woken when a pass over the Relay's backups sees a create
+succeed, and again on each backup sweep. It becomes available at the size
+Hearth saw only if that is the size of the archive its Relay reported, and
+within the backup's reservation; otherwise, or when the bucket has no object
+there, it fails, saying why. A copy on the Relay's own disk counts at once,
+so a backup with one is available while its bucket copy waits. A bucket
+Hearth can't ask is left alone a while, longer each time up to ten minutes,
+and a copy still unseen an hour after its upload fails with the last answer
+Hearth had: a refusal (403) says the copy may be missing or Hearth's key not
+allowed to read it. A copy Hearth settled stays as it settled whatever a
+later report of its create says, and a look that ends after its backup was
+deleted changes nothing. Nothing is deleted from the bucket here; a failed
+copy goes with its backup's delete. Hearth doesn't compare checksums: the
+bucket wasn't asked to keep one, and restore checks the archive's.
+
 Destination implementations are isolated by kind:
 
 ```text
