@@ -327,55 +327,76 @@ const turnsOf = (relayId: string) => {
  */
 export function takeScheduledBucketBackups(
   relayId: string,
-  request: ScheduledBucketBackupRequest
+  request: ScheduledBucketBackupRequest,
+  // The Relay's ask: given up on, it stops waiting for a turn. Once it has
+  // one, what it takes is taken and sent, whether or not anyone hears.
+  signal?: AbortSignal
 ): Promise<ScheduledBucketBackupReply> {
   const turns = turnsOf(relayId)
   const release = Semaphore.release(turns, 1)
   return runAppEffect(
     "ScheduledBackups.take",
-    Effect.gen(function* () {
-      const waiting = takesWaiting.get(relayId) ?? 0
-      if (waiting >= takesWaitingPerRelay) return busy
-      takesWaiting.set(relayId, waiting + 1)
-      const turn = yield* Semaphore.take(turns, 1).pipe(
-        Effect.timeoutOption(`${takeTurnWaitMs} millis`),
-        Effect.ensuring(
-          Effect.sync(() =>
-            takesWaiting.set(relayId, (takesWaiting.get(relayId) ?? 1) - 1)
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const waiting = takesWaiting.get(relayId) ?? 0
+        if (waiting >= takesWaitingPerRelay) return busy
+        takesWaiting.set(relayId, waiting + 1)
+        const turn = yield* restore(
+          Semaphore.take(turns, 1).pipe(
+            Effect.timeoutOption(`${takeTurnWaitMs} millis`)
+          )
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() =>
+              takesWaiting.set(relayId, (takesWaiting.get(relayId) ?? 1) - 1)
+            )
           )
         )
-      )
-      if (Option.isNone(turn)) return busy
-      return yield* runOperation(
-        takeBackups,
-        { relayId, request },
-        { user: null }
-      ).pipe(
-        Effect.onError(() => release),
-        Effect.map(({ backupIds, relay, taken }): ScheduledBucketBackupReply => {
-          // Sent at once and together, as a manual run's are, so a stopped
-          // batch reaches the Relay whole; any not sent now go on the
-          // Relay's next pass, as every queued backup does. Its turn ends
-          // once they are sent.
-          forkAppEffect(
-            "ScheduledBackups.dispatch",
-            sendTaken(relay, backupIds).pipe(Effect.ensuring(release))
-          )
-          scheduleBackupReconciliation(relay)
-          return { backups: taken, taken: true }
-        }),
-        Effect.catchIf(
-          (cause) =>
-            cause instanceof ScheduledBackupRefused ||
-            cause instanceof BackupStorageError ||
-            cause instanceof OperationBusyError,
-          (cause) =>
-            Effect.succeed<ScheduledBucketBackupReply>({
-              reason: cause.message.slice(0, 300),
-              taken: false,
+        if (Option.isNone(turn)) return busy
+        return yield* runOperation(
+          takeBackups,
+          { relayId, request },
+          { user: null }
+        ).pipe(
+          Effect.onError(() => release),
+          Effect.flatMap(({ backupIds, relay, taken }) => {
+            // Asked again for a run it already took: nothing new to send.
+            if (backupIds.length === 0) {
+              return release.pipe(
+                Effect.as<ScheduledBucketBackupReply>({
+                  backups: taken,
+                  taken: true,
+                })
+              )
+            }
+            // Sent at once and together, as a manual run's are, so a stopped
+            // batch reaches the Relay whole; any not sent now go on the
+            // Relay's next pass, as every queued backup does. Its turn ends
+            // once they are sent.
+            forkAppEffect(
+              "ScheduledBackups.dispatch",
+              sendTaken(relay, backupIds).pipe(Effect.ensuring(release))
+            )
+            scheduleBackupReconciliation(relay)
+            return Effect.succeed<ScheduledBucketBackupReply>({
+              backups: taken,
+              taken: true,
             })
+          }),
+          Effect.catchIf(
+            (cause) =>
+              cause instanceof ScheduledBackupRefused ||
+              cause instanceof BackupStorageError ||
+              cause instanceof OperationBusyError,
+            (cause) =>
+              Effect.succeed<ScheduledBucketBackupReply>({
+                reason: cause.message.slice(0, 300),
+                taken: false,
+              })
+          )
         )
-      )
-    })
+      })
+    ),
+    signal ? { signal } : undefined
   )
 }

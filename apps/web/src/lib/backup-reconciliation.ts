@@ -402,13 +402,24 @@ function dispatchAttributes(
   }
 }
 
+// A scheduled pass over a Relay's backups runs one at a time per Relay:
+// asked for while one runs, another follows it once, however often it was
+// asked for meanwhile.
+const reconciling = new Set<string>()
+const reconcileAgain = new Set<string>()
+
 export function scheduleBackupReconciliation(
   relay: PersistedRelay,
   subject?: string
 ): void {
   if (reconciliationTimers.has(relay.id)) return
+  if (reconciling.has(relay.id)) {
+    reconcileAgain.add(relay.id)
+    return
+  }
   const timer = setTimeout(() => {
     reconciliationTimers.delete(relay.id)
+    reconciling.add(relay.id)
     void runAppEffect(
       "Backups.reconcileRelay",
       reconcileRelayBackupsEffect(relay, subject).pipe(
@@ -421,6 +432,14 @@ export function scheduleBackupReconciliation(
               Effect.sync(() => scheduleBackupReconciliation(relay, subject))
             )
           )
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            reconciling.delete(relay.id)
+            if (reconcileAgain.delete(relay.id)) {
+              scheduleBackupReconciliation(relay, subject)
+            }
+          })
         )
       )
     )
