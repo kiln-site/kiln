@@ -392,9 +392,14 @@ catalogs each backup, at the object key it chooses, and sends their tasks
 together, as it sends a manual run's, each with a signed upload. From there
 it is a manual backup in all but its reason: it is refreshed after a
 restart, restored and deleted the same way, and leaves out what the
-resource's exclude patterns say. A run's backups keep the IDs the run gives
-them (`scheduledBackupId`), so asking twice, as each target of a batch
-does, takes them once.
+resource's exclude patterns say. Hearth answers with the IDs it gave each
+backup, and the Relay waits for those tasks. The IDs are keyed with
+Hearth's secret over the Relay, the run and what it backs up: the same on
+every ask of one run, so asking twice, as each target of a batch does,
+takes them once, and none a Relay can work out ahead of Hearth to take
+first. A batch's name is Hearth's too, from the same run and its members.
+(Rotating Hearth's secret mid-run gives a retry new IDs, so one run's
+backup can be taken twice then.)
 
 What this promises, for full backups, is that the bucket's secret key
 never reaches a Relay, and that a Relay can reach no object in a bucket
@@ -427,6 +432,22 @@ The step waits for its task to arrive and finish. What that leaves:
 - Hearth takes all of what one ask names or none: a volume an App has let
   go of since the schedule was sent refuses the rest with it, until the
   schedule is sent again.
+- Hearth works on four of one Relay's asks at once, and lets twelve more
+  wait for a turn. Each holds its turn from before Hearth reads anything
+  for it until the tasks it made are first sent; a later pass over the
+  Relay's backups runs outside it. One that waits twenty seconds for a
+  turn, or arrives with twelve already waiting, is refused, saying Hearth
+  is busy, and the schedule's next run is taken as usual. One the Relay
+  gives up on stops waiting; one that has its turn is taken and sent
+  whether or not the Relay still hears. Asked again for a run it already
+  took, Hearth sends nothing new, and a run asked again as part of another
+  batch than it was taken in is refused. Hearth goes over one Relay's
+  backups one pass at a time: asked for while a pass runs, one more
+  follows it.
+- The owning Relay still says which run is due and what of it: a run time
+  and the members of a batch are its word, as its own schedule is. What
+  keyed IDs stop is another Relay's report, or this one's, claiming the IDs
+  of a take before Hearth makes it.
 - A step waits 30 seconds for Hearth's answer and three minutes for its
   task. Hearth goes on with one it started, so a backup can be taken and
   turn up after its step failed; a step with no answer says Hearth may

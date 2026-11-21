@@ -577,8 +577,6 @@ export function scheduledBackupArtifactId(backupId: string) {
 export const scheduledBucketBackupRequestSchema = z
   .object({
     actionId: scheduleActionIdSchema,
-    /** The batch they are cataloged as: volumes, and what stops with them. */
-    batchId: z.uuid().optional(),
     members: z
       .array(
         z
@@ -599,6 +597,11 @@ export const scheduledBucketBackupRequestSchema = z
     // A time a `Date` holds, which names the backup.
     scheduledAt: z.number().int().nonnegative().max(8_640_000_000_000_000),
     scheduleId: z.uuid(),
+    /**
+     * Asked together, as one batch: volumes, and what stops with them.
+     * Hearth names the batch.
+     */
+    together: z.literal(true).optional(),
   })
   .strict()
 
@@ -606,9 +609,28 @@ export type ScheduledBucketBackupRequest = z.infer<
   typeof scheduledBucketBackupRequestSchema
 >
 
-/** Hearth's answer: it took them all, or none and why. */
+/**
+ * Hearth's answer: it took them all, each by the IDs Hearth gave it, whose
+ * task the Relay then waits for; or none, and why.
+ */
 export const scheduledBucketBackupReplySchema = z.discriminatedUnion("taken", [
-  z.object({ taken: z.literal(true) }).strict(),
+  z
+    .object({
+      backups: z
+        .array(
+          z
+            .object({
+              backupId: z.uuid(),
+              targetId: z.string().min(1).max(120),
+              targetKind: z.enum(["instance", "database", "relay", "volume"]),
+              taskId: z.uuid(),
+            })
+            .strict()
+        )
+        .max(SCHEDULED_APP_BACKUP_GROUP_MAX),
+      taken: z.literal(true),
+    })
+    .strict(),
   z
     .object({ reason: z.string().min(1).max(300), taken: z.literal(false) })
     .strict(),

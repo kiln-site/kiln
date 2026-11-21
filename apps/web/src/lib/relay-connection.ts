@@ -2086,7 +2086,8 @@ class RelayConnection {
           catch: asError,
         })
         const payload = yield* Effect.tryPromise({
-          try: () => takeScheduledBucketBackups(this.#relay.id, asked),
+          try: (signal) =>
+            takeScheduledBucketBackups(this.#relay.id, asked, signal),
           catch: asError,
         })
         yield* sendSocketEffect(socket, {

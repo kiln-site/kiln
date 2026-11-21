@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,8 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { RelayBackupTask } from "@workspace/contracts"
 import {
-  scheduledBackupId,
-  scheduledBackupTaskId,
   type RelayScheduleProjection,
   type ScheduledBucketBackupRequest,
 } from "@workspace/contracts/schedules"
@@ -831,25 +830,26 @@ describe("Relay scheduled backups to a bucket", () => {
           }, request),
       } satisfies Parameters<typeof manager>[0],
       own,
-      // Hearth sends the task of the backup it took.
-      send: ({
-        actionId,
-        members,
-        scheduledAt,
-        scheduleId,
-      }: ScheduledBucketBackupRequest) => {
-        const backupId = scheduledBackupId({
-          ...members[0]!,
-          actionId,
-          scheduledAt,
-          scheduleId,
-        })
-        const taskId = scheduledBackupTaskId(backupId)
-        sent.set(taskId, {
-          backupId,
-          status: "succeeded",
-          taskId,
-        } as unknown as RelayBackupTask)
+      // Hearth takes it, giving each backup IDs of its own, and sends its
+      // task after `sendAfterMs`, or never.
+      take: (request: ScheduledBucketBackupRequest, sendAfterMs?: number) => {
+        const backups = request.members.map((member) => ({
+          ...member,
+          backupId: randomUUID(),
+          taskId: randomUUID(),
+        }))
+        if (sendAfterMs !== undefined) {
+          setTimeout(() => {
+            for (const { backupId, taskId } of backups) {
+              sent.set(taskId, {
+                backupId,
+                status: "succeeded",
+                taskId,
+              } as unknown as RelayBackupTask)
+            }
+          }, sendAfterMs)
+        }
+        return { backups, taken: true }
       },
     }
   }
@@ -857,13 +857,10 @@ describe("Relay scheduled backups to a bucket", () => {
   it("asks Hearth to take the backup, and waits for the task Hearth sends", async () => {
     // One Hearth doesn't know the schedule; the other takes the backup, and
     // its task arrives a little later, as a manual backup's does.
-    const hearth = hearths((request) => {
-      setTimeout(() => hearth.send(request), 5_000)
-      return [
-        { reason: "Not this Hearth's schedule", taken: false },
-        { taken: true },
-      ]
-    })
+    const hearth = hearths((request) => [
+      { reason: "Not this Hearth's schedule", taken: false },
+      hearth.take(request, 5_000),
+    ])
     const { schedules } = await manager(hearth.options)
     await schedules.apply(nightly)
 
@@ -898,7 +895,7 @@ describe("Relay scheduled backups to a bucket", () => {
   })
 
   it("fails the step, rather than wait for good, when the task Hearth took never arrives", async () => {
-    const hearth = hearths(() => [{ taken: true }])
+    const hearth = hearths((request) => [hearth.take(request)])
     const { schedules } = await manager(hearth.options)
     await schedules.apply(nightly)
 

@@ -29,6 +29,7 @@ import {
   type RelayScheduleProjection,
   type ScheduleActionAttempt,
   type ScheduleActionType,
+  type ScheduledBucketBackupReply,
   type ScheduledBucketBackupRequest,
   type ScheduleRun,
   type ScheduleTarget,
@@ -96,11 +97,12 @@ export interface ScheduleManagerOptions {
   readonly getBackup: (taskId: string) => Promise<RelayBackupTask | null>
   /**
    * Asks Hearth to take a step's full backups to a bucket, whose keys only
-   * Hearth holds. It rejects, saying why, when no Hearth takes them.
+   * Hearth holds, and answers each one's IDs as Hearth gave them. It
+   * rejects, saying why, when no Hearth takes them.
    */
   readonly takeBucketBackups: (
     request: ScheduledBucketBackupRequest
-  ) => Promise<void>
+  ) => Promise<ReadonlyArray<TakenBucketBackup>>
   readonly listAppIds: () => Promise<ReadonlySet<string>>
   readonly listDatabaseIds: () => Promise<ReadonlySet<string>>
   // Read per run: Hearth can give the Relay its installation ID at any time.
@@ -932,7 +934,7 @@ export class ScheduleManager {
       }
       if (backupExecution(action, target)?.destination?.kind === "s3") {
         const member = { targetId: target.id, targetKind: target.kind }
-        await this.#options.takeBucketBackups({
+        const taken = await this.#options.takeBucketBackups({
           actionId: action.id,
           members: [member],
           revision: schedule.revision,
@@ -940,14 +942,7 @@ export class ScheduleManager {
           scheduleId: schedule.id,
         })
         await Effect.runPromise(
-          this.#waitForBucketBackup(
-            scheduledBackupId({
-              ...member,
-              actionId: action.id,
-              scheduledAt,
-              scheduleId: schedule.id,
-            })
-          ),
+          this.#waitForBucketBackup(takenTaskId(taken, member)),
           signal ? { signal } : undefined
         )
         return
@@ -1144,8 +1139,8 @@ export class ScheduleManager {
         : target.kind === "app" && execution.appIds?.includes(target.id)
     }
     // Full backups to a bucket are Hearth's to take: it holds the bucket's
-    // keys. Each target of a batch asks for all of it, by the same IDs, so
-    // Hearth takes it once, and each waits for its own to arrive.
+    // keys. Each target of a batch asks for all of it, and Hearth takes it
+    // once, giving each the same IDs; each waits for its own to arrive.
     if (executions.some(({ destination }) => destination?.kind === "s3")) {
       const asked = [
         ...executions.map(({ targetId }) => ({
@@ -1157,26 +1152,21 @@ export class ScheduleManager {
           targetKind: "database" as const,
         })),
       ]
-      await this.#options.takeBucketBackups({
+      const taken = await this.#options.takeBucketBackups({
         actionId: action.id,
-        batchId,
         members: asked,
         revision: schedule.revision,
         scheduledAt,
         scheduleId: schedule.id,
+        together: true,
       })
       await Effect.runPromise(
         Effect.all(
-          asked.filter(own).map((member) =>
-            this.#waitForBucketBackup(
-              scheduledBackupId({
-                ...member,
-                actionId: action.id,
-                scheduledAt,
-                scheduleId: schedule.id,
-              })
-            )
-          ),
+          asked
+            .filter(own)
+            .map((member) =>
+              this.#waitForBucketBackup(takenTaskId(taken, member))
+            ),
           { concurrency: "unbounded", discard: true }
         ),
         signal ? { signal } : undefined
@@ -1260,8 +1250,7 @@ export class ScheduleManager {
   // A bucket backup Hearth took arrives as a manual one does, sent by
   // Hearth, so there is nothing to wait on until it has. One that hasn't
   // within a few minutes fails its step; Hearth still sends it when it can.
-  #waitForBucketBackup(backupId: string) {
-    const taskId = scheduledBackupTaskId(backupId)
+  #waitForBucketBackup(taskId: string) {
     const getBackup = this.#options.getBackup
     const arrived = Effect.gen(function* () {
       for (;;) {
@@ -1654,10 +1643,31 @@ function scheduledBackupDestination(
   return { ...deployed, artifactId }
 }
 
+/** One backup Hearth took for a step, by the IDs Hearth gave it. */
+export type TakenBucketBackup = Extract<
+  ScheduledBucketBackupReply,
+  { taken: true }
+>["backups"][number]
+
+// The task Hearth gave the backup of one thing the Relay asked for. One it
+// didn't answer for fails that thing's step.
+function takenTaskId(
+  taken: ReadonlyArray<TakenBucketBackup>,
+  member: { targetId: string; targetKind: string }
+) {
+  const backup = taken.find(
+    ({ targetId, targetKind }) =>
+      targetId === member.targetId && targetKind === member.targetKind
+  )
+  if (!backup) throw new Error("Hearth took the step but not this backup")
+  return backup.taskId
+}
+
 /**
  * Asks every connected Hearth to take a step's bucket backups. The one
- * whose schedule it is takes them; its word only lets the step wait, since
- * each backup still arrives as a task that Hearth is allowed to send.
+ * whose schedule it is takes them, and answers each one's IDs; its word
+ * only lets the step wait, since each backup still arrives as a task that
+ * Hearth is allowed to send.
  */
 export async function askHearthForBucketBackups(
   requestClients: (
@@ -1666,14 +1676,15 @@ export async function askHearthForBucketBackups(
     timeoutMs: number
   ) => Promise<ReadonlyArray<{ payload: unknown }>>,
   request: ScheduledBucketBackupRequest
-): Promise<void> {
+): Promise<ReadonlyArray<TakenBucketBackup>> {
   const replies = (
     await requestClients("schedule.backup.take", request, 30_000)
   ).flatMap(({ payload }) => {
     const reply = scheduledBucketBackupReplySchema.safeParse(payload)
     return reply.success ? [reply.data] : []
   })
-  if (replies.some(({ taken }) => taken)) return
+  const taken = replies.find((reply) => reply.taken)
+  if (taken?.taken) return taken.backups
   const refused = replies.find((reply) => !reply.taken)
   throw new Error(
     refused && !refused.taken
