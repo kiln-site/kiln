@@ -39,8 +39,13 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
           name: "data",
           sizeBytes: null,
           users: [
-            { appId, configured: true, mounted: true },
-            { appId: otherAppId, configured: true, mounted: true },
+            { appId, composeKey: null, configured: true, mounted: true },
+            {
+              appId: otherAppId,
+              composeKey: null,
+              configured: true,
+              mounted: true,
+            },
           ],
         },
       ],

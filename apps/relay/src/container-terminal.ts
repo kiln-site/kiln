@@ -528,10 +528,7 @@ export class ContainerTerminals {
     return session.finished
   }
 
-  async #finish(
-    session: TerminalSession,
-    reason: TerminalEndReason | null
-  ) {
+  async #finish(session: TerminalSession, reason: TerminalEndReason | null) {
     // Claimed before anything is awaited, so the session takes no more input.
     session.ending = reason ?? "exited"
     // A client that exited on its own has nothing left to hang up, and its
@@ -815,10 +812,7 @@ function answerQueries(screen: Terminal, reply: (data: string) => void) {
   }
 }
 
-function controlFor(
-  state: StateChange,
-  attachmentId: string
-): TerminalControl {
+function controlFor(state: StateChange, attachmentId: string): TerminalControl {
   if (state.active === null) return "none"
   return state.active === attachmentId ? "self" : "other"
 }

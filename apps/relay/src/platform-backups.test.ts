@@ -338,7 +338,10 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
     own.state.running = false
     const restore = async (manifest: Partial<PlatformBackupManifest>) => {
       const source = join(testDirectory, `shared-${randomUUID()}.kiln`)
-      await writeFile(source, platformBundle("CREATE TABLE kept (id int);", manifest))
+      await writeFile(
+        source,
+        platformBundle("CREATE TABLE kept (id int);", manifest)
+      )
       return restoreEncryptedPlatformBackup(harness.config, source, "kiln-test")
     }
     return { harness, mysql, restore }

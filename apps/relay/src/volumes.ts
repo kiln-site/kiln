@@ -64,6 +64,22 @@ export function composeVolumeId(appId: string, key: string): string {
     .digest("hex")
 }
 
+/**
+ * The key an App's Compose file keeps a volume under, when the volume is
+ * the one Kiln keeps for that key; null for any other. One is named after
+ * its App and the key when it's made, and Docker keeps that name on it, so
+ * the key is read from there and checked against the ID, which only that
+ * App and key make.
+ */
+function composeVolumeKey(volume: DockerVolume, appId: string): string | null {
+  const made = volume.Labels?.[NAME_LABEL]
+  if (!made) return null
+  const key = made.slice(made.lastIndexOf(" ") + 1)
+  return key !== "" && composeVolumeId(appId, key) === volume.Labels?.[ID_LABEL]
+    ? key
+    : null
+}
+
 export class RelayVolumeError extends Schema.TaggedError<RelayVolumeError>()(
   "RelayVolumeError",
   { message: Schema.String }
@@ -281,6 +297,28 @@ export class RelayVolumes {
     )
   }
 
+  /**
+   * How much a managed volume holds, as Docker last measured it. One it
+   * hasn't measured yet, as a new one, waits for the measure listing
+   * starts; any other answers at once while listing refreshes it. Null
+   * when there's no such volume or Docker can't say.
+   */
+  size(id: string) {
+    return Effect.gen({ self: this }, function* () {
+      const listed = yield* this.list()
+      const volume = listed.volumes.find((candidate) => candidate.id === id)
+      if (!volume) return null
+      if (volume.sizeBytes !== null) return volume.sizeBytes
+      const measuring = this.#measuring
+      if (measuring) yield* Effect.promise(() => measuring)
+      return this.#sizes.values.get(volume.dockerName) ?? null
+    }).pipe(
+      Effect.withSpan("RelayVolumes.size", {
+        attributes: { "kiln.volume_id": id },
+      })
+    )
+  }
+
   // Every managed volume without its size, with the containers on the
   // daemon and what each mounts.
   #inventory() {
@@ -439,7 +477,9 @@ export class RelayVolumes {
       const kept = new Map<string, { dockerName: string; id: string }>()
       for (const key of keys) {
         const id = composeVolumeId(appId, key)
-        const found = existing.find((volume) => volume.Labels?.[ID_LABEL] === id)
+        const found = existing.find(
+          (volume) => volume.Labels?.[ID_LABEL] === id
+        )
         if (found) {
           kept.set(key, { dockerName: found.Name, id })
           continue
@@ -603,6 +643,30 @@ export class RelayVolumes {
     })
   }
 
+  /**
+   * A volume an App may be given the files of or have filled: one it uses,
+   * or the one kept for a key of its Compose file, deployed yet or not.
+   * Refused for any other, as its files are (`appVolumeMountpoint`).
+   */
+  appVolume(appId: string, id: string) {
+    return Effect.all([this.find(id), this.#required(id)]).pipe(
+      Effect.flatMap(([volume, made]) =>
+        volume &&
+        (volume.users.some((user) => user.appId === appId) ||
+          composeVolumeKey(made, appId) !== null)
+          ? Effect.succeed(volume)
+          : Effect.fail(
+              new RelayVolumeError({
+                message: "This App doesn't use that volume",
+              })
+            )
+      ),
+      Effect.withSpan("RelayVolumes.appVolume", {
+        attributes: { "kiln.volume_id": id, "relay.app_id": appId },
+      })
+    )
+  }
+
   readonly #forgetAppMountpoints = Effect.sync(() => {
     this.#appMountpointsEpoch += 1
     this.#appMountpoints.clear()
@@ -612,7 +676,9 @@ export class RelayVolumes {
   idsMissing(ids: ReadonlyArray<string>) {
     return this.#volumes().pipe(
       Effect.map((volumes) => {
-        const known = new Set(volumes.map((volume) => volume.Labels?.[ID_LABEL]))
+        const known = new Set(
+          volumes.map((volume) => volume.Labels?.[ID_LABEL])
+        )
         return ids.filter((id) => !known.has(id))
       })
     )
@@ -975,13 +1041,14 @@ function volumeView(
     dockerName: volume.Name,
     mountpoint: volume.Mountpoint ?? null,
     mounts: [...mounted],
-    users: volumeUsers(configuredBy, mounted),
+    users: volumeUsers(volume, configuredBy, mounted),
   }
 }
 
 // The Apps that use a volume: those whose configuration names it, and those
 // whose containers mount it.
 function volumeUsers(
+  volume: DockerVolume,
   configuredBy: ReadonlyArray<string>,
   mounts: ReadonlyArray<RelayVolumeMount>
 ): Array<RelayVolumeUser> {
@@ -993,6 +1060,7 @@ function volumeUsers(
   const configured = new Set(configuredBy)
   return [...new Set([...configured, ...mounted])].sort().map((appId) => ({
     appId,
+    composeKey: composeVolumeKey(volume, appId),
     configured: configured.has(appId),
     mounted: mounted.has(appId),
   }))

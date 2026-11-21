@@ -25,10 +25,7 @@ import {
   type BackupRestoreTaskInput,
 } from "@workspace/contracts"
 
-import {
-  brickSnapshotDirectory,
-  saveRecordedBrickSnapshot,
-} from "./bricks.js"
+import { brickSnapshotDirectory, saveRecordedBrickSnapshot } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { RelayBackupError } from "./effect/errors.js"

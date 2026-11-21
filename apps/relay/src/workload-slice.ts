@@ -15,7 +15,10 @@ import { totalmem } from "node:os"
 import { Duration, Effect, Exit } from "effect"
 
 import type { RelayConfig } from "./config.js"
-import { createContainer, WORKLOAD_SLICE_LABEL } from "./docker-container-spec.js"
+import {
+  createContainer,
+  WORKLOAD_SLICE_LABEL,
+} from "./docker-container-spec.js"
 import type { DockerEngine, DockerEngineError } from "./docker-engine.js"
 import { HOST_SHELL_IMAGE, type HostShell } from "./host-shell.js"
 import { exclusive, laneKeys, type OperationLanes } from "./operation-lanes.js"
@@ -34,7 +37,10 @@ const MEBIBYTE = 1024 ** 2
 const RECONCILE_TIMEOUT = Duration.minutes(2)
 
 type Host = Pick<HostShell, "enabled" | "runOnce">
-type SliceConfig = Pick<RelayConfig, "resourceNamespace" | "workloadMemoryLimit">
+type SliceConfig = Pick<
+  RelayConfig,
+  "resourceNamespace" | "workloadMemoryLimit"
+>
 
 const STATE_SCRIPT = `if [ ! -d /run/systemd/system ] || ! command -v systemctl >/dev/null 2>&1; then
   echo unsupported
@@ -68,7 +74,10 @@ const applyScript = (limitBytes: number) =>
 // What the kernel enforces, rather than what systemd was told, with the
 // probe's cgroup in the slice. A cgroup file always stats as empty, so its
 // contents are what show a process there.
-const verifyScript = (limitBytes: number, containerId: string) => `group=$(systemctl show ${WORKLOAD_SLICE} -p ControlGroup --value)
+const verifyScript = (
+  limitBytes: number,
+  containerId: string
+) => `group=$(systemctl show ${WORKLOAD_SLICE} -p ControlGroup --value)
 directory="${CGROUP_ROOT}$group"
 if [ "$(cat "$directory/memory.max")" = "${limitBytes}" ] && grep -q . "$directory/docker-${containerId}.scope/cgroup.procs"; then
   echo enforced
@@ -102,8 +111,7 @@ const wholeMebibytes = (bytes: number) =>
   Math.floor(bytes / MEBIBYTE) * MEBIBYTE
 
 // The same rounded up, for what mustn't be lowered.
-const mebibytesAbove = (bytes: number) =>
-  Math.ceil(bytes / MEBIBYTE) * MEBIBYTE
+const mebibytesAbove = (bytes: number) => Math.ceil(bytes / MEBIBYTE) * MEBIBYTE
 
 /** Why workloads can't run in a slice here, or null when they can. */
 function unsupported(info: {
@@ -196,7 +204,9 @@ export class WorkloadSlice {
         .runOnce(STATE_SCRIPT)
         .pipe(Effect.flatMap(parseState))
       if (state === null) {
-        yield* Effect.logInfo("No workload memory limit: no systemd on the host")
+        yield* Effect.logInfo(
+          "No workload memory limit: no systemd on the host"
+        )
         return
       }
       allocations.setWorkloadLimit(null, state.limitBytes)
@@ -214,9 +224,7 @@ export class WorkloadSlice {
         )
         return
       }
-      const others = yield* Effect.tryPromise(() =>
-        allocations.others("", "")
-      )
+      const others = yield* Effect.tryPromise(() => allocations.others("", ""))
       const assigned = others.reduce(
         (total, limits) => total + (limits.memoryBytes ?? 0),
         0
@@ -270,14 +278,16 @@ export class WorkloadSlice {
     const allocations = this.#allocations
     return Effect.gen(function* () {
       if (previous.limitBytes === null) {
-        yield* host.runOnce(CLEAR_SCRIPT).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning(
-              "Could not lift the workload memory limit",
-              cause
+        yield* host
+          .runOnce(CLEAR_SCRIPT)
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning(
+                "Could not lift the workload memory limit",
+                cause
+              )
             )
           )
-        )
       }
       const state = yield* host
         .runOnce(STATE_SCRIPT)

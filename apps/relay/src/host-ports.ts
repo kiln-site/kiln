@@ -130,14 +130,16 @@ export class HostPorts {
       Effect.forEach(
         stopped,
         (id) =>
-          this.#engine.inspectContainers([id]).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning(
-                "Relay couldn't read a stopped container's ports",
-                cause
-              ).pipe(Effect.as([]))
-            )
-          ),
+          this.#engine
+            .inspectContainers([id])
+            .pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning(
+                  "Relay couldn't read a stopped container's ports",
+                  cause
+                ).pipe(Effect.as([]))
+              )
+            ),
         { concurrency: 8 }
       )
     )

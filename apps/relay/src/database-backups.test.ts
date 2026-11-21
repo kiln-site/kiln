@@ -101,7 +101,9 @@ describe("database backups", () => {
     const own = join(directory, "mysql.sql.gz")
     await writeFile(
       own,
-      gzipSync(`-- MySQL dump 10.13  Distrib 8.4.7, for Linux (aarch64)\n${dump}`)
+      gzipSync(
+        `-- MySQL dump 10.13  Distrib 8.4.7, for Linux (aarch64)\n${dump}`
+      )
     )
     await restoreCompressedDatabaseBackup(harness.databases, databaseId, own)
     expect(container.executedSql).toHaveLength(1)

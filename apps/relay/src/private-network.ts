@@ -12,9 +12,7 @@ export const TUNNEL_FORWARD_CHAIN = "KILN-TAILSCALE"
 const TUNNEL_SUBNET_COUNT = 64 * 256
 
 export function tunnelFirewallRules(
-  bindings: ReadonlyArray<
-    Pick<TunnelConfig["bindings"][number], "address">
-  >
+  bindings: ReadonlyArray<Pick<TunnelConfig["bindings"][number], "address">>
 ): Array<Array<string>> {
   return [
     ...bindings.map(({ address }) => [
@@ -34,18 +32,14 @@ export function tunnelFirewallRules(
 export function tunnelFirewallIsCurrent(
   hookExists: boolean,
   specification: string,
-  bindings: ReadonlyArray<
-    Pick<TunnelConfig["bindings"][number], "address">
-  >
+  bindings: ReadonlyArray<Pick<TunnelConfig["bindings"][number], "address">>
 ): boolean {
   if (!hookExists) return false
   const current = specification
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith(`-A ${TUNNEL_FORWARD_CHAIN} `))
-  const expected = tunnelFirewallRules(bindings).map((rule) =>
-    rule.join(" ")
-  )
+  const expected = tunnelFirewallRules(bindings).map((rule) => rule.join(" "))
   return (
     current.length === expected.length &&
     current.every((line, index) => line === expected[index])
@@ -130,9 +124,9 @@ export function assignTailscaleBindingAddresses(
   })
 }
 
-export function activeTunnelBindings<
-  TBinding extends { enabled: boolean },
->(bindings: ReadonlyArray<TBinding>): Array<TBinding> {
+export function activeTunnelBindings<TBinding extends { enabled: boolean }>(
+  bindings: ReadonlyArray<TBinding>
+): Array<TBinding> {
   return bindings.filter((binding) => binding.enabled)
 }
 

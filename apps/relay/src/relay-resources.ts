@@ -72,8 +72,7 @@ export function relayResourceNames(
     relayEdgeAlias: "kiln-relay",
     relayEdgeNetwork: name("kiln-relay-edge"),
     tailscaleContainer: name("kiln-tailscale"),
-    tunnelContainer: (stackId) =>
-      name(`kiln-ts-${physicalShortKey(stackId)}`),
+    tunnelContainer: (stackId) => name(`kiln-ts-${physicalShortKey(stackId)}`),
     tunnelDnsContainer: (stackId) =>
       name(`kiln-ts-${physicalShortKey(stackId)}-dns`),
     tunnelNetwork: (stackId) =>

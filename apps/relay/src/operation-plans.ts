@@ -11,11 +11,13 @@ import {
   databaseTailscaleMember,
   instanceTailscaleMember,
   isRelayFileRoot,
+  volumeIdFromTransferRoot,
   type BackupTaskInput,
   type RelayControlOperation,
 } from "@workspace/contracts"
 import { Predicate } from "effect"
 
+import { composeVolumeId } from "./volumes.js"
 import {
   exclusive,
   laneKeys,
@@ -305,6 +307,9 @@ export function fileRootCommitLocks(rootId: string): Array<LaneLock> {
  * full ID.
  */
 export function transferPackLocks(rootId: string): Array<LaneLock> {
+  // A volume is archived beside what uses it, as a live backup of it is.
+  const volumeId = volumeIdFromTransferRoot(rootId)
+  if (volumeId) return [shared(laneKeys.volume(volumeId))]
   return fileRootTransferLocks(rootId)
 }
 
@@ -317,6 +322,16 @@ export function transferInstallLocks(rootId: string): Array<LaneLock> {
   // A database's dump is run into it, as an import is.
   const databaseId = databaseIdFromFileRoot(rootId)
   if (databaseId) return databaseLocks(databaseId)
+  // Nothing begins mounting a volume while it's filled: not the App it is
+  // filled as, which is held whole, or any other.
+  const appVolume = appVolumeFromFileRoot(rootId)
+  const volumeId = appVolume?.volumeId ?? volumeIdFromTransferRoot(rootId)
+  if (volumeId) {
+    return [
+      ...(appVolume ? appReplaceLocks(appVolume.appId) : []),
+      exclusive(laneKeys.volume(volumeId)),
+    ]
+  }
   const appId = appIdFromFileRoot(rootId)
   if (appId) return appReplaceLocks(appId)
   return instanceReplaceLocks(rootId)
@@ -749,6 +764,16 @@ export function controlRequestLocks(
       return appWithVolumes(appReplaceLocks)
     // Apart from the App's lifecycle, so saving its configuration never
     // waits behind a deployment.
+    // Makes the volumes its Compose file's keys are kept on, each alone,
+    // and names them as the App's, as recording what it mounts does.
+    case "app.volumes.keep":
+      return app((id) => [
+        shared(laneKeys.app(id)),
+        exclusive(laneKeys.appVolumes(id)),
+        ...stringArray(payload.keys).map((key) =>
+          exclusive(laneKeys.volume(composeVolumeId(id, key)))
+        ),
+      ])
     case "app.volumes.write":
       return app((id) => [
         shared(laneKeys.app(id)),

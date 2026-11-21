@@ -16,6 +16,7 @@ const mount = (resourceId: string): RelayVolume["mounts"][number] => ({
 })
 const user = (appId: string): RelayVolume["users"][number] => ({
   appId,
+  composeKey: null,
   configured: true,
   mounted: true,
 })

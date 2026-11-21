@@ -97,10 +97,10 @@ export class RuntimeRecoveryManager {
       catch: (cause) => cause,
     }).pipe(
       Effect.catch((cause) =>
-        Effect.logWarning(
-          "Server could not take its place on its tailnets",
-          { cause, instanceId }
-        )
+        Effect.logWarning("Server could not take its place on its tailnets", {
+          cause,
+          instanceId,
+        })
       )
     )
   }

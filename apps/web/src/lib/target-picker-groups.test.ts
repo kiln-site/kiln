@@ -23,7 +23,12 @@ const volume = (id: string, name: string, users: Array<string>) => ({
   mounts: [],
   name,
   sizeBytes: null,
-  users: users.map((appId) => ({ appId, configured: true, mounted: true })),
+  users: users.map((appId) => ({
+    appId,
+    composeKey: null,
+    configured: true,
+    mounted: true,
+  })),
 })
 
 // The site uses two volumes, and is kept in a group with its database.

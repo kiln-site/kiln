@@ -15,11 +15,7 @@ import {
   forkPromise,
   promiseEffect,
 } from "./effect/promise.js"
-import {
-  exclusive,
-  laneKeys,
-  type OperationLanes,
-} from "./operation-lanes.js"
+import { exclusive, laneKeys, type OperationLanes } from "./operation-lanes.js"
 import { operation, runOperation } from "./operations/operation.js"
 import { requestUrl } from "./request-url.js"
 
@@ -222,9 +218,7 @@ export class Desktop {
   }
 
   #idle(): boolean {
-    return (
-      this.#tickets.size === 0 && Date.now() - this.#lastWatched > IDLE_MS
-    )
+    return this.#tickets.size === 0 && Date.now() - this.#lastWatched > IDLE_MS
   }
 
   #sweep() {

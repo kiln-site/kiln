@@ -11,6 +11,7 @@ import { randomUUID, sign } from "node:crypto"
 import {
   databaseIdFromFileRoot,
   peerTransferAction,
+  volumeIdFromTransferRoot,
   RelayTransferPullSchema,
   RelayTransferSourceSchema,
   type RelayPeerEndpoint,
@@ -508,7 +509,8 @@ const authorizeTransferEffect = Effect.fn("RelayTransfers.authorize")(
 // takes what making a backup and taking it off the Relay do, or what
 // restoring one does, as its Relay asks of Hearth's pairing
 // (`peerTransferAction`): never what exporting or importing a dump with the
-// database's own login does.
+// database's own login does. A volume is archived and filled by its Relay
+// as its backups are too, and takes the same on the Relay, as they do.
 function requireRootPermission(
   user: AuthenticatedUser,
   relayId: string,
@@ -516,9 +518,9 @@ function requireRootPermission(
   access: "read" | "write"
 ) {
   const databaseId = databaseIdFromFileRoot(rootId)
-  if (databaseId !== null) {
+  if (databaseId !== null || volumeIdFromTransferRoot(rootId) !== null) {
     return requireRelayPermissionsEffect({
-      databaseId,
+      ...(databaseId !== null && { databaseId }),
       permissions:
         access === "read"
           ? ["backup.create", "backup.download"]

@@ -39,6 +39,7 @@ import {
   appIdFromFileRoot,
   appVolumeFromFileRoot,
   databaseIdFromFileRoot,
+  volumeIdFromTransferRoot,
   isRelayFileRoot,
   relayFileRootId,
   RelayTransferPullStartSchema,
@@ -105,6 +106,7 @@ import {
   relayVolumeDeleteSchema,
   relayDockerCleanupRequestSchema,
   relayAppVolumesImportSchema,
+  relayAppVolumesKeepSchema,
   relayAppVolumesWriteSchema,
   relayVolumeRenameSchema,
   relayDirectoryPageInputSchema,
@@ -159,6 +161,7 @@ import { transferSpace } from "./transfers/peer/space.js"
 import {
   databaseTransferRoot,
   fileTransferRoot,
+  volumeTransferRoot,
   type TransferRootResolver,
 } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
@@ -1060,7 +1063,8 @@ const backupManager = await runRelayEffect(
 const backupFiber = forkRelayEffect("relay.backups.worker", backupManager.run())
 // What is copied between Relays: artifacts this Relay packs for others, and
 // pulls it makes from them. A game server's, an App's and the host's files
-// are packed as they are; a database is packed as its dump.
+// are packed as they are; a database is packed as its dump, and a volume as
+// the archive a backup of it is.
 const transferRoot: TransferRootResolver = async (rootId) => {
   const locks = (lockedId: string) => ({
     installLocks: transferInstallLocks(lockedId),
@@ -1073,9 +1077,16 @@ const transferRoot: TransferRootResolver = async (rootId) => {
       locks(rootId)
     )
   }
-  // A volume moves with the App that owns it, or stays with its Relay.
-  if (appVolumeFromFileRoot(rootId)) {
-    throw new Error("A volume's files can't be transferred between Relays")
+  // A volume is copied whole: as an App's, which only that App's may be,
+  // or as the Relay's.
+  const appVolume = appVolumeFromFileRoot(rootId)
+  const volumeId = appVolume?.volumeId ?? volumeIdFromTransferRoot(rootId)
+  if (volumeId !== null) {
+    return volumeTransferRoot(
+      { config, engine: relayEngine, volumes },
+      { appId: appVolume?.appId ?? null, volumeId },
+      locks(rootId)
+    )
   }
   const appId = appIdFromFileRoot(rootId)
   if (appId) {
@@ -3251,6 +3262,14 @@ async function executeControlRequest(
         case "instance":
           return docker.checkImages(ids, signal)
       }
+    }
+    case "app.volumes.keep": {
+      const input = relayAppVolumesKeepSchema.parse(request.payload)
+      const kept = await runRelayEffect(
+        "relay.apps.volumes.keep",
+        volumes.composeVolumes(input.appId, input.name, input.keys)
+      )
+      return [...kept].map(([key, { id }]) => ({ id, key }))
     }
     case "app.volumes.write": {
       const input = relayAppVolumesWriteSchema.parse(request.payload)

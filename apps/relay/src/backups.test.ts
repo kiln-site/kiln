@@ -65,66 +65,68 @@ describe("Relay archive restores", () => {
       },
       restored: brickRecipeFromV1(testBrickRecipeV1()),
     },
-  ])("restores a verified archive, and $recipe", ({ record, restored: recipe }) =>
-    withRelay("kiln-backup-restore-", ({ config, root }) =>
-      Effect.gen(function* () {
-        yield* Effect.promise(() =>
-          writeFile(resolve(root, "server.txt"), "old")
-        )
-        const instance = testInstance({
-          brickSource: "https://kiln.test/bricks/paper.yml",
-          brickSnapshotSha256: yield* Effect.promise(() => record(config)),
-        })
-        const manager = yield* backupManager(config, async () => instance)
-        const input = backupInput(6)
-        const created = archiveResult(yield* runTask(manager, input))
-        yield* Effect.sync(() =>
-          rmSync(brickSnapshotDirectory(config.dataDirectory), {
-            force: true,
-            recursive: true,
+  ])(
+    "restores a verified archive, and $recipe",
+    ({ record, restored: recipe }) =>
+      withRelay("kiln-backup-restore-", ({ config, root }) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            writeFile(resolve(root, "server.txt"), "old")
+          )
+          const instance = testInstance({
+            brickSource: "https://kiln.test/bricks/paper.yml",
+            brickSnapshotSha256: yield* Effect.promise(() => record(config)),
           })
-        )
-        yield* Effect.promise(() =>
-          Promise.all([
-            writeFile(resolve(root, "server.txt"), "new"),
-            writeFile(resolve(root, "extra.txt"), "remove"),
-          ])
-        )
+          const manager = yield* backupManager(config, async () => instance)
+          const input = backupInput(6)
+          const created = archiveResult(yield* runTask(manager, input))
+          yield* Effect.sync(() =>
+            rmSync(brickSnapshotDirectory(config.dataDirectory), {
+              force: true,
+              recursive: true,
+            })
+          )
+          yield* Effect.promise(() =>
+            Promise.all([
+              writeFile(resolve(root, "server.txt"), "new"),
+              writeFile(resolve(root, "extra.txt"), "remove"),
+            ])
+          )
 
-        const restored = yield* runTask(manager, {
-          backupId: input.backupId,
-          kind: "restore",
-          source: {
-            bytes: created.bytes,
-            checksumSha256: created.checksumSha256,
-            kind: "local",
-          },
-          target: { id: "instance-1", kind: "instance" },
-          taskId: "20000000-0000-4000-8000-000000000006",
+          const restored = yield* runTask(manager, {
+            backupId: input.backupId,
+            kind: "restore",
+            source: {
+              bytes: created.bytes,
+              checksumSha256: created.checksumSha256,
+              kind: "local",
+            },
+            target: { id: "instance-1", kind: "instance" },
+            taskId: "20000000-0000-4000-8000-000000000006",
+          })
+
+          assert.strictEqual(restored.status, "succeeded")
+          assert.deepStrictEqual(restored.result, { warnings: [] })
+          assert.strictEqual(
+            yield* Effect.promise(() =>
+              readFile(resolve(root, "server.txt"), "utf8")
+            ),
+            "old"
+          )
+          const entries = yield* Effect.promise(() => readdir(root))
+          assert.notInclude(entries, "extra.txt")
+          assert.notInclude(entries, ".kiln-backup")
+          assert.deepStrictEqual(
+            yield* Effect.promise(() =>
+              new BrickCatalog(
+                config.brickCatalogUrl,
+                config.dataDirectory
+              ).recipe(instance.brickSource ?? "", instance.brickSnapshotSha256)
+            ),
+            recipe
+          )
         })
-
-        assert.strictEqual(restored.status, "succeeded")
-        assert.deepStrictEqual(restored.result, { warnings: [] })
-        assert.strictEqual(
-          yield* Effect.promise(() =>
-            readFile(resolve(root, "server.txt"), "utf8")
-          ),
-          "old"
-        )
-        const entries = yield* Effect.promise(() => readdir(root))
-        assert.notInclude(entries, "extra.txt")
-        assert.notInclude(entries, ".kiln-backup")
-        assert.deepStrictEqual(
-          yield* Effect.promise(() =>
-            new BrickCatalog(
-              config.brickCatalogUrl,
-              config.dataDirectory
-            ).recipe(instance.brickSource ?? "", instance.brickSnapshotSha256)
-          ),
-          recipe
-        )
-      })
-    )
+      )
   )
 
   it.effect("finishes a journaled directory swap after Relay restart", () =>

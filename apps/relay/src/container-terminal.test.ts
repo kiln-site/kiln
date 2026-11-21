@@ -117,9 +117,9 @@ describe("terminal sessions", () => {
       service: "web",
     })
 
-    expect(
-      terminals.heartbeat(alice, elsewhere, [attachment]).unknown
-    ).toEqual([attachment])
+    expect(terminals.heartbeat(alice, elsewhere, [attachment]).unknown).toEqual(
+      [attachment]
+    )
     terminals.detach(alice, elsewhere, attachment)
     expect(terminals.heartbeat(alice, targetKey, [attachment]).unknown).toEqual(
       []

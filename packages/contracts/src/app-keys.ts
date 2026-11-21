@@ -15,6 +15,9 @@ const APP_VOLUME_FILE_ROOT = /^app:([a-f0-9]{12}):volume:([a-f0-9]{40})$/u
 // A database's dumps travel as files under `database:<databaseId>`, a folder
 // the Relay keeps for them, so they go through the same transfers.
 const DATABASE_FILE_ROOT_PREFIX = "database:"
+// A volume is copied between Relays as `volume:<volume ID>`: a root only
+// transfers take, since its files open through the App that uses it.
+const VOLUME_TRANSFER_ROOT = /^volume:([a-f0-9]{40})$/u
 // A Relay's host files open as `relay:<relayId>`.
 const RELAY_FILE_ROOT_PREFIX = "relay:"
 const resourceIdPattern = INSTANCE_ID_PATTERN
@@ -74,6 +77,15 @@ export function databaseIdFromFileRoot(id: string): string | null {
   if (!id.startsWith(DATABASE_FILE_ROOT_PREFIX)) return null
   const databaseId = id.slice(DATABASE_FILE_ROOT_PREFIX.length)
   return resourceIdPattern.test(databaseId) ? databaseId : null
+}
+
+export function volumeTransferRootId(volumeId: string): string {
+  return `volume:${volumeId}`
+}
+
+/** The volume a transfer's root names; null for any other root. */
+export function volumeIdFromTransferRoot(id: string): string | null {
+  return VOLUME_TRANSFER_ROOT.exec(id)?.[1] ?? null
 }
 
 // A server's files, as opposed to an app's, a database's dumps, or a Relay's
@@ -140,7 +152,7 @@ export function fileTransferAction(
 /** A step of copying a root from one Relay to another. */
 export type PeerTransferStep = "pack" | "serve" | "install"
 
-const databasePeerTransferActions = {
+const backedUpPeerTransferActions = {
   install: "backup.restore",
   pack: "backup.create",
   serve: "backup.download",
@@ -154,14 +166,18 @@ const databasePeerTransferActions = {
  * the Relay itself, as its administrator and with no login from whoever
  * asks, as its backups are: so each step takes what making, downloading
  * and restoring a backup do, never what exporting or importing a dump with
- * the database's own login does.
+ * the database's own login does. A volume is archived and filled by the
+ * Relay too, as its backups are, and takes the same.
  */
 export function peerTransferAction(
   rootId: string,
   step: PeerTransferStep
-): FileTransferAction | (typeof databasePeerTransferActions)[PeerTransferStep] {
-  if (databaseIdFromFileRoot(rootId) !== null) {
-    return databasePeerTransferActions[step]
+): FileTransferAction | (typeof backedUpPeerTransferActions)[PeerTransferStep] {
+  if (
+    databaseIdFromFileRoot(rootId) !== null ||
+    volumeIdFromTransferRoot(rootId) !== null
+  ) {
+    return backedUpPeerTransferActions[step]
   }
   return fileTransferAction(rootId, step === "install" ? "upload" : "download")
 }

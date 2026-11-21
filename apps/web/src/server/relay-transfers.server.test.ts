@@ -238,6 +238,58 @@ describeMysql("Copying files between Relays", () => {
     )
 
     it.effect(
+      "copies a volume only for someone who may back it up and restore it on its Relay",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relayRequests.length = 0
+          yield* insertUser(user.id, { emailVerifiedAt: new Date() })
+          yield* insertRelay(relayId)
+          // Configuring the Relay, and reading and writing files, aren't
+          // backing a volume up and restoring it, which its Relay does.
+          const id = randomUUID()
+          yield* insertGrant({
+            id,
+            relayId,
+            resourceId: relayId,
+            resourceType: "relay",
+            userId: user.id,
+          })
+          for (const permission of [
+            "relay.configure",
+            "instance.files.read",
+            "instance.files.write",
+          ]) {
+            yield* insertRows("access_selection", {
+              access_id: id,
+              selection_key: permission,
+              selection_kind: "permission",
+            })
+          }
+          const handle = {
+            destination: { relayId, rootId: `volume:${"b".repeat(40)}` },
+            source: { relayId, rootId: `volume:${"a".repeat(40)}` },
+            transferId: "transfer-volume",
+          }
+
+          for (const asked of [
+            relayTransferStatusEffect(user, handle),
+            cancelRelayTransferEffect(user, handle),
+          ]) {
+            const exit = yield* Effect.exit(asked)
+            assert.isTrue(Exit.isFailure(exit))
+            if (Exit.isFailure(exit)) {
+              assert.match(
+                String(Cause.squash(exit.cause)),
+                /^PermissionDeniedError/
+              )
+            }
+          }
+          assert.deepStrictEqual(relayRequests, [])
+        })
+    )
+
+    it.effect(
       "has the destination pull under a grant that names it by its key",
       () =>
         Effect.gen(function* () {
