@@ -637,8 +637,10 @@ export class BackupManager {
       }
       if (
         claimed.length !== batch.size &&
-        // A schedule queues its whole batch at once, here on the Relay:
-        // one short of a member is broken, not still arriving.
+        // A schedule's batch is queued whole at once, here on the Relay,
+        // or sent by Hearth a task after another when it goes to a bucket.
+        // One still short of a member after this wait is taken for broken,
+        // not still arriving: its pieces wouldn't be of one moment.
         (claimed.some(
           (member) =>
             member.input.kind === "create" &&

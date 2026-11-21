@@ -632,6 +632,7 @@ export function controlRequestLocks(
     // Requests the Relay sends Hearth, never the other way.
     case "hearth.terminal.output":
     case "sftp.authorization.resolve":
+    case "schedule.backup.take":
       return null
 
     case "relay.proxy.write":

@@ -331,7 +331,7 @@ import {
   type PlatformContext,
   type PlatformPassResult,
 } from "./platform.js"
-import { ScheduleManager } from "./schedules.js"
+import { askHearthForBucketBackups, ScheduleManager } from "./schedules.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
 import {
   migrateTunnelBricks,
@@ -1179,6 +1179,11 @@ const scheduleManager = await ScheduleManager.make({
     new Set((await databases.list()).map((database) => database.id)),
   platformTargetId: () => config.installationId ?? relayIdentity.id,
   relayId: relayIdentity.id,
+  takeBucketBackups: (request) =>
+    askHearthForBucketBackups(
+      (...ask) => controlSocket.requestClients(...ask),
+      request
+    ),
   reportError: (message, cause) => {
     reportRelayError(
       cause instanceof Error ? cause : new Error(message, { cause }),

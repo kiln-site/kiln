@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect, Result } from "effect"
 
 import type {
+  BackupArtifactKind,
   BackupConsistency,
   BackupCreateTaskInput,
   BackupDeleteTaskInput,
@@ -23,6 +24,10 @@ import {
   resticS3BucketSchema,
   resticS3RegionSchema,
 } from "@workspace/contracts"
+import {
+  scheduledBackupArtifactId,
+  scheduledBackupTaskId,
+} from "@workspace/contracts/schedules"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
@@ -1052,11 +1057,65 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       : []
   const repositoryId = repositoryRows[0]?.id ?? null
   const orphaned = input.mode === "incremental" && !repositoryId
-  const objectKey =
-    input.destination.kind === "s3" ? input.destination.objectKey : null
+  yield* catalogScheduledBackup(transaction, {
+    artifactId,
+    artifactKind: input.artifactKind,
+    backupId: input.backupId,
+    // An App's scheduled backups are cataloged as one batch, live or
+    // stopped, as its manual ones are.
+    batchId: catalog.batchId ?? input.batch?.id ?? null,
+    // A volume's is live or stopped; a database's says so only when it
+    // was dumped in a stopped batch.
+    consistency:
+      input.target.kind === "volume"
+        ? (input.consistency ?? "live")
+        : (input.consistency ?? null),
+    createdAt: task.createdAt,
+    error: orphaned
+      ? "Its repository was gone when it finished, so it can't be restored"
+      : null,
+    maxBytes: input.maxBytes,
+    mode: input.mode,
+    name: catalog.name,
+    now,
+    objectKey:
+      input.destination.kind === "s3" ? input.destination.objectKey : null,
+    relayId,
+    repositoryId,
+    storageId: catalog.storageId,
+    targetId: input.target.id,
+    targetKind: input.target.kind,
+    taskId: input.taskId,
+  })
+})
 
-  // An App's scheduled backups are cataloged as one batch, live or stopped,
-  // as its manual ones are.
+// A scheduled backup's catalog rows: the backup, its one copy, and the
+// task that makes it. One already cataloged is left as it is.
+const catalogScheduledBackup = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  backup: {
+    artifactId: string
+    artifactKind: BackupArtifactKind
+    backupId: string
+    batchId: string | null
+    consistency: BackupConsistency | null
+    createdAt: number
+    /** Why it's cataloged as failed, when it is. */
+    error: string | null
+    maxBytes: number | null
+    mode: "full" | "incremental"
+    name: string
+    now: number
+    objectKey: string | null
+    relayId: string
+    repositoryId: string | null
+    storageId: string | null
+    targetId: string
+    targetKind: BackupTargetKind
+    taskId: string
+  }
+) {
+  const status = backup.error === null ? "queued" : "failed"
   yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup")}
       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
@@ -1065,25 +1124,21 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
      VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?,
              JSON_ARRAY(), NULL, ?, ?)`,
     [
-      input.backupId,
-      relayId,
-      input.target.kind,
-      input.target.id,
-      catalog.storageId,
-      input.artifactKind,
-      input.mode,
-      orphaned ? "failed" : "queued",
-      catalog.name,
-      objectKey,
-      repositoryId,
-      // A volume's is live or stopped; a database's says so only when it
-      // was dumped in a stopped batch.
-      input.target.kind === "volume"
-        ? (input.consistency ?? "live")
-        : (input.consistency ?? null),
-      catalog.batchId ?? input.batch?.id ?? null,
-      task.createdAt,
-      now,
+      backup.backupId,
+      backup.relayId,
+      backup.targetKind,
+      backup.targetId,
+      backup.storageId,
+      backup.artifactKind,
+      backup.mode,
+      status,
+      backup.name,
+      backup.objectKey,
+      backup.repositoryId,
+      backup.consistency,
+      backup.batchId,
+      backup.createdAt,
+      backup.now,
     ]
   )
   yield* transaction.execute(
@@ -1092,14 +1147,14 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
        created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      artifactId,
-      input.backupId,
-      input.mode === "incremental" ? "restic" : (catalog.storageId ?? "local"),
-      catalog.storageId,
-      orphaned ? "failed" : "queued",
-      objectKey,
-      task.createdAt,
-      now,
+      backup.artifactId,
+      backup.backupId,
+      backup.mode === "incremental" ? "restic" : (backup.storageId ?? "local"),
+      backup.storageId,
+      status,
+      backup.objectKey,
+      backup.createdAt,
+      backup.now,
     ]
   )
   yield* transaction.execute(
@@ -1108,16 +1163,119 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
        error, created_at, updated_at)
      VALUES (?, ?, 'create', ?, ?, NULL, ?, ?, ?)`,
     [
-      input.taskId,
-      input.backupId,
-      orphaned ? "failed" : "queued",
-      input.maxBytes,
-      orphaned
-        ? "Its repository was gone when it finished, so it can't be restored"
-        : null,
-      task.createdAt,
-      now,
+      backup.taskId,
+      backup.backupId,
+      status,
+      backup.maxBytes,
+      backup.error,
+      backup.createdAt,
+      backup.now,
     ]
+  )
+})
+
+/**
+ * Catalogs the full backups one run of a schedule's step sends to a bucket,
+ * for Hearth to send their tasks as it sends a manual backup's: it holds
+ * the bucket's keys, so the Relay asks it to take them rather than making
+ * them itself. Where each goes is Hearth's to say, from the destination its
+ * schedule names. Asked again for the same run, as each target of a batch
+ * asks, it changes nothing.
+ */
+export const reserveScheduledBucketBackupsEffect = Effect.fn(
+  "backups.reserveScheduledBucket"
+)(function* (input: {
+  backups: ReadonlyArray<{
+    artifactKind: BackupArtifactKind
+    backupId: string
+    batchId: string | null
+    consistency: BackupConsistency | null
+    maxBytes: number | null
+    name: string
+    targetId: string
+    targetKind: BackupTargetKind
+  }>
+  relayId: string
+  storageId: string
+}) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.transaction(
+    "backup_reserve_scheduled_bucket",
+    (transaction) =>
+      Effect.gen(function* () {
+        const storage = (yield* lockBackupStorageRows(transaction, [
+          input.storageId,
+        ])).get(input.storageId)
+        if (!storage || !storage.enabled || storage.deleting) {
+          return yield* BackupStorageError.make({
+            code: "storage_unavailable",
+            operation: "backup.reserveScheduled",
+            reason: "The backup destination is unavailable",
+          })
+        }
+        for (const backup of input.backups) {
+          yield* catalogScheduledBackup(transaction, {
+            ...backup,
+            artifactId: scheduledBackupArtifactId(backup.backupId),
+            createdAt: now,
+            error: null,
+            mode: "full",
+            now,
+            objectKey: backupObjectKey({
+              artifactKind: backup.artifactKind,
+              backupId: backup.backupId,
+              installationId: kilnInstallationId(),
+              objectPrefix: storage.object_prefix,
+              relayId: input.relayId,
+              targetId: backup.targetId,
+              targetKind: backup.targetKind,
+            }),
+            relayId: input.relayId,
+            repositoryId: null,
+            storageId: input.storageId,
+            taskId: scheduledBackupTaskId(backup.backupId),
+          })
+          // Its IDs are the run's own, so rows already holding them are
+          // this backup's, cataloged before. Anything else holding one is
+          // refused rather than passed off as this backup: without its own
+          // task and copy, nothing would ever be sent.
+          const [held] = yield* transaction.queryRows<
+            {
+              reason: string
+              relay_id: string
+              target_id: string
+              target_kind: string
+            } & RowDataPacket
+          >(
+            `SELECT backup.relay_id, backup.target_kind, backup.target_id,
+                    backup.reason
+               FROM ${databaseTable("backup")} backup
+               JOIN ${databaseTable("backup_task")} task
+                 ON task.backup_id = backup.id AND task.id = ?
+               JOIN ${databaseTable("backup_artifact")} artifact
+                 ON artifact.backup_id = backup.id AND artifact.id = ?
+              WHERE backup.id = ?`,
+            [
+              scheduledBackupTaskId(backup.backupId),
+              scheduledBackupArtifactId(backup.backupId),
+              backup.backupId,
+            ]
+          )
+          if (
+            held?.relay_id !== input.relayId ||
+            held.target_kind !== backup.targetKind ||
+            held.target_id !== backup.targetId ||
+            held.reason !== "scheduled"
+          ) {
+            return yield* BackupStorageError.make({
+              code: "reservation_failed",
+              operation: "backup.reserveScheduled",
+              reason: "Another backup already has this scheduled backup's ID",
+            })
+          }
+        }
+      })
   )
 })
 

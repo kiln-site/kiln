@@ -343,6 +343,9 @@ export async function scheduleWorker(harness: RelayHarness) {
       harness.commands.run(target, command),
     runPower: (kind, id, action, powerIntent) =>
       harness.power.scheduled(kind, id, action, powerIntent),
+    takeBucketBackups: async () => {
+      throw new Error("not used")
+    },
     sendConsoleCommand: async () => {
       throw new Error("not used")
     },

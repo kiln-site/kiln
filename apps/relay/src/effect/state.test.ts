@@ -600,6 +600,87 @@ describe("Relay state from before destinations took 12-character IDs", () => {
   )
 })
 
+describe("Relay state from when schedules came with a bucket's keys", () => {
+  it.effect("drops the keys its stored schedules hold, and nothing else", () =>
+    withTemporaryDirectory((directory) =>
+      Effect.gen(function* () {
+        const filename = join(directory, "relay.sqlite")
+        const open = <A, E>(
+          use: Effect.Effect<A, E, SqlClient.SqlClient>
+        ): Effect.Effect<A, unknown> =>
+          use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+        yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+        const execution = { mode: "full", targetKind: "instance" }
+        const schedule = {
+          actions: [
+            {
+              executions: [
+                {
+                  ...execution,
+                  destination: {
+                    accessKeyId: "AKIAKILNTESTKEY",
+                    allowPrivateNetwork: false,
+                    bucket: "kiln-backups",
+                    endpoint: "https://s3.example.test",
+                    forcePathStyle: false,
+                    kind: "s3",
+                    objectKeyPrefix: "team/kiln/kiln/relay/instance/server-a",
+                    region: "us-east-1",
+                    secretAccessKey: "kiln-test-secret-access-key",
+                  },
+                  targetId: "server-a",
+                },
+                {
+                  ...execution,
+                  destination: { kind: "local" },
+                  targetId: "server-b",
+                },
+              ],
+              type: "backup",
+            },
+            { command: "say hi", type: "console_command" },
+          ],
+          id: "14bb1e12-fab9-45f3-8f85-ae22d2f074e5",
+        }
+        yield* open(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            yield* sql`
+              INSERT INTO relay_schedules
+                (schedule_id, revision, enabled, next_run_at, definition_json)
+              VALUES (${schedule.id}, 1, 1, NULL, ${JSON.stringify(schedule)})
+            `
+            yield* sql`
+              DELETE FROM effect_sql_migrations WHERE migration_id >= 51
+            `
+          })
+        )
+        yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+
+        const [stored] = yield* open(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            return yield* sql<{ json: string }>`
+              SELECT definition_json AS json FROM relay_schedules
+            `
+          })
+        )
+        const [bucket, disk] = schedule.actions[0]!.executions!
+        assert.deepStrictEqual(JSON.parse(stored!.json), {
+          ...schedule,
+          actions: [
+            {
+              executions: [{ ...bucket, destination: { kind: "s3" } }, disk],
+              type: "backup",
+            },
+            schedule.actions[1],
+          ],
+        })
+      })
+    )
+  )
+})
+
 /** Gives each test its own SQLite file so tests never share rows or run order. */
 function stateTest(
   name: string,

@@ -22,10 +22,6 @@ import {
 
 import { prepareResticRepositoryLocation } from "@/backups/destinations"
 import {
-  backupObjectKeyPrefix,
-  loadBackupStorageCredentialEffect,
-} from "@/backups/destinations/s3"
-import {
   ensureBackupRepositoryEffect,
   scheduledBackupAdmissionEffect,
 } from "@/effect/backups"
@@ -609,7 +605,7 @@ async function scheduledBackupExecution(
   if (action.mode === "full") {
     return {
       ...execution,
-      destination: await scheduledFullBackupDestination(action, target),
+      destination: scheduledFullBackupDestination(action),
       maxBytes: admission.maxBytes,
       refusal: null,
       repositoryId: null,
@@ -677,39 +673,93 @@ interface BackupMember {
   readonly relayId: string
 }
 
-async function scheduledFullBackupDestination(
-  action: Extract<ScheduleAction, { type: "backup" }>,
-  target: BackupMember
+// Where a full backup goes, as the Relay is told: its own disk, or a
+// bucket, of which it is told nothing. Hearth keeps a bucket's keys, and
+// takes each backup there when the Relay says it is due
+// (`takeScheduledBucketBackups`).
+function scheduledFullBackupDestination(
+  action: Extract<ScheduleAction, { type: "backup" }>
 ) {
-  if (action.destination.kind === "local") {
-    return { kind: "local" as const }
-  }
-  const storage = await runAppEffect(
-    "schedules.loadBackupStorageCredential",
-    loadBackupStorageCredentialEffect(action.destination.storageId)
+  return action.destination.kind === "local"
+    ? { kind: "local" as const }
+    : { kind: "s3" as const }
+}
+
+/**
+ * A schedule's step that sends full backups to a bucket, as a Relay runs it
+ * now: of what was asked for, what it backs up there, each admitted or
+ * refused as Hearth would send it. Null when the schedule has no such step
+ * for that Relay. Only the asked targets are admitted, so a step of many
+ * game servers, each asking for its own, isn't admitted whole every time;
+ * volumes take the step's Apps with them, whose use of one decides it.
+ */
+export async function scheduledBucketBackupStep(
+  scheduleId: string,
+  actionId: string,
+  relay: PersistedRelay,
+  asked: ReadonlyArray<{ targetId: string; targetKind: string }>
+) {
+  const [[schedules], [actions], [targets]] = await Promise.all([
+    databasePool.query<ScheduleRow[]>(
+      `SELECT id, name, created_by
+         FROM ${databaseTable("schedule")}
+        WHERE id = ? AND deleted_at IS NULL`,
+      [scheduleId]
+    ),
+    databasePool.query<ScheduleActionRow[]>(
+      `SELECT id, schedule_id, position, action_type, action_config
+         FROM ${databaseTable("schedule_action")}
+        WHERE schedule_id = ? AND id = ?`,
+      [scheduleId, actionId]
+    ),
+    databasePool.query<ScheduleTargetRow[]>(
+      `SELECT schedule_id, relay_id, target_kind, target_id, target_name
+         FROM ${databaseTable("schedule_target")}
+        WHERE schedule_id = ? AND relay_id = ?`,
+      [scheduleId, relay.id]
+    ),
+  ])
+  const schedule = schedules[0]
+  const stored = scheduleActionSchema.safeParse(
+    jsonValue(actions[0]?.action_config)
   )
-  if (!storage || !storage.enabled || storage.deleting) {
-    throw new Error("Backup destination is unavailable")
+  if (!schedule || targets.length === 0 || !stored.success) return null
+  const action = stored.data
+  if (
+    action.type !== "backup" ||
+    action.mode !== "full" ||
+    action.destination.kind !== "storage"
+  ) {
+    return null
   }
-  const installationId = kilnInstallationId()
-  const targetKind = target.kind === "relay" ? "platform" : target.kind
-  return {
-    accessKeyId: storage.accessKeyId,
-    allowPrivateNetwork: storage.allowPrivateNetwork,
-    bucket: storage.bucket,
-    endpoint: storage.endpoint,
-    forcePathStyle: storage.forcePathStyle,
-    kind: "s3" as const,
-    objectKeyPrefix: backupObjectKeyPrefix({
-      installationId,
-      objectPrefix: storage.objectPrefix,
-      relayId: target.relayId,
-      targetId: targetKind === "platform" ? installationId : target.id,
-      targetKind,
-    }),
-    region: storage.region,
-    secretAccessKey: storage.secretAccessKey,
-  }
+  const named = new Set(
+    asked.map(({ targetId, targetKind }) => `${targetKind}:${targetId}`)
+  )
+  const volumes = asked.some(({ targetKind }) => targetKind === "volume")
+  const [step] = await prepareRelayScheduleActions(
+    [action],
+    targets
+      .filter(
+        ({ target_id: id, target_kind: kind }) =>
+          named.has(`${kind}:${id}`) ||
+          (volumes && (kind === "app" || kind === "volume"))
+      )
+      .map((target) => ({
+        id: target.target_id,
+        kind: target.target_kind,
+        name: target.target_name,
+        relayId: target.relay_id,
+      })),
+    schedule.created_by,
+    relay
+  )
+  return step?.type === "backup"
+    ? {
+        action: step,
+        scheduleName: schedule.name,
+        storageId: action.destination.storageId,
+      }
+    : null
 }
 
 async function scheduledResticDestination(

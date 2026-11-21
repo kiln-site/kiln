@@ -2012,7 +2012,56 @@ const migrations = SqliteMigrator.fromRecord({
       `
     }
   }),
+  // A schedule's full backups to a bucket are Hearth's to take, so a
+  // schedule no longer comes with the bucket's keys, and the ones stored
+  // schedules came with are dropped.
+  "51_schedule_bucket_keys": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const schedules = yield* sql<{ id: string; json: string }>`
+      SELECT schedule_id AS id, definition_json AS json FROM relay_schedules
+    `
+    for (const row of schedules) {
+      const kept = withoutScheduleBucketKeys(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_schedules SET definition_json = ${kept}
+        WHERE schedule_id = ${row.id}
+      `
+    }
+  }),
 })
+
+// A stored schedule without what it held of the buckets its full backups go
+// to, or null for one that held nothing of them. Anything unreadable is
+// left as it is, for whatever reads it to settle.
+function withoutScheduleBucketKeys(definitionJson: string): string | null {
+  const definition = Result.getOrNull(
+    Result.try(() => JSON.parse(definitionJson) as unknown)
+  )
+  if (!Predicate.isObject(definition) || !Array.isArray(definition.actions)) {
+    return null
+  }
+  let changed = false
+  for (const action of definition.actions as ReadonlyArray<unknown>) {
+    if (!Predicate.isObject(action) || !Array.isArray(action.executions)) {
+      continue
+    }
+    for (const execution of action.executions as ReadonlyArray<unknown>) {
+      if (!Predicate.isObject(execution)) continue
+      const destination = execution.destination
+      if (
+        !Predicate.isObject(destination) ||
+        destination.kind !== "s3" ||
+        Object.keys(destination).length === 1
+      ) {
+        continue
+      }
+      execution.destination = { kind: "s3" }
+      changed = true
+    }
+  }
+  return changed ? JSON.stringify(definition) : null
+}
 
 // Stored JSON with each old destination ID that `holders` finds in it, as a
 // `storageId`, moved to its new one; or null when it holds none. Anything

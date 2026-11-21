@@ -166,10 +166,12 @@ registry kind. The registries centralize destination behavior, but they are not
 dynamic plugin loading.
 
 S3 credentials never go to a game container and are not returned to the
-browser. Full archives still use Hearth-signed, narrowly scoped object
-requests. Incremental restic repositories cannot be driven with presigned
-URLs, so Relay receives the destination's static keys inside the durable task
-input (see [Incremental snapshots](#incremental-snapshots)). A full archive is
+browser. Full archives use Hearth-signed, narrowly scoped object requests,
+by hand or on a schedule: a Relay is never given a bucket's keys for one
+(see [Scheduled backups](#scheduled-backups)). Incremental restic
+repositories cannot be driven with presigned URLs, so Relay receives the
+destination's static keys inside the durable task input (see
+[Incremental snapshots](#incremental-snapshots)). A full archive is
 staged locally, its size and digest validated, then uploaded in a single
 request, so it has a 5 GiB ceiling; the single queue plus a free-space
 preflight keeps staging bounded. Restic S3 pack writes aren't subject to that
@@ -328,8 +330,9 @@ operator to send.
 
 ## Scheduled backups
 
-A Relay runs its schedules on its own, so scheduled backups go on while
-Hearth is away. Hearth decides whether each one may run as it decides a
+A Relay runs its schedules on its own, so scheduled backups it can make
+alone, to its own disk or a restic repository, go on while Hearth is away.
+Hearth decides whether each one may run as it decides a
 manual backup's reservation, and puts the answer in the schedule it sends
 the Relay, per backup step and target: not while the target is being
 deleted, not where its backups are turned off (a quantity or size ceiling of
@@ -341,6 +344,45 @@ and, for an incremental one, the repository it goes to; a refused one carries
 why, and the Relay records it as not run instead of running it. A
 destination Hearth can't use no longer fails the schedule's deploy, which
 left the Relay running what it had before.
+
+A full backup to a bucket is Hearth's to take, since only Hearth holds the
+bucket's keys. The schedule tells the Relay that the step goes to a bucket
+and nothing of the bucket itself. When a run reaches the step, the Relay
+asks the Hearths connected to it (`schedule.backup.take`) to take what it
+backs up, naming the schedule, the step, the run, and each thing. Hearth
+reads the rest from its own schedule (`takeScheduledBucketBackups`): the
+step must be one it has for that Relay, each thing one the step backs up
+there, and admitted as it would be if the schedule were sent now. It then
+catalogs each backup, at the object key it chooses, and sends its task as
+it sends a manual backup's, with a signed upload. From there it is a manual
+backup in all but its reason: it is refreshed after a restart, restored and
+deleted the same way, and leaves out what the resource's exclude patterns
+say. A run's backups keep the IDs the run gives them
+(`scheduledBackupId`), so asking twice, as each target of a batch does,
+takes them once.
+
+The step waits for its task to arrive and finish. What that leaves:
+
+- With no Hearth connected, or none that takes it, the step fails and says
+  why; the Relay makes nothing in its place. The schedule's other steps
+  follow its `continueOnFailure`.
+- Hearth takes it only if nothing is in its way then (`onlyIfFree`): while
+  the target is being deployed or deleted, or the destination or schedule
+  saved, it refuses, saying what, as it refuses a person.
+- Hearth takes all of what one ask names or none: a volume an App has let
+  go of since the schedule was sent refuses the rest with it, until the
+  schedule is sent again.
+- A step gives up on a task that hasn't arrived in three minutes. Hearth
+  still sends it when it can, so the backup can turn up after its step
+  failed.
+- Hearth sends a stopped batch a task after another, and the Relay waits
+  five seconds for a scheduled batch to be whole (see
+  [Formats and live consistency](#formats-and-live-consistency)). One that
+  takes longer to arrive, as dozens of volumes over a slow link could, is
+  failed whole with nothing stopped, rather than taken in pieces.
+- A scheduled bucket backup already queued when the Relay updates from a
+  release that sent keys still uploads with the keys in its own task; the
+  update drops them from every stored schedule (migration 51).
 
 A step that backs up an App backs up each volume it uses, each admitted on its own. It's taken live,
 or stopped once for all of them as a batch; saving a stopped one takes
@@ -364,9 +406,9 @@ schedule and Relay and raised on every send and every change it depends on.
 The Relay keeps the newest generation of the newest revision and ignores an
 older one that arrives late, and Hearth counts the schedule delivered only
 once the Relay acknowledges the newest generation Hearth issued.
-Hearth catalogs what the Relay ran as before, an incremental one in the
-repository its schedule named; one whose repository is gone by then is
-cataloged as failed, since it can't be restored.
+Hearth catalogs what the Relay ran on its own as before, an incremental
+one in the repository its schedule named; one whose repository is gone by
+then is cataloged as failed, since it can't be restored.
 
 ## Retention
 
