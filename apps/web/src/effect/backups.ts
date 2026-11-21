@@ -1651,25 +1651,31 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
               }
             }
             // What a delete left behind keeps the backup: available while a
-            // complete copy remains, failed while only failed ones do.
+            // complete copy remains, running while a bucket copy still
+            // waits to be seen, failed while only failed ones do.
             const [remaining] = yield* transaction.queryRows<
               RowDataPacket & {
                 available: number | string
                 kept: number | string
+                waiting: number | string
               }
             >(
               `SELECT COUNT(*) AS kept,
-                      COALESCE(SUM(status IN ('available', 'deleting')), 0) AS available
+                      COALESCE(SUM(status IN ('available', 'deleting')), 0) AS available,
+                      COALESCE(SUM(status = 'running' AND storage_id IS NOT NULL
+                        AND completed_at IS NULL AND ${notACopy}), 0) AS waiting
                  FROM ${databaseTable("backup_artifact")}
                 WHERE backup_id = ? AND status <> 'deleted'`,
-              [task.backupId]
+              [task.backupId, task.backupId]
             )
             const status =
               Number(remaining?.available ?? 0) > 0
                 ? "available"
-                : Number(remaining?.kept ?? 0) > 0
-                  ? "failed"
-                  : "deleted"
+                : Number(remaining?.waiting ?? 0) > 0
+                  ? "running"
+                  : Number(remaining?.kept ?? 0) > 0
+                    ? "failed"
+                    : "deleted"
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
                   SET status = 'available', updated_at = ?
@@ -3455,56 +3461,68 @@ export const waitingBucketCopiesEffect = Effect.fn(
 )(function* (input: {
   limit: number
   now: number
+  perDestination: number
   resting: ReadonlyArray<string>
 }) {
   const database = yield* Database
-  const select = (late: boolean) =>
-    database.queryRows<
-      RowDataPacket & {
-        artifact_id: string
-        backup_id: string
-        bytes: number | string | null
-        object_key: string | null
-        relay_id: string
-        reserved_bytes: number | string | null
-        seen_by: number | string | null
-        storage_id: string
-      }
-    >(
-      "backup_waiting_bucket_copies",
-      `SELECT artifact.id AS artifact_id, artifact.backup_id,
-              artifact.storage_id, artifact.object_key, artifact.bytes,
-              artifact.seen_by, backup.relay_id, task.reserved_bytes
-         FROM ${databaseTable("backup_artifact")} artifact
-         JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
-         JOIN ${databaseTable("backup_task")} task
-           ON task.backup_id = backup.id AND task.task_kind = 'create'
-          AND task.status = 'succeeded'
-        WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
-          AND artifact.completed_at IS NULL
-          AND backup.backup_mode = 'full'
-          AND backup.status NOT IN ('deleting', 'deleted')
-          AND artifact.id NOT IN (
-            SELECT destination_artifact_id
-              FROM ${databaseTable("backup_copy_task")})
-          AND ${
-            late
-              ? "artifact.seen_by < ?"
-              : `(artifact.seen_by IS NULL OR artifact.seen_by >= ?)${
-                  input.resting.length > 0
-                    ? ` AND artifact.storage_id NOT IN (${input.resting
-                        .map(() => "?")
-                        .join(", ")})`
-                    : ""
-                }`
-          }
-        ORDER BY artifact.seen_by ASC, artifact.id ASC
-        LIMIT ?`,
-      late
-        ? [input.now, input.limit]
-        : [input.now, ...input.resting, input.limit]
-    )
-  const rows = [...(yield* select(true)), ...(yield* select(false))]
+  type Row = RowDataPacket & {
+    artifact_id: string
+    backup_id: string
+    bytes: number | string | null
+    object_key: string | null
+    relay_id: string
+    reserved_bytes: number | string | null
+    seen_by: number | string | null
+    storage_id: string
+  }
+  const waiting = (where: string) => `
+    SELECT artifact.id AS artifact_id, artifact.backup_id,
+           artifact.storage_id, artifact.object_key, artifact.bytes,
+           artifact.seen_by, backup.relay_id, task.reserved_bytes,
+           ROW_NUMBER() OVER (
+             PARTITION BY artifact.storage_id
+             ORDER BY artifact.seen_by ASC, artifact.id ASC
+           ) AS place
+      FROM ${databaseTable("backup_artifact")} artifact
+      JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
+      JOIN ${databaseTable("backup_task")} task
+        ON task.backup_id = backup.id AND task.task_kind = 'create'
+       AND task.status = 'succeeded'
+     WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
+       AND artifact.completed_at IS NULL
+       AND backup.backup_mode = 'full'
+       AND backup.status NOT IN ('deleting', 'deleted')
+       AND artifact.id NOT IN (
+         SELECT destination_artifact_id
+           FROM ${databaseTable("backup_copy_task")})
+       AND ${where}`
+  // Past their deadline: failed without a look, so none waits on a bucket.
+  const late = yield* database.queryRows<Row>(
+    "backup_late_bucket_copies",
+    `SELECT * FROM (${waiting("artifact.seen_by < ?")}) waiting
+      ORDER BY seen_by ASC, artifact_id ASC
+      LIMIT ?`,
+    [input.now, input.limit]
+  )
+  // The rest, oldest first, but no more than `perDestination` of one
+  // destination's, so one bucket that can't be asked never fills a look.
+  const due = yield* database.queryRows<Row>(
+    "backup_waiting_bucket_copies",
+    `SELECT * FROM (${waiting(
+      `(artifact.seen_by IS NULL OR artifact.seen_by >= ?)${
+        input.resting.length > 0
+          ? ` AND artifact.storage_id NOT IN (${input.resting
+              .map(() => "?")
+              .join(", ")})`
+          : ""
+      }`
+    )}) waiting
+      WHERE place <= ?
+      ORDER BY seen_by ASC, artifact_id ASC
+      LIMIT ?`,
+    [input.now, ...input.resting, input.perDestination, input.limit]
+  )
+  const rows = [...late, ...due]
   return rows.map((row) => ({
     artifactId: row.artifact_id,
     backupId: row.backup_id,
@@ -3559,7 +3577,8 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
                   completed_at = ?, updated_at = ?
             WHERE id = ? AND backup_id = ? AND status = 'running'
               AND completed_at IS NULL
-              AND bytes <=> ? AND object_key <=> ?`,
+              AND bytes <=> ? AND object_key <=> ?
+              AND ${notACopy}`,
           [
             seen ? "available" : "failed",
             input.outcome.kind === "seen"
@@ -3573,6 +3592,7 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
             input.backupId,
             input.looked.bytes,
             input.looked.objectKey,
+            input.backupId,
           ]
         )
         if (settled.affectedRows === 0) return false

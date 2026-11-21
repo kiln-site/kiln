@@ -184,15 +184,19 @@ Hearth saw only if that is the size of the archive its Relay reported, and
 within the backup's reservation; otherwise, or when the bucket has no object
 there, it fails, saying why. A copy on the Relay's own disk counts at once,
 so a backup with one is available while its bucket copy waits; one whose
-delete fails while its bucket copy waits is running again, not failed. A
-bucket Hearth can't ask is left alone a while, longer each time up to ten
-minutes, and its copies are left out of a look rather than filling it. A
+delete fails, or ends with its bucket copy kept, while that copy waits is
+running again, not failed. A look takes at most ten of one destination's
+copies, so a bucket that can't be asked never fills one, and a bucket Hearth
+can't ask is left alone a while, longer each time up to ten minutes. A
 copy still unseen an hour after it first waited, by Hearth's clock
 (`seen_by`, migration 95), fails with the last answer Hearth had: a refusal
 (403) says the copy may be missing or Hearth's key not allowed to read it.
 One look runs at a time, whether the sweep or a pass asked for it. A look
-settles a copy only as it was when looked for: a newer report of another
-size is looked for again. Settling takes the backup's row first, so two
+settles a copy only as it was when looked for, and only while it is still
+its Relay's upload: a newer report of another size is looked for again, and
+a copy Hearth's copy worker has taken over meanwhile is the worker's. A copy
+seen after its deadline counts all the same: the deadline only keeps a
+final backup from waiting for good. Settling takes the backup's row first, so two
 copies settling at once leave it as both left it. A copy Hearth settled
 stays as it settled whatever a later report of its create says, and a look
 that ends after its backup was deleted changes nothing. Nothing is deleted from the bucket here; a failed

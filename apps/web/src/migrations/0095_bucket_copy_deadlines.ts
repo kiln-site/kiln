@@ -26,5 +26,24 @@ export const bucketCopyDeadlines: Migration = {
         `ALTER TABLE \`${table}\` ADD COLUMN \`seen_by\` bigint unsigned NULL DEFAULT NULL AFTER \`completed_at\``
       )
     }
+    // A full backup's bucket copy already waiting to be seen, its upload
+    // done, has an hour from now. One still being uploaded gets its hour
+    // when its Relay reports it done.
+    yield* sql.unsafe(
+      `UPDATE \`${table}\` artifact
+         JOIN \`${databaseTableName("backup")}\` backup
+           ON backup.id = artifact.backup_id AND backup.backup_mode = 'full'
+         JOIN \`${databaseTableName("backup_task")}\` task
+           ON task.backup_id = backup.id AND task.task_kind = 'create'
+          AND task.status = 'succeeded'
+          SET artifact.seen_by = ?
+        WHERE artifact.seen_by IS NULL AND artifact.status = 'running'
+          AND artifact.storage_id IS NOT NULL
+          AND artifact.completed_at IS NULL
+          AND artifact.id NOT IN (
+            SELECT destination_artifact_id
+              FROM \`${databaseTableName("backup_copy_task")}\`)`,
+      [Date.now() + 60 * 60_000]
+    )
   }),
 }

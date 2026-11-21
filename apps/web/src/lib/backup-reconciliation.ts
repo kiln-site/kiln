@@ -139,13 +139,14 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       changed.map((task) => task.backupId)
     )
     // A finished backup's bucket copies wait for Hearth to see them there,
-    // as do those a failed delete left behind.
+    // as do those a delete that ended left behind.
     if (
       changed.some(
         (task) =>
           (task.kind === "create" && task.status === "succeeded") ||
           (task.kind === "delete" &&
-            (task.status === "failed" || task.status === "cancelled"))
+            task.status !== "queued" &&
+            task.status !== "running")
       )
     ) {
       const { requestBucketCopyChecks } = yield* promiseEffect(

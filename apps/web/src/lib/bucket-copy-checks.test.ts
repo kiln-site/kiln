@@ -451,15 +451,110 @@ describeMysql("Bucket copies Hearth looks for", () => {
           bucket.objects.set(objectKey, { status: 503 })
           bucket.objects.set(secondObjectKey, uploaded)
 
-          // The first look finds that destination down; the next looks at
-          // the second's copy all the same.
-          yield* checkBucketCopiesEffect()
+          // One look, as the sweep makes one every ten minutes, reaches the
+          // second destination's copy all the same.
           yield* checkBucketCopiesEffect()
 
           assert.strictEqual(
             (yield* state).copies.get(secondCopy)?.status,
             "available"
           )
+        })
+    )
+
+    it.effect(
+      "settles nothing of a copy Hearth's copy worker took over while Hearth looked",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({ local: true })
+          yield* reported(1, [
+            { artifactId: bucketCopy },
+            { artifactId: localCopy },
+          ])
+          bucket.objects.set(objectKey, uploaded)
+          let answer = () => {}
+          bucket.looking = new Promise((resolve) => {
+            answer = resolve
+          })
+          const started = new Promise<void>((resolve) => {
+            bucket.started = resolve
+          })
+
+          // Hearth looks; meanwhile its copy worker takes the copy's row to
+          // copy the backup there again, from the copy on the Relay's disk.
+          const looking = yield* Effect.forkChild(checkBucketCopiesEffect())
+          yield* Effect.promise(() => started)
+          yield* insertRows("backup_copy_task", {
+            id: uuid("e1"),
+            backup_id: backupId,
+            source_artifact_id: localCopy,
+            destination_artifact_id: bucketCopy,
+            status: "running",
+            requested_by: "user-one",
+            created_at: now,
+            updated_at: now,
+          })
+          answer()
+          yield* Fiber.join(looking)
+
+          // The worker's copy is the worker's to settle.
+          assert.strictEqual(
+            (yield* state).copies.get(bucketCopy)?.status,
+            "running"
+          )
+        })
+    )
+
+    it.effect(
+      "keeps a backup waiting whose delete ended with its bucket copy kept",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* reported()
+          const deleteTaskId = uuid("d2")
+          yield* reserveBackupDeleteEffect({
+            backupId,
+            requestedBy: "user-one",
+            taskId: deleteTaskId,
+          })
+
+          // The delete ends, but the bucket refused to delete the copy.
+          yield* reconcileBackupTaskEffect(
+            relayBackupTaskSchema.parse({
+              backupId,
+              bytesCompleted: 0,
+              bytesTotal: null,
+              createdAt: now,
+              error: null,
+              finishedAt: now + 5,
+              input: {
+                backupId,
+                destination: { artifactId: bucketCopy, kind: "local" },
+                kind: "delete",
+                target,
+                taskId: deleteTaskId,
+              },
+              inputRefreshRequired: false,
+              kind: "delete",
+              result: {
+                artifacts: [
+                  {
+                    artifactId: bucketCopy,
+                    error: "The bucket refused the delete",
+                    status: "failed",
+                  },
+                ],
+                warnings: [],
+              },
+              startedAt: now,
+              status: "succeeded",
+              taskId: deleteTaskId,
+              updatedAt: now + 5,
+            }),
+            relayId
+          )
+
+          assert.strictEqual((yield* state).backup?.status, "running")
         })
     )
 

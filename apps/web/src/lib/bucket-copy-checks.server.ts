@@ -23,6 +23,9 @@ import { publishBackupChange } from "@/lib/backup-realtime.server"
 // How many copies Hearth looks for at once, and per look.
 const LOOKS_AT_ONCE = 4
 const COPIES_PER_LOOK = 100
+// And of one destination per look, so a bucket that can't be asked never
+// fills one.
+const COPIES_PER_DESTINATION = 10
 // A bucket that can't be asked is left alone a while, longer each time.
 const FIRST_BACKOFF_MS = 30_000
 const LONGEST_BACKOFF_MS = 10 * 60_000
@@ -56,6 +59,7 @@ const lookOnce = Effect.gen(function* () {
   const now = yield* Clock.currentTimeMillis
   const waiting = yield* waitingBucketCopiesEffect({
     limit: COPIES_PER_LOOK,
+    perDestination: COPIES_PER_DESTINATION,
     now,
     resting: [...backoff].flatMap(([storageId, { until }]) =>
       now < until ? [storageId] : []
