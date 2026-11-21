@@ -123,9 +123,25 @@ export class HostPorts {
         }
       }
     }
-    for (const container of await Effect.runPromise(
-      this.#engine.inspectContainers(stopped)
-    )) {
+    // One that can't be read, as when Docker's answer about it is too large,
+    // keeps nothing else from getting a port: what it would bind is found
+    // out when it starts, as for a process Docker doesn't run.
+    const readable = await Effect.runPromise(
+      Effect.forEach(
+        stopped,
+        (id) =>
+          this.#engine.inspectContainers([id]).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning(
+                "Relay couldn't read a stopped container's ports",
+                cause
+              ).pipe(Effect.as([]))
+            )
+          ),
+        { concurrency: 8 }
+      )
+    )
+    for (const container of readable.flat()) {
       for (const [binding, hosts] of Object.entries(
         container.HostConfig?.PortBindings ?? {}
       )) {
