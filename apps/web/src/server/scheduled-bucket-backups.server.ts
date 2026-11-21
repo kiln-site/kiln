@@ -1,10 +1,11 @@
-import { Effect, Schema } from "effect"
+import { createHmac } from "node:crypto"
+
+import { Effect, Option, Schema, Semaphore } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import type { BackupArtifactKind, BackupTargetKind } from "@workspace/contracts"
 import {
   resolveScheduleBackupName,
-  scheduledBackupId,
   scheduleStableId,
   type ScheduledBucketBackupReply,
   type ScheduledBucketBackupRequest,
@@ -22,6 +23,7 @@ import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import { backupStorageSettingsKey, backupTargetKey } from "@/lib/backup-lanes"
 import { databaseTable } from "@/lib/database-config"
+import { betterAuthSecrets } from "@/lib/environment"
 import { publishBackupChanges } from "@/lib/backup-realtime.server"
 import {
   dispatchBackupTask,
@@ -55,6 +57,23 @@ interface Ask {
   /** The Relay asking, as its connection says, never as it says itself. */
   readonly relayId: string
   readonly request: ScheduledBucketBackupRequest
+}
+
+// The IDs a take gives what it catalogs, from the Relay asking, the run
+// and what it backs up, keyed with Hearth's own secret: the same on every
+// ask of one run, so asking again takes nothing twice, and none a Relay can
+// work out ahead of Hearth to take first.
+function takenId(...parts: ReadonlyArray<string | number>) {
+  const [current] = betterAuthSecrets()
+  const hex = createHmac("sha256", current!.value)
+    .update(["kiln-scheduled-take", ...parts].join("\u001f"))
+    .digest("hex")
+    .slice(0, 32)
+    .split("")
+  hex[12] = "8"
+  hex[16] = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16)
+  const id = hex.join("")
+  return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`
 }
 
 const artifactKinds = {
@@ -94,13 +113,24 @@ const admit = Effect.fn("ScheduledBackups.admit")(function* ({
   }
   const { action, scheduleName, storageId } = step
   const stopped = action.consistency === "stopped"
-  const batchId = request.batchId ?? null
   const members = new Map(
     request.members.map((member) => [
       `${member.targetKind}:${member.targetId}`,
       member,
     ])
   )
+  // Every target of a batch asks for all of it, so its name is the same
+  // from each.
+  const batchId = request.together
+    ? takenId(
+        "batch",
+        relayId,
+        request.scheduleId,
+        action.id,
+        request.scheduledAt,
+        [...members.keys()].sort().join(",")
+      )
+    : null
   const backups = []
   for (const member of members.values()) {
     const execution = action.executions.find(
@@ -117,15 +147,21 @@ const admit = Effect.fn("ScheduledBackups.admit")(function* ({
     }
     const targetKind: keyof typeof artifactKinds =
       member.targetKind === "relay" ? "platform" : member.targetKind
-    const backupId = scheduledBackupId({
-      ...member,
-      actionId: action.id,
-      scheduledAt: request.scheduledAt,
-      scheduleId: request.scheduleId,
-    })
+    const backupId = takenId(
+      "backup",
+      relayId,
+      request.scheduleId,
+      action.id,
+      request.scheduledAt,
+      member.targetKind,
+      member.targetId
+    )
     backups.push({
+      artifactId: takenId("artifact", backupId),
       artifactKind: artifactKinds[targetKind],
       backupId,
+      // As the Relay asked for it, to answer it so.
+      member,
       // Volumes are cataloged as the batch they were asked in, live or
       // stopped; a database only as one it stops within.
       batchId:
@@ -162,6 +198,7 @@ const admit = Effect.fn("ScheduledBackups.admit")(function* ({
       targetId:
         targetKind === "platform" ? kilnInstallationId() : member.targetId,
       targetKind,
+      taskId: takenId("task", backupId),
     })
   }
   return { backups, relay, storageId }
@@ -214,7 +251,15 @@ const takeBackups = operation<Ask>()({
         relayId: input.relayId,
         storageId: context.storageId,
       })
-      return { backupIds: made, relay: context.relay }
+      return {
+        backupIds: made,
+        relay: context.relay,
+        taken: context.backups.map(({ backupId, member, taskId }) => ({
+          ...member,
+          backupId,
+          taskId,
+        })),
+      }
     }),
   publish: ({ context, input }) =>
     publishBackupChanges(
@@ -250,36 +295,76 @@ const sendTaken = (relay: PersistedRelay, backupIds: ReadonlyArray<string>) =>
     )
   )
 
+// How many takes of one Relay Hearth works on at once, and how long one
+// waits for its turn: the Relay waits 30 s for an answer. A take holds its
+// turn from before it reads anything for it until the tasks it made are
+// sent, so one Relay's asks can't swamp Hearth however many it sends.
+const takesPerRelay = 4
+const takeTurnWaitMs = 20_000
+const takeTurns = new Map<string, Semaphore.Semaphore>()
+const turnsOf = (relayId: string) => {
+  let turns = takeTurns.get(relayId)
+  if (!turns) {
+    turns = Semaphore.makeUnsafe(takesPerRelay)
+    takeTurns.set(relayId, turns)
+  }
+  return turns
+}
+
 /**
  * Answers a Relay that asked Hearth to take a step's bucket backups: taken,
- * all of them, and on their way to it as tasks; or none, and why.
+ * all of them, each by the IDs Hearth gave it, and on their way to it as
+ * tasks; or none, and why.
  */
 export function takeScheduledBucketBackups(
   relayId: string,
   request: ScheduledBucketBackupRequest
 ): Promise<ScheduledBucketBackupReply> {
+  const turns = turnsOf(relayId)
+  const release = Semaphore.release(turns, 1)
   return runAppEffect(
     "ScheduledBackups.take",
-    runOperation(takeBackups, { relayId, request }, { user: null }).pipe(
-      Effect.map(({ backupIds, relay }): ScheduledBucketBackupReply => {
-        // Sent at once and together, as a manual run's are, so a stopped
-        // batch reaches the Relay whole; any not sent now go on the
-        // Relay's next pass, as every queued backup does.
-        forkAppEffect("ScheduledBackups.dispatch", sendTaken(relay, backupIds))
-        scheduleBackupReconciliation(relay)
-        return { taken: true }
-      }),
-      Effect.catchIf(
-        (cause) =>
-          cause instanceof ScheduledBackupRefused ||
-          cause instanceof BackupStorageError ||
-          cause instanceof OperationBusyError,
-        (cause) =>
-          Effect.succeed<ScheduledBucketBackupReply>({
-            reason: cause.message.slice(0, 300),
-            taken: false,
-          })
+    Effect.gen(function* () {
+      const turn = yield* Semaphore.take(turns, 1).pipe(
+        Effect.timeoutOption(`${takeTurnWaitMs} millis`)
       )
-    )
+      if (Option.isNone(turn)) {
+        return {
+          reason:
+            "Hearth is busy with this Relay's other scheduled backups; its next run is taken as usual",
+          taken: false,
+        } satisfies ScheduledBucketBackupReply
+      }
+      return yield* runOperation(
+        takeBackups,
+        { relayId, request },
+        { user: null }
+      ).pipe(
+        Effect.onError(() => release),
+        Effect.map(({ backupIds, relay, taken }): ScheduledBucketBackupReply => {
+          // Sent at once and together, as a manual run's are, so a stopped
+          // batch reaches the Relay whole; any not sent now go on the
+          // Relay's next pass, as every queued backup does. Its turn ends
+          // once they are sent.
+          forkAppEffect(
+            "ScheduledBackups.dispatch",
+            sendTaken(relay, backupIds).pipe(Effect.ensuring(release))
+          )
+          scheduleBackupReconciliation(relay)
+          return { backups: taken, taken: true }
+        }),
+        Effect.catchIf(
+          (cause) =>
+            cause instanceof ScheduledBackupRefused ||
+            cause instanceof BackupStorageError ||
+            cause instanceof OperationBusyError,
+          (cause) =>
+            Effect.succeed<ScheduledBucketBackupReply>({
+              reason: cause.message.slice(0, 300),
+              taken: false,
+            })
+        )
+      )
+    })
   )
 }

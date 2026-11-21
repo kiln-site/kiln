@@ -6,9 +6,8 @@ import {
 } from "@workspace/contracts"
 import {
   relayScheduleProjectionSchema,
-  scheduledBackupArtifactId,
   scheduledBackupId,
-  scheduledBackupTaskId,
+  type ScheduledBucketBackupReply,
   type ScheduleDefinition,
 } from "@workspace/contracts/schedules"
 import { Effect } from "effect"
@@ -29,7 +28,7 @@ import {
 } from "@/server/schedule-deployment.server"
 import { takeScheduledBucketBackups } from "@/server/scheduled-bucket-backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
+import { insertBackup, insertRelay, selectRows } from "@/test/seed"
 
 // The Relay is the only boundary. It takes a schedule and a backup task as
 // a Relay does, refusing what it can't parse, and keeps what it was sent.
@@ -38,6 +37,8 @@ import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 const relay = vi.hoisted(() => ({
   // How often Hearth has asked what backups it holds.
   listed: 0,
+  // Holds every task sent to it on its way, until opened.
+  arriving: null as null | Promise<void>,
   // Something that happens while Hearth reads the Relay's volumes.
   meanwhile: null as null | (() => Promise<void>),
   schedules: [] as Array<unknown>,
@@ -99,6 +100,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       }))
     }
     if (operation === "backup.task.enqueue") {
+      await relay.arriving
       const input = backupTaskInputSchema.parse(payload)
       const task = {
         backupId: input.backupId,
@@ -149,7 +151,6 @@ const scheduleId = "33333333-3333-4333-8333-333333333333"
 const toBucket = "22222222-2222-4222-8222-222222222222"
 const toDisk = "44444444-4444-4444-8444-444444444444"
 const stoppedToBucket = "55555555-5555-4555-8555-555555555555"
-const batchId = "66666666-6666-4666-8666-666666666666"
 const accessKeyId = "AKIAKILNTESTKEY"
 const secretAccessKey = "kiln-test-secret-access-key"
 
@@ -213,6 +214,7 @@ const destination = (enabled: boolean) =>
 // up to it, saved as Hearth keeps it and sent to that Relay.
 const seed = Effect.gen(function* () {
   yield* resetDatabase
+  relay.arriving = null
   relay.meanwhile = null
   relay.schedules.length = 0
   relay.tasks.clear()
@@ -241,24 +243,34 @@ const ask = (
   from: string,
   asked: Partial<{
     actionId: string
-    batchId: string
     members: Array<Member>
     revision: number
+    scheduledAt: number
+    together: true
   }> = {}
 ) =>
   Effect.promise(() =>
     takeScheduledBucketBackups(from, {
       actionId: asked.actionId ?? toBucket,
-      ...(asked.batchId ? { batchId: asked.batchId } : {}),
       members: asked.members ?? [{ targetId: server, targetKind: "instance" }],
       revision: asked.revision ?? schedule.revision,
-      scheduledAt: at,
+      scheduledAt: asked.scheduledAt ?? at,
       scheduleId,
+      ...(asked.together ? { together: true as const } : {}),
     })
   )
 
-const idOf = (member: Member, actionId = toBucket) =>
-  scheduledBackupId({ ...member, actionId, scheduledAt: at, scheduleId })
+// The IDs Hearth answered for what it took of one thing.
+const takenOf = (reply: ScheduledBucketBackupReply, member: Member) => {
+  const backup = reply.taken
+    ? reply.backups.find(
+        ({ targetId, targetKind }) =>
+          targetId === member.targetId && targetKind === member.targetKind
+      )
+    : undefined
+  if (!backup) throw new Error("Hearth didn't take it")
+  return backup
+}
 
 // Hearth sends what it took on its next pass over the Relay's backups, a
 // moment later, and follows each task until it has ended. That moment is
@@ -311,14 +323,16 @@ describeMysql("A schedule's backups to a bucket", () => {
       () =>
         Effect.gen(function* () {
           yield* seed
-          const backupId = idOf({ targetId: server, targetKind: "instance" })
+          const member: Member = { targetId: server, targetKind: "instance" }
 
-          // Asked twice, as each target of a batch asks for all of it.
+          // Asked twice, as each target of a batch asks for all of it: the
+          // same backup, by the same IDs, both times.
           const taken = yield* ask(relayId)
-          yield* ask(relayId)
+          const again = yield* ask(relayId)
           yield* passesRun
 
-          assert.deepStrictEqual(taken, { taken: true })
+          const { backupId, taskId } = takenOf(taken, member)
+          assert.deepStrictEqual(takenOf(again, member), takenOf(taken, member))
           // Where it goes is Hearth's to say: the schedule's destination,
           // in that Relay's folder of it.
           const [cataloged, ...rest] = yield* backups()
@@ -336,12 +350,15 @@ describeMysql("A schedule's backups to a bucket", () => {
               `^team/kiln/[^/]+/${relayId}/instance/${server}/${backupId}/`
             )
           )
-          // The Relay holds a task with a signed upload to that object.
-          const [task] = [...relay.tasks.values()]
+          // The Relay holds a task with a signed upload to that object,
+          // under the ID Hearth answered.
+          const [task, ...others] = [...relay.tasks.values()]
+          assert.lengthOf(others, 0)
           assert.deepInclude(task?.input, {
             backupId,
             kind: "create",
             reason: "scheduled",
+            taskId,
           })
           const sent = task?.input as
             | { destination?: { uploadUrl?: string } }
@@ -374,36 +391,35 @@ describeMysql("A schedule's backups to a bucket", () => {
 
           const batch = yield* ask(relayId, {
             actionId: stoppedToBucket,
-            batchId,
             members,
+            together: true,
           })
           const own = yield* ask(relayId, { members: [kiln] })
           yield* passesRun
 
-          assert.deepStrictEqual(
-            [batch, own],
-            [{ taken: true }, { taken: true }]
-          )
           const cataloged = new Map(
             (yield* backups()).map((backup) => [backup.id, backup])
           )
-          // The batch's two are one stopped batch, to the Relay too, so it
-          // takes them in one stopped window.
+          // The batch's two are one stopped batch, named by Hearth, to the
+          // Relay too, so it takes them in one stopped window.
+          const batchId = cataloged.get(takenOf(batch, members[0]!).backupId)
+            ?.batch_id
+          assert.isString(batchId)
           for (const member of members) {
-            const id = idOf(member, stoppedToBucket)
-            assert.deepInclude(cataloged.get(id), {
+            const { backupId, taskId } = takenOf(batch, member)
+            assert.deepInclude(cataloged.get(backupId), {
               batch_id: batchId,
               consistency: "stopped",
               target_id: member.targetId,
             })
-            assert.deepInclude(
-              relay.tasks.get(scheduledBackupTaskId(id))?.input,
-              { batch: { id: batchId, size: 2 }, consistency: "stopped" }
-            )
+            assert.deepInclude(relay.tasks.get(taskId)?.input, {
+              batch: { id: batchId!, size: 2 },
+              consistency: "stopped",
+            })
           }
           // Kiln is the platform, by this installation's ID, in a batch of
           // nothing.
-          assert.deepInclude(cataloged.get(idOf(kiln)), {
+          assert.deepInclude(cataloged.get(takenOf(own, kiln).backupId), {
             artifact_kind: "platform_bundle",
             batch_id: null,
             target_id: "kiln-test",
@@ -528,111 +544,99 @@ describeMysql("A schedule's backups to a bucket", () => {
     )
 
     it.effect(
-      "takes nothing whose ID another backup already has",
+      "takes a run whose IDs a Relay worked out and used first",
       () =>
         Effect.gen(function* () {
           yield* seed
-          // The run's backup ID, held by a backup of another Relay's.
-          yield* insertBackup(
-            idOf({ targetId: server, targetKind: "instance" }),
-            { relay_id: otherRelayId, target_id: otherServer }
-          )
-
-          const refused = yield* ask(relayId)
-
-          assert.isFalse(refused.taken)
-          const [kept, ...rest] = yield* backups()
-          assert.lengthOf(rest, 0)
-          assert.deepInclude(kept, {
-            reason: "manual",
-            relay_id: otherRelayId,
+          // Another Relay holds a backup under the ID the run's backup would
+          // have by the schedule's own formula, which any Relay can work out.
+          const member: Member = { targetId: server, targetKind: "instance" }
+          const squatted = scheduledBackupId({
+            ...member,
+            actionId: toBucket,
+            scheduledAt: at,
+            scheduleId,
           })
-          assert.lengthOf(yield* selectRows("backup_task"), 0)
+          yield* insertBackup(squatted, {
+            relay_id: otherRelayId,
+            target_id: otherServer,
+          })
+
+          const taken = yield* ask(relayId)
+
+          // Hearth's IDs are its own: the run is taken all the same.
+          assert.notStrictEqual(takenOf(taken, member).backupId, squatted)
+          assert.lengthOf(yield* backups(), 2)
         }),
       60_000
     )
 
     it.effect(
-      "signs no object Hearth didn't choose, though a row from before has the run's IDs",
+      "takes no run again whose rows no longer hold the object Hearth chose",
+      () =>
+        Effect.gen(function* () {
+          // Rows at a run's IDs whose object differs from Hearth's, as one
+          // a release before this one cataloged from a Relay's report, or
+          // differs only in case: another object in a bucket, though
+          // MySQL's collation calls them equal.
+          const member: Member = { targetId: server, targetKind: "instance" }
+          for (const moved of [
+            () =>
+              `team/kiln/kiln-test/${otherRelayId}/instance/${otherServer}/x/backup.zip`,
+            (chosen: string) => chosen.replace("team/", "Team/"),
+          ]) {
+            yield* seed
+            const taken = yield* ask(relayId)
+            const { backupId } = takenOf(taken, member)
+            const chosen = `team/kiln/kiln-test/${relayId}/instance/${server}/${backupId}/${backupArtifactFilename(backupId, "archive")}`
+            const database = yield* Database
+            for (const table of ["kiln_backup", "kiln_backup_artifact"]) {
+              yield* database.execute(
+                "test.move",
+                `UPDATE ${table} SET object_key = ? WHERE object_key = ?`,
+                [moved(chosen), chosen]
+              )
+            }
+
+            const refused = yield* ask(relayId)
+
+            assert.isFalse(refused.taken)
+          }
+        }),
+      60_000
+    )
+
+    it.effect(
+      "works on a few of one Relay's takes at once, and refuses one that waits too long",
       () =>
         Effect.gen(function* () {
           yield* seed
-          // A release before this one cataloged a scheduled bucket backup
-          // from the Relay's report, at the object the Relay named.
-          const member: Member = { targetId: server, targetKind: "instance" }
-          const backupId = idOf(member)
-          const reported = `team/kiln/kiln-test/${otherRelayId}/instance/${otherServer}/x/backup.zip`
-          yield* insertBackup(backupId, {
-            backup_mode: "full",
-            object_key: reported,
-            reason: "scheduled",
-            relay_id: relayId,
-            status: "queued",
-            storage_id: storageId,
-            target_id: server,
+          let arrive = () => {}
+          relay.arriving = new Promise((resolve) => {
+            arrive = resolve
           })
-          yield* insertRows("backup_artifact", {
-            backup_id: backupId,
-            created_at: at,
-            destination_key: storageId,
-            id: scheduledBackupArtifactId(backupId),
-            object_key: reported,
-            status: "queued",
-            storage_id: storageId,
-            updated_at: at,
-          })
-          yield* insertRows("backup_task", {
-            backup_id: backupId,
-            created_at: at,
-            id: scheduledBackupTaskId(backupId),
-            status: "queued",
-            task_kind: "create",
-            updated_at: at,
-          })
+          const run = (minute: number) =>
+            ask(relayId, { scheduledAt: at + minute * 60_000 })
 
-          const refused = yield* ask(relayId, { members: [member] })
+          // Four runs taken, each holding its turn while its task is on its
+          // way to the Relay.
+          const four = yield* Effect.forEach([1, 2, 3, 4], run)
+          assert.isTrue(four.every(({ taken }) => taken))
 
+          // A fifth waits for a turn, and is refused once it has waited
+          // longer than the Relay waits for an answer.
+          const fifth = Effect.runPromise(run(5))
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(21_000))
+          const refused = yield* Effect.promise(() => fifth)
           assert.isFalse(refused.taken)
-          assert.strictEqual(relay.tasks.size, 0)
+          assert.lengthOf(yield* backups(), 4)
 
-          // One that differs from Hearth's only in case: another object
-          // in a bucket, though MySQL's collation calls them equal.
-          yield* seed
-          const chosen = `team/kiln/kiln-test/${relayId}/instance/${server}/${backupId}/${backupArtifactFilename(backupId, "archive")}`
-          const cased = chosen.replace("team/", "Team/")
-          yield* insertBackup(backupId, {
-            backup_mode: "full",
-            object_key: cased,
-            reason: "scheduled",
-            relay_id: relayId,
-            status: "queued",
-            storage_id: storageId,
-            target_id: server,
-          })
-          yield* insertRows("backup_artifact", {
-            backup_id: backupId,
-            created_at: at,
-            destination_key: storageId,
-            id: scheduledBackupArtifactId(backupId),
-            object_key: cased,
-            status: "queued",
-            storage_id: storageId,
-            updated_at: at,
-          })
-          yield* insertRows("backup_task", {
-            backup_id: backupId,
-            created_at: at,
-            id: scheduledBackupTaskId(backupId),
-            status: "queued",
-            task_kind: "create",
-            updated_at: at,
-          })
-
-          const casedAsk = yield* ask(relayId, { members: [member] })
-
-          assert.isFalse(casedAsk.taken)
-          assert.strictEqual(relay.tasks.size, 0)
-        }),
+          // Once their tasks have arrived, the next is taken.
+          arrive()
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_000))
+          assert.isTrue((yield* run(6)).taken)
+          yield* passesRun
+        }).pipe(inTestTime),
       60_000
     )
 
@@ -697,11 +701,11 @@ describeMysql("A schedule's backups to a bucket", () => {
           const saved = yield* Effect.promise(() =>
             takeScheduledBucketBackups(relayId, {
               actionId: appStep,
-              batchId,
               members: [{ targetId: media, targetKind: "volume" }],
               revision: appSchedule.revision,
               scheduledAt: at,
               scheduleId: appSchedule.id,
+              together: true,
             })
           )
 
