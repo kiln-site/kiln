@@ -9,6 +9,7 @@ import {
 
 import {
   cancelUnsentCreateEffect,
+  createTaskIdentityEffect,
   createsOfDeletedBackupsEffect,
   listDispatchableBackupTasksEffect,
   reconcileBackupTaskEffect,
@@ -164,13 +165,7 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       // backup, kind or resource: this one never arrived, and sending it
       // would only be refused. It is settled, saying so, rather than tried
       // on every pass.
-      if (
-        relayTask &&
-        (relayTask.backupId !== task.backupId ||
-          relayTask.kind !== task.kind ||
-          relayTask.input.target.id !== task.target.id ||
-          relayTask.input.target.kind !== task.target.kind)
-      ) {
+      if (relayTask && !relayHoldsTask(relayTask, task)) {
         yield* settleUndispatchable(relay, task.taskId, task.backupId, {
           code: "task_identity_conflict",
           reason: "The Relay holds a different backup task under this task's ID",
@@ -229,7 +224,12 @@ const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
   for (const create of creates) {
     yield* (
       relayTasksById.has(create.id)
-        ? cancelCreateEffect(relay, create.id, subject)
+        ? cancelCreateEffect(
+            relay,
+            create.id,
+            subject,
+            relayTasksById.get(create.id)
+          )
         : cancelUnsentCreateEffect(create.id)
     ).pipe(
       Effect.catch((cause) =>
@@ -241,6 +241,26 @@ const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
     )
   }
 })
+
+/**
+ * Whether the task a Relay holds under an ID is the one Hearth sent under
+ * it: for that backup, of that kind, for that resource.
+ */
+export function relayHoldsTask(
+  relayTask: RelayBackupTask,
+  sent: {
+    backupId: string
+    kind: string
+    target: { id: string; kind: string }
+  }
+) {
+  return (
+    relayTask.backupId === sent.backupId &&
+    relayTask.kind === sent.kind &&
+    relayTask.input.target.id === sent.target.id &&
+    relayTask.input.target.kind === sent.target.kind
+  )
+}
 
 /**
  * A Relay's answer about the one task Hearth asked it about. An answer
@@ -263,17 +283,32 @@ export const relayTaskReply = (reply: unknown, taskId: string) =>
 const cancelCreateEffect = Effect.fn("Backups.cancelCreate")(function* (
   relay: PersistedRelay,
   createTaskId: string,
-  subject?: string
+  subject?: string,
+  // What the Relay listed under the create's ID, when Hearth has read it.
+  listed?: RelayBackupTask
 ) {
   yield* Effect.annotateCurrentSpan({
     "relay.id": relay.id,
     "backup.task.id": createTaskId,
   })
+  const sent = yield* createTaskIdentityEffect(createTaskId)
+  if (!sent) return
+  // The Relay holds another task under the create's ID: Hearth's never
+  // arrived, so nothing of it will run. It is ended here, as one that never
+  // arrived is, and the delete waiting on it can go.
+  const neverArrived = Effect.gen(function* () {
+    yield* cancelUnsentCreateEffect(createTaskId)
+    yield* Effect.logWarning(
+      "The Relay holds a different backup task under a create's ID",
+      { "relay.id": relay.id, "backup.task.id": createTaskId }
+    )
+  })
+  if (listed && !relayHoldsTask(listed, sent)) return yield* neverArrived
   const reply = yield* promiseEffect(() =>
     relayRpc(
       relay,
       "backup.task.cancel",
-      { taskId: createTaskId },
+      { backupId: sent.backupId, target: sent.target, taskId: createTaskId },
       15_000,
       subject
     )
@@ -284,6 +319,7 @@ const cancelCreateEffect = Effect.fn("Backups.cancelCreate")(function* (
     return
   }
   const task = yield* relayTaskReply(reply, createTaskId)
+  if (!relayHoldsTask(task, sent)) return yield* neverArrived
   if (yield* reconcileBackupTaskEffect(task, relay.id)) {
     publishBackupChange(relay.id, task.backupId)
   }
@@ -308,13 +344,13 @@ const dispatchBackupTaskEffect = Effect.fnUntraced(function* (
         : Effect.void
     )
   )
-  const task = yield* relayTaskReply(
-    yield* promiseEffect(() =>
-      relayRpc(relay, "backup.task.enqueue", relayInput, 15_000, subject)
-    ),
-    input.taskId
+  const reply = yield* promiseEffect(() =>
+    relayRpc(relay, "backup.task.enqueue", relayInput, 15_000, subject)
   )
+  // Read back again whatever it answered: an answer about another task is
+  // refused below, and the Relay's list then says where this one stands.
   scheduleBackupReconciliation(relay, subject)
+  const task = yield* relayTaskReply(reply, input.taskId)
   if (yield* reconcileBackupTaskEffect(task, relay.id)) {
     publishBackupChange(relay.id, task.backupId)
   }

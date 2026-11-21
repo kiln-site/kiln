@@ -65,7 +65,15 @@ no resource it knows. An answer to an enqueue
 or a cancel must be about the task Hearth asked about; one about another is
 logged and the pass goes on. A task the Relay lists under the ID of one Hearth
 has queued, but for another backup, kind or resource, means Hearth's never
-arrived: it is failed, saying so, rather than counted as sent. A schedule's backup a Relay made on its own
+arrived: it is failed, saying so, rather than counted as sent. Cancelling a
+create names the backup and resource Hearth sent it for, and the Relay
+cancels only a create it holds as that; a delete waiting on a create the
+Relay holds as something else ends that create in Hearth, as one that never
+arrived, and goes ahead. A delete of an incremental backup with no snapshot
+recorded forgets only snapshots tagged with both its create's task and its
+backup. A task Hearth already has running that its Relay then lists as
+another task stays as Hearth last heard of it; only a Relay whose journal no
+longer matches what Hearth sent it can bring that about. A schedule's backup a Relay made on its own
 is cataloged from its report all at once or not at all: if any of its backup,
 copy or task IDs is already another backup's, none of it is kept, and it is
 reported again each pass. Nor is one cataloged of a game server Hearth's

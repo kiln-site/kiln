@@ -72,6 +72,7 @@ import {
   cancelCreateForDelete,
   dispatchBackupTask,
   reconcileRelayBackups,
+  relayHoldsTask,
   relayTaskReply,
 } from "@/lib/backup-reconciliation"
 import {
@@ -268,10 +269,11 @@ export async function cancelBackupHandler(
     throw new Error("You do not have permission to cancel this backup")
   }
   const relay = await requireBackupRelay(backup.relayId)
+  const target = { id: backup.targetId, kind: backup.targetKind }
   const reply = await relayRpc(
     relay,
     "backup.task.cancel",
-    { taskId: backup.taskId },
+    { backupId: backup.id, target, taskId: backup.taskId },
     15_000,
     user.id
   )
@@ -279,6 +281,17 @@ export async function cancelBackupHandler(
     "backups.cancelReply",
     relayTaskReply(reply, backup.taskId)
   )
+  // Another task under its ID: the Relay left that alone, and this backup's
+  // create isn't one it has to stop.
+  if (
+    !relayHoldsTask(task, {
+      backupId: backup.id,
+      kind: "create",
+      target,
+    })
+  ) {
+    throw new Error("This backup is no longer being created")
+  }
   await runAppEffect(
     "backups.reconcileCancel",
     reconcileBackupTaskEffect(task, relay.id)

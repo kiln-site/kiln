@@ -21,6 +21,7 @@ const first = {
   backupId: "11111111-1111-4111-8111-111111111111",
   taskId: "11111111-1111-4111-8111-1111111111c1",
 }
+const deleteTaskId = "33333333-3333-4333-8333-3333333333d3"
 const second = {
   artifactId: "22222222-2222-4222-8222-2222222222a2",
   backupId: "22222222-2222-4222-8222-222222222222",
@@ -229,5 +230,110 @@ describeMysql("A Relay's answer about a backup task", () => {
           assert.strictEqual(byId.get(second.taskId)?.status, "queued")
         })
     )
+
+    // A delete waits on its backup's create. The Relay holds a create under
+    // that create's ID, but of another game server: Hearth's never arrived.
+    const seedDeleteWaiting = Effect.gen(function* () {
+      yield* resetDatabase
+      yield* insertRelay(relayId, { enabled: 1 })
+      yield* insertBackup(first.backupId, {
+        relay_id: relayId,
+        status: "deleting",
+      })
+      yield* insertRows("backup_artifact", {
+        id: first.artifactId,
+        backup_id: first.backupId,
+        destination_key: "local",
+        status: "queued",
+        created_at: at,
+        updated_at: at,
+      })
+      yield* insertRows("backup_task", {
+        id: first.taskId,
+        backup_id: first.backupId,
+        task_kind: "create",
+        status: "queued",
+        created_at: at,
+        updated_at: at,
+      })
+      yield* insertRows("backup_task", {
+        id: deleteTaskId,
+        backup_id: first.backupId,
+        task_kind: "delete",
+        status: "queued",
+        depends_on_task_id: first.taskId,
+        created_at: at + 1,
+        updated_at: at + 1,
+      })
+      const listed = createTask(first, "queued")
+      const held = {
+        ...listed,
+        input: {
+          ...listed.input,
+          target: { id: "d".repeat(12), kind: "instance" },
+        },
+      }
+      // The Relay, holding that create: it cancels only what Hearth names
+      // as it holds it, and takes the delete it is sent.
+      relay.answer = (operation, payload) => {
+        if (operation === "backup.task.list") return [held]
+        if (operation === "backup.task.cancel") {
+          const asked = payload as {
+            backupId: string
+            target: { id: string; kind: string }
+          }
+          if (
+            asked.backupId === held.backupId &&
+            asked.target.id === held.input.target.id
+          ) {
+            held.status = "cancelled"
+          }
+          return held
+        }
+        if (operation === "backup.task.enqueue") {
+          const input = payload as { taskId: string }
+          return {
+            ...createTask(first, "queued", "delete"),
+            taskId: input.taskId,
+            input: {
+              ...createTask(first, "queued", "delete").input,
+              taskId: input.taskId,
+            },
+          }
+        }
+        throw new Error(`Unexpected Relay request ${operation}`)
+      }
+      return { held, persisted: (yield* Effect.promise(listPersistedRelays))[0]! }
+    })
+
+    for (const [path, run] of [
+      [
+        "a pass",
+        (persisted: Parameters<typeof reconcileRelayBackups>[0]) =>
+          reconcileRelayBackups(persisted),
+      ],
+      [
+        "the person deleting it",
+        (persisted: Parameters<typeof reconcileRelayBackups>[0]) =>
+          cancelCreateForDelete(persisted, first.taskId),
+      ],
+    ] as const) {
+      it.effect(
+        `lets a delete go whose create the Relay holds for another resource, from ${path}`,
+        () =>
+          Effect.gen(function* () {
+            const { held, persisted } = yield* seedDeleteWaiting
+
+            yield* Effect.promise(() => run(persisted))
+
+            const byId = new Map((yield* tasks).map((task) => [task.id, task]))
+            assert.strictEqual(byId.get(first.taskId)?.status, "cancelled")
+            // The delete was sent and its Relay answered for it.
+            assert.isNotNull(byId.get(deleteTaskId)?.relay_updated_at_ms ?? null)
+            // What the Relay holds under the ID is left as it was.
+            assert.strictEqual(held.status, "queued")
+          })
+      )
+    }
   })
 })

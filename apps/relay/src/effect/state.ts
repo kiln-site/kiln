@@ -775,7 +775,9 @@ export class RelayStateStore extends Context.Service<
       taskId: string,
       now: number,
       reason?: string,
-      errorCode?: BackupFailureCode | null
+      errorCode?: BackupFailureCode | null,
+      /** Cancel only a create of this backup, for this resource. */
+      expected?: { backupId: string; target: BackupTaskInput["target"] }
     ) => Effect.Effect<boolean, RelayStateError>
     /**
      * Claims the queued backups of a stopped batch, which run in the stopped
@@ -3613,14 +3615,20 @@ const makeRelayStateStore = Effect.gen(function* () {
       taskId,
       now,
       reason = "Cancelled by user",
-      errorCode = null
+      errorCode = null,
+      expected
     ) =>
       run(
         "cancel_backup_task",
         sql.withTransaction(
           Effect.gen(function* () {
-            const rows = yield* sql<{ inputJson: string; taskId: string }>`
-              SELECT task_id AS taskId, input_json AS inputJson
+            const rows = yield* sql<{
+              backupId: string
+              inputJson: string
+              taskId: string
+            }>`
+              SELECT task_id AS taskId, backup_id AS backupId,
+                     input_json AS inputJson
               FROM relay_backup_tasks
               WHERE task_id = ${taskId}
                 AND kind = 'create'
@@ -3628,6 +3636,19 @@ const makeRelayStateStore = Effect.gen(function* () {
               LIMIT 1
             `
             if (!rows[0]) return false
+            // Another task under the ID Hearth named is left alone.
+            if (expected) {
+              const target = fallbackBackupTarget(
+                parseBackupTaskInputJson(rows[0].inputJson)
+              )
+              if (
+                rows[0].backupId !== expected.backupId ||
+                target.id !== expected.target.id ||
+                target.kind !== expected.target.kind
+              ) {
+                return false
+              }
+            }
             yield* sql`
               UPDATE relay_backup_tasks
               SET status = 'cancelled',

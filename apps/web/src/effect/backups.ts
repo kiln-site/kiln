@@ -3390,6 +3390,36 @@ const restoreStatusAfterFailedDelete = Effect.fnUntraced(function* (
  * its Relay says it never received: it's cancelled here, so the delete
  * waiting on it can go.
  */
+/**
+ * The backup and resource a create was sent for, as Hearth has it, to tell
+ * the create a Relay holds under its ID from another task.
+ */
+export const createTaskIdentityEffect = Effect.fn("backups.createIdentity")(
+  function* (taskId: string) {
+    const database = yield* Database
+    const [row] = yield* database.queryRows<
+      Pick<BackupRow, "target_id" | "target_kind"> & {
+        backup_id: string
+      } & RowDataPacket
+    >(
+      "backup_create_identity",
+      `SELECT task.backup_id, backup.target_kind, backup.target_id
+         FROM ${databaseTable("backup_task")} task
+         JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+        WHERE task.id = ? AND task.task_kind = 'create'
+        LIMIT 1`,
+      [taskId]
+    )
+    return row
+      ? {
+          backupId: row.backup_id,
+          kind: "create" as const,
+          target: { id: row.target_id, kind: row.target_kind },
+        }
+      : null
+  }
+)
+
 export const cancelUnsentCreateEffect = Effect.fn("backups.cancelUnsentCreate")(
   function* (taskId: string) {
     const database = yield* Database
