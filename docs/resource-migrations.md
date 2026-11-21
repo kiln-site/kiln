@@ -71,6 +71,46 @@ Copying one needs its `database.read`, and `backup.create` and
 `database.create` on the Relay the copy goes to. It has owner and access
 to hand over; its connections stay with the old one.
 
+### Apps
+
+The copy is made with the old one's whole configuration, and the Brick it
+follows if any, and is never deployed: someone deploys it once they've
+checked its settings. It's filled from the old one's folder and from each
+volume it keeps data on, each its own part of the copy:
+
+- Each volume its settings mount is copied into a new volume of the
+  copy's, which its settings mount in the old one's place. A volume other
+  Apps share is copied too, and stays where it is for them; the copy stops
+  seeing what they write, as the dialog says.
+- Each volume the Relay keeps for a key of its Compose file is copied into
+  the one the copy's Relay keeps for the same key, made before the copy
+  first deploys (`app.volumes.keep`), so its first deployment finds it.
+- A volume only its containers mount, named by neither, isn't copied, and
+  the dialog names it.
+
+Its database connections aren't carried: its environment still names
+them, and connecting the copy is its owner's to do. A path on the node it
+mounts is mounted as it is on the copy's node, and nothing there is
+copied; a duplicate on the same Relay would also publish the same ports,
+which the dialog says to change first. The repository it builds comes
+with it, deploying only when asked; a move hands deploying on a push to
+the copy and stops it for the old one. It has no final backup: what it
+keeps is on its volumes, which deleting it leaves. A copy that's undone
+takes the volumes made for it alone with it, for someone who may delete
+volumes there; otherwise they stay.
+
+Copying one needs its `app.manage`, since its settings carry its secrets,
+and `instance.files.read`, and `app.create` on the Relay the copy goes to,
+with what making an App with its settings takes there besides: the
+Relay's `relay.files.write` for a path on the node, as saving one in its
+settings takes, and its `app.manage` for published ports or a Compose
+file or Dockerfile, as installing one from a Brick takes. It has an owner
+and web routes to hand over.
+
+A copy keeps the parts it settled on (`part_roots`), so undoing it
+discards exactly the transfers it started, though an App's settings and
+volumes may have changed since.
+
 ### Volumes
 
 A Kiln volume has its move or duplicate in its row on the Relay's Volumes

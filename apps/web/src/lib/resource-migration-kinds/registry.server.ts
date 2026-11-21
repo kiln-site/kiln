@@ -1,3 +1,6 @@
+import type { AccessPermission } from "@workspace/contracts"
+
+import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type {
   MigratedKindName,
@@ -8,6 +11,7 @@ import {
   type MigratedKind,
   type Migration,
 } from "@/lib/resource-migration-kinds/kind.server"
+import { apps } from "@/lib/resource-migration-kinds/apps.server"
 import { databases } from "@/lib/resource-migration-kinds/databases.server"
 import { servers } from "@/lib/resource-migration-kinds/servers.server"
 import { volumes } from "@/lib/resource-migration-kinds/volumes.server"
@@ -17,6 +21,7 @@ import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 export const migratedKinds: ReadonlyArray<MigratedKind> = [
   servers,
   databases,
+  apps,
   volumes,
 ]
 
@@ -56,7 +61,7 @@ export async function requireMigrationPermissions(
     },
     user,
   })
-  for (const permission of kind.permissions.create) {
+  for (const permission of await destinationPermissions(kind, asked.source)) {
     destination.require(permission)
   }
   // Whether or not it runs now: it may be started before the copy stops
@@ -73,7 +78,7 @@ export async function requireMigrationPermissions(
   if (options.backup) source.require("backup.create")
   if (options.deleteSource) {
     source.require(kind.permissions.delete)
-    source.require("backup.create")
+    if (kind.finalBackup !== false) source.require("backup.create")
   }
   if (
     kind.permissions.network &&
@@ -82,4 +87,21 @@ export async function requireMigrationPermissions(
   ) {
     source.require(kind.permissions.network)
   }
+}
+
+/**
+ * What the Relay a copy goes to takes: making one of its kind there, and
+ * what making one with what the copy carries takes besides.
+ */
+export async function destinationPermissions(
+  kind: MigratedKind,
+  source: { readonly id: string; readonly relayId: string }
+): Promise<ReadonlyArray<AccessPermission>> {
+  const needs = kind.createNeeds
+  return [
+    ...kind.permissions.create,
+    ...(needs
+      ? await runAppEffect("resourceMigrations.createNeeds", needs(source))
+      : []),
+  ]
 }

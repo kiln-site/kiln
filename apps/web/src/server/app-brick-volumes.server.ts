@@ -76,7 +76,7 @@ export const brickVolumeMounts = (
 export async function makeBrickVolumes(
   user: AuthenticatedUser,
   relay: PersistedRelay,
-  volumes: ReadonlyArray<BrickVolume>
+  volumes: ReadonlyArray<Pick<BrickVolume, "id" | "name">>
 ): Promise<void> {
   if (volumes.length === 0) return
   for (const { id, name } of volumes) {

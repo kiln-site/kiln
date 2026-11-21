@@ -28,19 +28,19 @@ Cloudflare Tunnel) may follow. See [Tunnels](#tunnels).
 
 Every kind gets these from the platform.
 
-| Capability  | Target                                          | Today                                                                                                                                              |
-| ----------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                                           |
-| Deployments | One redeploy for every kind                     | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                                           |
-| Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                                                    |
-| Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps, tunnel names included; a database has only its tunnel names |
-| Terminal    | A shell in every kind, on one path              | Done for game servers, databases, Apps and tunnels: one set of Relay requests, one stream and one permission                                       |
-| Logs        | One Logs page, one log store and one permission | Done for game servers, databases, Apps and tunnels                                                                                                 |
-| Ports       | One list of taken ports and one Ports section   | Done for game servers and Apps: one list on the Relay and one Ports section. Each kind still saves its ports its own way                           |
-| Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                                                          |
-| Files       | One file browser and one permission             | Done for game servers and Apps                                                                                                                     |
-| Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own                                                                        |
-| Move        | Move and duplicate every kind but a tunnel      | One operation, dialog, toast and notification; game servers, databases and volumes so far ([Moving and duplicating](resource-migrations.md))       |
+| Capability  | Target                                          | Today                                                                                                                                                |
+| ----------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                                             |
+| Deployments | One redeploy for every kind                     | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                                             |
+| Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                                                      |
+| Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps, tunnel names included; a database has only its tunnel names   |
+| Terminal    | A shell in every kind, on one path              | Done for game servers, databases, Apps and tunnels: one set of Relay requests, one stream and one permission                                         |
+| Logs        | One Logs page, one log store and one permission | Done for game servers, databases, Apps and tunnels                                                                                                   |
+| Ports       | One list of taken ports and one Ports section   | Done for game servers and Apps: one list on the Relay and one Ports section. Each kind still saves its ports its own way                             |
+| Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                                                            |
+| Files       | One file browser and one permission             | Done for game servers and Apps                                                                                                                       |
+| Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own                                                                          |
+| Move        | Move and duplicate every kind but a tunnel      | Done for game servers, databases, Apps and volumes: one operation, dialog, toast and notification ([Moving and duplicating](resource-migrations.md)) |
 
 A Relay implements each in its own way: it can only be restarted, its
 deployments are its updates, and its files and its shell are the host's.

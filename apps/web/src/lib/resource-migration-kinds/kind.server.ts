@@ -94,6 +94,7 @@ export const migrationHandOvers = [
   "backups",
   "domains",
   "routes",
+  "deploys",
 ] as const
 export type MigrationHandOver = (typeof migrationHandOvers)[number]
 
@@ -116,6 +117,11 @@ export interface MigratedKind {
    * copied, and a move stops the old one only once its copy is in.
    */
   readonly copiedRunning: boolean
+  /**
+   * Whether one is backed up before it's deleted: not one that keeps
+   * nothing of its own. Left out, it is.
+   */
+  readonly finalBackup?: boolean
   /** The permissions that name what copying one takes. */
   readonly permissions: {
     /** On the old one, to copy it at all. */
@@ -126,6 +132,15 @@ export interface MigratedKind {
     /** To hand its domains and web routes over, for a kind with either. */
     readonly network?: AccessPermission
   }
+  /**
+   * What the Relay its copy goes to takes besides `permissions.create`, for
+   * what this one's copy would carry there, as making one with it would
+   * take. Left out for a kind whose copy carries nothing more.
+   */
+  readonly createNeeds?: (source: {
+    readonly id: string
+    readonly relayId: string
+  }) => Effect.Effect<ReadonlyArray<AccessPermission>, unknown, Database>
   /** Reserves the copy's ID, under the key it is made with. */
   readonly reserveId: (
     createKey: string
@@ -205,6 +220,15 @@ export interface MigratedKind {
     actor: AuthenticatedUser,
     options: ResourceMigrationOptions
   ) => Effect.Effect<void, unknown, Database>
+  /**
+   * The volumes made for its copy, to delete with a copy that's undone:
+   * those whoever undoes it may delete. Left out for a kind whose copy has
+   * none of its own.
+   */
+  readonly copyVolumes?: (
+    migration: Migration,
+    actor: AuthenticatedUser
+  ) => Effect.Effect<ReadonlyArray<string>, unknown, Database>
   /** What one that was started again needs besides, of its own. */
   readonly started?: (
     relay: PersistedRelay,

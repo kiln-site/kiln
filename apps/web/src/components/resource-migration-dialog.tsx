@@ -89,6 +89,11 @@ const liveRisk: Record<MigratedKindName, string> = {
   volume: "What's written while it's copied can be missed.",
 }
 
+// "a game server", "an App".
+function aNoun(noun: string) {
+  return `${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}`
+}
+
 type Tone = "error" | "muted" | "warning"
 type Status = {
   fix?: { label: string; run: () => void }
@@ -373,7 +378,7 @@ function MigrationForm({
             ? { text: spaceProblem.message, tone: "error" }
             : nameTaken && selected
               ? {
-                  text: `${selected.name} already has a ${trimmedName}.`,
+                  text: `${selected.name} already has ${aNoun(noun)} named ${trimmedName}.`,
                   tone: "error",
                 }
               : !trimmedName
@@ -391,8 +396,8 @@ function MigrationForm({
                     : destinations.length === 0
                       ? {
                           text: moving
-                            ? `No other Relay can take a ${noun} from you.`
-                            : `No Relay can take a ${noun} from you.`,
+                            ? `No other Relay can take ${aNoun(noun)} from you.`
+                            : `No Relay can take ${aNoun(noun)} from you.`,
                           tone: "warning",
                         }
                       : archMismatch && selected && resource.kind !== "volume"

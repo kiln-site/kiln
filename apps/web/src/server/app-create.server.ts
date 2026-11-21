@@ -313,9 +313,9 @@ async function createAppHandler(
 }
 
 /**
- * Records an App and has its Relay make it, connected to the databases
- * named, whatever it was installed from. Whoever calls it holds the App
- * and has checked the person may create it.
+ * Records an App installed from a Brick and has its Relay make it,
+ * connected to the databases named. Whoever calls it holds the App and has
+ * checked the person may create it.
  */
 export async function provisionApp(
   user: AuthenticatedUser,
@@ -336,8 +336,63 @@ export async function provisionApp(
     volumes?: ReadonlyArray<BrickVolume>
   }
 ) {
-  const { id } = app
   const volumes = app.volumes ?? []
+  return provisionConfiguredApp(user, relay, {
+    brick: app.brick,
+    databaseIds: app.databaseIds,
+    deploys: {
+      ...(app.deploys.type === "image"
+        ? { image: app.deploys.image, sourceType: "image" as const }
+        : {
+            sourceType: app.deploys.type,
+            // The file its Brick carries is the App's own from the start.
+            ...(app.deploys.content === undefined
+              ? {}
+              : { [app.deploys.type]: app.deploys.content }),
+          }),
+      // Its Brick's `ready` command is its container's health check.
+      ...(app.deploys.ready === undefined
+        ? {}
+        : { healthcheck: { command: app.deploys.ready } }),
+      // What its Brick starts it with, and publishes on its Relay.
+      ...(app.deploys.command === undefined
+        ? {}
+        : { command: app.deploys.command }),
+      ...(app.deploys.ports === undefined
+        ? {}
+        : { ports: [...app.deploys.ports] }),
+    },
+    environment: app.environment,
+    id: app.id,
+    mounts: brickVolumeMounts(volumes),
+    name: app.name,
+    volumes,
+  })
+}
+
+type AppRecordInput = Parameters<typeof createAppRecordEffect>[0]
+
+/**
+ * Records an App with the configuration given and has its Relay make it,
+ * whatever it was made from: a Brick, or another App it is a copy of. The
+ * volumes named are made first, so the App is never kept without what its
+ * configuration mounts.
+ */
+export async function provisionConfiguredApp(
+  user: AuthenticatedUser,
+  relay: PersistedRelay,
+  app: {
+    brick?: AppBrickRecord | undefined
+    databaseIds: ReadonlyArray<string>
+    deploys: NonNullable<AppRecordInput["deploys"]>
+    environment: string | undefined
+    id: string
+    mounts: NonNullable<AppRecordInput["mounts"]>
+    name: string
+    volumes: ReadonlyArray<Pick<BrickVolume, "id" | "name">>
+  }
+) {
+  const { id, volumes } = app
   await makeBrickVolumes(user, relay, volumes)
   const cancel = () =>
     databaseRpc(
@@ -368,30 +423,9 @@ export async function provisionApp(
       appId: id,
       ...(app.brick ? { brick: app.brick } : {}),
       createdBy: user.id,
-      deploys: {
-        ...(app.deploys.type === "image"
-          ? { image: app.deploys.image, sourceType: "image" as const }
-          : {
-              sourceType: app.deploys.type,
-              // The file its Brick carries is the App's own from the start.
-              ...(app.deploys.content === undefined
-                ? {}
-                : { [app.deploys.type]: app.deploys.content }),
-            }),
-        // Its Brick's `ready` command is its container's health check.
-        ...(app.deploys.ready === undefined
-          ? {}
-          : { healthcheck: { command: app.deploys.ready } }),
-        // What its Brick starts it with, and publishes on its Relay.
-        ...(app.deploys.command === undefined
-          ? {}
-          : { command: app.deploys.command }),
-        ...(app.deploys.ports === undefined
-          ? {}
-          : { ports: [...app.deploys.ports] }),
-      },
+      deploys: app.deploys,
       environment: app.environment,
-      mounts: brickVolumeMounts(volumes),
+      mounts: app.mounts,
       name: app.name,
       relayId: relay.id,
     })

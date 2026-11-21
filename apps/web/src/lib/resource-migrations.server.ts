@@ -35,6 +35,7 @@ import { databaseTable } from "@/lib/database-config"
 import {
   relayRequest,
   type MigratedKind,
+  type Migration,
   type MigrationHandOver,
   type MigrationPart,
 } from "@/lib/resource-migration-kinds/kind.server"
@@ -121,6 +122,8 @@ interface MigrationRow extends RowDataPacket {
   options: unknown
   /** Which of its parts is being copied, from 1, and how many it has. */
   part: number
+  /** The parts it settled on, as JSON, once it has. */
+  part_roots: unknown
   parts: number
   received_bytes: number
   requested_by: string
@@ -461,7 +464,10 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
     const parts = yield* Activity.make({
       name: "parts",
       success: Parts,
-      execute: kind.parts(input).pipe(Effect.orDie),
+      execute: kind.parts(input).pipe(
+        Effect.tap((settled) => recordParts(input.migrationId, settled)),
+        Effect.orDie
+      ),
     })
     for (const [index, part] of parts.entries()) {
       // The old one's Relay packs the part under its transfer ID, so asking
@@ -492,6 +498,7 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
     yield* handOver("backups", options.linkBackups)
     yield* handOver("domains", moved && options.moveDomain)
     yield* handOver("routes", moved && options.moveWebRoutes)
+    yield* handOver("deploys", moved)
     if (input.mode === "duplicate" && kind.powered) {
       yield* step(input, "finish/restart", (actor) =>
         restartSource(input.migrationId, actor)
@@ -955,14 +962,21 @@ const endMigrationEffect = (
         ).pipe(
           Effect.orElseSucceed(() => parsed(row.actor) as AuthenticatedUser)
         )
-        yield* requestResourceDeletionEffect({
-          finalBackup: false,
-          kind: kind.kind,
-          queued: true,
-          relayId: row.destination_relay_id,
-          resourceId: row.destination_id,
-          storageId: null,
-          user: person,
+        yield* Effect.gen(function* () {
+          // What was made for the copy alone goes with it.
+          const volumeIds = kind.copyVolumes
+            ? yield* kind.copyVolumes(migrationOf(row), person)
+            : []
+          yield* requestResourceDeletionEffect({
+            finalBackup: false,
+            kind: kind.kind,
+            queued: true,
+            relayId: row.destination_relay_id,
+            resourceId: row.destination_id,
+            storageId: null,
+            user: person,
+            ...(volumeIds.length > 0 ? { volumeIds } : {}),
+          })
         }).pipe(
           Effect.catch((cause) =>
             Effect.sync(() => {
@@ -1039,58 +1053,75 @@ const notifyEnded = (
     )
   )
 
-// Deletes what either Relay packed or fetched for each of the copy's parts,
-// as Hearth's. A part never started has nothing to delete.
-const discardTransfers = (row: MigrationRow) =>
-  kindOf(row)
-    .parts({
-      backupStorageIds: [],
-      createKey: row.create_key,
-      destination: {
-        id: row.destination_id,
-        name: row.destination_name,
-        relayId: row.destination_relay_id,
-      },
-      kind: row.kind,
-      mode: row.mode,
-      source: {
-        id: row.source_id,
-        name: row.source_name,
-        relayId: row.source_relay_id,
-      },
-    })
-    .pipe(
-      Effect.flatMap((parts) =>
-        Effect.forEach(
-          parts.flatMap((part, index) => [
-            [
-              "transfer.pull.cancel",
-              row.destination_relay_id,
-              part.destination,
-              index,
-            ] as const,
-            [
-              "transfer.source.discard",
-              row.source_relay_id,
-              part.source,
-              index,
-            ] as const,
-          ]),
-          ([operation, relayId, rootId, index]) =>
-            relay(relayId).pipe(
-              Effect.flatMap((found) =>
-                relayRequest(found, operation, undefined, {
-                  rootId,
-                  transferId: transferIdOf({ migrationId: row.id }, index),
-                })
-              ),
-              Effect.ignore
-            ),
-          { discard: true }
-        )
-      ),
-      Effect.ignore
+// A migration as its kind is told of it, from its row.
+function migrationOf(row: MigrationRow): Migration {
+  return {
+    backupStorageIds: [],
+    createKey: row.create_key,
+    destination: {
+      id: row.destination_id,
+      name: row.destination_name,
+      relayId: row.destination_relay_id,
+    },
+    kind: row.kind,
+    mode: row.mode,
+    source: {
+      id: row.source_id,
+      name: row.source_name,
+      relayId: row.source_relay_id,
+    },
+  }
+}
+
+// Keeps the parts a copy settled on, before any of them starts, so undoing
+// it discards exactly those, whatever its kind would answer by then.
+const recordParts = (id: string, parts: ReadonlyArray<MigrationPart>) =>
+  Effect.gen(function* () {
+    const database = yield* Database
+    yield* database.execute(
+      "resourceMigrations.parts",
+      `UPDATE ${databaseTable("resource_migration")}
+          SET part_roots = ?, updated_at = ?
+        WHERE id = ?`,
+      [JSON.stringify(parts), yield* Clock.currentTimeMillis, id]
     )
+  })
+
+// Deletes what either Relay packed or fetched for each of the copy's parts,
+// as Hearth's. A copy that settled none started none.
+const discardTransfers = (row: MigrationRow) =>
+  Schema.decodeUnknownEffect(Schema.NullOr(Parts))(parsed(row.part_roots)).pipe(
+    Effect.flatMap((parts) =>
+      Effect.forEach(
+        (parts ?? []).flatMap((part, index) => [
+          [
+            "transfer.pull.cancel",
+            row.destination_relay_id,
+            part.destination,
+            index,
+          ] as const,
+          [
+            "transfer.source.discard",
+            row.source_relay_id,
+            part.source,
+            index,
+          ] as const,
+        ]),
+        ([operation, relayId, rootId, index]) =>
+          relay(relayId).pipe(
+            Effect.flatMap((found) =>
+              relayRequest(found, operation, undefined, {
+                rootId,
+                transferId: transferIdOf({ migrationId: row.id }, index),
+              })
+            ),
+            Effect.ignore
+          ),
+        { discard: true }
+      )
+    ),
+    Effect.ignore
+  )
 
 // ---------------------------------------------------------- helpers
 

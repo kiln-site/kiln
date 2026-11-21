@@ -137,15 +137,12 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     /** The Brick it follows, when it follows one. */
     brick?: AppBrickRecord
     createdBy: string
-    /** What its Brick deploys. Without one, nothing yet. */
-    deploys?: Pick<AppConfig, "sourceType"> & {
-      command?: string
-      compose?: string
-      dockerfile?: string
-      healthcheck?: NonNullable<AppConfig["healthcheck"]>
-      image?: string
-      ports?: AppConfig["ports"]
-    }
+    /**
+     * What it deploys: what its Brick does, or all another App's
+     * configuration says, for a copy of it. Without one, nothing yet.
+     */
+    deploys?: Pick<AppConfig, "sourceType"> &
+      Partial<Omit<AppConfig, "environment" | "mounts" | "sourceType">>
     environment?: string
     /** What it mounts from the start: the volumes its Brick keeps. */
     mounts?: AppConfig["mounts"]
@@ -178,22 +175,22 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
           )
     yield* database
       .execute(
-      "app_create",
-      `INSERT INTO ${databaseTable("app")}
+        "app_create",
+        `INSERT INTO ${databaseTable("app")}
       (app_id, relay_id, name, config_ciphertext, brick_ciphertext,
        created_by, owner_id, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        input.appId,
-        input.relayId,
-        input.name,
-        ciphertext,
-        input.brick ? yield* encryptBrick(input.brick) : null,
-        input.createdBy,
-        input.createdBy,
-        now,
-        now,
-      ]
+        [
+          input.appId,
+          input.relayId,
+          input.name,
+          ciphertext,
+          input.brick ? yield* encryptBrick(input.brick) : null,
+          input.createdBy,
+          input.createdBy,
+          now,
+          now,
+        ]
       )
       .pipe(Effect.tapError(() => unkept))
   }
