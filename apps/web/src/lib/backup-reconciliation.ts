@@ -225,6 +225,19 @@ const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
   }
 })
 
+/**
+ * A Relay's answer about the one task Hearth asked it about. An answer
+ * about another is refused: applied, it would reach a record Hearth never
+ * asked about.
+ */
+export function relayTaskReply(reply: unknown, taskId: string) {
+  const task = relayBackupTaskSchema.parse(reply)
+  if (task.taskId !== taskId) {
+    throw new Error("The Relay answered about another backup task")
+  }
+  return task
+}
+
 const cancelCreateEffect = Effect.fn("Backups.cancelCreate")(function* (
   relay: PersistedRelay,
   createTaskId: string,
@@ -248,7 +261,7 @@ const cancelCreateEffect = Effect.fn("Backups.cancelCreate")(function* (
     yield* cancelUnsentCreateEffect(createTaskId)
     return
   }
-  const task = relayBackupTaskSchema.parse(reply)
+  const task = relayTaskReply(reply, createTaskId)
   if (yield* reconcileBackupTaskEffect(task, relay.id)) {
     publishBackupChange(relay.id, task.backupId)
   }
@@ -273,10 +286,11 @@ const dispatchBackupTaskEffect = Effect.fnUntraced(function* (
         : Effect.void
     )
   )
-  const task = relayBackupTaskSchema.parse(
+  const task = relayTaskReply(
     yield* promiseEffect(() =>
       relayRpc(relay, "backup.task.enqueue", relayInput, 15_000, subject)
-    )
+    ),
+    input.taskId
   )
   scheduleBackupReconciliation(relay, subject)
   if (yield* reconcileBackupTaskEffect(task, relay.id)) {

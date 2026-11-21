@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { RowDataPacket } from "mysql2/promise"
-import { Clock, Effect, Result } from "effect"
+import { Clock, Effect, Result, Schema } from "effect"
 
 import type {
   BackupArtifactKind,
@@ -1007,6 +1007,38 @@ export const scheduledBackupAdmissionEffect = Effect.fn(
   )
 })
 
+/**
+ * A Relay reported a backup Hearth won't catalog: one of its IDs is already
+ * another backup's. Ends the transaction so none of its rows is kept.
+ */
+class ReportedBackupRefused extends Schema.TaggedError<ReportedBackupRefused>()(
+  "ReportedBackupRefused",
+  {}
+) {}
+
+// Whether Hearth knows the game server or database a Relay reports backing
+// up to be another Relay's: a server's ID is bound to its Relay in the
+// instance directory, and a database is Hearth's own record. One Hearth
+// doesn't know is taken as the Relay's, as are volumes and the platform,
+// which Hearth doesn't record per Relay (a volume a Compose file names is
+// known only from its Relay).
+const targetOfAnotherRelay = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  relayId: string,
+  target: { id: string; kind: BackupTargetKind }
+) {
+  if (target.kind !== "instance" && target.kind !== "database") return false
+  const rows = yield* transaction.queryRows<RowDataPacket>(
+    target.kind === "instance"
+      ? `SELECT 1 FROM ${databaseTable("instance_id")}
+          WHERE id = ? AND (kind <> 'server' OR relay_id <> ?) LIMIT 1`
+      : `SELECT 1 FROM ${databaseTable("database")}
+          WHERE database_id = ? AND relay_id <> ? LIMIT 1`,
+    [target.id, relayId]
+  )
+  return rows.length > 0
+})
+
 // Answers whether it cataloged one.
 const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
@@ -1025,6 +1057,9 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   const catalog = input.catalog
   const artifactId = input.destination.artifactId
   if (!catalog || !artifactId) return false
+  if (yield* targetOfAnotherRelay(transaction, relayId, input.target)) {
+    return false
+  }
   // A full backup a Relay made on its own is on its own disk. One to a
   // bucket is Hearth's to take (`reserveScheduledBucketBackupsEffect`), so
   // a Relay reporting one is either from before that, made with keys it no
@@ -1065,7 +1100,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       : []
   const repositoryId = repositoryRows[0]?.id ?? null
   const orphaned = input.mode === "incremental" && !repositoryId
-  return yield* catalogScheduledBackup(transaction, {
+  const cataloged = yield* catalogScheduledBackup(transaction, {
     artifactId,
     artifactKind: input.artifactKind,
     backupId: input.backupId,
@@ -1095,11 +1130,18 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     targetKind: input.target.kind,
     taskId: input.taskId,
   })
+  // Its own task wasn't found on this Relay, so any of its IDs already
+  // held is another backup's, a Relay's own or not. Nothing of it is kept:
+  // a row put beside another backup's would be read as part of that one.
+  if (cataloged !== "new") return yield* new ReportedBackupRefused()
+  return true
 })
 
 // A scheduled backup's catalog rows: the backup, its one copy, and the
-// task that makes it. One already cataloged is left as it is. Answers
-// whether it was new.
+// task that makes it. Answers "new" when it made all three, "held" when
+// all three were already there, and "mixed" when some of its IDs were
+// already taken and others weren't, which only rows of another backup
+// make so.
 const catalogScheduledBackup = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   backup: {
@@ -1150,7 +1192,7 @@ const catalogScheduledBackup = Effect.fnUntraced(function* (
       backup.now,
     ]
   )
-  yield* transaction.execute(
+  const madeArtifact = yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup_artifact")}
       (id, backup_id, destination_key, storage_id, status, object_key,
        created_at, updated_at)
@@ -1166,7 +1208,7 @@ const catalogScheduledBackup = Effect.fnUntraced(function* (
       backup.now,
     ]
   )
-  yield* transaction.execute(
+  const madeTask = yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup_task")}
       (id, backup_id, task_kind, status, reserved_bytes, requested_by,
        error, created_at, updated_at)
@@ -1181,7 +1223,14 @@ const catalogScheduledBackup = Effect.fnUntraced(function* (
       backup.now,
     ]
   )
-  return made.affectedRows > 0
+  const rows = [made, madeArtifact, madeTask].map(
+    ({ affectedRows }) => affectedRows > 0
+  )
+  return rows.every(Boolean)
+    ? ("new" as const)
+    : rows.some(Boolean)
+      ? ("mixed" as const)
+      : ("held" as const)
 })
 
 /**
@@ -1236,7 +1285,7 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             targetId: backup.targetId,
             targetKind: backup.targetKind,
           })
-          const isNew = yield* catalogScheduledBackup(transaction, {
+          const cataloged = yield* catalogScheduledBackup(transaction, {
             ...backup,
             artifactId: scheduledBackupArtifactId(backup.backupId),
             createdAt: now,
@@ -1249,7 +1298,16 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             storageId: input.storageId,
             taskId: scheduledBackupTaskId(backup.backupId),
           })
-          if (isNew) made.push(backup.backupId)
+          if (cataloged === "new") made.push(backup.backupId)
+          // Some of its IDs taken and some not is another backup's rows,
+          // never this one's cataloged before.
+          if (cataloged === "mixed") {
+            return yield* BackupStorageError.make({
+              code: "reservation_failed",
+              operation: "backup.reserveScheduled",
+              reason: "Another backup already has this scheduled backup's ID",
+            })
+          }
           // Its IDs are the run's own, so rows already holding them are
           // this backup's, cataloged before: a full backup of this target to
           // this destination, at the object Hearth chooses for it, with its
@@ -1348,26 +1406,34 @@ const applyDeleteOutcome = Effect.fnUntraced(function* (
   )
 })
 
+/**
+ * Applies what a Relay reports of one of its backup tasks to Hearth's
+ * records. `relayId` is the Relay the report came from, as its connection
+ * says: a report reaches only a task of a backup on that Relay, and only as
+ * the kind of task Hearth has it as. Hearth sends a backup's tasks to its
+ * own Relay alone, so no other Relay reports one honestly.
+ */
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
-  function* (task: RelayBackupTask, relayId?: string) {
+  function* (task: RelayBackupTask, relayId: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     let changed = false
+    const knownTaskOnRelay = (transaction: DatabaseTransaction) =>
+      transaction.queryRows<KnownBackupTaskRow>(
+        `SELECT task.id, task.status, task.bytes_completed,
+                backup.status AS backup_status, backup.backup_mode,
+                backup.repository_id, backup.reason, task.task_kind,
+                task.relay_updated_at_ms
+           FROM ${databaseTable("backup_task")} task
+           JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+          WHERE task.id = ? AND task.backup_id = ? AND backup.relay_id = ?
+          FOR UPDATE`,
+        [task.taskId, task.backupId, relayId]
+      )
     yield* database.transaction("backup_reconcile", (transaction) =>
       Effect.gen(function* () {
-        const knownTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
-          `SELECT task.id, task.status, task.bytes_completed,
-                  backup.status AS backup_status, backup.backup_mode,
-                  backup.repository_id, backup.reason, task.task_kind,
-                  task.relay_updated_at_ms
-             FROM ${databaseTable("backup_task")} task
-             JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
-            WHERE task.id = ? AND task.backup_id = ?
-            FOR UPDATE`,
-          [task.taskId, task.backupId]
-        )
-        let knownTask = knownTasks[0]
-        if (!knownTask && relayId) {
+        let knownTask = (yield* knownTaskOnRelay(transaction))[0]
+        if (!knownTask) {
           // Only one it cataloged is news: one it leaves out, as a bucket
           // backup from before this release, is reported again each pass.
           changed = yield* adoptScheduledBackupTask(
@@ -1376,20 +1442,24 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             task,
             now
           )
-          const adoptedTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
-            `SELECT task.id, task.status, task.bytes_completed,
-                      backup.status AS backup_status, backup.backup_mode,
-                      backup.repository_id, backup.reason, task.task_kind,
-                      task.relay_updated_at_ms
-                 FROM ${databaseTable("backup_task")} task
-                 JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
-                WHERE task.id = ? AND task.backup_id = ?
-                FOR UPDATE`,
-            [task.taskId, task.backupId]
-          )
-          knownTask = adoptedTasks[0]
+          knownTask = (yield* knownTaskOnRelay(transaction))[0]
         }
         if (!knownTask) return
+        // What the task is, and so what its report may change, is Hearth's
+        // record of it, not the report's: a delete reported for a create
+        // would otherwise delete the backup, and a snapshot reported for a
+        // full backup would be recorded as one.
+        if (knownTask.task_kind !== task.kind) return
+        if (
+          task.kind === "create" &&
+          task.status === "succeeded" &&
+          task.result &&
+          (knownTask.backup_mode === "incremental"
+            ? !isResticCreateTaskResult(task.result)
+            : !isArchiveCreateTaskResult(task.result))
+        ) {
+          return
+        }
         // A scheduled snapshot whose repository was gone when it was
         // cataloged stays failed: it can't be restored, whatever the Relay
         // says of it.
@@ -1695,6 +1765,13 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           )
         }
       })
+    ).pipe(
+      // Its rows were rolled back with the transaction; nothing changed.
+      Effect.catchTag("ReportedBackupRefused", () =>
+        Effect.sync(() => {
+          changed = false
+        })
+      )
     )
     return changed
   }

@@ -50,6 +50,21 @@ must use the flag rather than infer this handshake from an error message. A task
 that reached a non-repeatable restore step is marked failed for explicit review
 instead of guessed at.
 
+What a Relay reports of a task reaches Hearth's records only as far as that
+Relay's own work goes. Hearth sends a backup's tasks to its own Relay alone,
+so it applies a report only to a task of a backup on the Relay that sent it,
+as its connection says, and only as the kind of task Hearth has it as. A
+create's result must be the kind its backup is: an archive for a full backup,
+a snapshot for an incremental one. An answer to an enqueue or a cancel must be
+about the task Hearth asked about. A schedule's backup a Relay made on its own
+is cataloged from its report all at once or not at all: if any of its backup,
+copy or task IDs is already another backup's, none of it is kept, and it is
+reported again each pass. Nor is one cataloged of a game server Hearth's
+instance directory binds to another Relay, or of a database Hearth has on
+another one. A game server or database Hearth hasn't recorded yet, a volume
+and the platform are taken as the Relay says: whatever it catalogs is under
+its own Relay.
+
 An Effect `Queue` wakes the worker, which drains queued tasks one at a time;
 the stopped backups of one batch run together inside their shared stopped
 window (see [Formats and live consistency](#formats-and-live-consistency)).
