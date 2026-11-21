@@ -55,8 +55,13 @@ Relay's own work goes. Hearth sends a backup's tasks to its own Relay alone,
 so it applies a report only to a task of a backup on the Relay that sent it,
 as its connection says, and only as the kind of task Hearth has it as. A
 create's result must be the kind its backup is: an archive for a full backup,
-a snapshot for an incremental one. An answer to an enqueue or a cancel must be
-about the task Hearth asked about. A schedule's backup a Relay made on its own
+a snapshot for an incremental one, and it reaches only the copies the create
+was sent to make, never one Hearth is making to another destination. A
+restore's must name the resource Hearth sent it into. An answer to an enqueue
+or a cancel must be about the task Hearth asked about; one about another is
+logged and the pass goes on. A task the Relay lists under the ID of one Hearth
+has queued, but for another backup or of another kind, means Hearth's never
+arrived: it is failed, saying so, rather than counted as sent. A schedule's backup a Relay made on its own
 is cataloged from its report all at once or not at all: if any of its backup,
 copy or task IDs is already another backup's, none of it is kept, and it is
 reported again each pass. Nor is one cataloged of a game server Hearth's

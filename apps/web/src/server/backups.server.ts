@@ -268,15 +268,16 @@ export async function cancelBackupHandler(
     throw new Error("You do not have permission to cancel this backup")
   }
   const relay = await requireBackupRelay(backup.relayId)
-  const task = relayTaskReply(
-    await relayRpc(
-      relay,
-      "backup.task.cancel",
-      { taskId: backup.taskId },
-      15_000,
-      user.id
-    ),
-    backup.taskId
+  const reply = await relayRpc(
+    relay,
+    "backup.task.cancel",
+    { taskId: backup.taskId },
+    15_000,
+    user.id
+  )
+  const task = await runAppEffect(
+    "backups.cancelReply",
+    relayTaskReply(reply, backup.taskId)
   )
   await runAppEffect(
     "backups.reconcileCancel",

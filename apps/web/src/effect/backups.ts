@@ -266,6 +266,10 @@ interface DispatchableBackupRow extends RowDataPacket {
 
 interface KnownBackupTaskRow extends RowDataPacket {
   task_kind?: string
+  task_target_kind?: string | null
+  task_target_id?: string | null
+  backup_target_kind?: string
+  backup_target_id?: string
   backup_mode: BackupRow["backup_mode"]
   backup_status: BackupRow["status"]
   reason?: string
@@ -1406,6 +1410,13 @@ const applyDeleteOutcome = Effect.fnUntraced(function* (
   )
 })
 
+// The copies of a backup Hearth made itself, to another destination, are
+// the copy's to report, never its create's: a create's report changes only
+// the artifacts it was sent to make. Takes the backup's ID.
+const notACopy = `id NOT IN (
+  SELECT destination_artifact_id FROM ${databaseTable("backup_copy_task")}
+   WHERE backup_id = ?)`
+
 /**
  * Applies what a Relay reports of one of its backup tasks to Hearth's
  * records. `relayId` is the Relay the report came from, as its connection
@@ -1423,7 +1434,11 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         `SELECT task.id, task.status, task.bytes_completed,
                 backup.status AS backup_status, backup.backup_mode,
                 backup.repository_id, backup.reason, task.task_kind,
-                task.relay_updated_at_ms
+                task.relay_updated_at_ms,
+                task.target_kind AS task_target_kind,
+                task.target_id AS task_target_id,
+                backup.target_kind AS backup_target_kind,
+                backup.target_id AS backup_target_id
            FROM ${databaseTable("backup_task")} task
            JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
           WHERE task.id = ? AND task.backup_id = ? AND backup.relay_id = ?
@@ -1450,6 +1465,17 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         // would otherwise delete the backup, and a snapshot reported for a
         // full backup would be recorded as one.
         if (knownTask.task_kind !== task.kind) return
+        // A restore reports on the restore Hearth sent: into the resource it
+        // named, or the backup's own when it named none.
+        if (
+          task.input.kind === "restore" &&
+          (task.input.target.kind !==
+            (knownTask.task_target_kind ?? knownTask.backup_target_kind) ||
+            task.input.target.id !==
+              (knownTask.task_target_id ?? knownTask.backup_target_id))
+        ) {
+          return
+        }
         if (
           task.kind === "create" &&
           task.status === "succeeded" &&
@@ -1642,8 +1668,9 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
                 SET status = ?, updated_at = ?
-              WHERE backup_id = ? AND status IN ('queued', 'running')`,
-            [task.status, now, task.backupId]
+              WHERE backup_id = ? AND status IN ('queued', 'running')
+                AND ${notACopy}`,
+            [task.status, now, task.backupId, task.backupId]
           )
           return
         }
@@ -1676,13 +1703,14 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                       checksum_sha256 = ?, error = NULL, error_code = NULL,
                       completed_at = ?,
                       updated_at = ?
-                WHERE backup_id = ?`,
+                WHERE backup_id = ? AND ${notACopy}`,
               [
                 filename,
                 task.result.bytes,
                 checksum,
                 task.finishedAt ?? now,
                 now,
+                task.backupId,
                 task.backupId,
               ]
             )
@@ -1695,7 +1723,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                         checksum_sha256 = CASE WHEN ? = 'available' THEN ? ELSE NULL END,
                         error = ?, error_code = ?, completed_at = ?,
                         updated_at = ?
-                  WHERE id = ? AND backup_id = ?`,
+                  WHERE id = ? AND backup_id = ? AND ${notACopy}`,
                 [
                   outcome.status,
                   filename,
@@ -1708,6 +1736,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   task.finishedAt ?? now,
                   now,
                   outcome.artifactId,
+                  task.backupId,
                   task.backupId,
                 ]
               )
@@ -1754,12 +1783,14 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             `UPDATE ${databaseTable("backup_artifact")}
                 SET status = 'failed', error = ?, error_code = ?,
                     completed_at = ?, updated_at = ?
-              WHERE backup_id = ? AND status IN ('queued', 'running')`,
+              WHERE backup_id = ? AND status IN ('queued', 'running')
+                AND ${notACopy}`,
             [
               task.error,
               task.errorCode ?? null,
               task.finishedAt ?? now,
               now,
+              task.backupId,
               task.backupId,
             ]
           )

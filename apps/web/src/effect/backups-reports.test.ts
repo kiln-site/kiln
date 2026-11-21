@@ -6,7 +6,13 @@ import { relayBackupTaskSchema } from "@workspace/contracts"
 
 import { reconcileBackupTaskEffect } from "@/effect/backups"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
+import {
+  insertBackup,
+  insertBackupStorage,
+  insertRelay,
+  insertRows,
+  selectRows,
+} from "@/test/seed"
 
 // What a Relay reports of its backup tasks reaches Hearth's records only
 // for its own backups, as the tasks Hearth gave it: a Relay that reports
@@ -29,7 +35,11 @@ const fresh = Effect.gen(function* () {
 
 // A manual backup on Relay one, still being made.
 const seedRunning = Effect.gen(function* () {
-  yield* insertBackup(backupId, { relay_id: relayOne, status: "running" })
+  yield* insertBackup(backupId, {
+    relay_id: relayOne,
+    status: "running",
+    target_id: target.id,
+  })
   yield* insertRows("backup_artifact", {
     id: artifactId,
     backup_id: backupId,
@@ -194,6 +204,120 @@ describeMysql("Relay backup reports", () => {
 
         assert.isFalse(changed)
         assert.deepStrictEqual(yield* backupState, before)
+      })
+    )
+
+    it.effect("leave a copy Hearth is making elsewhere to the copy", () =>
+      Effect.gen(function* () {
+        yield* fresh
+        yield* seedRunning
+        yield* reconcileBackupTaskEffect(finishedCreate, relayOne)
+        // A person then copies the backup to a bucket.
+        const storageId = "44444444-4444-4444-8444-444444444444"
+        const copyId = "44444444-4444-4444-8444-4444444444a4"
+        yield* insertBackupStorage(storageId)
+        yield* insertRows("backup_artifact", {
+          id: copyId,
+          backup_id: backupId,
+          destination_key: storageId,
+          storage_id: storageId,
+          status: "queued",
+          created_at: now,
+          updated_at: now,
+        })
+        yield* insertRows("backup_copy_task", {
+          id: "44444444-4444-4444-8444-4444444444c4",
+          backup_id: backupId,
+          source_artifact_id: artifactId,
+          destination_artifact_id: copyId,
+          status: "queued",
+          requested_by: "user-one",
+          created_at: now,
+          updated_at: now,
+        })
+        const copyStatus = Effect.map(
+          selectRows<{ id: string; status: string }>("backup_artifact"),
+          (rows) => rows.find(({ id }) => id === copyId)?.status
+        )
+
+        // The create's Relay reports it again, newer, naming the copy, and
+        // then naming nothing.
+        for (const [later, artifacts] of [
+          [10, [{ artifactId: copyId, error: null, status: "available" }]],
+          [20, []],
+        ] as const) {
+          yield* reconcileBackupTaskEffect(
+            relayBackupTaskSchema.parse({
+              ...finishedCreate,
+              result: { ...finishedCreate.result, artifacts },
+              updatedAt: now + later,
+            }),
+            relayOne
+          )
+          assert.strictEqual(yield* copyStatus, "queued")
+        }
+      })
+    )
+
+    it.effect("apply a restore only into the resource Hearth sent it to", () =>
+      Effect.gen(function* () {
+        yield* fresh
+        yield* seedRunning
+        yield* reconcileBackupTaskEffect(finishedCreate, relayOne)
+        const restoreTaskId = "55555555-5555-4555-8555-5555555555c5"
+        // Restored where it was taken from: the task names no other target.
+        yield* insertRows("backup_task", {
+          id: restoreTaskId,
+          backup_id: backupId,
+          task_kind: "restore",
+          status: "queued",
+          created_at: now,
+          updated_at: now,
+        })
+        const restored = (into: { id: string; kind: "instance" }) =>
+          relayBackupTaskSchema.parse({
+            backupId,
+            bytesCompleted: 2048,
+            bytesTotal: 2048,
+            createdAt: now,
+            error: null,
+            finishedAt: now + 5,
+            input: {
+              backupId,
+              kind: "restore",
+              source: {
+                bytes: 2048,
+                checksumSha256: "a".repeat(64),
+                kind: "local",
+              },
+              target: into,
+              taskId: restoreTaskId,
+            },
+            inputRefreshRequired: false,
+            kind: "restore",
+            result: { artifacts: [], warnings: [] },
+            startedAt: now,
+            status: "succeeded",
+            taskId: restoreTaskId,
+            updatedAt: now + 5,
+          })
+        const restoreStatus = Effect.map(
+          selectRows<{ id: string; status: string }>("backup_task"),
+          (rows) => rows.find(({ id }) => id === restoreTaskId)?.status
+        )
+
+        assert.isFalse(
+          yield* reconcileBackupTaskEffect(
+            restored({ id: "d".repeat(12), kind: "instance" }),
+            relayOne
+          )
+        )
+        assert.strictEqual(yield* restoreStatus, "queued")
+
+        assert.isTrue(
+          yield* reconcileBackupTaskEffect(restored(target), relayOne)
+        )
+        assert.strictEqual(yield* restoreStatus, "succeeded")
       })
     )
 
