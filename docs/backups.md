@@ -69,7 +69,10 @@ arrived: it is failed, saying so, rather than counted as sent. Cancelling a
 create names the backup and resource Hearth sent it for, and the Relay
 cancels only a create it holds as that; a delete waiting on a create the
 Relay holds as something else ends that create in Hearth, as one that never
-arrived, and goes ahead. A delete of an incremental backup with no snapshot
+arrived, and goes ahead. The delete removes what the Relay keeps under that
+backup's ID, which is the backup the person asked to delete: no Relay holds a
+different task under one of Hearth's IDs except by making one up or by a
+journal that no longer matches what Hearth sent it. A delete of an incremental backup with no snapshot
 recorded forgets only snapshots tagged with both its create's task and its
 backup. A task Hearth already has running that its Relay then lists as
 another task stays as Hearth last heard of it; only a Relay whose journal no

@@ -297,11 +297,13 @@ const cancelCreateEffect = Effect.fn("Backups.cancelCreate")(function* (
   // arrived, so nothing of it will run. It is ended here, as one that never
   // arrived is, and the delete waiting on it can go.
   const neverArrived = Effect.gen(function* () {
-    yield* cancelUnsentCreateEffect(createTaskId)
-    yield* Effect.logWarning(
-      "The Relay holds a different backup task under a create's ID",
-      { "relay.id": relay.id, "backup.task.id": createTaskId }
-    )
+    // Said once, when it ends Hearth's create, not on every pass after.
+    if (yield* cancelUnsentCreateEffect(createTaskId)) {
+      yield* Effect.logWarning(
+        "The Relay holds a different backup task under a create's ID",
+        { "relay.id": relay.id, "backup.task.id": createTaskId }
+      )
+    }
   })
   if (listed && !relayHoldsTask(listed, sent)) return yield* neverArrived
   const reply = yield* promiseEffect(() =>
