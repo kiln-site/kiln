@@ -24,11 +24,6 @@ import {
   resticS3BucketSchema,
   resticS3RegionSchema,
 } from "@workspace/contracts"
-import {
-  scheduledBackupArtifactId,
-  scheduledBackupTaskId,
-} from "@workspace/contracts/schedules"
-
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import { isDeadlock } from "@/effect/database-deadlocks"
@@ -1250,6 +1245,7 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
   "backups.reserveScheduledBucket"
 )(function* (input: {
   backups: ReadonlyArray<{
+    artifactId: string
     artifactKind: BackupArtifactKind
     backupId: string
     batchId: string | null
@@ -1258,6 +1254,7 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
     name: string
     targetId: string
     targetKind: BackupTargetKind
+    taskId: string
   }>
   relayId: string
   storageId: string
@@ -1291,7 +1288,6 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
           })
           const cataloged = yield* catalogScheduledBackup(transaction, {
             ...backup,
-            artifactId: scheduledBackupArtifactId(backup.backupId),
             createdAt: now,
             error: null,
             mode: "full",
@@ -1300,7 +1296,6 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             relayId: input.relayId,
             repositoryId: null,
             storageId: input.storageId,
-            taskId: scheduledBackupTaskId(backup.backupId),
           })
           if (cataloged === "new") made.push(backup.backupId)
           // Some of its IDs taken and some not is another backup's rows,
@@ -1341,8 +1336,8 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
               WHERE backup.id = ? AND backup.backup_mode = 'full'
                 AND backup.storage_id <=> ?`,
             [
-              scheduledBackupTaskId(backup.backupId),
-              scheduledBackupArtifactId(backup.backupId),
+              backup.taskId,
+              backup.artifactId,
               backup.backupId,
               input.storageId,
             ]
