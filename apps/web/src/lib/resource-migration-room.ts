@@ -36,8 +36,9 @@ export interface MigrationSourceRoom {
   /**
    * Where `usedBytes` came from: measured, the live figure of a running
    * one, or its disk limit, when its Relay can't measure a stopped one.
+   * Unknown when nothing says how much it holds, and it's counted as none.
    */
-  readonly usedFrom: "measured" | "running" | "limit"
+  readonly usedFrom: "measured" | "running" | "limit" | "unknown"
 }
 
 export interface MigrationRoomProblem {

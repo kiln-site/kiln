@@ -345,7 +345,9 @@ function MigrationForm({
     (moving && offers.power && !preview.allowed.stop)
 
   const usedBytes =
-    preview.room && preview.room.resource.usedFrom !== "limit"
+    preview.room &&
+    preview.room.resource.usedFrom !== "limit" &&
+    preview.room.resource.usedFrom !== "unknown"
       ? preview.room.resource.usedBytes
       : null
   const room = selected?.room ?? null

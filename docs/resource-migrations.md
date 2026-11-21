@@ -71,6 +71,22 @@ Copying one needs its `database.read`, and `backup.create` and
 `database.create` on the Relay the copy goes to. It has owner and access
 to hand over; its connections stay with the old one.
 
+### Volumes
+
+A Kiln volume has its move or duplicate in its row on the Relay's Volumes
+page, since volumes have no page of their own. The copy is a new volume
+its Relay makes, filled with the archive a backup of the old one is. A
+volume has no power, owner or access of its own, and Hearth keeps no
+record of one, so nothing is stopped and nothing is handed over: a move
+leaves the old volume, and what uses it, where they are. The dialog warns
+when something runs on it, since what that writes while it's copied may
+be carried half-written, and says nothing mounts the copy until someone
+chooses it in an App's settings.
+
+Copying one takes what backing it up and restoring it do, on the Relay:
+`relay.read`, `backup.create` and `backup.download` where it is, and
+`relay.configure` and `backup.restore` where the copy goes.
+
 ## Power
 
 A kind that runs can be stopped while it's copied. A duplicate can stop
@@ -99,8 +115,9 @@ copy, and its first step each check, from what the Relays report
   of it there.
 
 Relays measure each root and report their free disk through
-`transfer.space`. One a Relay can't measure is taken to be its disk limit.
-Disk is checked once more just before the old one stops.
+`transfer.space`. One a Relay can't measure is taken to be its disk limit,
+and one with neither is counted as nothing and shown without a size. Disk
+is checked once more just before the old one stops.
 
 ## How it runs
 

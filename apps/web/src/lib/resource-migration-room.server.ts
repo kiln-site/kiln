@@ -109,7 +109,7 @@ export function migrationSourceRoom(
   return {
     limits,
     usedBytes: description.usedBytes ?? 0,
-    usedFrom: description.usedFrom,
+    usedFrom: description.usedBytes === null ? "unknown" : description.usedFrom,
   }
 }
 
