@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { revokeAccountSessionEffect } from "@/effect/account-sessions"
 import {
   approveCliAuthorizationEffect,
+  authorizeMobileSignInEffect,
   cliDeviceRequestIdEffect,
   denyCliAuthorizationEffect,
   revokeCliCredentialEffect,
@@ -88,6 +89,22 @@ export const approveCliAuthorizationOperation = operation<
       )
     ),
   audit: cliAnswerAudit,
+})
+
+export const authorizeMobileSignInOperation = operation<{
+  challenge: string
+  name: string
+}>()({
+  name: "cli.mobile.authorize",
+  doing: "Signing in to the Kiln app",
+  authorize: ({ user }) => signedIn(user),
+  locks: ({ context: person }) => [shared(userKey(person.id))],
+  // Read the account again now its lane is held, as approving a CLI does.
+  run: ({ context: person, input }) =>
+    currentActingUser(person.id, person).pipe(
+      Effect.flatMap((user) => authorizeMobileSignInEffect({ ...input, user }))
+    ),
+  audit: ({ context: person }) => ({ id: person.id, kind: "user" }),
 })
 
 export const denyCliAuthorizationOperation = operation<CliAnswer>()({

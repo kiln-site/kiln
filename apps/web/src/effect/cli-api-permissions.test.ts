@@ -22,6 +22,7 @@ const f = vi.hoisted(() => ({
   reserveDatabase: vi.fn(),
   reserveRestore: vi.fn(),
   databases: vi.fn(),
+  activity: vi.fn(),
 }))
 vi.mock("@/lib/access-control", async (original) => ({
   ...(await original<typeof import("@/lib/access-control")>()),
@@ -57,6 +58,9 @@ vi.mock("@/effect/managed-databases", async (original) => ({
   ...(await original<typeof import("@/effect/managed-databases")>()),
   listManagedDatabaseRecordsEffect: f.databases,
 }))
+vi.mock("@/server/activity-data.server", () => ({
+  getActivityForUser: f.activity,
+}))
 vi.mock("@/lib/backup-realtime.server", () => ({
   publishBackupChange: vi.fn(),
 }))
@@ -65,6 +69,8 @@ vi.mock("@/lib/backup-reconciliation", () => ({
 }))
 import {
   createCliBackupEffect,
+  getCliRelayInfoEffect,
+  listCliActivityEffect,
   updateCliServerStartupEffect,
 } from "@/effect/cli-api"
 import { testBrick } from "@/test/bricks"
@@ -209,6 +215,80 @@ const startup = (extra: Record<string, unknown>, mode = principal.mode) =>
   )
 const writes = () =>
   f.rpc.mock.calls.filter((call) => call[1] === "instance.startup.write")
+describe("CLI relay info", () => {
+  it("answers for a Relay that reports its memory reserve", async () => {
+    f.authorize.mockReturnValue(Effect.void)
+    f.relays.mockReturnValue(
+      Effect.succeed([{ id: relayId, enabled: true, name: "Relay" }])
+    )
+    f.rpc.mockResolvedValue(
+      relaySnapshotSchema.parse({
+        ...snapshot,
+        node: {
+          ...snapshot.node,
+          memory: {
+            assignableBytes: 6,
+            totalBytes: 8,
+            usedBytes: 2,
+            workloadLimit: { limitBytes: 6, targetBytes: 6, outsideCount: 0 },
+          },
+        },
+      })
+    )
+    const info = await run(getCliRelayInfoEffect(principal, relayId))
+    expect(info.node?.memory).toEqual({ totalBytes: 8, usedBytes: 2 })
+  })
+})
+
+describe("CLI activity", () => {
+  it("lists entries as the CLI contract describes them", async () => {
+    const entry = {
+      actor: { email: null, id: "system", name: "Kiln system" },
+      id: `${relayId}:1`,
+      label: "Started Survival",
+      occurredAt: 1,
+      permission: "instance.power.start",
+      source: "web",
+      type: "power",
+    }
+    f.activity.mockResolvedValue({
+      entries: [
+        {
+          ...entry,
+          databaseId: null,
+          inheritedBy: [],
+          rawEvent: { secret: "value" },
+          relay: { id: relayId, name: "Relay", unavailable: false },
+          target: { id: instanceId, kind: "server", name: "Survival" },
+        },
+        {
+          ...entry,
+          id: `${relayId}:2`,
+          databaseId: "b".repeat(12),
+          inheritedBy: [],
+          rawEvent: {},
+          relay: { id: relayId, name: "Relay", unavailable: true },
+          target: { id: "b".repeat(12), kind: "database", name: "Main" },
+        },
+      ],
+    })
+    const activity = await run(listCliActivityEffect(principal, 10))
+    expect(activity.entries).toEqual([
+      {
+        ...entry,
+        relay: { id: relayId, name: "Relay" },
+        server: { id: instanceId, name: "Survival" },
+      },
+      {
+        ...entry,
+        id: `${relayId}:2`,
+        relay: { id: relayId, name: "Relay" },
+        server: null,
+      },
+    ])
+  })
+})
+
 describe("CLI startup permission boundary", () => {
   it("denies memory resource changes with configuration permission alone", async () => {
     allowed.add("instance.configuration.write")

@@ -1,0 +1,88 @@
+@import "tailwindcss";
+@import "uniwind";
+
+/*
+ * Hearth's palette (packages/ui/src/styles/globals.css) at its default accent,
+ * hue 24.6, converted to hex: React Native takes neither hsl() nor oklch().
+ * Dark is Hearth's default; light follows the system appearance.
+ */
+@layer theme {
+  :root {
+    @variant dark {
+      --color-screen: #12100f;
+      --color-surface-low: #151312;
+      --color-card: #191715;
+      --color-raised: #221e1c;
+      --color-border: #312a26;
+      --color-input: #3a322c;
+      --color-foreground: #eceae9;
+      --color-foreground-muted: #aca29a;
+      --color-primary: #fa822e;
+      --color-primary-text: #fa822e;
+      --color-primary-foreground: #191410;
+      --color-secondary: #2a231d;
+      --color-accent: #3f2b1c;
+      --color-danger: #f45249;
+      --color-success: #47b777;
+      --color-warning: #daa843;
+      --color-info: #4896d3;
+    }
+    @variant light {
+      --color-screen: #f0e8e3;
+      --color-surface-low: #f8f3ef;
+      --color-card: #f9f5f3;
+      --color-raised: #e8dfd8;
+      --color-border: #dac9be;
+      --color-input: #ccb4a4;
+      --color-foreground: #211b17;
+      --color-foreground-muted: #544840;
+      --color-primary: #fa822e;
+      --color-primary-text: #c75505;
+      --color-primary-foreground: #191410;
+      --color-secondary: #eadfd7;
+      --color-accent: #f9e5d7;
+      --color-danger: #d01d21;
+      --color-success: #007e46;
+      --color-warning: #aa6a00;
+      --color-info: #2f6fa3;
+    }
+  }
+}
+
+@theme {
+  /* Native text takes one family name. Keep these aligned with app.config.ts. */
+  --font-sans: "Geist-Regular";
+  --font-medium: "Geist-Medium";
+  --font-semibold: "Geist-SemiBold";
+  --font-mono: "JetBrainsMono-Regular";
+  --font-mono-medium: "JetBrainsMono-Medium";
+
+  --text-2xs: 11px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 22px;
+  --text-lg: 18px;
+  --text-lg--line-height: 24px;
+  --text-xl: 22px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 34px;
+  --text-3xl: 32px;
+  --text-3xl--line-height: 38px;
+}
+
+@utility font-medium {
+  font-family: var(--font-medium);
+}
+
+@utility font-semibold {
+  font-family: var(--font-semibold);
+}
+
+@utility font-mono-medium {
+  font-family: var(--font-mono-medium);
+}

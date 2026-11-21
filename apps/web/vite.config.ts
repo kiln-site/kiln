@@ -348,7 +348,9 @@ function relayControlUpgrades(): Plugin {
 }
 
 function developmentHosts(): Array<string> {
-  const hosts = new Set(["localhost", "hearth.hearth.orb.local"])
+  // `.ts.net` lets a dev stack shared with `tailscale serve` load on other
+  // tailnet devices, such as a phone running the mobile app.
+  const hosts = new Set(["localhost", "hearth.hearth.orb.local", ".ts.net"])
   const configured = process.env.KILN_URL?.trim()
   if (!configured) return [...hosts]
   Result.try(() => {
