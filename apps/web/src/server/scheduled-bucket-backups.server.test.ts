@@ -39,9 +39,9 @@ const relay = vi.hoisted(() => ({
   listed: 0,
   // Holds every task sent to it on its way, until opened.
   arriving: null as null | Promise<void>,
-  // How long listing its backups takes, and how many listings it has had
-  // under way at once, at most.
-  listingMs: 0,
+  // Holds each listing of its backups, once it has read them, until
+  // opened; and how many listings it has had under way at once, at most.
+  listingHeld: null as null | Promise<void>,
   listing: 0,
   mostListing: 0,
   // Something that happens while Hearth reads the Relay's volumes.
@@ -99,11 +99,10 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       relay.listed += 1
       relay.listing += 1
       relay.mostListing = Math.max(relay.mostListing, relay.listing)
-      if (relay.listingMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, relay.listingMs))
-      }
+      const held = [...relay.tasks.values()]
+      await relay.listingHeld
       relay.listing -= 1
-      return [...relay.tasks.values()].map((task) => ({
+      return held.map((task) => ({
         ...task,
         error: "This Relay makes no backups",
         finishedAt: at,
@@ -226,7 +225,7 @@ const destination = (enabled: boolean) =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.arriving = null
-  relay.listingMs = 0
+  relay.listingHeld = null
   relay.listing = 0
   relay.mostListing = 0
   relay.meanwhile = null
@@ -701,19 +700,38 @@ describeMysql("A schedule's backups to a bucket", () => {
     )
 
     it.effect(
-      "goes over a Relay's backups once at a time, however often takes ask it to",
+      "goes over a Relay's backups once at a time, and once more after, however often takes ask it to",
       () =>
         Effect.gen(function* () {
           yield* seed
-          // Each look at the Relay's backups takes five seconds.
-          relay.listingMs = 5_000
-          for (const minute of [1, 2, 3]) {
+          let open = () => {}
+          relay.listingHeld = new Promise((resolve) => {
+            open = resolve
+          })
+          // A run is taken, and Hearth's pass over the Relay's backups
+          // starts and is held reading them.
+          yield* ask(relayId, { scheduledAt: at + 60_000 })
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_500))
+          assert.strictEqual(relay.listing, 1)
+
+          // Two more are taken meanwhile, each asking for a pass.
+          for (const minute of [2, 3]) {
             yield* ask(relayId, { scheduledAt: at + minute * 60_000 })
             yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_500))
           }
+          assert.strictEqual(relay.mostListing, 1)
+
+          // Once the held pass ends, one more follows it: the only one to
+          // read what those two sent, as the held pass read the Relay's
+          // backups before they arrived.
+          relay.listingHeld = null
+          open()
           yield* passesRun
 
           assert.strictEqual(relay.mostListing, 1)
+          const tasks = yield* selectRows<{ status: string }>("backup_task")
+          assert.lengthOf(tasks, 3)
+          assert.isTrue(tasks.every(({ status }) => status === "failed"))
         }).pipe(inTestTime),
       60_000
     )
