@@ -432,10 +432,16 @@ The step waits for its task to arrive and finish. What that leaves:
 - Hearth takes all of what one ask names or none: a volume an App has let
   go of since the schedule was sent refuses the rest with it, until the
   schedule is sent again.
-- Hearth works on four of one Relay's asks at once. Each holds its turn
-  from before Hearth reads anything for it until the tasks it made are
-  sent; one that waits twenty seconds for a turn is refused, saying Hearth
+- Hearth works on four of one Relay's asks at once, and lets twelve more
+  wait for a turn. Each holds its turn from before Hearth reads anything
+  for it until the tasks it made are first sent; a later pass over the
+  Relay's backups runs outside it. One that waits twenty seconds for a
+  turn, or arrives with twelve already waiting, is refused, saying Hearth
   is busy, and the schedule's next run is taken as usual.
+- The owning Relay still says which run is due and what of it: a run time
+  and the members of a batch are its word, as its own schedule is. What
+  keyed IDs stop is another Relay's report, or this one's, claiming the IDs
+  of a take before Hearth makes it.
 - A step waits 30 seconds for Hearth's answer and three minutes for its
   task. Hearth goes on with one it started, so a backup can be taken and
   turn up after its step failed; a step with no answer says Hearth may
