@@ -186,8 +186,11 @@ there, it fails, saying why. A copy on the Relay's own disk counts at once,
 so a backup with one is available while its bucket copy waits; one whose
 delete fails, or ends with its bucket copy kept, while that copy waits is
 running again, not failed. Each wake makes one bounded look: at most a
-hundred copies, ten of any one destination, four looked for at once, each
-waiting at most fifteen seconds for the bucket. A look that left copies
+hundred copies, ten of any one destination, late ones Hearth never looked
+for among them, four looked for at once, each waiting at most fifteen
+seconds for the bucket. A destination whose keys can't be read rests as one
+that can't be reached does, and anything else that goes wrong rests that
+copy, so the next look reaches others. A look that left copies
 another could reach asks for the next a second later, so a backlog is seen
 a look at a time, and the sweep only wakes the looks rather than waiting on
 buckets. An answer that says nothing of a copy leaves it to be looked for
@@ -195,9 +198,10 @@ again, after thirty seconds and longer each time up to ten minutes: a bucket
 that can't be reached rests whole, while a refusal (403), which can be of
 one object, rests that copy alone. A
 copy still unseen an hour after it first waited, by Hearth's clock
-(`seen_by`, migration 95), fails with the last answer Hearth had, so the
-hour bounds retries; one Hearth never got to look for first has one look
-before it can fail. A refusal (403) says the copy may be missing or
+(`seen_by`, migration 95), fails with the last answer Hearth had, without
+asking the bucket again, so the hour bounds retries; one Hearth never got
+to look for first has one look before it can fail, and an answer is kept
+for the copy as reported, so a newer report of another size has its own. A refusal (403) says the copy may be missing or
 Hearth's key not allowed to read it. One look runs at a time, whoever asked
 for it. A look
 settles a copy only as it was when looked for, and only while it is still

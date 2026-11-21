@@ -7,6 +7,7 @@ import {
   s3StatusOf,
 } from "@/backups/destinations/s3"
 import {
+  lateBucketCopiesEffect,
   settleBucketCopyEffect,
   waitingBucketCopiesEffect,
 } from "@/effect/backups"
@@ -42,8 +43,17 @@ type Rest = { delayMs: number; until: number }
 const restingBuckets = new Map<string, Rest>()
 const restingCopies = new Map<string, Rest>()
 // Why the last look at a copy didn't settle it, for its failure at the
-// deadline; a copy here has been looked for.
+// deadline; a copy here has been looked for. Kept by the copy as reported,
+// its object and size, so a newer report of it is looked for afresh.
 const lastAnswer = new Map<string, string>()
+const asReported = (copy: {
+  artifactId: string
+  objectKey: string | null
+  reportedBytes: number | null
+}) =>
+  [copy.artifactId, copy.objectKey ?? "", copy.reportedBytes ?? ""].join(
+    "\u001f"
+  )
 
 const resting = (rests: Map<string, Rest>, now: number) =>
   [...rests].flatMap(([id, { until }]) => (now < until ? [id] : []))
@@ -76,6 +86,26 @@ export const checkBucketCopiesEffect = Effect.fn("BucketCopies.check")(
 
 const lookOnce = Effect.gen(function* () {
   const now = yield* Clock.currentTimeMillis
+  // Past their deadline and looked for before: failed with what the last
+  // look heard, without asking any bucket again.
+  for (const copy of yield* lateBucketCopiesEffect({
+    limit: COPIES_PER_LOOK,
+    now,
+  })) {
+    const heard = lastAnswer.get(asReported(copy))
+    if (heard === undefined) continue
+    const settled = yield* settleBucketCopyEffect({
+      artifactId: copy.artifactId,
+      backupId: copy.backupId,
+      looked: { bytes: copy.reportedBytes, objectKey: copy.objectKey },
+      outcome: failed("bucket_copy_unseen", heard),
+    })
+    lastAnswer.delete(asReported(copy))
+    restingCopies.delete(copy.artifactId)
+    if (settled) publishBackupChange(copy.relayId, copy.backupId)
+  }
+  // One budget for every copy Hearth asks a bucket about, late ones it never
+  // looked for among them.
   const { copies: waiting, more } = yield* waitingBucketCopiesEffect({
     limit: COPIES_PER_LOOK,
     now,
@@ -98,7 +128,7 @@ const lookOnce = Effect.gen(function* () {
           }).pipe(
             Effect.tap((settled) =>
               Effect.sync(() => {
-                lastAnswer.delete(copy.artifactId)
+                lastAnswer.delete(asReported(copy))
                 restingCopies.delete(copy.artifactId)
                 if (settled) publishBackupChange(copy.relayId, copy.backupId)
               })
@@ -107,12 +137,6 @@ const lookOnce = Effect.gen(function* () {
               seen: settled && outcome.kind === "seen",
             }))
           )
-        // Past its deadline, and looked for before: it fails with what the
-        // last look heard.
-        const heard = lastAnswer.get(copy.artifactId)
-        if (copy.late && heard !== undefined) {
-          return yield* settle(failed("bucket_copy_unseen", heard))
-        }
         if (!copy.objectKey || copy.reportedBytes === null) {
           return yield* settle(
             failed(
@@ -123,14 +147,31 @@ const lookOnce = Effect.gen(function* () {
         }
         const credential = yield* loadBackupStorageCredentialEffect(
           copy.storageId
+        ).pipe(
+          Effect.map((loaded) => ({ loaded }) as const),
+          Effect.catch((error) => Effect.succeed({ error } as const))
         )
-        if (!credential) {
+        // Its destination's keys can't be read: the destination rests, and
+        // the copy is looked for again once it may be.
+        if ("error" in credential) {
+          yield* logException(credential.error, {
+            operation: "BucketCopies.credential",
+            attributes: { "backup.storage.id": copy.storageId },
+          })
+          lastAnswer.set(
+            asReported(copy),
+            "Hearth couldn't read this destination's keys to see the copy"
+          )
+          rest(restingBuckets, copy.storageId, now)
+          return { seen: false }
+        }
+        if (!credential.loaded) {
           return yield* settle(
             failed("storage_unavailable", "Its backup destination is gone")
           )
         }
         const answer = yield* headS3BackupObject(
-          credential,
+          credential.loaded,
           copy.objectKey
         ).pipe(
           Effect.map((found) => ({ found }) as const),
@@ -144,8 +185,9 @@ const lookOnce = Effect.gen(function* () {
               ? "The bucket refused to let Hearth see this copy (403): it may be missing, or Hearth's key may not be allowed to read it"
               : "Hearth couldn't reach the bucket to see this copy"
           // Its one look past the deadline told it nothing more.
-          if (copy.late) return yield* settle(failed("bucket_copy_unseen", said))
-          lastAnswer.set(copy.artifactId, said)
+          if (copy.late)
+            return yield* settle(failed("bucket_copy_unseen", said))
+          lastAnswer.set(asReported(copy), said)
           if (answer.status === 403) {
             rest(restingCopies, copy.artifactId, now)
           } else {
@@ -178,11 +220,18 @@ const lookOnce = Effect.gen(function* () {
         }
         return yield* settle({ bytes: found.bytes, kind: "seen" })
       }).pipe(
+        // Anything else that went wrong rests the copy, so the next look
+        // reaches others rather than the same again.
         Effect.catch((cause) =>
           logException(cause, {
             operation: "BucketCopies.check",
             attributes: { "backup.id": copy.backupId },
-          }).pipe(Effect.as({ seen: false }))
+          }).pipe(
+            Effect.andThen(
+              Effect.sync(() => rest(restingCopies, copy.artifactId, now))
+            ),
+            Effect.as({ seen: false })
+          )
         )
       ),
     { concurrency: LOOKS_AT_ONCE }
@@ -195,7 +244,8 @@ const lookOnce = Effect.gen(function* () {
     requestBackupRetention()
   }
   // Another look could reach copies this one left: there were more than it
-  // took, and it looked at some, so it isn't stuck on copies left resting.
+  // took, and it looked at some, each of which it settled or left resting,
+  // so the next look reaches others.
   return { more: more && waiting.length > 0 }
 })
 

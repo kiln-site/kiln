@@ -3449,12 +3449,81 @@ const restoreStatusAfterFailedDelete = Effect.fnUntraced(function* (
   )
 })
 
+type WaitingCopyRow = RowDataPacket & {
+  artifact_id: string
+  backup_id: string
+  bytes: number | string | null
+  object_key: string | null
+  place: number | string
+  relay_id: string
+  reserved_bytes: number | string | null
+  seen_by: number | string | null
+  storage_id: string
+}
+
+// Full backups' bucket copies a Relay reported uploading that Hearth hasn't
+// seen in the bucket yet, each numbered among its destination's by when
+// Hearth must have seen it. A copy Hearth's own copy worker makes is that
+// worker's.
+const waitingCopies = (where: string) => `
+  SELECT artifact.id AS artifact_id, artifact.backup_id,
+         artifact.storage_id, artifact.object_key, artifact.bytes,
+         artifact.seen_by, backup.relay_id, task.reserved_bytes,
+         ROW_NUMBER() OVER (
+           PARTITION BY artifact.storage_id
+           ORDER BY artifact.seen_by ASC, artifact.id ASC
+         ) AS place
+    FROM ${databaseTable("backup_artifact")} artifact
+    JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
+    JOIN ${databaseTable("backup_task")} task
+      ON task.backup_id = backup.id AND task.task_kind = 'create'
+     AND task.status = 'succeeded'
+   WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
+     AND artifact.completed_at IS NULL
+     AND backup.backup_mode = 'full'
+     AND backup.status NOT IN ('deleting', 'deleted')
+     AND artifact.id NOT IN (
+       SELECT destination_artifact_id
+         FROM ${databaseTable("backup_copy_task")})
+     AND ${where}`
+
+const waitingCopy = (now: number) => (row: WaitingCopyRow) => ({
+  artifactId: row.artifact_id,
+  backupId: row.backup_id,
+  late:
+    row.seen_by !== null &&
+    safeDatabaseNumber(row.seen_by, "bucket copy deadline") < now,
+  maxBytes: nullableDatabaseNumber(row.reserved_bytes, "backup reservation"),
+  objectKey: row.object_key,
+  relayId: row.relay_id,
+  reportedBytes: nullableDatabaseNumber(row.bytes, "backup artifact bytes"),
+  storageId: row.storage_id,
+})
+
 /**
- * Full backups' bucket copies a Relay reported uploading that Hearth hasn't
- * seen in the bucket yet, by when Hearth must have: those past it, then up
- * to `limit` others, leaving out destinations Hearth is leaving alone a
- * while (`resting`). A copy Hearth's own copy worker makes is that
- * worker's.
+ * Bucket copies waiting to be seen that are past their deadline, oldest
+ * first: those Hearth already looked for fail without another look.
+ */
+export const lateBucketCopiesEffect = Effect.fn("backups.lateBucketCopies")(
+  function* (input: { limit: number; now: number }) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<WaitingCopyRow>(
+      "backup_late_bucket_copies",
+      `SELECT * FROM (${waitingCopies("artifact.seen_by < ?")}) waiting
+        ORDER BY seen_by ASC, artifact_id ASC
+        LIMIT ?`,
+      [input.now, input.limit]
+    )
+    return rows.map(waitingCopy(input.now))
+  }
+)
+
+/**
+ * Bucket copies waiting to be seen that a look can look for, late ones
+ * among them, by when Hearth must have seen each: at most `limit`, and at
+ * most `perDestination` of one destination's, so one bucket never fills a
+ * look, leaving out destinations and copies Hearth is leaving alone a
+ * while. Answers too whether more are waiting than it took.
  */
 export const waitingBucketCopiesEffect = Effect.fn(
   "backups.waitingBucketCopies"
@@ -3466,95 +3535,39 @@ export const waitingBucketCopiesEffect = Effect.fn(
   restingCopies: ReadonlyArray<string>
 }) {
   const database = yield* Database
-  type Row = RowDataPacket & {
-    artifact_id: string
-    backup_id: string
-    bytes: number | string | null
-    object_key: string | null
-    relay_id: string
-    place: number | string
-    reserved_bytes: number | string | null
-    seen_by: number | string | null
-    storage_id: string
-  }
-  const waiting = (where: string) => `
-    SELECT artifact.id AS artifact_id, artifact.backup_id,
-           artifact.storage_id, artifact.object_key, artifact.bytes,
-           artifact.seen_by, backup.relay_id, task.reserved_bytes,
-           ROW_NUMBER() OVER (
-             PARTITION BY artifact.storage_id
-             ORDER BY artifact.seen_by ASC, artifact.id ASC
-           ) AS place
-      FROM ${databaseTable("backup_artifact")} artifact
-      JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
-      JOIN ${databaseTable("backup_task")} task
-        ON task.backup_id = backup.id AND task.task_kind = 'create'
-       AND task.status = 'succeeded'
-     WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
-       AND artifact.completed_at IS NULL
-       AND backup.backup_mode = 'full'
-       AND backup.status NOT IN ('deleting', 'deleted')
-       AND artifact.id NOT IN (
-         SELECT destination_artifact_id
-           FROM ${databaseTable("backup_copy_task")})
-       AND ${where}`
-  // Past their deadline: failed without a look, so none waits on a bucket.
-  const late = yield* database.queryRows<Row>(
-    "backup_late_bucket_copies",
-    `SELECT * FROM (${waiting("artifact.seen_by < ?")}) waiting
-      ORDER BY seen_by ASC, artifact_id ASC
-      LIMIT ?`,
-    [input.now, input.limit]
-  )
-  // The rest, oldest first, but no more than `perDestination` of one
-  // destination's, so one bucket that can't be asked never fills a look.
-  const due = yield* database.queryRows<Row>(
+  const leftAlone = [
+    ...(input.resting.length > 0
+      ? [
+          `artifact.storage_id NOT IN (${input.resting.map(() => "?").join(", ")})`,
+        ]
+      : []),
+    ...(input.restingCopies.length > 0
+      ? [
+          `artifact.id NOT IN (${input.restingCopies.map(() => "?").join(", ")})`,
+        ]
+      : []),
+  ]
+  const rows = yield* database.queryRows<WaitingCopyRow>(
     "backup_waiting_bucket_copies",
-    `SELECT * FROM (${waiting(
-      `(artifact.seen_by IS NULL OR artifact.seen_by >= ?)${
-        input.resting.length > 0
-          ? ` AND artifact.storage_id NOT IN (${input.resting
-              .map(() => "?")
-              .join(", ")})`
-          : ""
-      }${
-        input.restingCopies.length > 0
-          ? ` AND artifact.id NOT IN (${input.restingCopies
-              .map(() => "?")
-              .join(", ")})`
-          : ""
-      }`
+    `SELECT * FROM (${waitingCopies(
+      leftAlone.length > 0 ? leftAlone.join(" AND ") : "TRUE"
     )}) waiting
       WHERE place <= ?
       ORDER BY seen_by ASC, artifact_id ASC
       LIMIT ?`,
     [
-      input.now,
       ...input.resting,
       ...input.restingCopies,
       input.perDestination,
       input.limit,
     ]
   )
-  const rows = [...late, ...due]
-  // More are waiting than this look took, of a destination or in all.
-  const more =
-    late.length === input.limit ||
-    due.length === input.limit ||
-    due.some((row) => Number(row.place) === input.perDestination)
-  const copies = rows.map((row) => ({
-    artifactId: row.artifact_id,
-    backupId: row.backup_id,
-    late:
-      row.seen_by !== null &&
-      safeDatabaseNumber(row.seen_by, "bucket copy deadline") < input.now,
-    maxBytes: nullableDatabaseNumber(row.reserved_bytes, "backup reservation"),
-    objectKey: row.object_key,
-    relayId: row.relay_id,
-    reportedBytes: nullableDatabaseNumber(row.bytes, "backup artifact bytes"),
-    storageId: row.storage_id,
-  }))
-  return { copies, more }
+  return {
+    copies: rows.map(waitingCopy(input.now)),
+    more:
+      rows.length === input.limit ||
+      rows.some((row) => Number(row.place) === input.perDestination),
+  }
 })
 
 /**

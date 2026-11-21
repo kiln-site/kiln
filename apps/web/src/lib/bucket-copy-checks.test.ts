@@ -666,6 +666,80 @@ describeMysql("Bucket copies Hearth looks for", () => {
     )
 
     it.effect(
+      "asks a bucket that can't be reached about no more than its share, late copies among them",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          // A hundred copies past their deadline that Hearth never looked
+          // for, on a bucket that can't be reached, and one due on another.
+          yield* waitingCopies(100, storageId, now - 200_000, () => ({
+            status: 503,
+          }))
+          yield* waitingCopies(1, secondStorageId, now + 60 * 60_000, () =>
+            uploaded
+          )
+
+          yield* checkBucketCopiesEffect()
+
+          const down = yield* copyStatuses(storageId)
+          assert.isAtMost(
+            down.filter(({ status }) => status === "failed").length,
+            10
+          )
+          const [other] = yield* copyStatuses(secondStorageId)
+          assert.strictEqual(other?.status, "available")
+        })
+    )
+
+    it.effect(
+      "leaves a destination whose keys can't be read alone, rather than look again and again",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* waitingCopies(11, storageId, now + 60 * 60_000, () => uploaded)
+          const database = yield* Database
+          yield* database.execute(
+            "test.keys",
+            `UPDATE kiln_backup_storage SET access_key_id_ciphertext = ? WHERE id = ?`,
+            ["v1.1.unreadable.unreadable.unreadable", storageId]
+          )
+
+          yield* lookUntilDone
+
+          // Nothing more to look for while it rests, and none failed.
+          assert.isFalse((yield* checkBucketCopiesEffect()).more)
+          assert.isTrue(
+            (yield* copyStatuses(storageId)).every(
+              ({ status }) => status === "running"
+            )
+          )
+        })
+    )
+
+    it.effect(
+      "looks afresh at a copy reported anew after the bucket refused the old report",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* reported()
+          bucket.objects.set(objectKey, { status: 403 })
+          yield* checkBucketCopiesEffect()
+
+          // Reported anew at another size, and now readable at it, after
+          // its deadline.
+          yield* reported(10, undefined, { bytes: uploaded + 1024 })
+          bucket.objects.set(objectKey, uploaded + 1024)
+          yield* TestClock.adjust("61 minutes")
+          yield* checkBucketCopiesEffect()
+
+          assert.strictEqual(
+            (yield* state).copies.get(bucketCopy)?.status,
+            "available"
+          )
+        })
+    )
+
+    it.effect(
       "looks for a copy behind others the bucket refuses to show",
       () =>
         Effect.gen(function* () {
