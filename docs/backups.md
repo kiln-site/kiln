@@ -375,26 +375,34 @@ The step waits for its task to arrive and finish. What that leaves:
 - With no Hearth connected, or none that takes it, the step fails and says
   why; the Relay makes nothing in its place. The schedule's other steps
   follow its `continueOnFailure`.
-- Hearth decides as its schedule reads when it is asked, as a Relay runs
-  the schedule it last had: a change saved in that moment applies from the
-  next run. While the target is being deployed or deleted, or the
-  destination or schedule saved, it refuses (`onlyIfFree`), saying what, as
-  it refuses a person.
+- A run is planned whole when it starts, so the Relay names the schedule
+  revision it started with. If the schedule has been saved since, Hearth
+  refuses, checking again once it holds the schedule's lane: a run never
+  takes a backup by settings it wasn't planned under, and the next run
+  takes the saved ones. What isn't the schedule's, a target's limits or
+  which volumes an App uses, is read as Hearth is asked, as a Relay reads
+  them from the schedule it last had. While the target is being deployed or
+  deleted, or the destination or schedule saved, Hearth refuses
+  (`onlyIfFree`), saying what, as it refuses a person.
 - Hearth takes all of what one ask names or none: a volume an App has let
   go of since the schedule was sent refuses the rest with it, until the
   schedule is sent again.
 - A step waits 30 seconds for Hearth's answer and three minutes for its
   task. Hearth goes on with one it started, so a backup can be taken and
-  turn up after its step failed.
+  turn up after its step failed; a step with no answer says Hearth may
+  still take it.
 - A stopped batch's tasks are sent together, and the Relay waits five
   seconds for a scheduled batch to be whole (see
   [Formats and live consistency](#formats-and-live-consistency)). Any not
   sent then go on Hearth's next pass, a task after another; a batch still
   short after the wait is failed whole, with nothing stopped.
-- A scheduled bucket backup already queued when the Relay updates from a
-  release that sent keys still uploads with the keys in its own task, but
-  Hearth doesn't record it, since it never chose that object. The update
-  drops the keys from every stored schedule (migration 51).
+- Updating from a release that sent keys: migration 51 drops them from
+  every stored schedule, and fails a scheduled bucket backup still waiting
+  to be made with them, removing its keys too, since Hearth wouldn't record
+  a file it never chose. One that already finished but that Hearth hadn't
+  read before it updated stays in the bucket unrecorded. Let schedules that
+  back up to a bucket finish and be read before updating, then rotate the
+  bucket's keys.
 
 A step that backs up an App backs up each volume it uses, each admitted on its own. It's taken live,
 or stopped once for all of them as a batch; saving a stopped one takes

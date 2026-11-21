@@ -2014,7 +2014,11 @@ const migrations = SqliteMigrator.fromRecord({
   }),
   // A schedule's full backups to a bucket are Hearth's to take, so a
   // schedule no longer comes with the bucket's keys, and the ones stored
-  // schedules came with are dropped.
+  // schedules came with are dropped. So are those of a scheduled backup to
+  // a bucket still waiting to be made with them: Hearth no longer records
+  // one it didn't take, so made now it would be a file in the bucket that
+  // nothing restores or deletes. It fails instead, saying why; the
+  // schedule's next run is Hearth's to take.
   "51_schedule_bucket_keys": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     const schedules = yield* sql<{ id: string; json: string }>`
@@ -2028,8 +2032,44 @@ const migrations = SqliteMigrator.fromRecord({
         WHERE schedule_id = ${row.id}
       `
     }
+    const waiting = yield* sql<{ id: string; json: string }>`
+      SELECT task_id AS id, input_json AS json FROM relay_backup_tasks
+      WHERE kind = 'create' AND status IN ('queued', 'running')
+    `
+    const now = Date.now()
+    for (const row of waiting) {
+      const kept = withoutTaskBucketKeys(row.json)
+      if (kept === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks
+        SET input_json = ${kept}, status = 'failed',
+            error = ${"Taken with the bucket's keys before Kiln updated; its schedule's next run is Hearth's to take"},
+            finished_at = ${now}, updated_at = ${now}
+        WHERE task_id = ${row.id}
+      `
+    }
   }),
 })
+
+// A waiting create's input without the keys of the bucket it was to be
+// uploaded to, or null for one that held none.
+function withoutTaskBucketKeys(inputJson: string): string | null {
+  const input = Result.getOrNull(
+    Result.try(() => JSON.parse(inputJson) as unknown)
+  )
+  if (!Predicate.isObject(input) || !Predicate.isObject(input.destination)) {
+    return null
+  }
+  const destination = input.destination
+  if (
+    destination.kind !== "s3" ||
+    !("secretAccessKey" in destination || "accessKeyId" in destination)
+  ) {
+    return null
+  }
+  const { accessKeyId: _, secretAccessKey: __, ...kept } = destination
+  return JSON.stringify({ ...input, destination: kept })
+}
 
 // A stored schedule without what it held of the buckets its full backups go
 // to, or null for one that held nothing of them. Anything unreadable is

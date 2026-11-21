@@ -11,6 +11,7 @@ import { afterAll, vi } from "vite-plus/test"
 
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
+import { createAppRecordEffect } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { reconcileRelayBackups } from "@/lib/backup-reconciliation"
 import { listPersistedRelays } from "@/lib/relay-registry"
@@ -31,8 +32,12 @@ import { insertBackup, insertRelay, selectRows } from "@/test/seed"
 const relay = vi.hoisted(() => ({
   // How often Hearth has asked what backups it holds.
   listed: 0,
+  // Something that happens while Hearth reads the Relay's volumes.
+  meanwhile: null as null | (() => Promise<void>),
   schedules: [] as Array<unknown>,
   tasks: new Map<string, Record<string, unknown>>(),
+  // The Kiln volumes it has, each with the Apps that use it.
+  volumes: [] as Array<{ id: string; users: Array<string> }>,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
@@ -45,6 +50,36 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         acknowledgedRevision: projection.revision,
         nextRunAt: null,
         scheduleId: projection.id,
+      }
+    }
+    // It takes whichever volumes an App's configuration says it mounts.
+    if (operation === "app.volumes.write") return {}
+    if (operation === "relay.volumes.read") {
+      const meanwhile = relay.meanwhile
+      relay.meanwhile = null
+      await meanwhile?.()
+      return {
+        filesAvailable: false,
+        measuring: false,
+        missing: [],
+        protection: { ready: true, reason: null },
+        uncovered: [],
+        volumes: relay.volumes.map(({ id, users }) => ({
+          createdAt: null,
+          dockerName: `kiln-${id.slice(0, 8)}`,
+          id,
+          kind: "kiln",
+          mountpoint: null,
+          mounts: [],
+          name: "media",
+          owner: null,
+          sizeBytes: null,
+          users: users.map((appId) => ({
+            appId,
+            configured: true,
+            mounted: false,
+          })),
+        })),
       }
     }
     if (operation === "backup.task.list") {
@@ -171,8 +206,10 @@ const destination = (enabled: boolean) =>
 // up to it, saved as Hearth keeps it and sent to that Relay.
 const seed = Effect.gen(function* () {
   yield* resetDatabase
+  relay.meanwhile = null
   relay.schedules.length = 0
   relay.tasks.clear()
+  relay.volumes = []
   yield* insertRelay(relayId, { enabled: 1 })
   yield* insertRelay(otherRelayId, { enabled: 1 })
   yield* destination(true)
@@ -199,6 +236,7 @@ const ask = (
     actionId: string
     batchId: string
     members: Array<Member>
+    revision: number
   }> = {}
 ) =>
   Effect.promise(() =>
@@ -206,6 +244,7 @@ const ask = (
       actionId: asked.actionId ?? toBucket,
       ...(asked.batchId ? { batchId: asked.batchId } : {}),
       members: asked.members ?? [{ targetId: server, targetKind: "instance" }],
+      revision: asked.revision ?? schedule.revision,
       scheduledAt: at,
       scheduleId,
     })
@@ -496,6 +535,81 @@ describeMysql("A schedule's backups to a bucket", () => {
             relay_id: otherRelayId,
           })
           assert.lengthOf(yield* selectRows("backup_task"), 0)
+        }),
+      60_000
+    )
+
+    it.effect(
+      "takes nothing for a run started before its schedule was saved",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          // The run was started under revision 1; the schedule is now 2.
+          const database = yield* Database
+          yield* database.execute(
+            "test.save",
+            `UPDATE kiln_schedule SET revision = 2 WHERE id = ?`,
+            [scheduleId]
+          )
+
+          const stale = yield* ask(relayId, { revision: 1 })
+
+          assert.isFalse(stale.taken)
+          assert.lengthOf(yield* backups(), 0)
+
+          // Saved in the moment Hearth reads the step, before it holds the
+          // schedule's lane: refused once it does.
+          yield* seed
+          const app = "5".repeat(12)
+          const media = "6".repeat(40)
+          relay.volumes = [{ id: media, users: [app] }]
+          yield* createAppRecordEffect({
+            appId: app,
+            createdBy: "owner",
+            mounts: [
+              {
+                id: "mount0media",
+                readOnly: false,
+                service: null,
+                source: { type: "volume", volumeId: media },
+                target: "/data",
+              },
+            ],
+            name: "Site",
+            relayId,
+          })
+          const appStep = "99999999-9999-4999-8999-999999999999"
+          const appSchedule: ScheduleDefinition = {
+            ...schedule,
+            actions: [{ ...schedule.actions[0]!, id: appStep }],
+            id: "88888888-8888-4888-8888-888888888888",
+            targets: [{ id: app, kind: "app", name: "Site", relayId }],
+          }
+          yield* database.transaction("test.schedule", (transaction) =>
+            insertSchedule(transaction, appSchedule, "owner", at)
+          )
+          relay.meanwhile = () =>
+            Effect.runPromise(
+              database.execute(
+                "test.save",
+                `UPDATE kiln_schedule SET revision = revision + 1 WHERE id = ?`,
+                [appSchedule.id]
+              )
+            ).then(() => undefined)
+
+          const saved = yield* Effect.promise(() =>
+            takeScheduledBucketBackups(relayId, {
+              actionId: appStep,
+              batchId,
+              members: [{ targetId: media, targetKind: "volume" }],
+              revision: appSchedule.revision,
+              scheduledAt: at,
+              scheduleId: appSchedule.id,
+            })
+          )
+
+          assert.isFalse(saved.taken)
+          assert.lengthOf(yield* backups(), 0)
         }),
       60_000
     )

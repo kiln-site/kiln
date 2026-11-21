@@ -590,6 +590,12 @@ export const scheduledBucketBackupRequestSchema = z
       )
       .min(1)
       .max(SCHEDULED_APP_BACKUP_GROUP_MAX),
+    /**
+     * The revision of the schedule the run was started with. A run is
+     * planned whole when it starts, so one whose schedule was saved since is
+     * refused rather than taken by settings it wasn't planned under.
+     */
+    revision: z.number().int().positive(),
     // A time a `Date` holds, which names the backup.
     scheduledAt: z.number().int().nonnegative().max(8_640_000_000_000_000),
     scheduleId: z.uuid(),

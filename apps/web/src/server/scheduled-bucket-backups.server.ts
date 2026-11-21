@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import type { RowDataPacket } from "mysql2/promise"
 
 import type { BackupArtifactKind, BackupTargetKind } from "@workspace/contracts"
 import {
@@ -14,11 +15,13 @@ import {
   reserveScheduledBucketBackupsEffect,
   type BackupDispatch,
 } from "@/effect/backups"
+import { Database } from "@/effect/database"
 import { BackupStorageError } from "@/effect/errors"
 import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import { backupStorageSettingsKey, backupTargetKey } from "@/lib/backup-lanes"
+import { databaseTable } from "@/lib/database-config"
 import { publishBackupChanges } from "@/lib/backup-realtime.server"
 import {
   dispatchBackupTask,
@@ -88,6 +91,9 @@ const admit = Effect.fn("ScheduledBackups.admit")(function* ({
     )
   }
   const { action, scheduleName, storageId } = step
+  if (step.revision !== request.revision) {
+    return yield* refuse(stalePlan)
+  }
   const stopped = action.consistency === "stopped"
   const batchId = request.batchId ?? null
   const members = new Map(
@@ -162,6 +168,9 @@ const admit = Effect.fn("ScheduledBackups.admit")(function* ({
   return { backups, relay, storageId }
 })
 
+const stalePlan =
+  "This schedule was saved after the run started; its next run is taken as saved"
+
 const takeBackups = operation<Ask>()({
   name: "backup.scheduled.take",
   doing: "Taking a schedule's backups",
@@ -183,17 +192,34 @@ const takeBackups = operation<Ask>()({
     ].map((key) => shared(key)),
     shared(backupStorageSettingsKey(context.storageId)),
   ],
+  // Checked again under the schedule's lane, which a save takes whole: one
+  // saved after it was first read, before its lanes were free, is refused.
+  // The step as first read is otherwise what is taken; a destination is
+  // checked again as it is reserved.
   run: ({ context, input }) =>
-    reserveScheduledBucketBackupsEffect({
-      backups: context.backups,
-      relayId: input.relayId,
-      storageId: context.storageId,
-    }).pipe(
-      Effect.as({
+    Effect.gen(function* () {
+      const database = yield* Database
+      const [schedule] = yield* database.queryRows<
+        { revision: number } & RowDataPacket
+      >(
+        "backup_scheduled_take_revision",
+        `SELECT revision FROM ${databaseTable("schedule")}
+          WHERE id = ? AND deleted_at IS NULL`,
+        [input.request.scheduleId]
+      )
+      if (schedule?.revision !== input.request.revision) {
+        return yield* refuse(stalePlan)
+      }
+      yield* reserveScheduledBucketBackupsEffect({
+        backups: context.backups,
+        relayId: input.relayId,
+        storageId: context.storageId,
+      })
+      return {
         backupIds: context.backups.map(({ backupId }) => backupId),
         relay: context.relay,
-      })
-    ),
+      }
+    }),
   publish: ({ context, input }) =>
     publishBackupChanges(
       input.relayId,

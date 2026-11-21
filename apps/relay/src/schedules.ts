@@ -935,6 +935,7 @@ export class ScheduleManager {
         await this.#options.takeBucketBackups({
           actionId: action.id,
           members: [member],
+          revision: schedule.revision,
           scheduledAt,
           scheduleId: schedule.id,
         })
@@ -1160,6 +1161,7 @@ export class ScheduleManager {
         actionId: action.id,
         batchId,
         members: asked,
+        revision: schedule.revision,
         scheduledAt,
         scheduleId: schedule.id,
       })
@@ -1676,6 +1678,6 @@ export async function askHearthForBucketBackups(
   throw new Error(
     refused && !refused.taken
       ? refused.reason
-      : "Hearth didn't answer to take this backup, and only it holds the bucket's keys"
+      : "Hearth didn't answer in time to take this backup; it may still take it and send it here"
   )
 }

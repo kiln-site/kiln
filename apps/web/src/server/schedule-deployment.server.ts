@@ -701,7 +701,7 @@ export async function scheduledBucketBackupStep(
 ) {
   const [[schedules], [actions], [targets]] = await Promise.all([
     databasePool.query<ScheduleRow[]>(
-      `SELECT id, name, created_by
+      `SELECT id, name, created_by, revision
          FROM ${databaseTable("schedule")}
         WHERE id = ? AND deleted_at IS NULL`,
       [scheduleId]
@@ -756,6 +756,7 @@ export async function scheduledBucketBackupStep(
   return step?.type === "backup"
     ? {
         action: step,
+        revision: schedule.revision,
         scheduleName: schedule.name,
         storageId: action.destination.storageId,
       }
