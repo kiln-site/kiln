@@ -437,7 +437,13 @@ The step waits for its task to arrive and finish. What that leaves:
   for it until the tasks it made are first sent; a later pass over the
   Relay's backups runs outside it. One that waits twenty seconds for a
   turn, or arrives with twelve already waiting, is refused, saying Hearth
-  is busy, and the schedule's next run is taken as usual.
+  is busy, and the schedule's next run is taken as usual. One the Relay
+  gives up on stops waiting; one that has its turn is taken and sent
+  whether or not the Relay still hears. Asked again for a run it already
+  took, Hearth sends nothing new, and a run asked again as part of another
+  batch than it was taken in is refused. Hearth goes over one Relay's
+  backups one pass at a time: asked for while a pass runs, one more
+  follows it.
 - The owning Relay still says which run is due and what of it: a run time
   and the members of a batch are its word, as its own schedule is. What
   keyed IDs stop is another Relay's report, or this one's, claiming the IDs

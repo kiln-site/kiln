@@ -39,6 +39,11 @@ const relay = vi.hoisted(() => ({
   listed: 0,
   // Holds every task sent to it on its way, until opened.
   arriving: null as null | Promise<void>,
+  // How long listing its backups takes, and how many listings it has had
+  // under way at once, at most.
+  listingMs: 0,
+  listing: 0,
+  mostListing: 0,
   // Something that happens while Hearth reads the Relay's volumes.
   meanwhile: null as null | (() => Promise<void>),
   schedules: [] as Array<unknown>,
@@ -92,6 +97,12 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     if (operation === "backup.task.list") {
       relay.listed += 1
+      relay.listing += 1
+      relay.mostListing = Math.max(relay.mostListing, relay.listing)
+      if (relay.listingMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, relay.listingMs))
+      }
+      relay.listing -= 1
       return [...relay.tasks.values()].map((task) => ({
         ...task,
         error: "This Relay makes no backups",
@@ -215,6 +226,9 @@ const destination = (enabled: boolean) =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.arriving = null
+  relay.listingMs = 0
+  relay.listing = 0
+  relay.mostListing = 0
   relay.meanwhile = null
   relay.schedules.length = 0
   relay.tasks.clear()
@@ -642,6 +656,94 @@ describeMysql("A schedule's backups to a bucket", () => {
           assert.isTrue((yield* run(6)).taken)
           yield* passesRun
         }).pipe(inTestTime),
+      60_000
+    )
+
+    it.effect(
+      "forgets an ask the Relay gave up on while it waited for a turn",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          let arrive = () => {}
+          relay.arriving = new Promise((resolve) => {
+            arrive = resolve
+          })
+          const run = (minute: number, signal?: AbortSignal) =>
+            Effect.promise(() =>
+              takeScheduledBucketBackups(
+                relayId,
+                {
+                  actionId: toBucket,
+                  members: [{ targetId: server, targetKind: "instance" }],
+                  revision: schedule.revision,
+                  scheduledAt: at + minute * 60_000,
+                  scheduleId,
+                },
+                signal
+              ).catch(() => null)
+            )
+          yield* Effect.forEach([1, 2, 3, 4], (minute) => run(minute))
+
+          // A fifth waits, and the Relay gives up on it before a turn frees.
+          const gaveUp = new AbortController()
+          const fifth = Effect.runPromise(run(5, gaveUp.signal))
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0))
+          gaveUp.abort()
+          yield* Effect.promise(() => fifth)
+          arrive()
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_000))
+          yield* passesRun
+
+          // Its turn came, and it took nothing.
+          assert.lengthOf(yield* backups(), 4)
+        }).pipe(inTestTime),
+      60_000
+    )
+
+    it.effect(
+      "goes over a Relay's backups once at a time, however often takes ask it to",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          // Each look at the Relay's backups takes five seconds.
+          relay.listingMs = 5_000
+          for (const minute of [1, 2, 3]) {
+            yield* ask(relayId, { scheduledAt: at + minute * 60_000 })
+            yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_500))
+          }
+          yield* passesRun
+
+          assert.strictEqual(relay.mostListing, 1)
+        }).pipe(inTestTime),
+      60_000
+    )
+
+    it.effect("takes no run again as part of another batch", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const both: Array<Member> = [
+          { targetId: volume, targetKind: "volume" },
+          { targetId: database, targetKind: "database" },
+        ]
+        assert.isTrue(
+          (yield* ask(relayId, {
+            actionId: stoppedToBucket,
+            members: both,
+            together: true,
+          })).taken
+        )
+
+        // The same run asked for again with only the volume: its backup
+        // would leave the batch it was taken in.
+        const split = yield* ask(relayId, {
+          actionId: stoppedToBucket,
+          members: [both[0]!],
+          together: true,
+        })
+
+        assert.isFalse(split.taken)
+        assert.lengthOf(yield* backups(), 2)
+      }).pipe(inTestTime),
       60_000
     )
 
