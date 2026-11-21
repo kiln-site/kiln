@@ -120,11 +120,11 @@ export interface MigratedKind {
   readonly permissions: {
     /** On the old one, to copy it at all. */
     readonly copy: ReadonlyArray<AccessPermission>
-    /** On the Relay its copy goes to. */
-    readonly create: AccessPermission
+    /** On the Relay its copy goes to, to make it there and fill it. */
+    readonly create: ReadonlyArray<AccessPermission>
     readonly delete: AccessPermission
-    /** To hand its domains and web routes over. */
-    readonly network: AccessPermission
+    /** To hand its domains and web routes over, for a kind with either. */
+    readonly network?: AccessPermission
   }
   /** Reserves the copy's ID, under the key it is made with. */
   readonly reserveId: (

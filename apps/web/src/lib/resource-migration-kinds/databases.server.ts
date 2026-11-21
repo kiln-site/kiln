@@ -43,7 +43,7 @@ export const databases: MigratedKind = {
     // Its Relay dumps and restores it as backups do, with no login from
     // whoever asks, so copying one takes what taking a backup off it does.
     copy: ["database.read", "backup.create", "backup.download"],
-    create: "database.create",
+    create: ["database.create"],
     delete: "database.delete",
     network: "database.network.write",
   },

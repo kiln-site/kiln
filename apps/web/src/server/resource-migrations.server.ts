@@ -144,17 +144,15 @@ export async function previewResourceMigrationHandler(
   ])
   const destinations = await Promise.all(
     relays.map(async (candidate) => {
-      const allowed = (
-        await resolveScopeAuthorization({
-          scope: {
-            relayId: candidate.id,
-            resourceId: candidate.id,
-            resourceType: "relay",
-          },
-          user,
-        })
-      ).allows(kind.permissions.create)
-      if (!allowed) return null
+      const there = await resolveScopeAuthorization({
+        scope: {
+          relayId: candidate.id,
+          resourceId: candidate.id,
+          resourceType: "relay",
+        },
+        user,
+      })
+      if (!kind.permissions.create.every(there.allows)) return null
       const [problems, takenNames, space] = await Promise.all([
         transferProblems(relay, candidate, roots),
         kind.takenNames(candidate, user.id),
@@ -176,6 +174,7 @@ export async function previewResourceMigrationHandler(
       } satisfies ResourceMigrationDestination
     })
   )
+  const { network } = kind.permissions
   const allowed = {
     backup: authorization.allows("backup.create"),
     copyAccess: authorization.allows("access.read"),
@@ -183,7 +182,7 @@ export async function previewResourceMigrationHandler(
       authorization.allows(kind.permissions.delete) &&
       authorization.allows("backup.create"),
     linkBackups: authorization.allows("backup.download"),
-    network: authorization.allows(kind.permissions.network),
+    network: network !== undefined && authorization.allows(network),
     power:
       authorization.allows("instance.power.stop") &&
       authorization.allows("instance.power.start"),
@@ -191,7 +190,7 @@ export async function previewResourceMigrationHandler(
   }
   const counts = await kind.handOverCounts(relay, data.id, user, {
     backups: authorization.allows("backup.read"),
-    network: authorization.allows(kind.permissions.network),
+    network: allowed.network,
   })
   return {
     ...counts,

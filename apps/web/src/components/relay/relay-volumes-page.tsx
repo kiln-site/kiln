@@ -4,6 +4,7 @@ import { sortFn_basic } from "@tanstack/react-table"
 import type { RelayVolume } from "@workspace/contracts"
 import {
   Archive,
+  ArrowRightLeft,
   EllipsisVertical,
   HardDrive,
   LoaderCircle,
@@ -80,6 +81,7 @@ import { volumeDeletionsQueryOptions } from "@/lib/resource-deletion-queries"
 
 type VolumeDialog =
   | { kind: "back-up"; volume: RelayVolume }
+  | { kind: "copy"; volume: RelayVolume }
   | { kind: "delete"; volume: RelayVolume }
   | { kind: "rename"; volume: RelayVolume }
   | null
@@ -106,6 +108,15 @@ const DeleteVolumeDialog = React.lazy(() =>
 const ResourceBackupDialog = React.lazy(() =>
   import("@/components/backups/resource-backup-dialogs").then((module) => ({
     default: module.ResourceBackupDialog,
+  }))
+)
+
+const loadMigrationDialog = () =>
+  import("@/components/resource-migration-dialog")
+const warmMigrationDialog = () => void loadMigrationDialog()
+const ResourceMigrationDialog = React.lazy(() =>
+  loadMigrationDialog().then((module) => ({
+    default: module.ResourceMigrationDialog,
   }))
 )
 
@@ -166,6 +177,21 @@ export function RelayVolumesPage() {
             relayId={relay.id}
             volume={dialog.volume}
             onClose={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "copy" && dialog.volume.id ? (
+          <ResourceMigrationDialog
+            open
+            initialMode="duplicate"
+            resource={{
+              id: dialog.volume.id,
+              kind: "volume",
+              name: dialog.volume.name,
+              relayId: relay.id,
+            }}
+            onOpenChange={(open) => {
+              if (!open) closeDialog()
+            }}
           />
         ) : null}
         {dialog?.kind === "back-up" && dialog.volume.id ? (
@@ -719,6 +745,19 @@ const VolumeActions = React.memo(function VolumeActions({
           onClick={() => onDialog({ kind: "back-up", volume })}
         >
           <Archive />
+        </VolumeAction>
+      ) : (
+        <VolumeActionGap />
+      )}
+      {/* Copying one is backing it up and restoring it into a new one. */}
+      {canBackUp && canManage ? (
+        <VolumeAction
+          label={`Move or duplicate ${volume.name}`}
+          tooltip="Move or duplicate"
+          onClick={() => onDialog({ kind: "copy", volume })}
+          onWarm={warmMigrationDialog}
+        >
+          <ArrowRightLeft />
         </VolumeAction>
       ) : (
         <VolumeActionGap />

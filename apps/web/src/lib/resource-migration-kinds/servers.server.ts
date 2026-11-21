@@ -60,7 +60,7 @@ export const servers: MigratedKind = {
   copiedRunning: false,
   permissions: {
     copy: ["instance.files.read", "instance.configuration.read"],
-    create: "instance.create",
+    create: ["instance.create"],
     delete: "instance.delete",
     network: "instance.network.write",
   },
