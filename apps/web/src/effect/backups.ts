@@ -3471,6 +3471,7 @@ export const waitingBucketCopiesEffect = Effect.fn(
     bytes: number | string | null
     object_key: string | null
     relay_id: string
+    place: number | string
     reserved_bytes: number | string | null
     seen_by: number | string | null
     storage_id: string
@@ -3523,7 +3524,12 @@ export const waitingBucketCopiesEffect = Effect.fn(
     [input.now, ...input.resting, input.perDestination, input.limit]
   )
   const rows = [...late, ...due]
-  return rows.map((row) => ({
+  // More are waiting than this look took, of a destination or in all.
+  const more =
+    late.length === input.limit ||
+    due.length === input.limit ||
+    due.some((row) => Number(row.place) === input.perDestination)
+  const copies = rows.map((row) => ({
     artifactId: row.artifact_id,
     backupId: row.backup_id,
     late:
@@ -3535,6 +3541,7 @@ export const waitingBucketCopiesEffect = Effect.fn(
     reportedBytes: nullableDatabaseNumber(row.bytes, "backup artifact bytes"),
     storageId: row.storage_id,
   }))
+  return { copies, more }
 })
 
 /**

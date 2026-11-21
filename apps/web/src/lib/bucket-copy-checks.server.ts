@@ -26,6 +26,9 @@ const COPIES_PER_LOOK = 100
 // And of one destination per look, so a bucket that can't be asked never
 // fills one.
 const COPIES_PER_DESTINATION = 10
+// Looks one check makes, one after another, while each settles something
+// and leaves more waiting.
+const LOOKS_PER_CHECK = 50
 // A bucket that can't be asked is left alone a while, longer each time.
 const FIRST_BACKOFF_MS = 30_000
 const LONGEST_BACKOFF_MS = 10 * 60_000
@@ -37,6 +40,8 @@ const backoff = new Map<string, { delayMs: number; until: number }>()
 // Why the last look at a copy didn't settle it, for its failure at the
 // deadline.
 const lastAnswer = new Map<string, string>()
+
+const unsettled = { seen: false, settled: false }
 
 const failed = (code: string, reason: string) =>
   ({ code, kind: "failed", reason }) as const
@@ -51,13 +56,24 @@ const oneLook = Semaphore.makeUnsafe(1)
  */
 export const checkBucketCopiesEffect = Effect.fn("BucketCopies.check")(
   function* () {
-    yield* oneLook.withPermits(1)(lookOnce)
+    yield* oneLook.withPermits(1)(
+      Effect.gen(function* () {
+        // Another bounded look follows at once while one settled something
+        // and left more waiting, so a backlog of healthy copies is all seen
+        // before its deadline; it stops once a look settles nothing, as
+        // when only buckets left alone remain.
+        for (let round = 0; round < LOOKS_PER_CHECK; round += 1) {
+          const { more, settled } = yield* lookOnce
+          if (!more || settled === 0) return
+        }
+      })
+    )
   }
 )
 
 const lookOnce = Effect.gen(function* () {
   const now = yield* Clock.currentTimeMillis
-  const waiting = yield* waitingBucketCopiesEffect({
+  const { copies: waiting, more } = yield* waitingBucketCopiesEffect({
     limit: COPIES_PER_LOOK,
     perDestination: COPIES_PER_DESTINATION,
     now,
@@ -65,7 +81,7 @@ const lookOnce = Effect.gen(function* () {
       now < until ? [storageId] : []
     ),
   })
-  yield* Effect.forEach(
+  return yield* Effect.forEach(
     waiting,
     (copy) =>
       Effect.gen(function* () {
@@ -84,7 +100,10 @@ const lookOnce = Effect.gen(function* () {
                 if (settled) publishBackupChange(copy.relayId, copy.backupId)
               })
             ),
-            Effect.as(outcome.kind === "seen")
+            Effect.map((settled) => ({
+              seen: settled && outcome.kind === "seen",
+              settled,
+            }))
           )
         if (copy.late) {
           return yield* settle(
@@ -134,7 +153,7 @@ const lookOnce = Effect.gen(function* () {
               ? "The bucket refused to let Hearth see this copy (403): it may be missing, or Hearth's key may not be allowed to read it"
               : "Hearth couldn't reach the bucket to see this copy"
           )
-          return false
+          return unsettled
         }
         backoff.delete(copy.storageId)
         const { found } = answer
@@ -165,19 +184,23 @@ const lookOnce = Effect.gen(function* () {
           logException(cause, {
             operation: "BucketCopies.check",
             attributes: { "backup.id": copy.backupId },
-          }).pipe(Effect.as(false))
+          }).pipe(Effect.as(unsettled))
         )
       ),
     { concurrency: LOOKS_AT_ONCE }
   ).pipe(
-    Effect.tap((seen) =>
+    Effect.tap((looked) =>
       // A backup that now counts can take its target past its retention.
-      seen.some(Boolean)
+      looked.some(({ seen }) => seen)
         ? Effect.promise(() => import("@/lib/backup-maintenance.server")).pipe(
             Effect.map(({ requestBackupRetention }) => requestBackupRetention())
           )
         : Effect.void
-    )
+    ),
+    Effect.map((looked) => ({
+      more,
+      settled: looked.filter(({ settled }) => settled).length,
+    }))
   )
 })
 

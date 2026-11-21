@@ -186,8 +186,11 @@ there, it fails, saying why. A copy on the Relay's own disk counts at once,
 so a backup with one is available while its bucket copy waits; one whose
 delete fails, or ends with its bucket copy kept, while that copy waits is
 running again, not failed. A look takes at most ten of one destination's
-copies, so a bucket that can't be asked never fills one, and a bucket Hearth
-can't ask is left alone a while, longer each time up to ten minutes. A
+copies, so a bucket that can't be asked never fills one, and another look
+follows at once while one settled something and left more waiting, so a
+backlog of healthy copies is seen well inside its hour; a check stops once
+a look settles nothing. A bucket Hearth can't ask is left alone a while,
+longer each time up to ten minutes. A
 copy still unseen an hour after it first waited, by Hearth's clock
 (`seen_by`, migration 95), fails with the last answer Hearth had: a refusal
 (403) says the copy may be missing or Hearth's key not allowed to read it.

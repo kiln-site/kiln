@@ -558,6 +558,61 @@ describeMysql("Bucket copies Hearth looks for", () => {
         })
     )
 
+    it.effect("sees a backlog of one destination's copies in one check", () =>
+      Effect.gen(function* () {
+        yield* seed()
+        // Ninety backups' bucket copies, all uploaded and all there.
+        for (let index = 0; index < 90; index += 1) {
+          const id = `${String(seeded).padStart(8, "0")}-4444-4000-8000-${String(index).padStart(12, "0")}`
+          yield* insertBackup(id, {
+            backup_mode: "full",
+            relay_id: relayId,
+            status: "running",
+            storage_id: storageId,
+            target_id: target.id,
+          })
+          yield* insertRows("backup_artifact", {
+            id: id.replace("-4444-", "-5555-"),
+            backup_id: id,
+            bytes: uploaded,
+            destination_key: storageId,
+            object_key: `${objectKey}.${index}`,
+            seen_by: now + 60 * 60_000,
+            status: "running",
+            storage_id: storageId,
+            created_at: now,
+            updated_at: now,
+          })
+          yield* insertRows("backup_task", {
+            id: id.replace("-4444-", "-6666-"),
+            backup_id: id,
+            task_kind: "create",
+            status: "succeeded",
+            created_at: now,
+            updated_at: now,
+          })
+          bucket.objects.set(`${objectKey}.${index}`, uploaded)
+        }
+
+        // One check, as one wake-up makes, sees them all.
+        yield* checkBucketCopiesEffect()
+
+        const copies = (yield* selectRows<{ status: string; storage_id: string | null }>(
+          "backup_artifact"
+        )).filter(({ storage_id }) => storage_id === storageId)
+        assert.isTrue(copies.length >= 90)
+        assert.deepStrictEqual(
+          [...new Set(copies.map(({ status }) => status))].sort(),
+          // The seeded backup's own copy wasn't reported, so it never waited.
+          ["available", "running"]
+        )
+        assert.strictEqual(
+          copies.filter(({ status }) => status === "available").length,
+          90
+        )
+      })
+    )
+
     it.effect("keeps a backup waiting whose delete failed", () =>
       Effect.gen(function* () {
         yield* seed()
