@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto"
 
-import { Effect, Option, Schema, Semaphore } from "effect"
+import { Effect, Exit, Option, Schema, Scope, Semaphore } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import type { BackupArtifactKind, BackupTargetKind } from "@workspace/contracts"
@@ -333,7 +333,6 @@ export function takeScheduledBucketBackups(
   signal?: AbortSignal
 ): Promise<ScheduledBucketBackupReply> {
   const turns = turnsOf(relayId)
-  const release = Semaphore.release(turns, 1)
   return runAppEffect(
     "ScheduledBackups.take",
     Effect.uninterruptibleMask((restore) =>
@@ -341,18 +340,26 @@ export function takeScheduledBucketBackups(
         const waiting = takesWaiting.get(relayId) ?? 0
         if (waiting >= takesWaitingPerRelay) return busy
         takesWaiting.set(relayId, waiting + 1)
+        // The turn belongs to a scope of the take's own, so one granted as
+        // the wait times out, or as the Relay gives up, is still returned
+        // when the scope closes: on refusal, on failure, or once its tasks
+        // are sent.
+        const held = yield* Scope.make()
+        const release = Scope.close(held, Exit.void)
         const turn = yield* restore(
-          Semaphore.take(turns, 1).pipe(
+          Semaphore.takeScoped(turns, 1).pipe(
+            Scope.provide(held),
             Effect.timeoutOption(`${takeTurnWaitMs} millis`)
           )
         ).pipe(
+          Effect.onInterrupt(() => release),
           Effect.ensuring(
             Effect.sync(() =>
               takesWaiting.set(relayId, (takesWaiting.get(relayId) ?? 1) - 1)
             )
           )
         )
-        if (Option.isNone(turn)) return busy
+        if (Option.isNone(turn)) return yield* release.pipe(Effect.as(busy))
         return yield* runOperation(
           takeBackups,
           { relayId, request },
