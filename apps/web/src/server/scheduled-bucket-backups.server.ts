@@ -295,13 +295,22 @@ const sendTaken = (relay: PersistedRelay, backupIds: ReadonlyArray<string>) =>
     )
   )
 
-// How many takes of one Relay Hearth works on at once, and how long one
-// waits for its turn: the Relay waits 30 s for an answer. A take holds its
-// turn from before it reads anything for it until the tasks it made are
-// sent, so one Relay's asks can't swamp Hearth however many it sends.
+// How many takes of one Relay Hearth works on at once, how many more wait
+// for a turn, and how long one waits: the Relay waits 30 s for an answer.
+// A take holds its turn from before it reads anything for it until the
+// tasks it made are first sent (a later pass over the Relay's backups runs
+// outside it); one past those waiting is refused at once. So one Relay's
+// asks can't swamp Hearth, however many it sends.
 const takesPerRelay = 4
+const takesWaitingPerRelay = 12
 const takeTurnWaitMs = 20_000
 const takeTurns = new Map<string, Semaphore.Semaphore>()
+const takesWaiting = new Map<string, number>()
+const busy = {
+  reason:
+    "Hearth is busy with this Relay's other scheduled backups; its next run is taken as usual",
+  taken: false,
+} satisfies ScheduledBucketBackupReply
 const turnsOf = (relayId: string) => {
   let turns = takeTurns.get(relayId)
   if (!turns) {
@@ -325,16 +334,18 @@ export function takeScheduledBucketBackups(
   return runAppEffect(
     "ScheduledBackups.take",
     Effect.gen(function* () {
+      const waiting = takesWaiting.get(relayId) ?? 0
+      if (waiting >= takesWaitingPerRelay) return busy
+      takesWaiting.set(relayId, waiting + 1)
       const turn = yield* Semaphore.take(turns, 1).pipe(
-        Effect.timeoutOption(`${takeTurnWaitMs} millis`)
+        Effect.timeoutOption(`${takeTurnWaitMs} millis`),
+        Effect.ensuring(
+          Effect.sync(() =>
+            takesWaiting.set(relayId, (takesWaiting.get(relayId) ?? 1) - 1)
+          )
+        )
       )
-      if (Option.isNone(turn)) {
-        return {
-          reason:
-            "Hearth is busy with this Relay's other scheduled backups; its next run is taken as usual",
-          taken: false,
-        } satisfies ScheduledBucketBackupReply
-      }
+      if (Option.isNone(turn)) return busy
       return yield* runOperation(
         takeBackups,
         { relayId, request },

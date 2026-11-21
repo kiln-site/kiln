@@ -607,7 +607,7 @@ describeMysql("A schedule's backups to a bucket", () => {
     )
 
     it.effect(
-      "works on a few of one Relay's takes at once, and refuses one that waits too long",
+      "works on a few of one Relay's takes at once, lets a few more wait, and refuses the rest",
       () =>
         Effect.gen(function* () {
           yield* seed
@@ -623,12 +623,17 @@ describeMysql("A schedule's backups to a bucket", () => {
           const four = yield* Effect.forEach([1, 2, 3, 4], run)
           assert.isTrue(four.every(({ taken }) => taken))
 
-          // A fifth waits for a turn, and is refused once it has waited
-          // longer than the Relay waits for an answer.
-          const fifth = Effect.runPromise(run(5))
+          // Twelve more wait for a turn; one past those is refused at once.
+          const waiting = Array.from({ length: 12 }, (_, index) =>
+            Effect.runPromise(run(5 + index))
+          )
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0))
+          assert.isFalse((yield* run(17)).taken)
+          // Those waiting are refused once they have waited longer than the
+          // Relay waits for an answer.
           yield* Effect.promise(() => vi.advanceTimersByTimeAsync(21_000))
-          const refused = yield* Effect.promise(() => fifth)
-          assert.isFalse(refused.taken)
+          const refused = yield* Effect.promise(() => Promise.all(waiting))
+          assert.isTrue(refused.every(({ taken }) => !taken))
           assert.lengthOf(yield* backups(), 4)
 
           // Once their tasks have arrived, the next is taken.
