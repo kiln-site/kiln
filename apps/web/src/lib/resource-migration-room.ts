@@ -5,15 +5,15 @@ import {
 
 import { formatBytes } from "@/lib/format-bytes"
 
-// Whether a game server's copy fits where it's going, asked before anything
+// Whether a resource's copy fits where it's going, asked before anything
 // changes: the copy's limits must fit what the Relay can still assign, and
-// each Relay needs free disk for its part of the move. The old server packs
-// its files into an archive, beside any backup kept on that Relay; the new
-// one fetches the archive and unpacks it, so it holds both until the files
-// are in. The archive is counted at the folder's full size, since a world
+// each Relay needs free disk for its part of the move. The old one's Relay
+// packs its data into an archive, beside any backup kept on that Relay; the
+// new one's fetches the archive and unpacks it, so it holds both until the
+// data is in. The archive is counted at the data's full size, since a world
 // barely compresses.
 
-/** What one Relay can give a copy, for those who may create servers there. */
+/** What one Relay can give a copy, for those who may create one there. */
 export interface MigrationRelayRoom {
   readonly name: string
   readonly relayId: string
@@ -29,13 +29,13 @@ export interface MigrationRelayRoom {
   readonly sharedFilesystem: boolean
 }
 
-/** The server being copied: its folder's size and its limits. */
+/** The resource being copied: how much it holds and its limits. */
 export interface MigrationSourceRoom {
   readonly limits: ResourceLimits
   readonly usedBytes: number
   /**
    * Where `usedBytes` came from: measured, the live figure of a running
-   * server, or its disk limit, when its Relay can't measure a stopped one.
+   * one, or its disk limit, when its Relay can't measure a stopped one.
    */
   readonly usedFrom: "measured" | "running" | "limit"
 }
@@ -50,12 +50,15 @@ export function migrationRoomProblems(input: {
   readonly destination: MigrationRelayRoom
   /** Whether to check the copy's limits too, as before it's created. */
   readonly limits: boolean
-  /** Backups the move keeps on the old server's Relay while it runs. */
+  /** Backups the move keeps on the old one's Relay while it runs. */
   readonly localBackups: number
+  /** What the messages call it: "game server", "database". */
+  readonly noun: string
+  readonly resource: MigrationSourceRoom
   readonly source: MigrationRelayRoom
-  readonly server: MigrationSourceRoom
 }): Array<MigrationRoomProblem> {
-  const { destination, server, source } = input
+  const { destination, noun, source } = input
+  const server = input.resource
   const problems: Array<MigrationRoomProblem> = []
   if (input.limits) {
     const { cpuMillis, diskBytes, memoryBytes } = server.limits
@@ -65,7 +68,7 @@ export function migrationRoomProblems(input: {
     ) {
       problems.push({
         code: "cpu",
-        message: `${destination.name} has ${destination.cores} ${destination.cores === 1 ? "core" : "cores"}, fewer than this server's CPU limit`,
+        message: `${destination.name} has ${destination.cores} ${destination.cores === 1 ? "core" : "cores"}, fewer than this ${noun}'s CPU limit`,
         relayId: destination.relayId,
       })
     }
@@ -75,14 +78,14 @@ export function migrationRoomProblems(input: {
     ) {
       problems.push({
         code: "memory",
-        message: `${destination.name} can assign ${formatBytes(destination.assignableMemoryBytes)} more memory, and this server's limit is ${formatBytes(memoryBytes)}`,
+        message: `${destination.name} can assign ${formatBytes(destination.assignableMemoryBytes)} more memory, and this ${noun}'s limit is ${formatBytes(memoryBytes)}`,
         relayId: destination.relayId,
       })
     }
     if (diskBytes !== null && diskBytes > destination.assignableDiskBytes) {
       problems.push({
         code: "disk_limit",
-        message: `${destination.name} can assign ${formatBytes(destination.assignableDiskBytes)} more disk, and this server's limit is ${formatBytes(diskBytes)}`,
+        message: `${destination.name} can assign ${formatBytes(destination.assignableDiskBytes)} more disk, and this ${noun}'s limit is ${formatBytes(diskBytes)}`,
         relayId: destination.relayId,
       })
     } else if (
@@ -93,7 +96,7 @@ export function migrationRoomProblems(input: {
       // A copy whose files already fill its disk couldn't start.
       problems.push({
         code: "disk_files",
-        message: `This server's files take ${formatBytes(server.usedBytes)}, more than a ${formatBytes(diskBytes)} disk limit`,
+        message: `This ${noun}'s data takes ${formatBytes(server.usedBytes)}, more than a ${formatBytes(diskBytes)} disk limit`,
         relayId: destination.relayId,
       })
     }
@@ -135,15 +138,13 @@ export function migrationRoomProblems(input: {
       code: "space",
       message: `${relay.name} needs ${formatBytes(short.needed)} of free disk for ${
         relay.relayId === destination.relayId
-          ? relay.relayId === source.relayId
-            ? "the archive and the copy's files"
-            : "the archive and the new server's files"
+          ? "the archive and the copy's data"
           : input.localBackups > 0
             ? "the archive and the backup kept on it"
-            : "the archive of this server's files"
+            : `the archive of this ${noun}'s data`
       }, and has ${formatBytes(short.free)}${
         server.usedFrom === "limit"
-          ? " (sized by this server's disk limit; update the Relay to measure it)"
+          ? ` (sized by this ${noun}'s disk limit; update the Relay to measure it)`
           : ""
       }`,
       relayId: relay.relayId,

@@ -49,7 +49,6 @@ import { startDiskLimitWarnings } from "./lib/disk-limit-warnings.server"
 import { startNotificationPushes } from "./lib/notification-pushes.server"
 import { startDnsWorker } from "./lib/dns-worker.server"
 import { startOperationsEngine } from "./operations/startup"
-import { startLegacyServerMigrationRollback } from "./lib/instance-migrations.server"
 import {
   startBackupMaintenance,
   stopBackupMaintenance,
@@ -178,7 +177,6 @@ startDnsWorker()
 startOperationsEngine()
 // After the lanes close for startup, so what it queues waits behind the
 // operations a previous Hearth left running.
-startLegacyServerMigrationRollback()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   reportAppError(cause, { operation: "authorization.delivery.recover" })
 })

@@ -11,7 +11,7 @@ import {
 import {
   deploymentsHref,
   notificationHref,
-  notificationResourceHref,
+  migratedResourceHref,
 } from "@/lib/notification-links"
 import type { KilnNotification } from "@/lib/notifications"
 import { redeployAppDeployment } from "@/server/app-deployments"
@@ -176,9 +176,9 @@ export function notificationCommands(
         notificationHref(content, platformAdmin),
         platformAdmin ? "Review" : "Open"
       )
-    case "server.migration":
+    case "resource.migration":
       return open(
-        notificationResourceHref(
+        migratedResourceHref(
           content.outcome === "completed" ? content.destination : content.source
         )
       )

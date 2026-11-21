@@ -631,7 +631,7 @@ copy, or export of a resource can start while its deletion runs.
 ## Linked backups
 
 A game server copied with **Move or duplicate**
-([Moving and duplicating game servers](server-migrations.md)) can take the
+([Moving and duplicating](resource-migrations.md)) can take the
 original's backups along without copying their archives. Each becomes a
 catalog row for the copy that names the backup it was made as in
 `linked_from_backup_id` and `linked_from_target_id`; the archive stays where

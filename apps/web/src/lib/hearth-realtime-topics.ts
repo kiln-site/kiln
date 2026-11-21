@@ -30,7 +30,7 @@ export const hearthRealtimeTopics = [
   "resource-deletions",
   "schedules",
   "security",
-  "server-migrations",
+  "resource-migrations",
   "tailscale",
   "web-certificates",
 ] as const

@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import { Database } from "@/effect/database"
 import {
   assertDelegation,
-  copyInstanceAccessEffect,
+  copyResourceAccessEffect,
   resolveAssignmentEffect,
 } from "@/lib/access-policy-mutations"
 import type { ResourceScope } from "@/lib/resource-permissions"
@@ -175,10 +175,11 @@ describeMysql("copying a server's access", () => {
             userId: "admin",
           })
 
-          const copied = yield* copyInstanceAccessEffect({
+          const copied = yield* copyResourceAccessEffect({
             actorId: "actor",
-            from: { instanceId: "source", relayId: "relay" },
-            to: { instanceId: "copy", relayId: "other-relay" },
+            from: { id: "source", relayId: "relay" },
+            resourceType: "instance",
+            to: { id: "copy", relayId: "other-relay" },
           })
 
           expect(copied).toEqual(["member"])

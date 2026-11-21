@@ -97,7 +97,10 @@ describeMysql("database migrations", () => {
                    (${"b".repeat(40)}, ${"r".repeat(43)}, 0, 0, 1, 6)`
           yield* sql`SET FOREIGN_KEY_CHECKS = 1`
 
-          yield* applyMigrations(migrations)
+          // Up to the schema it knew: a later one renames the copies' table.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id < 93)
+          )
           const queued = yield* sql<{
             input: unknown
             queue_key: string
@@ -209,7 +212,10 @@ describeMysql("database migrations", () => {
                    ('other', 's', 2, 'wait', '{"seconds":5}', 0)`
           yield* sql`SET FOREIGN_KEY_CHECKS = 1`
 
-          yield* applyMigrations(migrations)
+          // Up to the schema it knew: a later one renames the copies' table.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id < 93)
+          )
 
           // Stopped after settling, with the column still there and saying
           // something else now: what was settled stays. Then run once more

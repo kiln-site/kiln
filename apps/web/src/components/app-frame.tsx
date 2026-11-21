@@ -17,7 +17,7 @@ import { PanelFooter } from "@/components/panel-footer"
 import { PushNotificationsPrompt } from "@/components/push-notifications-prompt"
 import { RealtimeSync } from "@/components/realtime-sync"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
-import { ServerMigrationToasts } from "@/components/server/server-migration-toasts"
+import { ResourceMigrationToasts } from "@/components/resource-migration-toasts"
 import { applyAppearance, saveAppearanceCache } from "@/lib/appearance"
 import type { AppearancePreferences } from "@/lib/appearance"
 import { uiPreferencesQueryOptions } from "@/lib/query-options"
@@ -49,7 +49,7 @@ export const AppFrame = React.memo(function AppFrame({
           <AccountStatusSync />
           <RealtimeSync />
           <RelayConnectionToastMonitor />
-          <ServerMigrationToasts />
+          <ResourceMigrationToasts />
           <PushNotificationsPrompt />
           <MobileSidebarNavigationDismiss />
           <AppSidebar

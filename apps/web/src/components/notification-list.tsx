@@ -271,13 +271,16 @@ function NotificationActions({
     content.kind === "security.report" && !commands.length
       ? content.resources
       : null
+  // A moved game server is deleted from here. Any other kind's old one is
+  // opened and deleted where it is.
   const movedServer =
-    content.kind === "server.migration" &&
+    content.kind === "resource.migration" &&
     content.outcome === "completed" &&
     content.mode === "migrate" &&
+    content.source.type === "instance" &&
     !content.sourceDeleted &&
     !content.sourceDeleting
-      ? content.source
+      ? { ...content.source, type: content.source.type }
       : null
   if (!commands.length && !reportedResources) return null
   return (
@@ -413,7 +416,7 @@ const notificationIcons = {
   "instance.brick-update": PackagePlus,
   "app.deployed": CloudUpload,
   "security.report": ShieldAlert,
-  "server.migration": ArrowRightLeft,
+  "resource.migration": ArrowRightLeft,
 } satisfies Record<
   NotificationContent["kind"],
   React.ComponentType<{ className?: string }>

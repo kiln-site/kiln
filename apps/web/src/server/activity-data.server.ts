@@ -463,13 +463,16 @@ interface InheritedActivity {
   }>
 }
 
-// Servers copied with their history, from the server each came from.
+// Servers copied with their history, from the server each came from. Only
+// a game server's copy carries its history.
 async function listActivityLineage(): Promise<Array<LineageRow>> {
   const [rows] = await databasePool.query<Array<LineageRow>>(
-    `SELECT source_relay_id, source_instance_id,
-            destination_relay_id, destination_instance_id, finished_at
-       FROM ${databaseTable("server_migration")}
-      WHERE state = 'completed' AND finished_at IS NOT NULL
+    `SELECT source_relay_id, source_id AS source_instance_id,
+            destination_relay_id, destination_id AS destination_instance_id,
+            finished_at
+       FROM ${databaseTable("resource_migration")}
+      WHERE kind = 'instance' AND state = 'completed'
+        AND finished_at IS NOT NULL
         AND JSON_UNQUOTE(JSON_EXTRACT(options, '$.keepActivity')) = 'true'`
   )
   return rows

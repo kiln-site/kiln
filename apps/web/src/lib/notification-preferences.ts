@@ -46,7 +46,11 @@ export const resourceNotificationKinds = {
     "instance.brick-update",
     "security.report",
   ],
-  instance: ["instance.image-update", "instance.brick-update", "security.report"],
+  instance: [
+    "instance.image-update",
+    "instance.brick-update",
+    "security.report",
+  ],
   relay: ["kiln.updated", "security.report"],
 } as const satisfies Record<
   NotificationResource["type"],
@@ -119,12 +123,12 @@ export const notificationPreferenceGroups = [
         kind: "resource.disk-limit",
         label: "Disk limit warnings",
       },
-      // A finished move waits in the inbox to offer deleting the old server.
+      // A finished move waits in the inbox to offer deleting the old one.
       {
         description: "A move or copy you started ended.",
         inboxRequired: true,
-        kind: "server.migration",
-        label: "Game Server moves and copies",
+        kind: "resource.migration",
+        label: "Moves and copies",
       },
     ],
     label: "Instances",
@@ -206,7 +210,7 @@ const allKinds: ReadonlyArray<NotificationKind> = [
   "instance.brick-update",
   "app.deployed",
   "security.report",
-  "server.migration",
+  "resource.migration",
 ] satisfies ReadonlyArray<NotificationKind>
 
 const storedKindSchema = z.object({

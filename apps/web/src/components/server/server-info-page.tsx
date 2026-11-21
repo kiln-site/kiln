@@ -1,22 +1,12 @@
-import * as React from "react"
-import { useQueryClient } from "@tanstack/react-query"
-import { ArrowRightLeft, Copy, LoaderCircle } from "lucide-react"
-
-import { Button } from "@workspace/ui/components/button"
-
 import {
   InfoDangerAction,
   InfoDangerZone,
   InfoPage,
-  InfoSection,
 } from "@/components/info-page"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { ServerInfoRail } from "@/components/server/server-info-rail"
 import { ServerContainerSection } from "@/components/server/server-limits-section"
-import {
-  ServerMigrationDialog,
-  type ServerMigrationMode,
-} from "@/components/server/server-migration-dialog"
+import { ResourceMigrationSection } from "@/components/resource-migration-section"
 import {
   ServerConnectionSettings,
   ServerProfile,
@@ -27,8 +17,6 @@ import type {
   RelayNodeSummary,
 } from "@/lib/relay-selectors"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
-import { ensuringPromise, recoverPromise } from "@/effect/promise"
-import { serverMigrationPreviewQueryOptions } from "@/lib/server-migration-queries"
 
 // The game server's details, in the order every kind's Info page has: what
 // it is and the Brick it runs, its container with its usage and limits,
@@ -92,9 +80,17 @@ export function ServerInfoPage({
         />
       )}
       {permissions.copyServer && !provisioning ? (
-        <ServerMigrationSection
-          instance={instance}
+        <ResourceMigrationSection
           relayConnected={relayConnected}
+          resource={{
+            brickId: instance.brickId,
+            brickSource: instance.brickSource,
+            id: instance.id,
+            implementation: instance.implementation,
+            kind: "instance",
+            name: instance.name,
+            relayId: instance.relayId,
+          }}
         />
       ) : null}
       {permissions.deleteServer ? (
@@ -147,100 +143,3 @@ function ServerDangerZone({
 
 // Copies the server to a new one, on this Relay or another, or moves it to
 // another Relay. The dialog mounts only while it's open.
-function ServerMigrationSection({
-  instance,
-  relayConnected,
-}: {
-  instance: InstanceSettingsInstance
-  relayConnected: boolean
-}) {
-  const [mode, setMode] = React.useState<ServerMigrationMode | null>(null)
-  const [opening, setOpening] = React.useState<ServerMigrationMode | null>(null)
-  const queryClient = useQueryClient()
-  const previewOptions = serverMigrationPreviewQueryOptions({
-    instanceId: instance.id,
-    relayId: instance.relayId,
-  })
-  // Asked for as the pointer reaches a button, and waited for on click, so
-  // the dialog opens whole rather than growing once it loads.
-  const prefetch = () => {
-    void queryClient.prefetchQuery(previewOptions)
-  }
-  const open = (next: ServerMigrationMode) => {
-    setOpening(next)
-    // The dialog shows a failed preview itself.
-    void ensuringPromise(
-      () =>
-        recoverPromise(
-          () => queryClient.fetchQuery(previewOptions),
-          () => undefined
-        ),
-      () => {
-        setOpening(null)
-        setMode(next)
-      }
-    )
-  }
-  const unavailable = relayConnected
-    ? undefined
-    : "Reconnect this server's Relay first"
-  return (
-    <InfoSection
-      icon={<ArrowRightLeft />}
-      title="Move or duplicate"
-      action={
-        <>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!relayConnected || opening !== null}
-            title={unavailable}
-            onClick={() => open("duplicate")}
-            onFocus={prefetch}
-            onPointerEnter={prefetch}
-          >
-            {opening === "duplicate" ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Copy />
-            )}
-            Duplicate
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!relayConnected || opening !== null}
-            title={unavailable}
-            onClick={() => open("migrate")}
-            onFocus={prefetch}
-            onPointerEnter={prefetch}
-          >
-            {opening === "migrate" ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <ArrowRightLeft />
-            )}
-            Move to another Relay
-          </Button>
-          {mode ? (
-            <ServerMigrationDialog
-              open
-              initialMode={mode}
-              server={{
-                brickId: instance.brickId,
-                brickSource: instance.brickSource,
-                id: instance.id,
-                implementation: instance.implementation,
-                name: instance.name,
-                relayId: instance.relayId,
-              }}
-              onOpenChange={(open) => {
-                if (!open) setMode(null)
-              }}
-            />
-          ) : null}
-        </>
-      }
-    />
-  )
-}
