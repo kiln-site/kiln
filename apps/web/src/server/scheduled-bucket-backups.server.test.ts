@@ -1,5 +1,8 @@
 import { assert, layer } from "@effect/vitest"
-import { backupTaskInputSchema } from "@workspace/contracts"
+import {
+  backupArtifactFilename,
+  backupTaskInputSchema,
+} from "@workspace/contracts"
 import {
   relayScheduleProjectionSchema,
   scheduledBackupArtifactId,
@@ -581,6 +584,44 @@ describeMysql("A schedule's backups to a bucket", () => {
           const refused = yield* ask(relayId, { members: [member] })
 
           assert.isFalse(refused.taken)
+          assert.strictEqual(relay.tasks.size, 0)
+
+          // One that differs from Hearth's only in case: another object
+          // in a bucket, though MySQL's collation calls them equal.
+          yield* seed
+          const chosen = `team/kiln/kiln-test/${relayId}/instance/${server}/${backupId}/${backupArtifactFilename(backupId, "archive")}`
+          const cased = chosen.replace("team/", "Team/")
+          yield* insertBackup(backupId, {
+            backup_mode: "full",
+            object_key: cased,
+            reason: "scheduled",
+            relay_id: relayId,
+            status: "queued",
+            storage_id: storageId,
+            target_id: server,
+          })
+          yield* insertRows("backup_artifact", {
+            backup_id: backupId,
+            created_at: at,
+            destination_key: storageId,
+            id: scheduledBackupArtifactId(backupId),
+            object_key: cased,
+            status: "queued",
+            storage_id: storageId,
+            updated_at: at,
+          })
+          yield* insertRows("backup_task", {
+            backup_id: backupId,
+            created_at: at,
+            id: scheduledBackupTaskId(backupId),
+            status: "queued",
+            task_kind: "create",
+            updated_at: at,
+          })
+
+          const casedAsk = yield* ask(relayId, { members: [member] })
+
+          assert.isFalse(casedAsk.taken)
           assert.strictEqual(relay.tasks.size, 0)
         }),
       60_000

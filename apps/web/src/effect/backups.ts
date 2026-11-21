@@ -1258,6 +1258,8 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
           // didn't choose, as one a Relay reported before this release.
           const [held] = yield* transaction.queryRows<
             {
+              artifact_object_key: string | null
+              object_key: string | null
               reason: string
               relay_id: string
               target_id: string
@@ -1265,27 +1267,29 @@ export const reserveScheduledBucketBackupsEffect = Effect.fn(
             } & RowDataPacket
           >(
             `SELECT backup.relay_id, backup.target_kind, backup.target_id,
-                    backup.reason
+                    backup.reason, backup.object_key,
+                    artifact.object_key AS artifact_object_key
                FROM ${databaseTable("backup")} backup
                JOIN ${databaseTable("backup_task")} task
                  ON task.backup_id = backup.id AND task.id = ?
                JOIN ${databaseTable("backup_artifact")} artifact
                  ON artifact.backup_id = backup.id AND artifact.id = ?
                 AND artifact.storage_id <=> backup.storage_id
-                AND artifact.object_key <=> ?
               WHERE backup.id = ? AND backup.backup_mode = 'full'
-                AND backup.storage_id <=> ? AND backup.object_key <=> ?`,
+                AND backup.storage_id <=> ?`,
             [
               scheduledBackupTaskId(backup.backupId),
               scheduledBackupArtifactId(backup.backupId),
-              objectKey,
               backup.backupId,
               input.storageId,
-              objectKey,
             ]
           )
+          // Compared here, byte for byte: the columns' collation ignores
+          // case, and a bucket doesn't.
           if (
-            held?.relay_id !== input.relayId ||
+            held?.object_key !== objectKey ||
+            held.artifact_object_key !== objectKey ||
+            held.relay_id !== input.relayId ||
             held.target_kind !== backup.targetKind ||
             held.target_id !== backup.targetId ||
             held.reason !== "scheduled"
