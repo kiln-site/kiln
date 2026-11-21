@@ -138,17 +138,27 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       relay.id,
       changed.map((task) => task.backupId)
     )
-    // A finished backup can push its target past its retention, and its
-    // bucket copies wait for Hearth to see them there.
+    // A finished backup's bucket copies wait for Hearth to see them there,
+    // as do those a failed delete left behind.
     if (
       changed.some(
-        (task) => task.kind === "create" && task.status === "succeeded"
+        (task) =>
+          (task.kind === "create" && task.status === "succeeded") ||
+          (task.kind === "delete" &&
+            (task.status === "failed" || task.status === "cancelled"))
       )
     ) {
       const { requestBucketCopyChecks } = yield* promiseEffect(
         () => import("@/lib/bucket-copy-checks.server")
       )
       requestBucketCopyChecks()
+    }
+    // A finished backup can push its target past its retention.
+    if (
+      changed.some(
+        (task) => task.kind === "create" && task.status === "succeeded"
+      )
+    ) {
       const { requestBackupRetention } = yield* promiseEffect(
         () => import("@/lib/backup-maintenance.server")
       )

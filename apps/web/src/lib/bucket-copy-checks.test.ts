@@ -8,7 +8,10 @@ import type { BackupStorageError } from "@/effect/errors"
 import { relayBackupTaskSchema } from "@workspace/contracts"
 
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
-import { reconcileBackupTaskEffect } from "@/effect/backups"
+import {
+  reconcileBackupTaskEffect,
+  reserveBackupDeleteEffect,
+} from "@/effect/backups"
 import { Database } from "@/effect/database"
 import { finalBackupStateEffect } from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
@@ -84,6 +87,9 @@ let storageId = ""
 let backupId = ""
 let bucketCopy = ""
 let localCopy = ""
+let secondCopy = ""
+let secondStorageId = ""
+let secondObjectKey = ""
 let createTaskId = ""
 let objectKey = ""
 const uuid = (part: string) =>
@@ -91,13 +97,18 @@ const uuid = (part: string) =>
 
 // A full backup being made to the bucket, and to the Relay's own disk too
 // when `local`, with its size limit.
-const seed = (options: { local?: boolean; maxBytes?: number } = {}) =>
+const seed = (
+  options: { local?: boolean; maxBytes?: number; second?: boolean } = {}
+) =>
   Effect.gen(function* () {
     seeded += 1
     storageId = `d${String(seeded).padStart(11, "0")}`
     backupId = uuid("1")
     bucketCopy = uuid("a1")
     localCopy = uuid("a2")
+    secondCopy = uuid("a3")
+    secondStorageId = `e${String(seeded).padStart(11, "0")}`
+    secondObjectKey = `${objectKey}.second`
     createTaskId = uuid("c1")
     objectKey = `team/kiln/kiln-test/${relayId}/instance/${target.id}/${backupId}/archive.zip`
     yield* resetDatabase
@@ -106,20 +117,25 @@ const seed = (options: { local?: boolean; maxBytes?: number } = {}) =>
     bucket.looking = null
     bucket.started = () => {}
     yield* insertRelay(relayId)
-    yield* saveBackupStorageEffect({
-      accessKeyId: "AKIAKILNTESTKEY",
-      allowPrivateNetwork: false,
-      bucket: "kiln-backups",
-      enabled: true,
-      endpoint: "https://s3.example.test",
-      forcePathStyle: false,
-      id: storageId,
-      name: "Team",
-      objectPrefix: "team",
-      ownerUserId: null,
-      region: "us-east-1",
-      secretAccessKey: "kiln-test-secret-access-key",
-    })
+    for (const [id, name] of [
+      [storageId, "Team"],
+      [secondStorageId, "Offsite"],
+    ] as const) {
+      yield* saveBackupStorageEffect({
+        accessKeyId: "AKIAKILNTESTKEY",
+        allowPrivateNetwork: false,
+        bucket: "kiln-backups",
+        enabled: true,
+        endpoint: "https://s3.example.test",
+        forcePathStyle: false,
+        id,
+        name,
+        objectPrefix: "team",
+        ownerUserId: null,
+        region: "us-east-1",
+        secretAccessKey: "kiln-test-secret-access-key",
+      })
+    }
     yield* insertBackup(backupId, {
       backup_mode: "full",
       object_key: objectKey,
@@ -128,15 +144,18 @@ const seed = (options: { local?: boolean; maxBytes?: number } = {}) =>
       storage_id: storageId,
       target_id: target.id,
     })
-    for (const [id, storage] of [
-      [bucketCopy, storageId],
-      ...(options.local ? [[localCopy, null] as const] : []),
+    for (const [id, storage, key] of [
+      [bucketCopy, storageId, objectKey],
+      ...(options.local ? [[localCopy, null, null] as const] : []),
+      ...(options.second
+        ? [[secondCopy, secondStorageId, secondObjectKey] as const]
+        : []),
     ] as const) {
       yield* insertRows("backup_artifact", {
         id,
         backup_id: backupId,
         destination_key: storage ?? "local",
-        object_key: storage ? objectKey : null,
+        object_key: key,
         status: "running",
         storage_id: storage,
         created_at: now,
@@ -154,16 +173,22 @@ const seed = (options: { local?: boolean; maxBytes?: number } = {}) =>
     })
   })
 
-// Its Relay reports the backup made and uploaded, `at` after now.
-const reported = (at = 1, artifacts?: Array<{ artifactId: string }>) =>
+// Its Relay reports the backup made and uploaded, `at` after now, of
+// `bytes`, finished by its own clock at `finishedAt`.
+const reported = (
+  at = 1,
+  artifacts?: Array<{ artifactId: string }>,
+  report: { bytes?: number; finishedAt?: number | null } = {}
+) =>
   reconcileBackupTaskEffect(
     relayBackupTaskSchema.parse({
       backupId,
-      bytesCompleted: uploaded,
-      bytesTotal: uploaded,
+      bytesCompleted: report.bytes ?? uploaded,
+      bytesTotal: report.bytes ?? uploaded,
       createdAt: now,
       error: null,
-      finishedAt: now + at,
+      finishedAt:
+        report.finishedAt === undefined ? now + at : report.finishedAt,
       input: {
         artifactKind: "archive",
         backupId,
@@ -187,7 +212,7 @@ const reported = (at = 1, artifacts?: Array<{ artifactId: string }>) =>
         artifacts: (artifacts ?? [{ artifactId: bucketCopy }]).map(
           ({ artifactId }) => ({ artifactId, error: null, status: "available" })
         ),
-        bytes: uploaded,
+        bytes: report.bytes ?? uploaded,
         checksumSha256: "a".repeat(64),
         filename: `${backupId}.zip`,
         warnings: [],
@@ -286,7 +311,9 @@ describeMysql("Bucket copies Hearth looks for", () => {
       () =>
         Effect.gen(function* () {
           yield* seed()
-          yield* reported()
+          // Its Relay says nothing of when it finished: the hour is
+          // Hearth's, from when it first waited.
+          yield* reported(1, undefined, { finishedAt: null })
           bucket.objects.set(objectKey, { status: 403 })
 
           yield* checkBucketCopiesEffect()
@@ -302,6 +329,180 @@ describeMysql("Bucket copies Hearth looks for", () => {
           assert.strictEqual(copy?.status, "failed")
           assert.include(copy?.error ?? "", "403")
         })
+    )
+
+    it.effect(
+      "looks again at a copy reported anew while Hearth looked at the old report",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* reported()
+          bucket.objects.set(objectKey, uploaded)
+          let answer = () => {}
+          bucket.looking = new Promise((resolve) => {
+            answer = resolve
+          })
+          const started = new Promise<void>((resolve) => {
+            bucket.started = resolve
+          })
+
+          // Hearth looks for 2 KiB; meanwhile a newer report says 3 KiB.
+          const looking = yield* Effect.forkChild(checkBucketCopiesEffect())
+          yield* Effect.promise(() => started)
+          yield* reported(10, undefined, { bytes: uploaded + 1024 })
+          answer()
+          yield* Fiber.join(looking)
+
+          // What it saw settles nothing of the newer report.
+          assert.strictEqual(
+            (yield* state).copies.get(bucketCopy)?.status,
+            "running"
+          )
+          bucket.looking = null
+          bucket.objects.set(objectKey, uploaded + 1024)
+          yield* checkBucketCopiesEffect()
+          assert.strictEqual(
+            (yield* state).copies.get(bucketCopy)?.status,
+            "available"
+          )
+        })
+    )
+
+    it.effect(
+      "settles a backup whose two bucket copies Hearth settles at once",
+      () =>
+        Effect.gen(function* () {
+          for (const [first, second, expected] of [
+            [undefined, undefined, "failed"],
+            [uploaded, undefined, "available"],
+          ] as const) {
+            yield* seed({ second: true })
+            yield* reported(1, [
+              { artifactId: bucketCopy },
+              { artifactId: secondCopy },
+            ])
+            if (first !== undefined) bucket.objects.set(objectKey, first)
+            if (second !== undefined) {
+              bucket.objects.set(secondObjectKey, second)
+            }
+            // Both looks answer together.
+            let answer = () => {}
+            bucket.looking = new Promise((resolve) => {
+              answer = resolve
+            })
+            const looking = yield* Effect.forkChild(checkBucketCopiesEffect())
+            yield* Effect.promise(() => new Promise((r) => setImmediate(r)))
+            answer()
+            yield* Fiber.join(looking)
+
+            assert.strictEqual((yield* state).backup?.status, expected)
+          }
+        })
+    )
+
+    it.effect(
+      "looks at one destination's copies though another's fill a look",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({ second: true })
+          yield* reported(1, [
+            { artifactId: bucketCopy },
+            { artifactId: secondCopy },
+          ])
+          // The first destination has a hundred more copies waiting, each
+          // due before the second's, and it can't be asked.
+          const database = yield* Database
+          for (let index = 0; index < 100; index += 1) {
+            const id = `${String(seeded).padStart(8, "0")}-1111-4000-8000-${String(index).padStart(12, "0")}`
+            yield* insertBackup(id, {
+              backup_mode: "full",
+              relay_id: relayId,
+              status: "running",
+              storage_id: storageId,
+              target_id: target.id,
+            })
+            yield* insertRows("backup_artifact", {
+              id: id.replace("-1111-", "-2222-"),
+              backup_id: id,
+              bytes: uploaded,
+              destination_key: storageId,
+              object_key: `${objectKey}.${index}`,
+              seen_by: now + 1_000,
+              status: "running",
+              storage_id: storageId,
+              created_at: now,
+              updated_at: now,
+            })
+            yield* insertRows("backup_task", {
+              id: id.replace("-1111-", "-3333-"),
+              backup_id: id,
+              task_kind: "create",
+              status: "succeeded",
+              created_at: now,
+              updated_at: now,
+            })
+            bucket.objects.set(`${objectKey}.${index}`, { status: 503 })
+          }
+          yield* database.execute(
+            "test.later",
+            `UPDATE kiln_backup_artifact SET seen_by = ? WHERE id = ?`,
+            [now + 2_000, secondCopy]
+          )
+          bucket.objects.set(objectKey, { status: 503 })
+          bucket.objects.set(secondObjectKey, uploaded)
+
+          // The first look finds that destination down; the next looks at
+          // the second's copy all the same.
+          yield* checkBucketCopiesEffect()
+          yield* checkBucketCopiesEffect()
+
+          assert.strictEqual(
+            (yield* state).copies.get(secondCopy)?.status,
+            "available"
+          )
+        })
+    )
+
+    it.effect("keeps a backup waiting whose delete failed", () =>
+      Effect.gen(function* () {
+        yield* seed()
+        yield* reported()
+        const deleteTaskId = uuid("d1")
+        yield* reserveBackupDeleteEffect({
+          backupId,
+          requestedBy: "user-one",
+          taskId: deleteTaskId,
+        })
+
+        yield* reconcileBackupTaskEffect(
+          relayBackupTaskSchema.parse({
+            backupId,
+            bytesCompleted: 0,
+            bytesTotal: null,
+            createdAt: now,
+            error: "The bucket refused the delete",
+            finishedAt: now + 5,
+            input: {
+              backupId,
+              destination: { artifactId: bucketCopy, kind: "local" },
+              kind: "delete",
+              target,
+              taskId: deleteTaskId,
+            },
+            inputRefreshRequired: false,
+            kind: "delete",
+            result: null,
+            startedAt: now,
+            status: "failed",
+            taskId: deleteTaskId,
+            updatedAt: now + 5,
+          }),
+          relayId
+        )
+
+        // Its bucket copy still waits to be seen, so it isn't failed.
+        assert.strictEqual((yield* state).backup?.status, "running")
+      })
     )
 
     it.effect("keeps what Hearth saw, whatever a later report says", () =>

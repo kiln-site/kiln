@@ -1419,6 +1419,12 @@ const notACopy = `id NOT IN (
   SELECT destination_artifact_id FROM ${databaseTable("backup_copy_task")}
    WHERE backup_id = ?)`
 
+/**
+ * How long Hearth gives itself to see a full backup's bucket copy in the
+ * bucket, from when the copy first waits to be seen, by Hearth's clock.
+ */
+export const BUCKET_COPY_SEEN_WITHIN_MS = 60 * 60_000
+
 // A full backup's bucket copy Hearth has settled: seen there, or not. Takes
 // whether the backup is a full one.
 const unsettledCopy = `NOT (? AND storage_id IS NOT NULL
@@ -1749,6 +1755,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                       checksum_sha256 = ?, error = NULL, error_code = NULL,
                       completed_at = CASE WHEN ? AND storage_id IS NOT NULL
                                        THEN NULL ELSE ? END,
+                      seen_by = CASE WHEN ? AND storage_id IS NOT NULL
+                                  THEN COALESCE(seen_by, ?) ELSE seen_by END,
                       updated_at = ?
                 WHERE backup_id = ? AND ${notACopy} AND ${unsettledCopy}`,
               [
@@ -1758,6 +1766,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 checksum,
                 full,
                 task.finishedAt ?? now,
+                full,
+                now + BUCKET_COPY_SEEN_WITHIN_MS,
                 now,
                 task.backupId,
                 task.backupId,
@@ -1777,6 +1787,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                         error = ?, error_code = ?,
                         completed_at = CASE WHEN ? AND storage_id IS NOT NULL
                                          THEN NULL ELSE ? END,
+                        seen_by = CASE WHEN ? AND storage_id IS NOT NULL
+                                    THEN COALESCE(seen_by, ?) ELSE seen_by END,
                         updated_at = ?
                   WHERE id = ? AND backup_id = ? AND ${notACopy}
                     AND ${unsettledCopy}`,
@@ -1792,6 +1804,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   outcome.errorCode ?? null,
                   waits,
                   task.finishedAt ?? now,
+                  waits,
+                  now + BUCKET_COPY_SEEN_WITHIN_MS,
                   now,
                   outcome.artifactId,
                   task.backupId,
@@ -3418,73 +3432,85 @@ const restoreStatusAfterFailedDelete = Effect.fnUntraced(function* (
       WHERE backup_id = ? AND status = 'deleting'`,
     [input.reason, input.code, input.now, input.backupId]
   )
+  // As its copies left it: a bucket copy still waiting to be seen keeps it
+  // running.
+  const status = yield* backupStatusFromCopies(transaction, input.backupId)
   yield* transaction.execute(
-    `UPDATE ${databaseTable("backup")} backup
-        SET backup.status = CASE
-              WHEN EXISTS (
-                SELECT 1 FROM ${databaseTable("backup_artifact")} artifact
-                 WHERE artifact.backup_id = backup.id
-                   AND artifact.status = 'available'
-              ) THEN 'available'
-              ELSE 'failed'
-            END,
-            backup.updated_at = ?
-      WHERE backup.id = ?`,
-    [input.now, input.backupId]
+    `UPDATE ${databaseTable("backup")}
+        SET status = ?, updated_at = ?
+      WHERE id = ?`,
+    [status, input.now, input.backupId]
   )
 })
 
 /**
- * A create Hearth still counts as queued for a backup being deleted, which
- * its Relay says it never received: it's cancelled here, so the delete
- * waiting on it can go.
- */
-/**
  * Full backups' bucket copies a Relay reported uploading that Hearth hasn't
- * seen in the bucket yet, oldest first: what `checkBucketCopiesEffect`
- * looks for. A copy Hearth's own copy worker makes is that worker's.
+ * seen in the bucket yet, by when Hearth must have: those past it, then up
+ * to `limit` others, leaving out destinations Hearth is leaving alone a
+ * while (`resting`). A copy Hearth's own copy worker makes is that
+ * worker's.
  */
 export const waitingBucketCopiesEffect = Effect.fn(
   "backups.waitingBucketCopies"
-)(function* (limit: number) {
+)(function* (input: {
+  limit: number
+  now: number
+  resting: ReadonlyArray<string>
+}) {
   const database = yield* Database
-  const rows = yield* database.queryRows<
-    RowDataPacket & {
-      artifact_id: string
-      backup_id: string
-      bytes: number | string | null
-      finished_at: Date | string | null
-      object_key: string | null
-      relay_id: string
-      reserved_bytes: number | string | null
-      storage_id: string
-    }
-  >(
-    "backup_waiting_bucket_copies",
-    `SELECT artifact.id AS artifact_id, artifact.backup_id,
-            artifact.storage_id, artifact.object_key, artifact.bytes,
-            backup.relay_id, task.reserved_bytes, task.finished_at
-       FROM ${databaseTable("backup_artifact")} artifact
-       JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
-       JOIN ${databaseTable("backup_task")} task
-         ON task.backup_id = backup.id AND task.task_kind = 'create'
-        AND task.status = 'succeeded'
-      WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
-        AND artifact.completed_at IS NULL
-        AND backup.backup_mode = 'full'
-        AND backup.status NOT IN ('deleting', 'deleted')
-        AND artifact.id NOT IN (
-          SELECT destination_artifact_id
-            FROM ${databaseTable("backup_copy_task")})
-      ORDER BY task.finished_at ASC, artifact.id ASC
-      LIMIT ?`,
-    [limit]
-  )
+  const select = (late: boolean) =>
+    database.queryRows<
+      RowDataPacket & {
+        artifact_id: string
+        backup_id: string
+        bytes: number | string | null
+        object_key: string | null
+        relay_id: string
+        reserved_bytes: number | string | null
+        seen_by: number | string | null
+        storage_id: string
+      }
+    >(
+      "backup_waiting_bucket_copies",
+      `SELECT artifact.id AS artifact_id, artifact.backup_id,
+              artifact.storage_id, artifact.object_key, artifact.bytes,
+              artifact.seen_by, backup.relay_id, task.reserved_bytes
+         FROM ${databaseTable("backup_artifact")} artifact
+         JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
+         JOIN ${databaseTable("backup_task")} task
+           ON task.backup_id = backup.id AND task.task_kind = 'create'
+          AND task.status = 'succeeded'
+        WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
+          AND artifact.completed_at IS NULL
+          AND backup.backup_mode = 'full'
+          AND backup.status NOT IN ('deleting', 'deleted')
+          AND artifact.id NOT IN (
+            SELECT destination_artifact_id
+              FROM ${databaseTable("backup_copy_task")})
+          AND ${
+            late
+              ? "artifact.seen_by < ?"
+              : `(artifact.seen_by IS NULL OR artifact.seen_by >= ?)${
+                  input.resting.length > 0
+                    ? ` AND artifact.storage_id NOT IN (${input.resting
+                        .map(() => "?")
+                        .join(", ")})`
+                    : ""
+                }`
+          }
+        ORDER BY artifact.seen_by ASC, artifact.id ASC
+        LIMIT ?`,
+      late
+        ? [input.now, input.limit]
+        : [input.now, ...input.resting, input.limit]
+    )
+  const rows = [...(yield* select(true)), ...(yield* select(false))]
   return rows.map((row) => ({
     artifactId: row.artifact_id,
     backupId: row.backup_id,
-    finishedAt:
-      row.finished_at === null ? null : new Date(row.finished_at).getTime(),
+    late:
+      row.seen_by !== null &&
+      safeDatabaseNumber(row.seen_by, "bucket copy deadline") < input.now,
     maxBytes: nullableDatabaseNumber(row.reserved_bytes, "backup reservation"),
     objectKey: row.object_key,
     relayId: row.relay_id,
@@ -3503,6 +3529,9 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
   function* (input: {
     artifactId: string
     backupId: string
+    // What Hearth looked for: a newer report since, of another size or
+    // object, is looked for again rather than settled by this look.
+    looked: { bytes: number | null; objectKey: string | null }
     outcome:
       | { bytes: number; kind: "seen" }
       | { code: string; kind: "failed"; reason: string }
@@ -3511,22 +3540,39 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
     const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_settle_bucket_copy", (transaction) =>
       Effect.gen(function* () {
+        // The backup first, as a report of it takes it, so two copies
+        // settling at once each see the other's outcome.
+        const [backup] = yield* transaction.queryRows<
+          RowDataPacket & { status: string }
+        >(
+          `SELECT status FROM ${databaseTable("backup")}
+            WHERE id = ? FOR UPDATE`,
+          [input.backupId]
+        )
+        if (!backup || backup.status === "deleting" || backup.status === "deleted") {
+          return false
+        }
         const seen = input.outcome.kind === "seen"
         const settled = yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
               SET status = ?, bytes = ?, error = ?, error_code = ?,
                   completed_at = ?, updated_at = ?
             WHERE id = ? AND backup_id = ? AND status = 'running'
-              AND completed_at IS NULL`,
+              AND completed_at IS NULL
+              AND bytes <=> ? AND object_key <=> ?`,
           [
             seen ? "available" : "failed",
-            input.outcome.kind === "seen" ? input.outcome.bytes : null,
+            input.outcome.kind === "seen"
+              ? input.outcome.bytes
+              : input.looked.bytes,
             input.outcome.kind === "failed" ? input.outcome.reason : null,
             input.outcome.kind === "failed" ? input.outcome.code : null,
             now,
             now,
             input.artifactId,
             input.backupId,
+            input.looked.bytes,
+            input.looked.objectKey,
           ]
         )
         if (settled.affectedRows === 0) return false
@@ -3540,7 +3586,7 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
                   completed_at = CASE WHEN ? = 'running' THEN completed_at
                                  ELSE COALESCE(completed_at, ?) END,
                   updated_at = ?
-            WHERE id = ? AND status NOT IN ('deleting', 'deleted')`,
+            WHERE id = ?`,
           [status, status, now, now, input.backupId]
         )
         return true
@@ -3579,6 +3625,11 @@ export const createTaskIdentityEffect = Effect.fn("backups.createIdentity")(
   }
 )
 
+/**
+ * A create Hearth still counts as queued for a backup being deleted, which
+ * its Relay says it never received: it's cancelled here, so the delete
+ * waiting on it can go.
+ */
 export const cancelUnsentCreateEffect = Effect.fn("backups.cancelUnsentCreate")(
   function* (taskId: string) {
     const database = yield* Database
