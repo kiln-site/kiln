@@ -232,8 +232,9 @@ function answer(
     case "brick.recipe":
       return testBrick
     case "tunnel.state":
-    case "backup.task.list":
       return []
+    case "backup.task.list":
+      return { changed: [], current: [], next: null }
     // Both keep everything on the one disk their snapshots report.
     case "transfer.space":
       return {

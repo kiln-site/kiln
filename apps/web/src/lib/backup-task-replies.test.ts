@@ -16,6 +16,7 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import { cancelBackupHandler } from "@/server/backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
+import { relayBackupTaskPage } from "@/test/relay-backup-tasks"
 
 // Hearth applies a Relay's answer about a task only to the task it asked
 // about, and counts a task as arrived only when the Relay holds that task.
@@ -147,7 +148,7 @@ describeMysql("A Relay's answer about a backup task", () => {
           if (operation === "backup.task.cancel") {
             return createTask(second, "cancelled")
           }
-          if (operation === "backup.task.list") return []
+          if (operation === "backup.task.list") return relayBackupTaskPage([])
           throw new Error(`Unexpected Relay request ${operation}`)
         }
 
@@ -234,7 +235,7 @@ describeMysql("A Relay's answer about a backup task", () => {
         // The first create is answered with the second; the second with
         // itself.
         relay.answer = (operation) => {
-          if (operation === "backup.task.list") return []
+          if (operation === "backup.task.list") return relayBackupTaskPage([])
           if (operation === "backup.task.enqueue") {
             return createTask(second, "queued")
           }
@@ -257,12 +258,15 @@ describeMysql("A Relay's answer about a backup task", () => {
           const persisted = yield* seed("queued")
           // The Relay lists a delete under the first create's ID, and the
           // second create as Hearth sent it.
-          relay.answer = (operation) => {
+          relay.answer = (operation, payload) => {
             if (operation === "backup.task.list") {
-              return [
-                createTask(first, "queued", "delete"),
-                createTask(second, "queued"),
-              ]
+              return relayBackupTaskPage(
+                [
+                  createTask(first, "queued", "delete"),
+                  createTask(second, "queued"),
+                ],
+                payload
+              )
             }
             throw new Error(`Unexpected Relay request ${operation}`)
           }
@@ -282,20 +286,23 @@ describeMysql("A Relay's answer about a backup task", () => {
           const persisted = yield* seed("queued")
           // The first create listed as Hearth sent it but for another game
           // server, waiting on fresh input.
-          relay.answer = (operation) => {
+          relay.answer = (operation, payload) => {
             if (operation === "backup.task.list") {
               const listed = createTask(first, "queued")
-              return [
-                {
-                  ...listed,
-                  input: {
-                    ...listed.input,
-                    target: { id: "d".repeat(12), kind: "instance" },
+              return relayBackupTaskPage(
+                [
+                  {
+                    ...listed,
+                    input: {
+                      ...listed.input,
+                      target: { id: "d".repeat(12), kind: "instance" },
+                    },
+                    inputRefreshRequired: true,
                   },
-                  inputRefreshRequired: true,
-                },
-                createTask(second, "queued"),
-              ]
+                  createTask(second, "queued"),
+                ],
+                payload
+              )
             }
             throw new Error(`Unexpected Relay request ${operation}`)
           }
@@ -353,7 +360,9 @@ describeMysql("A Relay's answer about a backup task", () => {
       // The Relay, holding that create: it cancels only what Hearth names
       // as it holds it, and takes the delete it is sent.
       relay.answer = (operation, payload) => {
-        if (operation === "backup.task.list") return [held]
+        if (operation === "backup.task.list") {
+          return relayBackupTaskPage([held], payload)
+        }
         if (operation === "backup.task.cancel") {
           const asked = payload as {
             backupId: string

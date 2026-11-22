@@ -19,6 +19,7 @@ import {
   RelayInventoryLookupSchema,
   backupRestoreResolveSchema,
   backupTaskCancelRequestSchema,
+  backupTaskListRequestSchema,
   decodeRelayJoinLink,
   relayInstallationReplaceInputSchema,
   backupTaskInputSchema,
@@ -3317,18 +3318,16 @@ async function executeControlRequest(
     case "backup.restore.unfinished":
       return backupManager.unfinishedTarRestores()
     case "backup.task.list": {
-      const updatedAfter = payload.updatedAfter
-      if (
-        updatedAfter !== undefined &&
-        (!Number.isSafeInteger(updatedAfter) || Number(updatedAfter) < 0)
-      ) {
-        throw new Error("updatedAfter must be a non-negative integer")
-      }
+      const asked = backupTaskListRequestSchema.parse(request.payload ?? {})
       return runRelayEffect(
         "relay.backups.list",
-        backupManager
-          .list(updatedAfter === undefined ? undefined : Number(updatedAfter))
-          .pipe(Effect.map((tasks) => tasks.map(sendBackupTask)))
+        backupManager.page(asked).pipe(
+          Effect.map(({ changed, current, next }) => ({
+            changed: changed.map(sendBackupTask),
+            current: current.map(sendBackupTask),
+            next,
+          }))
+        )
       )
     }
     case "transfer.source.prepare":

@@ -753,9 +753,18 @@ export class RelayStateStore extends Context.Service<
     readonly getBackupTask: (
       taskId: string
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
-    readonly listBackupTasks: (
-      updatedAfter?: number
-    ) => Effect.Effect<ReadonlyArray<RelayBackupTask>, RelayStateError>
+    readonly backupTaskPage: (query: {
+      readonly after: { readonly taskId: string; readonly updatedAt: number }
+      readonly budgetBytes: number
+      readonly taskIds: ReadonlyArray<string>
+    }) => Effect.Effect<
+      {
+        readonly changed: ReadonlyArray<RelayBackupTask>
+        readonly current: ReadonlyArray<RelayBackupTask>
+        readonly next: { readonly taskId: string; readonly updatedAt: number } | null
+      },
+      RelayStateError
+    >
     readonly updateBackupTaskProgress: (
       taskId: string,
       bytesCompleted: number,
@@ -2432,36 +2441,41 @@ const makeRelayStateStore = Effect.gen(function* () {
   const backupTaskRows = Effect.fn("RelayStateStore.backupTaskRows")(function* (
     filter:
       | { readonly taskId: string }
-      | { readonly updatedAfter?: number } = {}
+      | {
+          readonly after: { readonly taskId: string; readonly updatedAt: number }
+          readonly limit: number
+        }
+      | { readonly current: ReadonlyArray<string> }
   ) {
-    return "taskId" in filter
-      ? yield* sql<Record<string, unknown>>`
+    if ("taskId" in filter) {
+      return yield* sql<Record<string, unknown>>`
           SELECT
-            task_id AS taskId,
-            backup_id AS backupId,
-            kind,
-            status,
-            input_json AS inputJson,
-            input_refresh_required AS inputRefreshRequired,
-            result_json AS resultJson,
-            bytes_completed AS bytesCompleted,
-            bytes_total AS bytesTotal,
-            phase,
-            current_artifact_id AS currentArtifactId,
-            current_path AS currentPath,
-            error,
-            error_code AS errorCode,
-            created_at AS createdAt,
-            started_at AS startedAt,
-            finished_at AS finishedAt,
-            updated_at AS updatedAt
+              task_id AS taskId,
+              backup_id AS backupId,
+              kind,
+              status,
+              input_json AS inputJson,
+              input_refresh_required AS inputRefreshRequired,
+              result_json AS resultJson,
+              bytes_completed AS bytesCompleted,
+              bytes_total AS bytesTotal,
+              phase,
+              current_artifact_id AS currentArtifactId,
+              current_path AS currentPath,
+              error,
+              error_code AS errorCode,
+              created_at AS createdAt,
+              started_at AS startedAt,
+              finished_at AS finishedAt,
+              updated_at AS updatedAt
           FROM relay_backup_tasks
           WHERE task_id = ${filter.taskId}
           LIMIT 1
         `
-      : filter.updatedAfter === undefined
-        ? yield* sql<Record<string, unknown>>`
-            SELECT
+    }
+    if ("after" in filter) {
+      return yield* sql<Record<string, unknown>>`
+          SELECT
               task_id AS taskId,
               backup_id AS backupId,
               kind,
@@ -2480,11 +2494,22 @@ const makeRelayStateStore = Effect.gen(function* () {
               started_at AS startedAt,
               finished_at AS finishedAt,
               updated_at AS updatedAt
-            FROM relay_backup_tasks
-            ORDER BY updated_at ASC, task_id ASC
-          `
-        : yield* sql<Record<string, unknown>>`
-            SELECT
+          FROM relay_backup_tasks
+          WHERE kind <> 'prune'
+            AND (
+              updated_at > ${filter.after.updatedAt}
+              OR (
+                updated_at = ${filter.after.updatedAt}
+                AND task_id > ${filter.after.taskId}
+              )
+            )
+          ORDER BY updated_at ASC, task_id ASC
+          LIMIT ${filter.limit}
+        `
+    }
+    return filter.current.length > 0
+      ? yield* sql<Record<string, unknown>>`
+          SELECT
               task_id AS taskId,
               backup_id AS backupId,
               kind,
@@ -2503,16 +2528,42 @@ const makeRelayStateStore = Effect.gen(function* () {
               started_at AS startedAt,
               finished_at AS finishedAt,
               updated_at AS updatedAt
-            FROM relay_backup_tasks
-            WHERE updated_at > ${filter.updatedAfter}
-            ORDER BY updated_at ASC, task_id ASC
-          `
+          FROM relay_backup_tasks
+          WHERE kind <> 'prune'
+            AND (
+              status IN ('queued', 'running')
+              OR task_id IN ${sql.in(filter.current)}
+            )
+          ORDER BY updated_at ASC, task_id ASC
+        `
+      : yield* sql<Record<string, unknown>>`
+          SELECT
+              task_id AS taskId,
+              backup_id AS backupId,
+              kind,
+              status,
+              input_json AS inputJson,
+              input_refresh_required AS inputRefreshRequired,
+              result_json AS resultJson,
+              bytes_completed AS bytesCompleted,
+              bytes_total AS bytesTotal,
+              phase,
+              current_artifact_id AS currentArtifactId,
+              current_path AS currentPath,
+              error,
+              error_code AS errorCode,
+              created_at AS createdAt,
+              started_at AS startedAt,
+              finished_at AS finishedAt,
+              updated_at AS updatedAt
+          FROM relay_backup_tasks
+          WHERE kind <> 'prune' AND status IN ('queued', 'running')
+          ORDER BY updated_at ASC, task_id ASC
+        `
   })
 
   const backupTasks = Effect.fn("RelayStateStore.backupTasks")(function* (
-    filter:
-      | { readonly taskId: string }
-      | { readonly updatedAfter?: number } = {}
+    filter: { readonly taskId: string }
   ) {
     const rows = yield* backupTaskRows(filter)
     const decoded = yield* decodeBackupTaskRows(rows)
@@ -2601,6 +2652,8 @@ const makeRelayStateStore = Effect.gen(function* () {
   )
 
   const warnedUnparseableTaskIds = new Set<string>()
+  // Rows read for one page of the journal, before its byte budget cuts it.
+  const backupTaskPageRows = 500
   const insertBackupPrune = (prune: ScheduledBackupPrune, now: number) =>
     Effect.gen(function* () {
       const waiting = yield* sql`
@@ -2653,47 +2706,91 @@ const makeRelayStateStore = Effect.gen(function* () {
       )
   `
 
-  const listBackupTasksLenient = Effect.fn(
-    "RelayStateStore.listBackupTasksLenient"
-  )(function* (updatedAfter?: number) {
-    yield* pruneSupersededExportTasks()
-    const rows = yield* backupTaskRows({ updatedAfter })
-    const tasks: RelayBackupTask[] = []
-    for (const row of rows) {
-      const decodedRow = yield* Schema.decodeUnknownEffect(
-        RelayBackupTaskRowSchema
-      )(row).pipe(Effect.result)
-      if (Result.isFailure(decodedRow)) {
-        const taskId = typeof row.taskId === "string" ? row.taskId : undefined
-        if (taskId && !warnedUnparseableTaskIds.has(taskId)) {
-          warnedUnparseableTaskIds.add(taskId)
+  // Rows as tasks, as forgiving as a list must be: a row that can't be read
+  // is skipped, saying so once, or reported failed when enough of it can be.
+  const lenientBackupTasks = Effect.fn("RelayStateStore.lenientBackupTasks")(
+    function* (rows: ReadonlyArray<Record<string, unknown>>) {
+      const tasks: RelayBackupTask[] = []
+      for (const row of rows) {
+        const decodedRow = yield* Schema.decodeUnknownEffect(
+          RelayBackupTaskRowSchema
+        )(row).pipe(Effect.result)
+        if (Result.isFailure(decodedRow)) {
+          const taskId =
+            typeof row.taskId === "string" ? row.taskId : undefined
+          if (taskId && !warnedUnparseableTaskIds.has(taskId)) {
+            warnedUnparseableTaskIds.add(taskId)
+            yield* Effect.logWarning("Skipped unparseable backup journal row", {
+              taskId,
+            })
+          }
+          continue
+        }
+        const decodedTask = yield* backupTaskFromRow(decodedRow.success).pipe(
+          Effect.result
+        )
+        if (Result.isSuccess(decodedTask)) {
+          tasks.push(decodedTask.success)
+          continue
+        }
+        if (!warnedUnparseableTaskIds.has(decodedRow.success.taskId)) {
+          warnedUnparseableTaskIds.add(decodedRow.success.taskId)
           yield* Effect.logWarning("Skipped unparseable backup journal row", {
-            taskId,
+            backupId: decodedRow.success.backupId,
+            kind: decodedRow.success.kind,
+            status: decodedRow.success.status,
+            taskId: decodedRow.success.taskId,
           })
         }
-        continue
+        const fallback = fallbackFailedBackupTask(decodedRow.success)
+        if (fallback) tasks.push(fallback)
       }
-      const decodedTask = yield* backupTaskFromRow(decodedRow.success).pipe(
-        Effect.result
-      )
-      if (Result.isSuccess(decodedTask)) {
-        tasks.push(decodedTask.success)
-        continue
-      }
-      if (!warnedUnparseableTaskIds.has(decodedRow.success.taskId)) {
-        warnedUnparseableTaskIds.add(decodedRow.success.taskId)
-        yield* Effect.logWarning("Skipped unparseable backup journal row", {
-          backupId: decodedRow.success.backupId,
-          kind: decodedRow.success.kind,
-          status: decodedRow.success.status,
-          taskId: decodedRow.success.taskId,
-        })
-      }
-      const fallback = fallbackFailedBackupTask(decodedRow.success)
-      if (fallback) tasks.push(fallback)
+      return tasks
     }
-    return tasks
-  })
+  )
+
+  // One page of the journal as Hearth reads it: the tasks changed after
+  // `after`, in the order they changed, as many as fit `budgetBytes` (at
+  // least one); every task still queued or running, and any Hearth names in
+  // `taskIds`, on every page; and where the next page starts, or null on the
+  // last. A row that can't be read is passed over, so it never holds a page
+  // up. Sizes are of the tasks as stored, which is no smaller than what the
+  // Relay sends.
+  const backupTaskPage = Effect.fn("RelayStateStore.backupTaskPage")(
+    function* (query: {
+      readonly after: { readonly taskId: string; readonly updatedAt: number }
+      readonly budgetBytes: number
+      readonly taskIds: ReadonlyArray<string>
+    }) {
+      yield* pruneSupersededExportTasks()
+      const current = yield* lenientBackupTasks(
+        yield* backupTaskRows({ current: query.taskIds })
+      )
+      const rows = yield* backupTaskRows({
+        after: query.after,
+        limit: backupTaskPageRows + 1,
+      })
+      const changed: RelayBackupTask[] = []
+      // What's left of the budget once the page carries the current tasks.
+      let used = current.reduce(
+        (total, task) => total + Buffer.byteLength(JSON.stringify(task)),
+        0
+      )
+      let last: { taskId: string; updatedAt: number } | null = null
+      let taken = 0
+      for (const row of rows.slice(0, backupTaskPageRows)) {
+        const [task] = yield* lenientBackupTasks([row])
+        const bytes = task ? Buffer.byteLength(JSON.stringify(task)) : 0
+        if (changed.length > 0 && used + bytes > query.budgetBytes) break
+        if (task) changed.push(task)
+        used += bytes
+        taken += 1
+        last = { taskId: String(row.taskId), updatedAt: Number(row.updatedAt) }
+      }
+      const more = taken < rows.length
+      return { changed, current, next: more ? last : null }
+    }
+  )
 
   const webRoutes = Effect.fn("RelayStateStore.webRoutes")(function* (
     instanceId?: string
@@ -3533,8 +3630,7 @@ const makeRelayStateStore = Effect.gen(function* () {
         "get_backup_task",
         backupTasks({ taskId }).pipe(Effect.map((tasks) => tasks[0] ?? null))
       ),
-    listBackupTasks: (updatedAfter) =>
-      run("list_backup_tasks", listBackupTasksLenient(updatedAfter)),
+    backupTaskPage: (query) => run("backup_task_page", backupTaskPage(query)),
     updateBackupTaskProgress: (
       taskId,
       bytesCompleted,
