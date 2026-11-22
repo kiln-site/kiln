@@ -364,19 +364,26 @@ export class BackupManager {
    * and those Hearth names, all within one control message.
    */
   page(request: BackupTaskListRequest) {
-    return this.#state
-      .backupTaskPage({
+    return Effect.gen({ self: this }, function* () {
+      // Pruning is housekeeping: Hearth gets its page regardless.
+      yield* this.#state
+        .pruneBackupJournal(Date.now())
+        .pipe(
+          Effect.catch((cause) =>
+            logException(cause, { operation: "Backups.pruneJournal" })
+          )
+        )
+      const { changed, current, next } = yield* this.#state.backupTaskPage({
         after: request.after ?? { taskId: "", updatedAt: 0 },
         budgetBytes: backupTaskPageBytes,
         taskIds: request.taskIds ?? [],
       })
-      .pipe(
-        Effect.map(({ changed, current, next }) => ({
-          changed: changed.map(withinPage),
-          current: current.map(withinPage),
-          next,
-        }))
-      )
+      return {
+        changed: changed.map(withinPage),
+        current: current.map(withinPage),
+        next,
+      }
+    })
   }
 
   /**

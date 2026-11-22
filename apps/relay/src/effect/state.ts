@@ -753,6 +753,13 @@ export class RelayStateStore extends Context.Service<
     readonly getBackupTask: (
       taskId: string
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
+    /**
+     * Removes finished backup tasks, exports aside, a week after they ended,
+     * keeping the latest finished whatever their age.
+     */
+    readonly pruneBackupJournal: (
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
     readonly backupTaskPage: (query: {
       readonly after: { readonly taskId: string; readonly updatedAt: number }
       readonly budgetBytes: number
@@ -2654,6 +2661,11 @@ const makeRelayStateStore = Effect.gen(function* () {
   const warnedUnparseableTaskIds = new Set<string>()
   // Rows read for one page of the journal, before its byte budget cuts it.
   const backupTaskPageRows = 500
+  // Hearth reads the journal every few minutes, so a week is long past
+  // anything it hasn't read. The latest finished stay for looking into what
+  // the Relay did.
+  const backupJournalKeepMs = 7 * 24 * 60 * 60_000
+  const backupJournalKeepLatest = 20
   const insertBackupPrune = (prune: ScheduledBackupPrune, now: number) =>
     Effect.gen(function* () {
       const waiting = yield* sql`
@@ -3634,6 +3646,24 @@ const makeRelayStateStore = Effect.gen(function* () {
         backupTasks({ taskId }).pipe(Effect.map((tasks) => tasks[0] ?? null))
       ),
     backupTaskPage: (query) => run("backup_task_page", backupTaskPage(query)),
+    // Exports keep their own rule: only the latest for each backup stays.
+    pruneBackupJournal: (now) =>
+      run(
+        "prune_backup_journal",
+        sql`
+          DELETE FROM relay_backup_tasks
+          WHERE status IN ('succeeded', 'failed', 'cancelled')
+            AND kind <> 'export'
+            AND updated_at < ${now - backupJournalKeepMs}
+            AND task_id NOT IN (
+              SELECT task_id FROM relay_backup_tasks
+              WHERE status IN ('succeeded', 'failed', 'cancelled')
+                AND kind <> 'export'
+              ORDER BY updated_at DESC, task_id DESC
+              LIMIT ${backupJournalKeepLatest}
+            )
+        `.pipe(Effect.asVoid)
+      ),
     updateBackupTaskProgress: (
       taskId,
       bytesCompleted,
