@@ -3790,6 +3790,65 @@ export const cancelUnsentCreateEffect = Effect.fn("backups.cancelUnsentCreate")(
  * being deleted, or is gone, which the Relay should stop; and the ones
  * Hearth still waits on that the Relay doesn't have at all.
  */
+/**
+ * How far Hearth has read a Relay's backup task journal: the Relay's own time
+ * of the newest change Hearth has applied, or null before its first read.
+ */
+export const backupTasksReadAtEffect = Effect.fn("backups.tasksReadAt")(
+  function* (relayId: string) {
+    const database = yield* Database
+    const [row] = yield* database.queryRows<
+      RowDataPacket & { read_at: number | string | null }
+    >(
+      "backup_tasks_read_at",
+      `SELECT backup_tasks_read_at AS read_at
+         FROM ${databaseTable("relay")}
+        WHERE id = ?`,
+      [relayId]
+    )
+    return nullableDatabaseNumber(row?.read_at ?? null, "backup tasks read")
+  }
+)
+
+/**
+ * Records that Hearth has applied a Relay's backup task changes as far as
+ * `at`, by the Relay's clock. It never moves back, so passes running side by
+ * side only ever read some changes again.
+ */
+export const markBackupTasksReadEffect = Effect.fn("backups.markTasksRead")(
+  function* (relayId: string, at: number) {
+    const database = yield* Database
+    yield* database.execute(
+      "backup_tasks_mark_read",
+      `UPDATE ${databaseTable("relay")}
+          SET backup_tasks_read_at = GREATEST(COALESCE(backup_tasks_read_at, 0), ?)
+        WHERE id = ?`,
+      [at, relayId]
+    )
+  }
+)
+
+/**
+ * The backup tasks Hearth still has queued or running on a Relay, whose
+ * standing there each pass asks after by ID.
+ */
+export const unfinishedBackupTaskIdsEffect = Effect.fn(
+  "backups.unfinishedTaskIds"
+)(function* (relayId: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+    "backup_unfinished_task_ids",
+    `SELECT task.id
+       FROM ${databaseTable("backup_task")} task
+       JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+      WHERE backup.relay_id = ? AND task.status IN ('queued', 'running')
+      ORDER BY task.created_at ASC, task.id ASC
+      LIMIT 1000`,
+    [relayId]
+  )
+  return rows.map((row) => row.id)
+})
+
 export const createsOfDeletedBackupsEffect = Effect.fn(
   "backups.createsOfDeletedBackups"
 )(function* (relayId: string, relayTaskIds: ReadonlyArray<string>) {

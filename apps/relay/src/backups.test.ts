@@ -254,6 +254,60 @@ describe("Relay backup exports", () => {
   )
 })
 
+describe("Relay backup task pages", () => {
+  // A backup can end with up to a thousand warnings of a kilobyte each,
+  // enough alone to fill a control message.
+  it.effect("cuts a task's warnings so no one task fills a page", () =>
+    withRelay("kiln-backup-task-page-", ({ config }) =>
+      Effect.gen(function* () {
+        const manager = yield* backupManager(config)
+        const store = yield* RelayStateStore
+        const taskId = "41300000-0000-4000-8000-000000000001"
+        yield* store.enqueueBackupTask(
+          {
+            artifactKind: "archive",
+            backupId: "41300000-0000-4000-8000-000000000002",
+            destination: { kind: "local" },
+            exclude: [],
+            kind: "create",
+            maxBytes: null,
+            mode: "full",
+            reason: "manual",
+            target: { id: "instance-1", kind: "instance" },
+            taskId,
+          },
+          1_000
+        )
+        yield* store.claimNextBackupTask(1_010)
+        assert.isTrue(
+          yield* store.completeBackupTask(
+            taskId,
+            {
+              bytes: 1,
+              checksumSha256: "a".repeat(64),
+              filename: "backup.zip",
+              warnings: Array.from(
+                { length: 1_000 },
+                (_, n) => `/data/${n}/${"x".repeat(1_000)}`
+              ),
+            },
+            1_020
+          )
+        )
+
+        const page = yield* manager.page({})
+        const [task] = page.changed
+        const warnings =
+          task?.result && "warnings" in task.result ? task.result.warnings : []
+
+        assert.lengthOf(warnings, 50)
+        assert.strictEqual(warnings.at(-1), "…and 951 more warnings")
+        assert.isBelow(Buffer.byteLength(JSON.stringify(page)), 128 * 1024)
+      })
+    )
+  )
+})
+
 function withRelay<A, E>(
   prefix: string,
   body: (context: {

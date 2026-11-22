@@ -29,6 +29,7 @@ import {
 import { takeScheduledBucketBackups } from "@/server/scheduled-bucket-backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRelay, selectRows } from "@/test/seed"
+import { relayBackupTaskPage } from "@/test/relay-backup-tasks"
 
 // The Relay is the only boundary. It takes a schedule and a backup task as
 // a Relay does, refusing what it can't parse, and keeps what it was sent.
@@ -102,12 +103,15 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       const held = [...relay.tasks.values()]
       await relay.listingHeld
       relay.listing -= 1
-      return held.map((task) => ({
-        ...task,
-        error: "This Relay makes no backups",
-        finishedAt: at,
-        status: "failed",
-      }))
+      return relayBackupTaskPage(
+        held.map((task) => ({
+          ...task,
+          error: "This Relay makes no backups",
+          finishedAt: at,
+          status: "failed",
+        })),
+        payload
+      )
     }
     if (operation === "backup.task.enqueue") {
       await relay.arriving
@@ -290,6 +294,16 @@ const takenOf = (reply: ScheduledBucketBackupReply, member: Member) => {
 // the test's to pass: each pass is started, then read after while it has
 // its turn, until no task is left to follow and Hearth has stopped asking
 // the Relay, so nothing of this test runs on into the next.
+// Until a pass is reading the Relay's backups: a pass reads Hearth's own
+// records first, which takes real time the fake clock doesn't move.
+const passReading = Effect.gen(function* () {
+  const giveUpAt = performance.now() + 30_000
+  while (relay.listing === 0 && performance.now() < giveUpAt) {
+    yield* Effect.promise(() => vi.advanceTimersByTimeAsync(100))
+    yield* selectRows("backup_task")
+  }
+})
+
 const passesRun = Effect.gen(function* () {
   const giveUpAt = performance.now() + 30_000
   let quiet = 0
@@ -712,6 +726,7 @@ describeMysql("A schedule's backups to a bucket", () => {
           // starts and is held reading them.
           yield* ask(relayId, { scheduledAt: at + 60_000 })
           yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_500))
+          yield* passReading
           assert.strictEqual(relay.listing, 1)
 
           // Two more are taken meanwhile, each asking for a pass.

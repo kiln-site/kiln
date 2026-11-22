@@ -352,6 +352,73 @@ describe("Relay state", () => {
       })
   )
 
+  stateTest(
+    "pages the backup journal for Hearth in the order tasks changed, with what's unfinished on every page",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const id = (n: number) =>
+          `41200000-0000-4000-8000-${String(n).padStart(12, "0")}`
+        const create = (n: number, now: number) =>
+          store.enqueueBackupTask(
+            {
+              artifactKind: "archive",
+              backupId: id(100 + n),
+              destination: { kind: "local" },
+              exclude: [],
+              kind: "create",
+              maxBytes: null,
+              mode: "full",
+              reason: "manual",
+              target: { id: `instance-${n}`, kind: "instance" },
+              taskId: id(n),
+            },
+            now
+          )
+        // Nine creates. All but the last end, three of them at the same
+        // moment.
+        for (let n = 1; n <= 9; n += 1) yield* create(n, 1_000 + n * 10)
+        for (let n = 1; n <= 8; n += 1) {
+          const at = n >= 4 && n <= 6 ? 2_005 : 2_000 + n
+          assert.isTrue(yield* store.failBackupTask(id(n), "It failed", at))
+        }
+        const oneTask = Buffer.byteLength(
+          JSON.stringify((yield* store.getBackupTask(id(1)))!)
+        )
+
+        // Pages of about three tasks, asking after one ended task by ID.
+        const seen: Array<string> = []
+        let after = { taskId: "", updatedAt: 0 }
+        let pages = 0
+        for (;;) {
+          const page = yield* store.backupTaskPage({
+            after,
+            budgetBytes: oneTask * 3.5,
+            taskIds: [id(2)],
+          })
+          pages += 1
+          // What's unfinished, and the one asked after, on every page.
+          assert.sameMembers(
+            page.current.map((task) => task.taskId),
+            pages === 1 ? [id(2), id(9)] : [id(2)]
+          )
+          seen.push(...page.changed.map((task) => task.taskId))
+          // A task that changes after its page was read comes again later.
+          if (pages === 1) {
+            assert.isTrue(yield* store.failBackupTask(id(9), "Late", 9_000))
+          }
+          if (!page.next) break
+          after = page.next
+        }
+
+        // Each comes once, in the order they changed, but for what a page
+        // already carries as current: the create while it was queued, and
+        // the one asked after.
+        assert.isAbove(pages, 2)
+        assert.deepStrictEqual(seen, [...[1, 3, 4, 5, 6, 7, 8].map(id), id(9)])
+      })
+  )
+
   stateTest("never runs a create that arrives after its backup's delete", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore

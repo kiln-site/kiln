@@ -44,6 +44,7 @@ import {
   type BackupResticCreateTaskResult,
   type BackupRestoreTaskInput,
   type BackupTaskCancelRequest,
+  type BackupTaskListRequest,
   type BackupTarget,
   type BackupUnfinishedRestore,
   type BackupTaskInput,
@@ -134,6 +135,34 @@ import {
 } from "./restic.js"
 
 const MAX_BACKUP_ENTRIES = 100_000
+// One page of the task journal for Hearth stays well inside a control
+// message (1 MiB), whatever else the message carries.
+const backupTaskPageBytes = 512 * 1024
+// A task's warnings are cut to this many on a page, with a last one saying
+// how many more there were, so no one task can fill a page alone.
+const backupTaskPageWarnings = 50
+
+function withinPage(task: RelayBackupTask): RelayBackupTask {
+  const result = task.result
+  if (
+    !result ||
+    !("warnings" in result) ||
+    result.warnings.length <= backupTaskPageWarnings
+  ) {
+    return task
+  }
+  const kept = result.warnings.slice(0, backupTaskPageWarnings - 1)
+  return {
+    ...task,
+    result: {
+      ...result,
+      warnings: [
+        ...kept,
+        `…and ${result.warnings.length - kept.length} more warnings`,
+      ],
+    },
+  }
+}
 const ZIP_OVERHEAD_RESERVE_BYTES = 64 * 1024 * 1024
 const BACKUP_TIMEOUT_REASON =
   "Cancelled after reaching the configured backup timeout"
@@ -329,11 +358,24 @@ export class BackupManager {
     return this.#state.getBackupTask(taskId)
   }
 
-  list(updatedAfter?: number) {
+  /**
+   * One page of the backup task journal for Hearth: the tasks changed after
+   * `after`, in the order they changed, every task still queued or running,
+   * and those Hearth names, all within one control message.
+   */
+  page(request: BackupTaskListRequest) {
     return this.#state
-      .listBackupTasks(updatedAfter)
+      .backupTaskPage({
+        after: request.after ?? { taskId: "", updatedAt: 0 },
+        budgetBytes: backupTaskPageBytes,
+        taskIds: request.taskIds ?? [],
+      })
       .pipe(
-        Effect.map((tasks) => tasks.filter((task) => task.kind !== "prune"))
+        Effect.map(({ changed, current, next }) => ({
+          changed: changed.map(withinPage),
+          current: current.map(withinPage),
+          next,
+        }))
       )
   }
 

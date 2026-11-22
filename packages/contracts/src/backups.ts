@@ -1049,6 +1049,41 @@ export type BackupTaskResult = z.infer<typeof backupTaskResultSchema>
 export type BackupTaskStatus = z.infer<typeof backupTaskStatusSchema>
 export type RelayBackupTask = z.infer<typeof relayBackupTaskSchema>
 
+/** Where Hearth's read of a Relay's backup tasks is up to. */
+export const backupTaskListCursorSchema = z
+  .object({
+    taskId: z.string().max(64),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .strict()
+export type BackupTaskListCursor = z.infer<typeof backupTaskListCursorSchema>
+
+/**
+ * Asks a Relay for its backup tasks a page at a time: those changed after
+ * `after`, and, on every page, those still queued or running and those Hearth
+ * names in `taskIds`.
+ */
+export const backupTaskListRequestSchema = z
+  .object({
+    after: backupTaskListCursorSchema.optional(),
+    taskIds: z.array(backupTaskIdSchema).max(1_000).optional(),
+  })
+  .strict()
+export type BackupTaskListRequest = z.infer<typeof backupTaskListRequestSchema>
+
+/**
+ * One page of a Relay's backup tasks: `changed` in the order they changed,
+ * `next` where the following page starts, or null on the last.
+ */
+export const backupTaskListResponseSchema = z
+  .object({
+    changed: z.array(relayBackupTaskSchema),
+    current: z.array(relayBackupTaskSchema),
+    next: backupTaskListCursorSchema.nullable(),
+  })
+  .strict()
+export type BackupTaskListResponse = z.infer<typeof backupTaskListResponseSchema>
+
 const BACKUP_ARTIFACT_EXTENSIONS = {
   archive: "zip",
   database_dump: "dmp.gz",

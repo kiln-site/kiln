@@ -7,6 +7,7 @@ import { reconcileRelayBackups } from "@/lib/backup-reconciliation"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
+import { relayBackupTaskPage } from "@/test/relay-backup-tasks"
 
 const relayId = "1".repeat(12)
 const batchId = "22222222-2222-4222-8222-222222222222"
@@ -53,16 +54,121 @@ const members = Array.from({ length: 6 }, (_, member) => {
   }
 })
 
-// The Relay is the only boundary: it lists the backups it holds.
+// The Relay is the only boundary: it lists the backups it holds, as each
+// test says.
+const relay = vi.hoisted(() => ({
+  list: null as null | ((payload: unknown, relayId: string) => unknown),
+}))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayRpc: async (_relay: unknown, operation: string) => {
-    if (operation === "backup.task.list") return members
+  relayRpc: async (
+    asking: { id: string },
+    operation: string,
+    payload: unknown
+  ) => {
+    if (operation === "backup.task.list") {
+      return relay.list
+        ? relay.list(payload, asking.id)
+        : relayBackupTaskPage(members, payload)
+    }
     throw new Error(`Unexpected Relay request ${operation}`)
   },
 }))
+
+// A schedule's backup of one volume the Relay made on its own, which failed
+// there, changed last at `updatedAt` by the Relay's clock.
+const scheduled = (index: number, updatedAt: number) => {
+  const part = String(index).padStart(4, "0")
+  const backupId = `${part}0000-0000-4000-8000-000000000001`
+  const taskId = `${part}0000-0000-4000-8000-000000000002`
+  return {
+    ...members[0]!,
+    backupId,
+    input: {
+      ...members[0]!.input,
+      backupId,
+      catalog: { name: "Nightly", storageId: null },
+      destination: {
+        artifactId: `${part}0000-0000-4000-8000-000000000003`,
+        kind: "local",
+      },
+      target: { id: part.repeat(10), kind: "volume" },
+      taskId,
+    },
+    error: "The volume couldn't be read",
+    finishedAt: updatedAt,
+    status: "failed",
+    taskId,
+    updatedAt,
+  }
+}
+
+// The Relay the paging tests read: passes over another, as ones an earlier
+// test left running, aren't counted.
+const pagedRelayId = "3".repeat(12)
+
+// A Relay holding `journal`, answering a page of `size` tasks at a time from
+// where Hearth asks, as a Relay does; `asked` keeps where each request began.
+const pagingRelay = (
+  journal: Array<ReturnType<typeof scheduled>>,
+  size: number,
+  asked: Array<{ taskId: string; updatedAt: number } | undefined>,
+  failOn?: number
+) => {
+  let requests = 0
+  return (payload: unknown, relayId: string) => {
+    if (relayId !== pagedRelayId)
+      return { changed: [], current: [], next: null }
+    requests += 1
+    if (requests === failOn) throw new Error("The Relay stopped answering")
+    const after = (payload as { after?: { taskId: string; updatedAt: number } })
+      .after
+    asked.push(after)
+    const ordered = [...journal].sort(
+      (a, b) => a.updatedAt - b.updatedAt || a.taskId.localeCompare(b.taskId)
+    )
+    const changed = ordered.filter(
+      (task) =>
+        !after ||
+        task.updatedAt > after.updatedAt ||
+        (task.updatedAt === after.updatedAt && task.taskId > after.taskId)
+    )
+    const page = changed.slice(0, size)
+    const last = page.at(-1)
+    const askedIds = new Set(
+      (payload as { taskIds?: Array<string> }).taskIds ?? []
+    )
+    return {
+      changed: page,
+      // Every page carries what's unfinished and what Hearth asks after.
+      current: journal.filter(
+        (task) =>
+          task.status === "queued" ||
+          task.status === "running" ||
+          askedIds.has(task.taskId)
+      ),
+      next:
+        changed.length > size && last
+          ? { taskId: last.taskId, updatedAt: last.updatedAt }
+          : null,
+    }
+  }
+}
+
+const readAt = Effect.map(
+  selectRows<{ backup_tasks_read_at: number | string | null }>("relay"),
+  ([row]) =>
+    row?.backup_tasks_read_at === null ||
+    row?.backup_tasks_read_at === undefined
+      ? null
+      : Number(row.backup_tasks_read_at)
+)
+// What watching browsers are told changed.
+const published = vi.hoisted(() => [] as Array<string>)
 vi.mock("@/lib/realtime-source.server", () => ({
-  publishRealtimeChange: () => undefined,
+  publishRealtimeChange: (change: unknown) => {
+    published.push(JSON.stringify(change))
+  },
 }))
 
 afterAll(() => disposeAppRuntime())
@@ -77,10 +183,11 @@ describeMysql("Reconciling a Relay's backups", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
+          relay.list = null
           yield* insertRelay(relayId, { enabled: 1 })
-          const [relay] = yield* Effect.promise(listPersistedRelays)
+          const [persisted] = yield* Effect.promise(listPersistedRelays)
 
-          yield* Effect.promise(() => reconcileRelayBackups(relay!))
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
 
           const backups = yield* selectRows<{
             batch_id: string | null
@@ -92,6 +199,138 @@ describeMysql("Reconciling a Relay's backups", () => {
               (backup) =>
                 backup.batch_id === batchId && backup.reason === "scheduled"
             )
+          )
+        })
+    )
+
+    it.effect(
+      "reads a Relay's journal a page at a time, and the next pass from where it left off",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(pagedRelayId, { enabled: 1 })
+          const [persisted] = yield* Effect.promise(listPersistedRelays)
+          const journal = Array.from({ length: 12 }, (_, index) =>
+            scheduled(index + 1, at + index * 1_000)
+          )
+          const asked: Array<
+            { taskId: string; updatedAt: number } | undefined
+          > = []
+          relay.list = pagingRelay(journal, 5, asked)
+
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          assert.lengthOf(yield* selectRows("backup"), 12)
+          assert.lengthOf(asked, 3)
+          assert.isUndefined(asked[0])
+          assert.strictEqual(yield* readAt, at + 11_000)
+
+          // Made later; the next pass starts a minute before where it left
+          // off, and finds it.
+          journal.push(scheduled(13, at + 200_000))
+          asked.length = 0
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          assert.lengthOf(yield* selectRows("backup"), 13)
+          assert.deepStrictEqual(asked[0], {
+            taskId: "",
+            updatedAt: at + 11_000 - 60_000,
+          })
+          assert.strictEqual(yield* readAt, at + 200_000)
+        })
+    )
+
+    it.effect(
+      "starts again after the last page it applied when a page fails",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(pagedRelayId, { enabled: 1 })
+          const [persisted] = yield* Effect.promise(listPersistedRelays)
+          const journal = Array.from({ length: 12 }, (_, index) =>
+            scheduled(index + 1, at + index * 100_000)
+          )
+          const asked: Array<
+            { taskId: string; updatedAt: number } | undefined
+          > = []
+          published.length = 0
+          relay.list = pagingRelay(journal, 5, asked, 2)
+
+          const failed = yield* Effect.promise(() =>
+            reconcileRelayBackups(persisted!).then(
+              () => false,
+              () => true
+            )
+          )
+
+          // The first page is applied, and those watching are told of it;
+          // what Hearth has read stops there.
+          assert.isTrue(failed)
+          assert.lengthOf(yield* selectRows("backup"), 5)
+          assert.strictEqual(yield* readAt, at + 400_000)
+          for (const task of journal.slice(0, 5)) {
+            assert.isTrue(
+              published.some((change) => change.includes(task.backupId))
+            )
+          }
+
+          relay.list = pagingRelay(journal, 5, asked)
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          assert.lengthOf(yield* selectRows("backup"), 12)
+        })
+    )
+
+    it.effect(
+      "applies a task Hearth has running that ends between two pages, at the moment it last changed",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(pagedRelayId, { enabled: 1 })
+          const [persisted] = yield* Effect.promise(listPersistedRelays)
+          const ended = scheduled(1, at)
+          const running = {
+            ...ended,
+            error: null,
+            finishedAt: null,
+            status: "running",
+          }
+          // Hearth hears of it running.
+          relay.list = (_payload, relayId) =>
+            relayId === pagedRelayId
+              ? { changed: [], current: [running], next: null }
+              : { changed: [], current: [], next: null }
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          // The next pass asks after it: the first page still has it
+          // running; by the second it has ended, stamped the same moment by
+          // the Relay's clock, and comes only as asked after.
+          const other = scheduled(2, at + 1_000)
+          relay.list = (payload, relayId) => {
+            if (relayId !== pagedRelayId) {
+              return { changed: [], current: [], next: null }
+            }
+            const asked = new Set(
+              (payload as { taskIds?: Array<string> }).taskIds ?? []
+            )
+            assert.isTrue(asked.has(ended.taskId))
+            return (payload as { after?: unknown }).after === undefined ||
+              !(payload as { after: { taskId: string } }).after.taskId
+              ? {
+                  changed: [other],
+                  current: [running],
+                  next: { taskId: other.taskId, updatedAt: other.updatedAt },
+                }
+              : { changed: [], current: [ended], next: null }
+          }
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          const tasks = yield* selectRows<{ id: string; status: string }>(
+            "backup_task"
+          )
+          assert.strictEqual(
+            tasks.find(({ id }) => id === ended.taskId)?.status,
+            "failed"
           )
         })
     )

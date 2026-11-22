@@ -36,7 +36,7 @@ The managed server or database process never owns the backup job.
 4. Relay atomically persists progress and the terminal result. Events are an
    optimization, not the source of truth.
 5. Hearth consumes events while connected and reconciles its catalog with the
-   Relay's task list whenever the Relay reconnects.
+   Relay's task journal, a page at a time, whenever the Relay reconnects.
 
 Submitting an existing task ID returns its current task rather than starting a
 second operation. A Relay restart changes an interrupted `running` create or
@@ -49,6 +49,25 @@ replaces the durable input, clears the flag, and wakes the worker. Orchestration
 must use the flag rather than infer this handshake from an error message. A task
 that reached a non-repeatable restore step is marked failed for explicit review
 instead of guessed at.
+
+Hearth reads a Relay's task journal a page at a time, never all of it at
+once: the Relay keeps every task it has run, so the whole journal soon
+outgrows one control message (1 MiB). Each pass asks for the tasks changed
+after where Hearth last read (`backup_tasks_read_at` on the Relay's row, by
+the Relay's clock), less a minute, since a change can be stamped a moment
+before another that is written first. Each page holds the tasks changed
+next, in the order they changed, up to half a megabyte, and on every page
+the Relay also sends each task still queued or running and each Hearth asks
+after by ID: Hearth asks after its own unfinished tasks, so it knows what
+the Relay holds under each before sending or stopping one. Hearth records
+how far it has read once each page is applied, so a pass that fails part
+way starts the next from there. A task Hearth queued after the pass asked
+waits for the next pass. A task's warnings are cut to fifty on a page, the
+last saying how many more there were, so no one task fills a page. The
+backup sweep reads each Relay with scheduled backups from the start, a page
+at a time, so a report Hearth refused before gets another look, and a change
+the faster passes missed, as when a Relay's clock stepped back, is found
+within ten minutes.
 
 What a Relay reports of a task reaches Hearth's records only as far as that
 Relay's own work goes. Hearth sends a backup's tasks to its own Relay alone,

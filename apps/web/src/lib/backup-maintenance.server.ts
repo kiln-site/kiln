@@ -44,7 +44,10 @@ const seedDefaultSchedule = Effect.fn("backupMaintenance.seedDefault")(
 )
 
 // A Relay makes scheduled backups on its own; Hearth catalogs them when it
-// next lists the Relay's backups, which retention needs first.
+// next lists the Relay's backups, which retention needs first. The sweep
+// reads each such Relay's whole journal, a page at a time, so a report
+// Hearth refused before gets another look and a change passes missed is
+// found.
 const catalogScheduledBackups = Effect.fn("backupMaintenance.catalog")(
   function* () {
     const relayIds = new Set(yield* scheduledBackupRelayIdsEffect())
@@ -55,7 +58,9 @@ const catalogScheduledBackups = Effect.fn("backupMaintenance.catalog")(
       () => import("@/lib/backup-reconciliation")
     )
     for (const relay of relays) {
-      yield* promiseEffect(() => reconcileRelayBackups(relay)).pipe(
+      yield* promiseEffect(() =>
+        reconcileRelayBackups(relay, undefined, { rescan: true })
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(`Couldn't list ${relay.name}'s backups`, cause)
         )

@@ -1,19 +1,23 @@
-import { z } from "zod"
 import { Effect } from "effect"
 import { logException } from "@workspace/telemetry"
 
 import {
+  backupTaskListResponseSchema,
   relayBackupTaskSchema,
+  type BackupTaskListCursor,
   type RelayBackupTask,
 } from "@workspace/contracts"
 
 import {
+  backupTasksReadAtEffect,
   cancelUnsentCreateEffect,
   createTaskIdentityEffect,
   createsOfDeletedBackupsEffect,
   listDispatchableBackupTasksEffect,
+  markBackupTasksReadEffect,
   reconcileBackupTaskEffect,
   settleUndispatchableBackupTaskEffect,
+  unfinishedBackupTaskIdsEffect,
   type BackupDispatch,
 } from "@/effect/backups"
 import { isDeadlock } from "@/effect/database-deadlocks"
@@ -30,7 +34,9 @@ import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 
 const reconciliationTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-const relayTasksSchema = z.array(relayBackupTaskSchema)
+// Each pass reads the last minute of a Relay's journal again: a change can
+// be stamped a moment before another one that is written first.
+const READ_AGAIN_MS = 60_000
 
 export async function reconcileBackupsAfterRelayConnect(
   relayId: string
@@ -43,11 +49,12 @@ export async function reconcileBackupsAfterRelayConnect(
 
 export function reconcileRelayBackups(
   relay: PersistedRelay,
-  subject?: string
+  subject?: string,
+  options?: ReconcileOptions
 ): Promise<void> {
   return runAppEffect(
     "Backups.reconcileRelay",
-    reconcileRelayBackupsEffect(relay, subject)
+    reconcileRelayBackupsEffect(relay, subject, options)
   )
 }
 
@@ -87,82 +94,86 @@ export function cancelCreateForDelete(
 
 export { prepareBackupTaskEffect }
 
+type ReconcileOptions = {
+  /**
+   * Reads the Relay's whole journal again rather than what changed since the
+   * last pass, as the backup sweep does: a report Hearth refused before, as
+   * one for a resource it hadn't cataloged yet, gets another look, and a
+   * change the last passes missed is found.
+   */
+  readonly rescan?: boolean
+}
+
 /**
- * Brings Hearth's catalog in line with what a Relay holds: its tasks are
- * read in first, so tasks interrupted there can be refreshed and sent again
- * in the same pass; creates of backups being deleted are stopped; then every
- * queued task is sent, each on its own, so one Hearth can't send never holds
- * up the rest.
+ * Brings Hearth's catalog in line with what a Relay holds: the tasks that
+ * changed there since the last pass are read in first, a page at a time, so
+ * tasks interrupted there can be refreshed and sent again in the same pass;
+ * creates of backups being deleted are stopped; then every queued task is
+ * sent, each on its own, so one Hearth can't send never holds up the rest.
  */
 // Untraced: each caller runs it in a `Backups.reconcileRelay` span of its own.
 const reconcileRelayBackupsEffect = Effect.fnUntraced(
-  function* (relay: PersistedRelay, subject?: string) {
+  function* (
+    relay: PersistedRelay,
+    subject?: string,
+    options: ReconcileOptions = {}
+  ) {
     yield* Effect.annotateCurrentSpan({ "relay.id": relay.id })
-    const tasks = relayTasksSchema.parse(
-      yield* promiseEffect(() =>
-        relayRpc(relay, "backup.task.list", {}, 15_000, subject)
-      )
-    )
-    const relayTasksById = new Map(tasks.map((task) => [task.taskId, task]))
-    // Tasks Hearth hasn't seen, as a schedule's backups whose news never
-    // reached it, are cataloged side by side, each locking where its rows
-    // will go, and MySQL ends one of two that wait on each other. Those run
-    // again one at a time, where none is left to wait on another: without
-    // that the pass failed the same way every time, and none of a batch was
-    // ever cataloged.
-    const settled = yield* Effect.forEach(
-      tasks,
-      (task) =>
-        reconcileBackupTaskEffect(task, relay.id).pipe(
-          Effect.map((updated) => ({ ended: false, task, updated })),
-          Effect.catchIf(isDeadlock, () =>
-            Effect.succeed({ ended: true, task, updated: false })
+    // Hearth's own unfinished tasks are asked after by ID on every page, so
+    // what the Relay holds under each is known whatever changed when.
+    const asked = yield* unfinishedBackupTaskIdsEffect(relay.id)
+    const askedIds = new Set(asked)
+    const readAt = options.rescan
+      ? null
+      : yield* backupTasksReadAtEffect(relay.id)
+    let after: BackupTaskListCursor | undefined =
+      readAt === null
+        ? undefined
+        : { taskId: "", updatedAt: Math.max(0, readAt - READ_AGAIN_MS) }
+    const relayTasksById = new Map<string, RelayBackupTask>()
+    const changed: Array<RelayBackupTask> = []
+    let current: ReadonlyArray<RelayBackupTask> = []
+    let read = 0
+    let pages = 0
+    for (;;) {
+      const page = backupTaskListResponseSchema.parse(
+        yield* promiseEffect(() =>
+          relayRpc(
+            relay,
+            "backup.task.list",
+            { ...(after ? { after } : {}), taskIds: asked },
+            15_000,
+            subject
           )
-        ),
-      { concurrency: 8 }
-    )
-    const again = yield* Effect.forEach(
-      settled.filter(({ ended }) => ended),
-      ({ task }) =>
-        reconcileBackupTaskEffect(task, relay.id).pipe(
-          // Another pass may still be cataloging beside this one.
-          Effect.retry({ times: 3, while: isDeadlock }),
-          Effect.map((updated) => ({ task, updated }))
-        ),
-      { concurrency: 1 }
-    )
-    const changed = [...settled, ...again].flatMap(({ task, updated }) =>
-      updated ? [task] : []
-    )
-    publishBackupChanges(
-      relay.id,
-      changed.map((task) => task.backupId)
-    )
-    // A finished backup's bucket copies wait for Hearth to see them there.
-    if (
-      changed.some(
-        (task) => task.kind === "create" && task.status === "succeeded"
+        )
       )
-    ) {
-      const { requestBucketCopyChecks } = yield* promiseEffect(
-        () => import("@/lib/bucket-copy-checks.server")
-      )
-      requestBucketCopyChecks()
+      pages += 1
+      read += page.changed.length
+      changed.push(...(yield* applied(relay, page.changed)))
+      for (const task of page.changed) relayTasksById.set(task.taskId, task)
+      // Applied, so the next pass can start after them.
+      const newest = page.changed.at(-1)
+      if (newest) yield* markBackupTasksReadEffect(relay.id, newest.updatedAt)
+      current = page.current
+      if (!page.next) break
+      after = page.next
     }
-    // A finished backup can push its target past its retention.
-    if (
-      changed.some(
-        (task) => task.kind === "create" && task.status === "succeeded"
-      )
-    ) {
-      const { requestBackupRetention } = yield* promiseEffect(
-        () => import("@/lib/backup-maintenance.server")
-      )
-      requestBackupRetention()
-    }
-    yield* stopCreatesOfDeletedBackups(relay, relayTasksById, subject)
+    // What's still queued or running, and what Hearth asked after, as the
+    // last page found it. Applied whatever a page showed of them: one that
+    // ended the moment its page read it is caught here.
+    changed.push(...(yield* applied(relay, current)))
+    for (const task of current) relayTasksById.set(task.taskId, task)
+    yield* stopCreatesOfDeletedBackups(relay, {
+      asked: askedIds,
+      current,
+      held: relayTasksById,
+      subject,
+    })
     const dispatchable = yield* listDispatchableBackupTasksEffect(relay.id)
     let pending = 0
+    // Tasks queued after this pass asked the Relay about Hearth's: what it
+    // holds under their IDs isn't known yet, so the next pass sends them.
+    let deferred = 0
     for (const task of dispatchable) {
       if (task.kind === "undispatchable") {
         yield* settleUndispatchable(relay, task.taskId, task.backupId, {
@@ -172,6 +183,10 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
         continue
       }
       const relayTask = relayTasksById.get(task.taskId)
+      if (!relayTask && !askedIds.has(task.taskId)) {
+        deferred += 1
+        continue
+      }
       // The Relay holds another task under this one's ID, for another
       // backup, kind or resource: this one never arrived, and sending it
       // would only be refused. It is settled, saying so, rather than tried
@@ -201,28 +216,109 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       )
     }
     yield* Effect.annotateCurrentSpan({
-      "backup.tasks.relay": tasks.length,
+      "backup.tasks.read": read,
+      "backup.tasks.pages": pages,
+      "backup.tasks.current": current.length,
       "backup.tasks.changed": changed.length,
       "backup.tasks.dispatched": pending,
+      "backup.tasks.deferred": deferred,
     })
     if (
       pending > 0 ||
-      tasks.some((task) => task.status === "queued" || task.status === "running")
+      deferred > 0 ||
+      current.some(
+        (task) => task.status === "queued" || task.status === "running"
+      )
     ) {
       scheduleBackupReconciliation(relay, subject)
     }
   }
 )
 
+// Applies a page of what a Relay reports, and follows up on what changed
+// at once, page by page, so a later page that fails can't keep the news of an
+// earlier one from those watching, or a finished backup from its checks.
+const applied = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  tasks: ReadonlyArray<RelayBackupTask>
+) {
+  const changed = yield* reconcileTasks(relay, tasks)
+  publishBackupChanges(
+    relay.id,
+    changed.map((task) => task.backupId)
+  )
+  if (
+    changed.some(
+      (task) => task.kind === "create" && task.status === "succeeded"
+    )
+  ) {
+    // A finished backup's bucket copies wait for Hearth to see them there,
+    // and it can push its target past its retention.
+    const { requestBucketCopyChecks } = yield* promiseEffect(
+      () => import("@/lib/bucket-copy-checks.server")
+    )
+    requestBucketCopyChecks()
+    const { requestBackupRetention } = yield* promiseEffect(
+      () => import("@/lib/backup-maintenance.server")
+    )
+    requestBackupRetention()
+  }
+  return changed
+})
+
+// Applies what a Relay reports of each task. Tasks Hearth hasn't seen, as a
+// schedule's backups whose news never reached it, are cataloged side by side,
+// each locking where its rows will go, and MySQL ends one of two that wait on
+// each other. Those run again one at a time, where none is left to wait on
+// another: without that the pass failed the same way every time, and none of
+// a batch was ever cataloged. Answers the tasks whose report changed Hearth's
+// records.
+const reconcileTasks = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  tasks: ReadonlyArray<RelayBackupTask>
+) {
+  const settled = yield* Effect.forEach(
+    tasks,
+    (task) =>
+      reconcileBackupTaskEffect(task, relay.id).pipe(
+        Effect.map((updated) => ({ ended: false, task, updated })),
+        Effect.catchIf(isDeadlock, () =>
+          Effect.succeed({ ended: true, task, updated: false })
+        )
+      ),
+    { concurrency: 8 }
+  )
+  const again = yield* Effect.forEach(
+    settled.filter(({ ended }) => ended),
+    ({ task }) =>
+      reconcileBackupTaskEffect(task, relay.id).pipe(
+        // Another pass may still be cataloging beside this one.
+        Effect.retry({ times: 3, while: isDeadlock }),
+        Effect.map((updated) => ({ task, updated }))
+      ),
+    { concurrency: 1 }
+  )
+  return [...settled, ...again].flatMap(({ task, updated }) =>
+    updated ? [task] : []
+  )
+})
+
 // Creates still running or queued for backups being deleted are stopped on
 // the Relay, and ones the Relay never received are cancelled in Hearth, so
 // each delete waiting on one can follow.
 const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
   relay: PersistedRelay,
-  relayTasksById: ReadonlyMap<string, RelayBackupTask>,
-  subject?: string
+  input: {
+    // The IDs this pass asked the Relay about.
+    readonly asked: ReadonlySet<string>
+    // Every task the Relay has queued or running, and those asked about.
+    readonly current: ReadonlyArray<RelayBackupTask>
+    // What the Relay holds under each ID this pass heard of.
+    readonly held: ReadonlyMap<string, RelayBackupTask>
+    readonly subject: string | undefined
+  }
 ) {
-  const activeRelayCreates = [...relayTasksById.values()].flatMap((task) =>
+  const activeRelayCreates = input.current.flatMap((task) =>
     task.kind === "create" &&
     (task.status === "queued" || task.status === "running")
       ? [task.taskId]
@@ -233,14 +329,13 @@ const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
     activeRelayCreates
   )
   for (const create of creates) {
+    const held = input.held.get(create.id)
+    // Queued after this pass asked the Relay: the next pass knows whether
+    // the Relay holds it.
+    if (!held && !input.asked.has(create.id)) continue
     yield* (
-      relayTasksById.has(create.id)
-        ? cancelCreateEffect(
-            relay,
-            create.id,
-            subject,
-            relayTasksById.get(create.id)
-          )
+      held
+        ? cancelCreateEffect(relay, create.id, input.subject, held)
         : cancelUnsentCreateEffect(create.id)
     ).pipe(
       Effect.catch((cause) =>
