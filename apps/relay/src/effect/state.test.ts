@@ -411,12 +411,11 @@ describe("Relay state", () => {
           after = page.next
         }
 
+        // Each comes once, in the order they changed, but for what a page
+        // already carries as current: the create while it was queued, and
+        // the one asked after.
         assert.isAbove(pages, 2)
-        assert.deepStrictEqual(seen, [
-          id(9),
-          ...[1, 2, 3, 4, 5, 6, 7, 8].map(id),
-          id(9),
-        ])
+        assert.deepStrictEqual(seen, [...[1, 3, 4, 5, 6, 7, 8].map(id), id(9)])
       })
   )
 

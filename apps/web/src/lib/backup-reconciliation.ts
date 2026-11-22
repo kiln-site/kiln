@@ -149,7 +149,7 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       )
       pages += 1
       read += page.changed.length
-      changed.push(...(yield* reconcileTasks(relay, page.changed)))
+      changed.push(...(yield* applied(relay, page.changed)))
       for (const task of page.changed) relayTasksById.set(task.taskId, task)
       // Applied, so the next pass can start after them.
       const newest = page.changed.at(-1)
@@ -159,43 +159,10 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       after = page.next
     }
     // What's still queued or running, and what Hearth asked after, as the
-    // last page found it.
-    changed.push(
-      ...(yield* reconcileTasks(
-        relay,
-        current.filter(
-          (task) =>
-            relayTasksById.get(task.taskId)?.updatedAt !== task.updatedAt
-        )
-      ))
-    )
+    // last page found it. Applied whatever a page showed of them: one that
+    // ended the moment its page read it is caught here.
+    changed.push(...(yield* applied(relay, current)))
     for (const task of current) relayTasksById.set(task.taskId, task)
-    publishBackupChanges(
-      relay.id,
-      changed.map((task) => task.backupId)
-    )
-    // A finished backup's bucket copies wait for Hearth to see them there.
-    if (
-      changed.some(
-        (task) => task.kind === "create" && task.status === "succeeded"
-      )
-    ) {
-      const { requestBucketCopyChecks } = yield* promiseEffect(
-        () => import("@/lib/bucket-copy-checks.server")
-      )
-      requestBucketCopyChecks()
-    }
-    // A finished backup can push its target past its retention.
-    if (
-      changed.some(
-        (task) => task.kind === "create" && task.status === "succeeded"
-      )
-    ) {
-      const { requestBackupRetention } = yield* promiseEffect(
-        () => import("@/lib/backup-maintenance.server")
-      )
-      requestBackupRetention()
-    }
     yield* stopCreatesOfDeletedBackups(relay, {
       asked: askedIds,
       current,
@@ -267,6 +234,37 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
     }
   }
 )
+
+// Applies a page of what a Relay reports, and follows up on what changed
+// at once, page by page, so a later page that fails can't keep the news of an
+// earlier one from those watching, or a finished backup from its checks.
+const applied = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  tasks: ReadonlyArray<RelayBackupTask>
+) {
+  const changed = yield* reconcileTasks(relay, tasks)
+  publishBackupChanges(
+    relay.id,
+    changed.map((task) => task.backupId)
+  )
+  if (
+    changed.some(
+      (task) => task.kind === "create" && task.status === "succeeded"
+    )
+  ) {
+    // A finished backup's bucket copies wait for Hearth to see them there,
+    // and it can push its target past its retention.
+    const { requestBucketCopyChecks } = yield* promiseEffect(
+      () => import("@/lib/bucket-copy-checks.server")
+    )
+    requestBucketCopyChecks()
+    const { requestBackupRetention } = yield* promiseEffect(
+      () => import("@/lib/backup-maintenance.server")
+    )
+    requestBackupRetention()
+  }
+  return changed
+})
 
 // Applies what a Relay reports of each task. Tasks Hearth hasn't seen, as a
 // schedule's backups whose news never reached it, are cataloged side by side,

@@ -2778,8 +2778,11 @@ const makeRelayStateStore = Effect.gen(function* () {
       )
       let last: { taskId: string; updatedAt: number } | null = null
       let taken = 0
+      // A task the page already carries as current isn't sent twice.
+      const carried = new Set(current.map((task) => task.taskId))
       for (const row of rows.slice(0, backupTaskPageRows)) {
-        const [task] = yield* lenientBackupTasks([row])
+        const [read] = yield* lenientBackupTasks([row])
+        const task = read && !carried.has(read.taskId) ? read : undefined
         const bytes = task ? Buffer.byteLength(JSON.stringify(task)) : 0
         if (changed.length > 0 && used + bytes > query.budgetBytes) break
         if (task) changed.push(task)

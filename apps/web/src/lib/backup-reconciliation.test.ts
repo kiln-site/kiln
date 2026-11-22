@@ -163,8 +163,12 @@ const readAt = Effect.map(
       ? null
       : Number(row.backup_tasks_read_at)
 )
+// What watching browsers are told changed.
+const published = vi.hoisted(() => [] as Array<string>)
 vi.mock("@/lib/realtime-source.server", () => ({
-  publishRealtimeChange: () => undefined,
+  publishRealtimeChange: (change: unknown) => {
+    published.push(JSON.stringify(change))
+  },
 }))
 
 afterAll(() => disposeAppRuntime())
@@ -249,6 +253,7 @@ describeMysql("Reconciling a Relay's backups", () => {
           const asked: Array<
             { taskId: string; updatedAt: number } | undefined
           > = []
+          published.length = 0
           relay.list = pagingRelay(journal, 5, asked, 2)
 
           const failed = yield* Effect.promise(() =>
@@ -258,15 +263,49 @@ describeMysql("Reconciling a Relay's backups", () => {
             )
           )
 
-          // The first page is applied; what Hearth has read stops there.
+          // The first page is applied, and those watching are told of it;
+          // what Hearth has read stops there.
           assert.isTrue(failed)
           assert.lengthOf(yield* selectRows("backup"), 5)
           assert.strictEqual(yield* readAt, at + 400_000)
+          for (const task of journal.slice(0, 5)) {
+            assert.isTrue(
+              published.some((change) => change.includes(task.backupId))
+            )
+          }
 
           relay.list = pagingRelay(journal, 5, asked)
           yield* Effect.promise(() => reconcileRelayBackups(persisted!))
 
           assert.lengthOf(yield* selectRows("backup"), 12)
+        })
+    )
+
+    it.effect(
+      "applies a task that ended the moment its page read it running",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(pagedRelayId, { enabled: 1 })
+          const [persisted] = yield* Effect.promise(listPersistedRelays)
+          const ended = scheduled(1, at)
+          const running = {
+            ...ended,
+            error: null,
+            finishedAt: null,
+            status: "running",
+          }
+          // The page reads it running; by the last page it has ended, at
+          // the same moment by the Relay's clock.
+          relay.list = (_payload, relayId) =>
+            relayId === pagedRelayId
+              ? { changed: [running], current: [ended], next: null }
+              : { changed: [], current: [], next: null }
+
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          const [task] = yield* selectRows<{ status: string }>("backup_task")
+          assert.strictEqual(task?.status, "failed")
         })
     )
   })
