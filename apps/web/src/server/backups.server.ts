@@ -292,10 +292,18 @@ export async function cancelBackupHandler(
   ) {
     throw new Error("This backup is no longer being created")
   }
-  await runAppEffect(
+  const changed = await runAppEffect(
     "backups.reconcileCancel",
     reconcileBackupTaskEffect(task, relay.id)
   )
+  // Finished before it could be stopped: a bucket copy it uploaded waits for
+  // Hearth to see it, as after any report of a create that succeeded.
+  if (changed && task.status === "succeeded") {
+    const { requestBucketCopyChecks } = await import(
+      "@/lib/bucket-copy-checks.server"
+    )
+    requestBucketCopyChecks()
+  }
   if (task.status !== "cancelled") {
     throw new Error("This backup is no longer being created")
   }

@@ -133,6 +133,15 @@ export function startBackupMaintenance(): void {
     Effect.andThen(
       catalogScheduledBackups().pipe(logFailure("backupMaintenance.catalog"))
     ),
+    // Bucket copies still waiting to be seen, as after a restart or a
+    // bucket that couldn't be asked: the sweep wakes the look, and doesn't
+    // wait on the buckets.
+    Effect.andThen(
+      Effect.promise(() => import("@/lib/bucket-copy-checks.server")).pipe(
+        Effect.map(({ requestBucketCopyChecks }) => requestBucketCopyChecks()),
+        logFailure("backupMaintenance.bucketCopies")
+      )
+    ),
     Effect.andThen(applyRetentionLogged)
   )
   // The first sweep waits a little, so Relays have connected.

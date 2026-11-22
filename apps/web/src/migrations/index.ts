@@ -92,6 +92,7 @@ import { scheduleVolumeTargets } from "@/migrations/0091_schedule_volume_targets
 import { backupDestinationIds } from "@/migrations/0092_backup_destination_ids"
 import { resourceMigrations } from "@/migrations/0093_resource_migrations"
 import { resourceMigrationParts } from "@/migrations/0094_resource_migration_parts"
+import { bucketCopyChecks } from "@/migrations/0095_bucket_copy_checks"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -187,4 +188,5 @@ export const migrations: ReadonlyArray<Migration> = [
   backupDestinationIds,
   resourceMigrations,
   resourceMigrationParts,
+  bucketCopyChecks,
 ]
