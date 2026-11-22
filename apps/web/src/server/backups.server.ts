@@ -299,6 +299,15 @@ export async function cancelBackupHandler(
   if (task.status !== "cancelled") {
     throw new Error("This backup is no longer being created")
   }
+  // Cancelled as Hearth has it: a success Hearth accepted first stays, and
+  // a cancel answered after it changes nothing.
+  const after = await runAppEffect(
+    "backups.getAfterCancel",
+    getBackupCatalogRecordEffect(backup.id)
+  )
+  if (after?.taskId !== backup.taskId || after.taskStatus !== "cancelled") {
+    throw new Error("This backup is no longer being created")
+  }
   publishBackupChange(relay.id, backup.id)
   return { cancelled: true as const }
 }

@@ -2,12 +2,18 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { disposeAppRuntime } from "@/effect/runtime"
+import { relayBackupTaskSchema } from "@workspace/contracts"
+
+import type { AuthenticatedUser } from "@/lib/auth-session"
+
+import { reconcileBackupTaskEffect } from "@/effect/backups"
+import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
 import {
   cancelCreateForDelete,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { cancelBackupHandler } from "@/server/backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 
@@ -68,6 +74,18 @@ const createTask = (
   taskId: ids.taskId,
   updatedAt: at + 1,
 })
+
+const admin: AuthenticatedUser = {
+  id: "admin-one",
+  name: "Admin",
+  email: "admin@example.test",
+  emailVerified: true,
+  emailVerifiedAt: "2026-01-01T00:00:00.000Z",
+  isDevelopmentBypass: false,
+  role: "admin",
+  status: "enabled",
+  twoFactorEnabled: false,
+}
 
 // The Relay, the one boundary: each test says how it answers.
 const relay = vi.hoisted(() => ({
@@ -149,6 +167,65 @@ describeMysql("A Relay's answer about a backup task", () => {
           ["running", "running"]
         )
       })
+    )
+
+    it.effect(
+      "to a cancel is not taken as cancelled once Hearth has the create's success",
+      () =>
+        Effect.gen(function* () {
+          yield* seed("running")
+          // The create finishes, and a pass accepts its success, while the
+          // cancel is on its way; the Relay then answers cancelled.
+          relay.answer = async (operation) => {
+            if (operation !== "backup.task.cancel") {
+              throw new Error(`Unexpected Relay request ${operation}`)
+            }
+            await runAppEffect(
+              "test.success",
+              reconcileBackupTaskEffect(
+                relayBackupTaskSchema.parse({
+                  ...createTask(first, "queued"),
+                  bytesCompleted: 2048,
+                  bytesTotal: 2048,
+                  finishedAt: at + 1,
+                  result: {
+                    artifacts: [
+                      {
+                        artifactId: first.artifactId,
+                        error: null,
+                        status: "available",
+                      },
+                    ],
+                    bytes: 2048,
+                    checksumSha256: "a".repeat(64),
+                    filename: `${first.backupId}.zip`,
+                    warnings: [],
+                  },
+                  startedAt: at,
+                  status: "succeeded",
+                }),
+                relayId
+              )
+            )
+            return { ...createTask(first, "cancelled"), updatedAt: at + 5 }
+          }
+
+          const outcome = yield* Effect.promise(() =>
+            cancelBackupHandler(admin, { backupId: first.backupId }).then(
+              () => "cancelled",
+              () => "refused"
+            )
+          )
+
+          assert.strictEqual(outcome, "refused")
+          const backups = yield* selectRows<{ id: string; status: string }>(
+            "backup"
+          )
+          assert.strictEqual(
+            backups.find(({ id }) => id === first.backupId)?.status,
+            "available"
+          )
+        })
     )
 
     it.effect("about another task leaves the pass to send the rest", () =>
