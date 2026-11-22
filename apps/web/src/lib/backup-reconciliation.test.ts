@@ -282,7 +282,7 @@ describeMysql("Reconciling a Relay's backups", () => {
     )
 
     it.effect(
-      "applies a task that ended the moment its page read it running",
+      "applies a task Hearth has running that ends between two pages, at the moment it last changed",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -295,17 +295,43 @@ describeMysql("Reconciling a Relay's backups", () => {
             finishedAt: null,
             status: "running",
           }
-          // The page reads it running; by the last page it has ended, at
-          // the same moment by the Relay's clock.
+          // Hearth hears of it running.
           relay.list = (_payload, relayId) =>
             relayId === pagedRelayId
-              ? { changed: [running], current: [ended], next: null }
+              ? { changed: [], current: [running], next: null }
               : { changed: [], current: [], next: null }
-
           yield* Effect.promise(() => reconcileRelayBackups(persisted!))
 
-          const [task] = yield* selectRows<{ status: string }>("backup_task")
-          assert.strictEqual(task?.status, "failed")
+          // The next pass asks after it: the first page still has it
+          // running; by the second it has ended, stamped the same moment by
+          // the Relay's clock, and comes only as asked after.
+          const other = scheduled(2, at + 1_000)
+          relay.list = (payload, relayId) => {
+            if (relayId !== pagedRelayId) {
+              return { changed: [], current: [], next: null }
+            }
+            const asked = new Set(
+              (payload as { taskIds?: Array<string> }).taskIds ?? []
+            )
+            assert.isTrue(asked.has(ended.taskId))
+            return (payload as { after?: unknown }).after === undefined ||
+              !(payload as { after: { taskId: string } }).after.taskId
+              ? {
+                  changed: [other],
+                  current: [running],
+                  next: { taskId: other.taskId, updatedAt: other.updatedAt },
+                }
+              : { changed: [], current: [ended], next: null }
+          }
+          yield* Effect.promise(() => reconcileRelayBackups(persisted!))
+
+          const tasks = yield* selectRows<{ id: string; status: string }>(
+            "backup_task"
+          )
+          assert.strictEqual(
+            tasks.find(({ id }) => id === ended.taskId)?.status,
+            "failed"
+          )
         })
     )
   })

@@ -6,6 +6,7 @@ import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { operationsAtRest } from "@/operations/test/at-rest"
 import { resetDatabase } from "@/test/database"
+import { relayBackupTaskPage } from "@/test/relay-backup-tasks"
 import {
   insertInstance,
   insertRelay,
@@ -322,7 +323,7 @@ export const deletionRelayConnection = {
       return {}
     }
     // Backups are queued and followed by Hearth's own records here.
-    if (operation === "backup.task.list") return []
+    if (operation === "backup.task.list") return relayBackupTaskPage([])
     if (operation === "backup.task.enqueue") {
       throw new Error("The Relay's backup queue is busy")
     }
