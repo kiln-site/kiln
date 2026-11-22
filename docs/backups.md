@@ -50,6 +50,41 @@ must use the flag rather than infer this handshake from an error message. A task
 that reached a non-repeatable restore step is marked failed for explicit review
 instead of guessed at.
 
+What a Relay reports of a task reaches Hearth's records only as far as that
+Relay's own work goes. Hearth sends a backup's tasks to its own Relay alone,
+so it applies a report only to a task of a backup on the Relay that sent it,
+as its connection says, and only as the kind of task Hearth has it as. A
+create's result must be the kind its backup is: an archive for a full backup,
+a snapshot for an incremental one, and it reaches only the copies the create
+was sent to make, never one Hearth is making to another destination. Every
+report must name the resource Hearth sent its task for: a restore's
+destination, otherwise the backup's own target. A failure with no result is
+the exception, since the Relay could report it under the right one anyway; a
+task whose journal row the Relay couldn't read is reported that way, naming
+no resource it knows. An answer to an enqueue
+or a cancel must be about the task Hearth asked about; one about another is
+logged and the pass goes on. A task the Relay lists under the ID of one Hearth
+has queued, but for another backup, kind or resource, means Hearth's never
+arrived: it is failed, saying so, rather than counted as sent. Cancelling a
+create names the backup and resource Hearth sent it for, and the Relay
+cancels only a create it holds as that; a delete waiting on a create the
+Relay holds as something else ends that create in Hearth, as one that never
+arrived, and goes ahead. The delete removes what the Relay keeps under that
+backup's ID, which is the backup the person asked to delete: no Relay holds a
+different task under one of Hearth's IDs except by making one up or by a
+journal that no longer matches what Hearth sent it. A delete of an incremental backup with no snapshot
+recorded forgets only snapshots tagged with both its create's task and its
+backup. A task Hearth already has running that its Relay then lists as
+another task stays as Hearth last heard of it; only a Relay whose journal no
+longer matches what Hearth sent it can bring that about. A schedule's backup a Relay made on its own
+is cataloged from its report all at once or not at all: if any of its backup,
+copy or task IDs is already another backup's, none of it is kept, and it is
+reported again each pass. Nor is one cataloged of a game server Hearth's
+instance directory binds to another Relay, or of a database Hearth has on
+another one. A game server or database Hearth hasn't recorded yet, a volume
+and the platform are taken as the Relay says: whatever it catalogs is under
+its own Relay.
+
 An Effect `Queue` wakes the worker, which drains queued tasks one at a time;
 the stopped backups of one batch run together inside their shared stopped
 window (see [Formats and live consistency](#formats-and-live-consistency)).

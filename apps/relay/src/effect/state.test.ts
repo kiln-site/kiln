@@ -304,6 +304,54 @@ describe("Relay state", () => {
     })
   )
 
+  stateTest(
+    "cancels a create only when Hearth names it as the Relay holds it",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const backupId = "41100000-0000-4000-8000-000000000030"
+        const target = { id: "instance-a", kind: "instance" as const }
+        const taskId = "41100000-0000-4000-8000-000000000031"
+        yield* store.enqueueBackupTask(
+          {
+            artifactKind: "archive",
+            backupId,
+            destination: { kind: "local" },
+            exclude: [],
+            kind: "create",
+            maxBytes: null,
+            mode: "full",
+            reason: "manual",
+            target,
+            taskId,
+          },
+          700
+        )
+
+        // Named for another backup, then for another resource: left alone.
+        for (const expected of [
+          { backupId: "41100000-0000-4000-8000-000000000039", target },
+          { backupId, target: { id: "instance-b", kind: "instance" as const } },
+        ]) {
+          assert.isFalse(
+            yield* store.cancelBackupTask(taskId, 710, undefined, null, expected)
+          )
+          assert.strictEqual((yield* store.getBackupTask(taskId))?.status, "queued")
+        }
+
+        assert.isTrue(
+          yield* store.cancelBackupTask(taskId, 720, undefined, null, {
+            backupId,
+            target,
+          })
+        )
+        assert.strictEqual(
+          (yield* store.getBackupTask(taskId))?.status,
+          "cancelled"
+        )
+      })
+  )
+
   stateTest("never runs a create that arrives after its backup's delete", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore
