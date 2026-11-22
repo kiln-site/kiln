@@ -57,22 +57,26 @@ const members = Array.from({ length: 6 }, (_, member) => {
 // The Relay is the only boundary: it lists the backups it holds, as each
 // test says.
 const relay = vi.hoisted(() => ({
-  list: null as null | ((payload: unknown) => unknown),
+  list: null as null | ((payload: unknown, relayId: string) => unknown),
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayRpc: async (_relay: unknown, operation: string, payload: unknown) => {
+  relayRpc: async (
+    asking: { id: string },
+    operation: string,
+    payload: unknown
+  ) => {
     if (operation === "backup.task.list") {
       return relay.list
-        ? relay.list(payload)
+        ? relay.list(payload, asking.id)
         : relayBackupTaskPage(members, payload)
     }
     throw new Error(`Unexpected Relay request ${operation}`)
   },
 }))
 
-// A schedule's backup of one volume the Relay made on its own, changed last
-// at `updatedAt` by the Relay's clock.
+// A schedule's backup of one volume the Relay made on its own, which failed
+// there, changed last at `updatedAt` by the Relay's clock.
 const scheduled = (index: number, updatedAt: number) => {
   const part = String(index).padStart(4, "0")
   const backupId = `${part}0000-0000-4000-8000-000000000001`
@@ -91,10 +95,17 @@ const scheduled = (index: number, updatedAt: number) => {
       target: { id: part.repeat(10), kind: "volume" },
       taskId,
     },
+    error: "The volume couldn't be read",
+    finishedAt: updatedAt,
+    status: "failed",
     taskId,
     updatedAt,
   }
 }
+
+// The Relay the paging tests read: passes over another, as ones an earlier
+// test left running, aren't counted.
+const pagedRelayId = "3".repeat(12)
 
 // A Relay holding `journal`, answering a page of `size` tasks at a time from
 // where Hearth asks, as a Relay does; `asked` keeps where each request began.
@@ -105,7 +116,9 @@ const pagingRelay = (
   failOn?: number
 ) => {
   let requests = 0
-  return (payload: unknown) => {
+  return (payload: unknown, relayId: string) => {
+    if (relayId !== pagedRelayId)
+      return { changed: [], current: [], next: null }
     requests += 1
     if (requests === failOn) throw new Error("The Relay stopped answering")
     const after = (payload as { after?: { taskId: string; updatedAt: number } })
@@ -122,9 +135,18 @@ const pagingRelay = (
     )
     const page = changed.slice(0, size)
     const last = page.at(-1)
+    const askedIds = new Set(
+      (payload as { taskIds?: Array<string> }).taskIds ?? []
+    )
     return {
-      ...relayBackupTaskPage(page, payload),
-      current: [],
+      changed: page,
+      // Every page carries what's unfinished and what Hearth asks after.
+      current: journal.filter(
+        (task) =>
+          task.status === "queued" ||
+          task.status === "running" ||
+          askedIds.has(task.taskId)
+      ),
       next:
         changed.length > size && last
           ? { taskId: last.taskId, updatedAt: last.updatedAt }
@@ -182,7 +204,7 @@ describeMysql("Reconciling a Relay's backups", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          yield* insertRelay(relayId, { enabled: 1 })
+          yield* insertRelay(pagedRelayId, { enabled: 1 })
           const [persisted] = yield* Effect.promise(listPersistedRelays)
           const journal = Array.from({ length: 12 }, (_, index) =>
             scheduled(index + 1, at + index * 1_000)
@@ -219,7 +241,7 @@ describeMysql("Reconciling a Relay's backups", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          yield* insertRelay(relayId, { enabled: 1 })
+          yield* insertRelay(pagedRelayId, { enabled: 1 })
           const [persisted] = yield* Effect.promise(listPersistedRelays)
           const journal = Array.from({ length: 12 }, (_, index) =>
             scheduled(index + 1, at + index * 100_000)
