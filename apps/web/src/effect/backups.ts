@@ -1752,7 +1752,26 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           // has. One Hearth has settled, seen or not, stays as it settled
           // whatever a later report of the create says.
           const full = knownTask.backup_mode === "full"
+          // A report of another size than the copy has is another upload:
+          // what Hearth heard looking for the one before says nothing of it.
+          const reportChanges = (bytes: number | null, artifactId?: string) =>
+            transaction.execute(
+              `UPDATE ${databaseTable("backup_artifact")}
+                  SET report_generation = report_generation + 1,
+                      check_after = NULL, check_rests = 0, check_note = NULL
+                WHERE backup_id = ? AND NOT (bytes <=> ?)
+                  ${artifactId === undefined ? "" : "AND id = ?"}
+                  AND ${notACopy} AND ${unsettledCopy}`,
+              [
+                task.backupId,
+                bytes,
+                ...(artifactId === undefined ? [] : [artifactId]),
+                task.backupId,
+                full,
+              ]
+            )
           if (outcomes.length === 0) {
+            yield* reportChanges(task.result.bytes)
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
                   SET status = CASE WHEN ? AND storage_id IS NOT NULL
@@ -1783,6 +1802,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           } else {
             for (const outcome of outcomes) {
               const waits = full && outcome.status === "available"
+              yield* reportChanges(
+                outcome.status === "available" ? task.result.bytes : null,
+                outcome.artifactId
+              )
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
                     SET status = CASE WHEN ? AND storage_id IS NOT NULL
@@ -3453,9 +3476,11 @@ type WaitingCopyRow = RowDataPacket & {
   artifact_id: string
   backup_id: string
   bytes: number | string | null
+  check_note: string | null
   object_key: string | null
   place: number | string
   relay_id: string
+  report_generation: number | string
   reserved_bytes: number | string | null
   seen_by: number | string | null
   storage_id: string
@@ -3468,7 +3493,8 @@ type WaitingCopyRow = RowDataPacket & {
 const waitingCopies = (where: string) => `
   SELECT artifact.id AS artifact_id, artifact.backup_id,
          artifact.storage_id, artifact.object_key, artifact.bytes,
-         artifact.seen_by, backup.relay_id, task.reserved_bytes,
+         artifact.seen_by, artifact.report_generation, artifact.check_note,
+         backup.relay_id, task.reserved_bytes,
          ROW_NUMBER() OVER (
            PARTITION BY artifact.storage_id
            ORDER BY artifact.seen_by ASC, artifact.id ASC
@@ -3490,6 +3516,9 @@ const waitingCopies = (where: string) => `
 const waitingCopy = (now: number) => (row: WaitingCopyRow) => ({
   artifactId: row.artifact_id,
   backupId: row.backup_id,
+  generation: safeDatabaseNumber(row.report_generation, "bucket copy report"),
+  // What the last look that didn't settle it heard: set, it was looked for.
+  heard: row.check_note,
   late:
     row.seen_by !== null &&
     safeDatabaseNumber(row.seen_by, "bucket copy deadline") < now,
@@ -3501,15 +3530,17 @@ const waitingCopy = (now: number) => (row: WaitingCopyRow) => ({
 })
 
 /**
- * Bucket copies waiting to be seen that are past their deadline, oldest
- * first: those Hearth already looked for fail without another look.
+ * Bucket copies waiting to be seen that are past their deadline and that
+ * Hearth has looked for, oldest first: they fail without another look.
  */
 export const lateBucketCopiesEffect = Effect.fn("backups.lateBucketCopies")(
   function* (input: { limit: number; now: number }) {
     const database = yield* Database
     const rows = yield* database.queryRows<WaitingCopyRow>(
       "backup_late_bucket_copies",
-      `SELECT * FROM (${waitingCopies("artifact.seen_by < ?")}) waiting
+      `SELECT * FROM (${waitingCopies(
+        "artifact.seen_by < ? AND artifact.check_note IS NOT NULL"
+      )}) waiting
         ORDER BY seen_by ASC, artifact_id ASC
         LIMIT ?`,
       [input.now, input.limit]
@@ -3522,8 +3553,8 @@ export const lateBucketCopiesEffect = Effect.fn("backups.lateBucketCopies")(
  * Bucket copies waiting to be seen that a look can look for, late ones
  * among them, by when Hearth must have seen each: at most `limit`, and at
  * most `perDestination` of one destination's, so one bucket never fills a
- * look, leaving out destinations and copies Hearth is leaving alone a
- * while. Answers too whether more are waiting than it took.
+ * look, leaving out destinations (`resting`) and copies Hearth is leaving
+ * alone a while. Answers too whether more are waiting than it took.
  */
 export const waitingBucketCopiesEffect = Effect.fn(
   "backups.waitingBucketCopies"
@@ -3532,35 +3563,24 @@ export const waitingBucketCopiesEffect = Effect.fn(
   now: number
   perDestination: number
   resting: ReadonlyArray<string>
-  restingCopies: ReadonlyArray<string>
 }) {
   const database = yield* Database
-  const leftAlone = [
-    ...(input.resting.length > 0
-      ? [
-          `artifact.storage_id NOT IN (${input.resting.map(() => "?").join(", ")})`,
-        ]
-      : []),
-    ...(input.restingCopies.length > 0
-      ? [
-          `artifact.id NOT IN (${input.restingCopies.map(() => "?").join(", ")})`,
-        ]
-      : []),
-  ]
   const rows = yield* database.queryRows<WaitingCopyRow>(
     "backup_waiting_bucket_copies",
     `SELECT * FROM (${waitingCopies(
-      leftAlone.length > 0 ? leftAlone.join(" AND ") : "TRUE"
+      [
+        "(artifact.check_after IS NULL OR artifact.check_after <= ?)",
+        ...(input.resting.length > 0
+          ? [
+              `artifact.storage_id NOT IN (${input.resting.map(() => "?").join(", ")})`,
+            ]
+          : []),
+      ].join(" AND ")
     )}) waiting
       WHERE place <= ?
       ORDER BY seen_by ASC, artifact_id ASC
       LIMIT ?`,
-    [
-      ...input.resting,
-      ...input.restingCopies,
-      input.perDestination,
-      input.limit,
-    ]
+    [input.now, ...input.resting, input.perDestination, input.limit]
   )
   return {
     copies: rows.map(waitingCopy(input.now)),
@@ -3580,9 +3600,13 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
   function* (input: {
     artifactId: string
     backupId: string
-    // What Hearth looked for: a newer report since, of another size or
-    // object, is looked for again rather than settled by this look.
-    looked: { bytes: number | null; objectKey: string | null }
+    // What Hearth looked for: a newer report since, of another size, is
+    // looked for again rather than settled by this look.
+    looked: {
+      bytes: number | null
+      generation: number
+      objectKey: string | null
+    }
     outcome:
       | { bytes: number; kind: "seen" }
       | { code: string; kind: "failed"; reason: string }
@@ -3609,7 +3633,7 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
               SET status = ?, bytes = ?, error = ?, error_code = ?,
                   completed_at = ?, updated_at = ?
             WHERE id = ? AND backup_id = ? AND status = 'running'
-              AND completed_at IS NULL
+              AND completed_at IS NULL AND report_generation = ?
               AND bytes <=> ? AND object_key <=> ?
               AND ${notACopy}`,
           [
@@ -3623,6 +3647,7 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
             now,
             input.artifactId,
             input.backupId,
+            input.looked.generation,
             input.looked.bytes,
             input.looked.objectKey,
             input.backupId,
@@ -3644,6 +3669,49 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
         )
         return true
       })
+    )
+  }
+)
+
+/**
+ * Keeps what a look that didn't settle a bucket copy heard of it, for its
+ * failure at the deadline, and when `rest`, leaves it alone a while from
+ * `at`, longer each time. Only the report that was looked for, still
+ * waiting, takes it.
+ */
+export const noteBucketCopyEffect = Effect.fn("backups.noteBucketCopy")(
+  function* (input: {
+    artifactId: string
+    at: number
+    generation: number
+    heard: string | null
+    rest: { firstMs: number; longestMs: number } | null
+  }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "backup_note_bucket_copy",
+      `UPDATE ${databaseTable("backup_artifact")}
+          SET check_note = COALESCE(?, check_note),
+              check_after = CASE WHEN ?
+                THEN ? + LEAST(? * POW(2, check_rests), ?)
+                ELSE check_after END,
+              check_rests = CASE WHEN ?
+                THEN LEAST(check_rests + 1, 16) ELSE check_rests END,
+              updated_at = ?
+        WHERE id = ? AND status = 'running' AND completed_at IS NULL
+          AND report_generation = ?`,
+      [
+        input.heard,
+        input.rest !== null,
+        input.at,
+        input.rest?.firstMs ?? 0,
+        input.rest?.longestMs ?? 0,
+        input.rest !== null,
+        now,
+        input.artifactId,
+        input.generation,
+      ]
     )
   }
 )

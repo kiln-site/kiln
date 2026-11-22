@@ -14,7 +14,7 @@ import {
 } from "@/effect/backups"
 import { Database } from "@/effect/database"
 import { finalBackupStateEffect } from "@/effect/resource-deletions"
-import { disposeAppRuntime } from "@/effect/runtime"
+import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
 import {
   checkBucketCopiesEffect,
   requestBucketCopyChecks,
@@ -642,6 +642,22 @@ describeMysql("Bucket copies Hearth looks for", () => {
         Effect.gen(function* () {
           yield* seed()
           yield* waitingCopies(90, storageId, now + 60 * 60_000, () => uploaded)
+          // The looks run in the app's runtime: its MySQL pool connects now,
+          // before its connection timeouts run on the fake clock too.
+          yield* Effect.promise(() =>
+            runAppEffect(
+              "test.connect",
+              Effect.gen(function* () {
+                const database = yield* Database
+                yield* Effect.forEach(
+                  Array.from({ length: 10 }),
+                  () =>
+                    database.queryRows("test.connect", "SELECT SLEEP(0.05)"),
+                  { concurrency: 10 }
+                )
+              })
+            )
+          )
           vi.useFakeTimers({ now, toFake: ["setTimeout", "clearTimeout", "Date"] })
 
           // One wake-up, as a report or the sweep gives; each look asks for
@@ -661,6 +677,18 @@ describeMysql("Bucket copies Hearth looks for", () => {
           }
 
           assert.strictEqual(seen, 90)
+          // The looks end on their own: none waits to follow, and none runs
+          // on into another test.
+          for (let tick = 0; tick < 20; tick += 1) {
+            yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_100))
+            yield* Effect.promise(
+              () => new Promise((resolve) => setImmediate(resolve))
+            )
+            // Waits for a look that runs, as looks take turns.
+            yield* checkBucketCopiesEffect()
+            if (vi.getTimerCount() === 0) break
+          }
+          assert.strictEqual(vi.getTimerCount(), 0)
         }).pipe(Effect.ensuring(Effect.sync(() => vi.useRealTimers()))),
       60_000
     )
@@ -755,6 +783,63 @@ describeMysql("Bucket copies Hearth looks for", () => {
           const copies = yield* copyStatuses(storageId)
           const last = copies.find(({ id }) => id.endsWith("000000000010"))
           assert.strictEqual(last?.status, "available")
+        })
+    )
+
+    it.effect(
+      "leaves copies the bucket refused alone from when a slow look ends",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* waitingCopies(11, storageId, now + 60 * 60_000, (index) =>
+            index < 10 ? { status: 403 } : uploaded
+          )
+          let answer = () => {}
+          bucket.looking = new Promise((resolve) => {
+            answer = resolve
+          })
+          const started = new Promise<void>((resolve) => {
+            bucket.started = resolve
+          })
+
+          // The bucket takes 40 s to refuse the ten older copies.
+          const looking = yield* Effect.forkChild(checkBucketCopiesEffect())
+          yield* Effect.promise(() => started)
+          yield* TestClock.adjust("40 seconds")
+          answer()
+          yield* Fiber.join(looking)
+          bucket.looking = null
+
+          // The next look reaches the eleventh, not the ten again.
+          yield* checkBucketCopiesEffect()
+          const last = (yield* copyStatuses(storageId)).find(({ id }) =>
+            id.endsWith("000000000010")
+          )
+          assert.strictEqual(last?.status, "available")
+        })
+    )
+
+    it.effect(
+      "looks afresh at a copy reported back at the size the bucket refused",
+      () =>
+        Effect.gen(function* () {
+          yield* seed()
+          yield* reported()
+          bucket.objects.set(objectKey, { status: 403 })
+          yield* checkBucketCopiesEffect()
+
+          // Reported at another size, then at the first again, and readable
+          // at it by its deadline.
+          yield* reported(10, undefined, { bytes: uploaded + 1024 })
+          yield* reported(20)
+          bucket.objects.set(objectKey, uploaded)
+          yield* TestClock.adjust("61 minutes")
+          yield* checkBucketCopiesEffect()
+
+          assert.strictEqual(
+            (yield* state).copies.get(bucketCopy)?.status,
+            "available"
+          )
         })
     )
 

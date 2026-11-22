@@ -194,19 +194,24 @@ copy, so the next look reaches others. A look that left copies
 another could reach asks for the next a second later, so a backlog is seen
 a look at a time, and the sweep only wakes the looks rather than waiting on
 buckets. An answer that says nothing of a copy leaves it to be looked for
-again, after thirty seconds and longer each time up to ten minutes: a bucket
-that can't be reached rests whole, while a refusal (403), which can be of
-one object, rests that copy alone. A
+again, thirty seconds after the look ends and longer each time up to ten
+minutes: a bucket that can't be reached rests whole, while a refusal (403),
+which can be of one object, rests that copy alone. A
 copy still unseen an hour after it first waited, by Hearth's clock
 (`seen_by`, migration 95), fails with the last answer Hearth had, without
 asking the bucket again, so the hour bounds retries; one Hearth never got
-to look for first has one look before it can fail, and an answer is kept
-for the copy as reported, so a newer report of another size has its own. A refusal (403) says the copy may be missing or
-Hearth's key not allowed to read it. One look runs at a time, whoever asked
-for it. A look
-settles a copy only as it was when looked for, and only while it is still
-its Relay's upload: a newer report of another size is looked for again, and
-a copy Hearth's copy worker has taken over meanwhile is the worker's. A copy
+to look for first has one look before it can fail. A refusal (403) says the
+copy may be missing or Hearth's key not allowed to read it. What Hearth
+heard of a copy and when it may ask about it again are kept on the copy's
+row (`check_note`, `check_after`, `check_rests`), so a restart forgets
+neither; only a bucket's rest, which just paces Hearth, is kept in memory.
+Each report of another size than the copy has advances its
+`report_generation` and clears what Hearth heard, so a newer upload is
+looked for afresh, even one back at an earlier size. One look runs at a
+time, whoever asked for it. A look settles a copy, or keeps what it heard,
+only for the report it looked for, and only while the copy is still its
+Relay's upload: a copy Hearth's copy worker has taken over meanwhile is the
+worker's. A copy
 seen after its deadline counts all the same: the deadline only keeps a
 final backup from waiting for good. Settling takes the backup's row first, so two
 copies settling at once leave it as both left it. A copy Hearth settled
