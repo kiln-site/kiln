@@ -1508,6 +1508,19 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         ) {
           return
         }
+        // A full backup's create its Relay reported succeeded is settled:
+        // every copy comes from the one archive that report described, so
+        // no later report of the task, however new, changes its size, its
+        // checksum or its copies. A failure or cancel Hearth recorded itself
+        // never says succeeded, and still gives way to the Relay's success.
+        if (
+          knownTask.task_kind === "create" &&
+          knownTask.backup_mode === "full" &&
+          knownTask.status === "succeeded" &&
+          knownTask.relay_updated_at_ms !== null
+        ) {
+          return
+        }
         if (
           !shouldApplyRelayBackupTaskSnapshot(
             {

@@ -4,7 +4,10 @@ import { TestClock } from "effect/testing"
 
 import { relayBackupTaskSchema } from "@workspace/contracts"
 
-import { reconcileBackupTaskEffect } from "@/effect/backups"
+import {
+  reconcileBackupTaskEffect,
+  settleUndispatchableBackupTaskEffect,
+} from "@/effect/backups"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertBackup,
@@ -144,6 +147,104 @@ const scheduledReport = (ids: {
 
 describeMysql("Relay backup reports", () => {
   layer(TestDatabase)((it) => {
+    it.effect(
+      "keep a full backup's success as its Relay first reported it",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* seedRunning
+          assert.isTrue(
+            yield* reconcileBackupTaskEffect(finishedCreate, relayOne)
+          )
+
+          // Reported again, newer: failed, then succeeded at another size.
+          assert.isFalse(
+            yield* reconcileBackupTaskEffect(
+              relayBackupTaskSchema.parse({
+                ...finishedCreate,
+                error: "The archive could not be written",
+                result: null,
+                status: "failed",
+                updatedAt: now + 10,
+              }),
+              relayOne
+            )
+          )
+          assert.isFalse(
+            yield* reconcileBackupTaskEffect(
+              relayBackupTaskSchema.parse({
+                ...finishedCreate,
+                bytesCompleted: 4096,
+                bytesTotal: 4096,
+                result: {
+                  ...finishedCreate.result,
+                  bytes: 4096,
+                  checksumSha256: "b".repeat(64),
+                },
+                updatedAt: now + 20,
+              }),
+              relayOne
+            )
+          )
+
+          const [backup] = yield* selectRows<{
+            bytes: number | string
+            checksum_sha256: string
+            status: string
+          }>("backup")
+          assert.strictEqual(backup?.status, "available")
+          assert.strictEqual(Number(backup?.bytes), 2048)
+          assert.strictEqual(backup?.checksum_sha256, "a".repeat(64))
+          const [copy] = yield* selectRows<{
+            bytes: number | string
+            status: string
+          }>("backup_artifact")
+          assert.strictEqual(copy?.status, "available")
+          assert.strictEqual(Number(copy?.bytes), 2048)
+          const [task] = yield* selectRows<{ status: string }>("backup_task")
+          assert.strictEqual(task?.status, "succeeded")
+        })
+    )
+
+    it.effect(
+      "let a Relay's success replace a failure Hearth recorded itself",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* seedRunning
+          // The Relay has said it holds the create, queued; then Hearth,
+          // failing to send it again, records it failed.
+          yield* reconcileBackupTaskEffect(
+            relayBackupTaskSchema.parse({
+              ...finishedCreate,
+              bytesCompleted: 0,
+              bytesTotal: null,
+              finishedAt: null,
+              result: null,
+              startedAt: null,
+              status: "queued",
+              updatedAt: now,
+            }),
+            relayOne
+          )
+          yield* settleUndispatchableBackupTaskEffect({
+            code: "relay_unavailable",
+            reason: "The Relay couldn't be reached",
+            taskId: createTaskId,
+          })
+          let [backup] = yield* selectRows<{ status: string }>("backup")
+          assert.strictEqual(backup?.status, "failed")
+
+          // The create it already held finishes.
+          assert.isTrue(
+            yield* reconcileBackupTaskEffect(finishedCreate, relayOne)
+          )
+
+          ;[backup] = yield* selectRows<{ status: string }>("backup")
+          assert.strictEqual(backup?.status, "available")
+        })
+    )
+
     it.effect("leave another Relay's backup as it was", () =>
       Effect.gen(function* () {
         yield* fresh
