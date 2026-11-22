@@ -76,6 +76,7 @@ type BackupAvailabilityTagView = {
 type BackupAvailabilityState =
   | "available"
   | "cancelled"
+  | "checking"
   | "deleting"
   | "failed"
   | "missing"
@@ -1452,6 +1453,8 @@ function artifactAvailabilityState(
   if (status === "available") return "available"
   if (artifact?.error) return "failed"
   if (status === "failed") return "failed"
+  // Made and uploaded, and waiting for Hearth to see it in the bucket.
+  if (artifact?.checking) return "checking"
   if (status === "queued" || status === "running") {
     return "working"
   }
@@ -1462,7 +1465,7 @@ function availabilityTagClassName(state: BackupAvailabilityState): string {
   if (state === "available") {
     return "border-emerald-500/30 bg-emerald-500/10 light:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
   }
-  if (state === "working") {
+  if (state === "working" || state === "checking") {
     return "border-sky-500/30 bg-sky-500/10 light:bg-sky-500/20 text-sky-700 dark:text-sky-300"
   }
   if (state === "deleting") {
@@ -1477,6 +1480,7 @@ function availabilityTagClassName(state: BackupAvailabilityState): string {
 function availabilityStateLabel(state: BackupAvailabilityState): string {
   if (state === "available") return "Available"
   if (state === "working") return "Backing up"
+  if (state === "checking") return "Checking bucket"
   if (state === "deleting") return "Deleting"
   if (state === "cancelled") return "Cancelled"
   if (state === "failed") return "Failed"

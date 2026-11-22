@@ -180,6 +180,68 @@ A full backup can go to several destinations at once: its task writes the
 primary and copies it to each replica, and the catalog keeps every copy. An
 incremental backup goes to exactly one.
 
+A full backup's copy in a bucket counts once Hearth has seen it there
+(`checkBucketCopiesEffect`, apps/web/src/lib/bucket-copy-checks.server.ts),
+not on its Relay's word. The promise: Hearth marks a newly uploaded full
+backup's bucket copy available only if a HEAD Hearth made, after it accepted
+the Relay's report that the create succeeded and before any delete of the
+backup was asked for, saw an object of exactly the reported size, within the
+backup's reservation, at the key Hearth chose.
+
+- **What it covers.** A Relay that lies about an upload, its size, its
+  timing or its outcome, or reports it again differently (an accepted
+  success is final; see the ownership model above); a bucket that is slow,
+  can't be reached, refuses (403) or doesn't have the object; Hearth
+  restarting; deletes, copy-worker takeovers and cancels happening at the
+  same time.
+- **What it doesn't.** The bucket is trusted to answer honestly, and a
+  passing look is a point-in-time observation: the object can still be
+  replaced while the signed upload is valid (#989, create-only uploads), or
+  disappear later. An upload of the right size with the wrong content passes;
+  checksums aren't compared, and restore checks the archive's. A copy on the
+  Relay's own disk counts on the Relay's word, as before. Incremental copies
+  aren't checked.
+
+When the Relay reports a bucket copy uploaded it waits, still running and
+shown as "Checking bucket". Hearth looks in the background, woken when a
+pass over the Relay's backups or a cancel's reply sees a create succeed, and
+on each backup sweep. The copy becomes available at the size Hearth saw if
+that is the reported size and within the reservation; a different size, an
+oversize object or no object fails it, saying why. A copy the create was
+sent to make that its success report leaves out fails, rather than stay
+queued. A success report that lists no copies at all applies to every copy the
+create was sent to make, so each bucket copy waits to be seen. The catalog marks each copy waiting to be seen as checking, which
+is what the list shows; a copy Hearth's copy worker is making isn't one. A
+backup is available
+while any copy is, so one with a copy on the Relay's disk is available while
+its bucket copy waits; running while only bucket copies wait; failed
+otherwise.
+
+Each wake makes one bounded look: at most a hundred copies, ten of any one
+destination, the oldest first, four at once, each waiting at most fifteen
+seconds for the bucket. One look runs at a time, and a look that left copies
+another could reach asks for the next a second later, so a backlog is seen a
+look at a time. An answer that says nothing of a copy leaves it for a while
+after the look ends: a bucket that can't be reached, or whose keys can't be
+read, rests whole, thirty seconds and longer each time up to ten minutes,
+kept in memory since it only paces Hearth; a refusal (403), which can be of
+one object, rests that copy for two minutes (`check_after`, migration 95). A
+403 says the copy may be missing or Hearth's key not allowed to read it. An
+hour after a copy first waited, by Hearth's clock (`seen_by`), it becomes
+eligible for one last look, which a backlog or a resting bucket can delay;
+it fails with what that look heard unless the look settles it, so a copy
+readable by then still counts.
+
+Settling takes the backup's row first and settles only a copy that still
+waits, as it was looked for, and that is still its Relay's upload, not one
+Hearth's copy worker took over. Asking to delete a backup takes the same row
+and ends every copy of it still waiting, as failed: the delete may remove the
+object, even if its Relay then reports the delete failed, so nothing a look
+saw before or after counts. A create that succeeds after a delete of its
+backup was asked for leaves its bucket copies failed the same way. Either
+way the copy stays listed, so a delete still removes its object. A settled
+copy stays as it settled. Nothing is deleted from the bucket here.
+
 Destination implementations are isolated by kind:
 
 ```text

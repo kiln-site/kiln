@@ -53,6 +53,8 @@ export interface BackupRunOrderKey {
 
 export interface BackupRunArtifact {
   bytes: number | null
+  /** Uploaded by its Relay, and waiting for Hearth to see it in the bucket. */
+  checking: boolean
   checksumSha256: string | null
   error: string | null
   /** Why this copy failed, when the Relay could tell; see `backupFailureCodes`. */

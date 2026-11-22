@@ -338,6 +338,53 @@ export function verifyS3BackupCredential(credential: S3BackupCredential) {
   )
 }
 
+/**
+ * What a bucket holds at a key: the object's size, or nothing there. Any
+ * other answer, a refusal included, is an error keeping the bucket's status
+ * (`s3StatusOf`): a bucket can refuse to say whether an object is missing.
+ */
+export function headS3BackupObject(
+  credential: S3BackupCredential,
+  objectKey: string
+) {
+  return withS3Client(credential, (client) =>
+    s3Request("storage.head", (signal) =>
+      client.send(
+        new HeadObjectCommand({ Bucket: credential.bucket, Key: objectKey }),
+        { abortSignal: signal }
+      )
+    ).pipe(
+      Effect.map((output) => ({
+        bytes: output.ContentLength ?? null,
+        kind: "found" as const,
+      })),
+      Effect.catchIf(
+        (error) => s3FailureStatus(error.cause) === 404,
+        () => Effect.succeed({ kind: "missing" as const })
+      ),
+      // However the bucket's connection is set, one look waits so long.
+      Effect.timeoutOrElse({
+        duration: "15 seconds",
+        orElse: () =>
+          Effect.fail(
+            backupStorageError(
+              "s3_request_failed",
+              "storage.head",
+              "The bucket didn't answer in time"
+            )
+          ),
+      })
+    )
+  )
+}
+
+/** The HTTP status a bucket answered a failed request with, if any. */
+export function s3StatusOf(error: unknown): number | null {
+  return error instanceof BackupStorageError
+    ? s3FailureStatus(error.cause)
+    : null
+}
+
 export function putS3BackupObject(
   credential: S3BackupCredential,
   input: {

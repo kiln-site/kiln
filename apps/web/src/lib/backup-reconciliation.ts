@@ -19,7 +19,7 @@ import {
 import { isDeadlock } from "@/effect/database-deadlocks"
 import { BackupStorageError, CredentialError } from "@/effect/errors"
 import { promiseEffect } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import {
   publishBackupChange,
   publishBackupChanges,
@@ -138,6 +138,17 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       relay.id,
       changed.map((task) => task.backupId)
     )
+    // A finished backup's bucket copies wait for Hearth to see them there.
+    if (
+      changed.some(
+        (task) => task.kind === "create" && task.status === "succeeded"
+      )
+    ) {
+      const { requestBucketCopyChecks } = yield* promiseEffect(
+        () => import("@/lib/bucket-copy-checks.server")
+      )
+      requestBucketCopyChecks()
+    }
     // A finished backup can push its target past its retention.
     if (
       changed.some(
@@ -355,6 +366,12 @@ const dispatchBackupTaskEffect = Effect.fnUntraced(function* (
   const task = yield* relayTaskReply(reply, input.taskId)
   if (yield* reconcileBackupTaskEffect(task, relay.id)) {
     publishBackupChange(relay.id, task.backupId)
+    if (task.kind === "create" && task.status === "succeeded") {
+      const { requestBucketCopyChecks } = yield* promiseEffect(
+        () => import("@/lib/bucket-copy-checks.server")
+      )
+      requestBucketCopyChecks()
+    }
   }
 })
 
@@ -420,7 +437,9 @@ export function scheduleBackupReconciliation(
   const timer = setTimeout(() => {
     reconciliationTimers.delete(relay.id)
     reconciling.add(relay.id)
-    void runAppEffect(
+    // A fiber of its own: stopped with the app, as on shutdown, it leaves
+    // no promise to reject.
+    forkAppEffect(
       "Backups.reconcileRelay",
       reconcileRelayBackupsEffect(relay, subject).pipe(
         Effect.catch((cause) =>
