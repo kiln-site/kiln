@@ -56,7 +56,13 @@ so it applies a report only to a task of a backup on the Relay that sent it,
 as its connection says, and only as the kind of task Hearth has it as. A
 create's result must be the kind its backup is: an archive for a full backup,
 a snapshot for an incremental one, and it reaches only the copies the create
-was sent to make, never one Hearth is making to another destination. Every
+was sent to make, never one Hearth is making to another destination. Once
+Hearth has applied its Relay's report that a full backup's create succeeded,
+no later report of that task changes it, however new: every copy comes from
+the one archive that report described, so a second report can't change its
+size, checksum or copies, nor turn it into a failure. A failure or cancel
+Hearth recorded itself, as when it couldn't send the create, never says
+succeeded, and still gives way to the Relay's success. Every
 report must name the resource Hearth sent its task for: a restore's
 destination, otherwise the backup's own target. A failure with no result is
 the exception, since the Relay could report it under the right one anyway; a
