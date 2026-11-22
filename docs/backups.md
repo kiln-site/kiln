@@ -209,7 +209,8 @@ on each backup sweep. The copy becomes available at the size Hearth saw if
 that is the reported size and within the reservation; a different size, an
 oversize object or no object fails it, saying why. A copy the create was
 sent to make that its success report leaves out fails, rather than stay
-queued. The catalog marks each copy waiting to be seen as checking, which
+queued. A success report that lists no copies at all applies to every copy the
+create was sent to make, so each bucket copy waits to be seen. The catalog marks each copy waiting to be seen as checking, which
 is what the list shows; a copy Hearth's copy worker is making isn't one. A
 backup is available
 while any copy is, so one with a copy on the Relay's disk is available while

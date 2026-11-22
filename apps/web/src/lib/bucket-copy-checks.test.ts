@@ -421,11 +421,11 @@ describeMysql("Bucket copies Hearth looks for", () => {
             const after = yield* state
             assert.strictEqual(after.copies.get(bucketCopy)?.status, "failed")
             assert.strictEqual(after.backup?.status, "failed")
-            // A final backup that never counted lets nothing be deleted.
-            assert.notStrictEqual(
-              (yield* finalBackupStateEffect(backupId)).state,
-              "available"
-            )
+            // A final backup that never counted lets nothing be deleted,
+            // and says why.
+            const final = yield* finalBackupStateEffect(backupId)
+            assert.strictEqual(final.state, "failed")
+            assert.include(final.error ?? "", "bytes")
           }
         })
     )

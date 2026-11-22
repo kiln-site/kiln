@@ -619,16 +619,26 @@ export const finalBackupStateEffect = Effect.fn(
   "resourceDeletions.finalBackupState"
 )(function* (backupId: string) {
   const database = yield* Database
+  // A create that succeeded leaves no error of its own: why its backup
+  // failed is then on a copy, as one Hearth didn't see in its bucket.
   const [row] = yield* database.queryRows<
     RowDataPacket & { status: string; task_error: string | null }
   >(
     "resource_deletion_backup_state",
     `SELECT backup.status,
-            (SELECT task.error
-               FROM ${databaseTable("backup_task")} task
-              WHERE task.backup_id = backup.id AND task.task_kind = 'create'
-              ORDER BY task.created_at DESC, task.id DESC
-              LIMIT 1) AS task_error
+            COALESCE(
+              (SELECT task.error
+                 FROM ${databaseTable("backup_task")} task
+                WHERE task.backup_id = backup.id AND task.task_kind = 'create'
+                ORDER BY task.created_at DESC, task.id DESC
+                LIMIT 1),
+              (SELECT artifact.error
+                 FROM ${databaseTable("backup_artifact")} artifact
+                WHERE artifact.backup_id = backup.id
+                  AND artifact.status = 'failed' AND artifact.error IS NOT NULL
+                ORDER BY artifact.updated_at DESC, artifact.id DESC
+                LIMIT 1)
+            ) AS task_error
        FROM ${databaseTable("backup")} backup
       WHERE backup.id = ?
       LIMIT 1`,
