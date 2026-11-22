@@ -3631,7 +3631,8 @@ export const settleBucketCopyEffect = Effect.fn("backups.settleBucketCopy")(
         const settled = yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
               SET status = ?, bytes = ?, error = ?, error_code = ?,
-                  completed_at = ?, updated_at = ?
+                  completed_at = ?, check_after = NULL, check_rests = 0,
+                  check_note = NULL, updated_at = ?
             WHERE id = ? AND backup_id = ? AND status = 'running'
               AND completed_at IS NULL AND report_generation = ?
               AND bytes <=> ? AND object_key <=> ?
