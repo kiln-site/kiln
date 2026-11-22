@@ -420,7 +420,7 @@ describe("Relay state", () => {
   )
 
   stateTest(
-    "removes finished backup tasks a week old, keeping the latest and unfinished",
+    "removes finished backup tasks a week old, keeping the latest, unfinished and restores",
     () =>
       Effect.gen(function* () {
         const store = yield* RelayStateStore
@@ -443,8 +443,8 @@ describe("Relay state", () => {
             },
             at
           )
-        // Thirty finished creates, ending a day apart, and one still queued
-        // from the first day.
+        // Thirty finished creates, ending a day apart, one still queued from
+        // the first day, and a restore that failed partway that day.
         for (let n = 1; n <= 30; n += 1) {
           yield* create(n, n * day - 1_000)
           assert.isTrue(
@@ -452,6 +452,17 @@ describe("Relay state", () => {
           )
         }
         yield* create(31, day)
+        yield* store.enqueueBackupTask(
+          {
+            backupId: id(1_032),
+            kind: "restore",
+            source: { bytes: 1, checksumSha256: "a".repeat(64), kind: "local" },
+            target: { id: "instance-32", kind: "instance" },
+            taskId: id(32),
+          },
+          day
+        )
+        assert.isTrue(yield* store.failBackupTask(id(32), "Interrupted", day))
 
         const keptFrom = (first: number) =>
           Effect.gen(function* () {
@@ -463,7 +474,7 @@ describe("Relay state", () => {
             const left = new Set(
               [...page.changed, ...page.current].map((task) => task.taskId)
             )
-            for (let n = 1; n <= 31; n += 1) {
+            for (let n = 1; n <= 32; n += 1) {
               assert.strictEqual(left.has(id(n)), n >= first, `task ${n}`)
             }
           })

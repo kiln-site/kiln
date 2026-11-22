@@ -69,11 +69,12 @@ at a time, so a report Hearth refused before gets another look, and a change
 the faster passes missed, as when a Relay's clock stepped back, is found
 within ten minutes.
 
-Each time Hearth lists the journal, the Relay first removes finished tasks
-that ended more than a week ago, keeping the twenty latest finished
-whatever their age. Hearth reads every few minutes, so a week is long past
-anything it hasn't read. Exports keep their own rule: only the latest for
-each backup stays.
+Each time Hearth lists the journal, the Relay first removes finished
+creates, deletes and prunes that ended more than a week ago, keeping the
+twenty latest whatever their age. Hearth reads every few minutes, so a week
+is long past anything it hasn't read. Restores stay, since they're rare and
+one that failed partway can still be finished by hand. Exports keep their
+own rule: only the latest for each backup stays.
 
 What a Relay reports of a task reaches Hearth's records only as far as that
 Relay's own work goes. Hearth sends a backup's tasks to its own Relay alone,

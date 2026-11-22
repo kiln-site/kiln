@@ -754,7 +754,7 @@ export class RelayStateStore extends Context.Service<
       taskId: string
     ) => Effect.Effect<RelayBackupTask | null, RelayStateError>
     /**
-     * Removes finished backup tasks, exports aside, a week after they ended,
+     * Removes finished creates, deletes and prunes a week after they ended,
      * keeping the latest finished whatever their age.
      */
     readonly pruneBackupJournal: (
@@ -3647,18 +3647,20 @@ const makeRelayStateStore = Effect.gen(function* () {
       ),
     backupTaskPage: (query) => run("backup_task_page", backupTaskPage(query)),
     // Exports keep their own rule: only the latest for each backup stays.
+    // Restores are rare, and one that failed partway may still be finished
+    // by hand later, recording its result on its row.
     pruneBackupJournal: (now) =>
       run(
         "prune_backup_journal",
         sql`
           DELETE FROM relay_backup_tasks
           WHERE status IN ('succeeded', 'failed', 'cancelled')
-            AND kind <> 'export'
+            AND kind IN ('create', 'delete', 'prune')
             AND updated_at < ${now - backupJournalKeepMs}
             AND task_id NOT IN (
               SELECT task_id FROM relay_backup_tasks
               WHERE status IN ('succeeded', 'failed', 'cancelled')
-                AND kind <> 'export'
+                AND kind IN ('create', 'delete', 'prune')
               ORDER BY updated_at DESC, task_id DESC
               LIMIT ${backupJournalKeepLatest}
             )
