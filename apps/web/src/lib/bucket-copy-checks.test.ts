@@ -9,6 +9,7 @@ import { relayBackupTaskSchema } from "@workspace/contracts"
 
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import {
+  getBackupCatalogRecordEffect,
   reconcileBackupTaskEffect,
   reserveBackupDeleteEffect,
   settleUndispatchableBackupTaskEffect,
@@ -1105,6 +1106,63 @@ describeMysql("Bucket copies Hearth looks for", () => {
           const copy = (yield* state).copies.get(bucketCopy)
           assert.strictEqual(copy?.status, "failed")
           assert.include(copy?.error ?? "", "deleted before")
+        })
+    )
+
+    it.effect("fails a copy its Relay's success report leaves out", () =>
+      Effect.gen(function* () {
+        yield* seed({ second: true })
+        // Sent to make two bucket copies, it reports only one.
+        yield* reported(1, [{ artifactId: bucketCopy }])
+
+        let after = yield* state
+        assert.strictEqual(after.copies.get(secondCopy)?.status, "failed")
+        assert.strictEqual(after.copies.get(bucketCopy)?.status, "running")
+
+        bucket.objects.set(objectKey, uploaded)
+        yield* checkBucketCopiesEffect()
+        after = yield* state
+        assert.strictEqual(after.backup?.status, "available")
+      })
+    )
+
+    it.effect(
+      "shows only a copy waiting to be seen as checking its bucket",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({ local: true })
+          yield* reported(1, [
+            { artifactId: bucketCopy },
+            { artifactId: localCopy },
+          ])
+          const checking = Effect.map(
+            getBackupCatalogRecordEffect(backupId),
+            (record) =>
+              new Map(
+                (record?.artifacts ?? []).map((copy) => [
+                  copy.id,
+                  copy.checking,
+                ])
+              )
+          )
+
+          let shown = yield* checking
+          assert.isTrue(shown.get(bucketCopy))
+          assert.isFalse(shown.get(localCopy))
+
+          // Hearth's copy worker takes the copy over, to make it again.
+          yield* insertRows("backup_copy_task", {
+            id: uuid("e2"),
+            backup_id: backupId,
+            source_artifact_id: localCopy,
+            destination_artifact_id: bucketCopy,
+            status: "running",
+            requested_by: "user-one",
+            created_at: now,
+            updated_at: now,
+          })
+          shown = yield* checking
+          assert.isFalse(shown.get(bucketCopy))
         })
     )
 

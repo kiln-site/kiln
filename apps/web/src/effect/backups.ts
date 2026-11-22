@@ -97,6 +97,12 @@ interface BackupArtifactRow extends RowDataPacket {
   storage_id: string | null
 }
 
+// A copy as the catalog lists it, with whether it waits for Hearth to see it
+// in its bucket (`checkingSql`, which every catalog query selects).
+interface BackupCatalogArtifactRow extends BackupArtifactRow {
+  checking: number | string
+}
+
 interface BackupCopyTaskRow extends RowDataPacket {
   archive_id: string
   artifact_kind: BackupRow["artifact_kind"]
@@ -331,6 +337,8 @@ export interface BackupCatalogRecord {
 
 export interface BackupArtifactRecord {
   bytes: number | null
+  /** Uploaded by its Relay, and waiting for Hearth to see it in the bucket. */
+  checking: boolean
   checksumSha256: string | null
   error: string | null
   errorCode: string | null
@@ -1425,6 +1433,16 @@ const notACopy = `id NOT IN (
  */
 export const BUCKET_COPY_SEEN_WITHIN_MS = 60 * 60_000
 
+// Whether a copy waits for Hearth to see it in its bucket, as a column:
+// uploaded by its Relay (`seen_by` is set then), not yet settled, and not one
+// Hearth's copy worker is making. Takes the artifact table's name or alias.
+const checkingSql = (artifact: string) => `(${artifact}.status = 'running'
+  AND ${artifact}.storage_id IS NOT NULL AND ${artifact}.completed_at IS NULL
+  AND ${artifact}.seen_by IS NOT NULL
+  AND ${artifact}.id NOT IN (
+    SELECT destination_artifact_id FROM ${databaseTable("backup_copy_task")}
+  )) AS checking`
+
 // A copy a delete has taken, or is taking: no report of its create brings
 // it back.
 const notDeleted = "status NOT IN ('deleted', 'deleting')"
@@ -1465,7 +1483,8 @@ const backupStatusFromCopies = Effect.fnUntraced(function* (
   >(
     `SELECT COALESCE(SUM(status = 'available'), 0) AS available,
             COALESCE(SUM(status = 'running' AND storage_id IS NOT NULL
-              AND completed_at IS NULL AND ${notACopy}), 0) AS waiting
+              AND completed_at IS NULL AND seen_by IS NOT NULL
+              AND ${notACopy}), 0) AS waiting
        FROM ${databaseTable("backup_artifact")}
       WHERE backup_id = ?`,
     [backupId, backupId]
@@ -1848,6 +1867,25 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 ]
               )
             }
+            // A copy the create was sent to make that its report leaves out
+            // was never made: it fails, rather than stay queued for good.
+            yield* transaction.execute(
+              `UPDATE ${databaseTable("backup_artifact")}
+                  SET status = 'failed', error = ?, completed_at = ?,
+                      updated_at = ?
+                WHERE backup_id = ? AND status IN ('queued', 'running')
+                  AND seen_by IS NULL
+                  AND id NOT IN (${outcomes.map(() => "?").join(", ")})
+                  AND ${notACopy}`,
+              [
+                "Its Relay reported the backup made without this copy",
+                task.finishedAt ?? now,
+                now,
+                task.backupId,
+                ...outcomes.map((outcome) => outcome.artifactId),
+                task.backupId,
+              ]
+            )
           }
           // A delete was asked for before the create finished: what it
           // uploaded never waits to be seen.
@@ -2008,12 +2046,12 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
       WHERE backup.status <> 'deleted'
       ORDER BY backup.created_at DESC, backup.id DESC`
   )
-  const artifactRows = yield* database.queryRows<BackupArtifactRow>(
+  const artifactRows = yield* database.queryRows<BackupCatalogArtifactRow>(
     "backup_artifact_catalog_list",
     `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
             artifact.status, artifact.filename, artifact.object_key,
             artifact.bytes, artifact.checksum_sha256, artifact.error,
-            artifact.error_code
+            artifact.error_code, ${checkingSql("artifact")}
        FROM ${databaseTable("backup_artifact")} artifact
        JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
       WHERE backup.status <> 'deleted' AND artifact.status <> 'deleted'
@@ -2024,6 +2062,7 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
     const records = artifactsByBackup.get(artifact.backup_id) ?? []
     records.push({
       bytes: nullableDatabaseNumber(artifact.bytes, "backup artifact bytes"),
+      checking: Boolean(Number(artifact.checking)),
       checksumSha256: artifact.checksum_sha256,
       error: artifact.error,
       errorCode: artifact.error_code ?? null,
@@ -2120,10 +2159,11 @@ const catalogRecordsWhere = Effect.fnUntraced(function* (
     [...values]
   )
   if (rows.length === 0) return []
-  const artifacts = yield* database.queryRows<BackupArtifactRow>(
+  const artifacts = yield* database.queryRows<BackupCatalogArtifactRow>(
     "backup_artifact_catalog_where",
     `SELECT id, backup_id, storage_id, status, filename, object_key,
-            bytes, checksum_sha256, error, error_code
+            bytes, checksum_sha256, error, error_code,
+            ${checkingSql(databaseTable("backup_artifact"))}
        FROM ${databaseTable("backup_artifact")}
       WHERE backup_id IN (${rows.map(() => "?").join(", ")})
         AND status <> 'deleted'
@@ -2299,10 +2339,11 @@ export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
   )
   const row = rows[0]
   if (!row) return null
-  const artifacts = yield* database.queryRows<BackupArtifactRow>(
+  const artifacts = yield* database.queryRows<BackupCatalogArtifactRow>(
     "backup_artifact_catalog_get",
     `SELECT id, backup_id, storage_id, status, filename, object_key,
-            bytes, checksum_sha256, error, error_code
+            bytes, checksum_sha256, error, error_code,
+            ${checkingSql(databaseTable("backup_artifact"))}
        FROM ${databaseTable("backup_artifact")}
       WHERE backup_id = ? AND status <> 'deleted'
       ORDER BY created_at ASC, id ASC`,
@@ -2477,10 +2518,11 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   const artifactsByBackup = new Map<string, Array<BackupArtifactRecord>>()
   if (backupIds.length > 0) {
     const placeholders = backupIds.map(() => "?").join(", ")
-    const artifactRows = yield* database.queryRows<BackupArtifactRow>(
+    const artifactRows = yield* database.queryRows<BackupCatalogArtifactRow>(
       "backup_artifact_catalog_page",
       `SELECT id, backup_id, storage_id, status, filename, object_key,
-                bytes, checksum_sha256, error, error_code
+                bytes, checksum_sha256, error, error_code,
+                ${checkingSql(databaseTable("backup_artifact"))}
            FROM ${databaseTable("backup_artifact")}
           WHERE backup_id IN (${placeholders}) AND status <> 'deleted'
           ORDER BY created_at ASC, id ASC`,
@@ -2505,9 +2547,12 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   }
 })
 
-function backupArtifactFromRow(row: BackupArtifactRow): BackupArtifactRecord {
+function backupArtifactFromRow(
+  row: BackupCatalogArtifactRow
+): BackupArtifactRecord {
   return {
     bytes: nullableDatabaseNumber(row.bytes, "backup artifact bytes"),
+    checking: Boolean(Number(row.checking)),
     checksumSha256: row.checksum_sha256,
     error: row.error,
     errorCode: row.error_code ?? null,
@@ -3528,7 +3573,7 @@ const waitingCopies = (where: string) => `
       ON task.backup_id = backup.id AND task.task_kind = 'create'
      AND task.status = 'succeeded'
    WHERE artifact.status = 'running' AND artifact.storage_id IS NOT NULL
-     AND artifact.completed_at IS NULL
+     AND artifact.completed_at IS NULL AND artifact.seen_by IS NOT NULL
      AND backup.backup_mode = 'full'
      AND backup.status NOT IN ('deleting', 'deleted')
      AND artifact.id NOT IN (

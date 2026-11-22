@@ -1454,14 +1454,7 @@ function artifactAvailabilityState(
   if (artifact?.error) return "failed"
   if (status === "failed") return "failed"
   // Made and uploaded, and waiting for Hearth to see it in the bucket.
-  if (
-    status === "running" &&
-    artifact?.storageId &&
-    backup.taskKind === "create" &&
-    backup.taskStatus === "succeeded"
-  ) {
-    return "checking"
-  }
+  if (artifact?.checking) return "checking"
   if (status === "queued" || status === "running") {
     return "working"
   }

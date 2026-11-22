@@ -19,6 +19,7 @@ const backup = {
   artifacts: [
     {
       bytes: 1,
+      checking: false,
       checksumSha256: "a".repeat(64),
       error: null,
       errorCode: null,

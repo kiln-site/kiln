@@ -207,7 +207,11 @@ shown as "Checking bucket". Hearth looks in the background, woken when a
 pass over the Relay's backups or a cancel's reply sees a create succeed, and
 on each backup sweep. The copy becomes available at the size Hearth saw if
 that is the reported size and within the reservation; a different size, an
-oversize object or no object fails it, saying why. A backup is available
+oversize object or no object fails it, saying why. A copy the create was
+sent to make that its success report leaves out fails, rather than stay
+queued. The catalog marks each copy waiting to be seen as checking, which
+is what the list shows; a copy Hearth's copy worker is making isn't one. A
+backup is available
 while any copy is, so one with a copy on the Relay's disk is available while
 its bucket copy waits; running while only bucket copies wait; failed
 otherwise.
