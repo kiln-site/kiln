@@ -51,8 +51,8 @@ that reached a non-repeatable restore step is marked failed for explicit review
 instead of guessed at.
 
 Hearth reads a Relay's task journal a page at a time, never all of it at
-once: the Relay keeps every task it has run, so the whole journal soon
-outgrows one control message (1 MiB). Each pass asks for the tasks changed
+once: the Relay keeps a week of tasks, so the whole journal can outgrow
+one control message (1 MiB). Each pass asks for the tasks changed
 after where Hearth last read (`backup_tasks_read_at` on the Relay's row, by
 the Relay's clock), less a minute, since a change can be stamped a moment
 before another that is written first. Each page holds the tasks changed
@@ -68,6 +68,13 @@ backup sweep reads each Relay with scheduled backups from the start, a page
 at a time, so a report Hearth refused before gets another look, and a change
 the faster passes missed, as when a Relay's clock stepped back, is found
 within ten minutes.
+
+Each time Hearth lists the journal, the Relay first removes finished
+creates, deletes and prunes that ended more than a week ago, keeping the
+twenty latest whatever their age. Hearth reads every few minutes, so a week
+is long past anything it hasn't read. Restores stay, since they're rare and
+one that failed partway can still be finished by hand. Exports keep their
+own rule: only the latest for each backup stays.
 
 What a Relay reports of a task reaches Hearth's records only as far as that
 Relay's own work goes. Hearth sends a backup's tasks to its own Relay alone,

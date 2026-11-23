@@ -419,6 +419,76 @@ describe("Relay state", () => {
       })
   )
 
+  stateTest(
+    "removes finished backup tasks a week old, keeping the latest, unfinished and restores",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const day = 24 * 60 * 60_000
+        const id = (n: number) =>
+          `41400000-0000-4000-8000-${String(n).padStart(12, "0")}`
+        const create = (n: number, at: number) =>
+          store.enqueueBackupTask(
+            {
+              artifactKind: "archive",
+              backupId: id(1_000 + n),
+              destination: { kind: "local" },
+              exclude: [],
+              kind: "create",
+              maxBytes: null,
+              mode: "full",
+              reason: "manual",
+              target: { id: `instance-${n}`, kind: "instance" },
+              taskId: id(n),
+            },
+            at
+          )
+        // Thirty finished creates, ending a day apart, one still queued from
+        // the first day, and a restore that failed partway that day.
+        for (let n = 1; n <= 30; n += 1) {
+          yield* create(n, n * day - 1_000)
+          assert.isTrue(
+            yield* store.failBackupTask(id(n), "It failed", n * day)
+          )
+        }
+        yield* create(31, day)
+        yield* store.enqueueBackupTask(
+          {
+            backupId: id(1_032),
+            kind: "restore",
+            source: { bytes: 1, checksumSha256: "a".repeat(64), kind: "local" },
+            target: { id: "instance-32", kind: "instance" },
+            taskId: id(32),
+          },
+          day
+        )
+        assert.isTrue(yield* store.failBackupTask(id(32), "Interrupted", day))
+
+        const keptFrom = (first: number) =>
+          Effect.gen(function* () {
+            const page = yield* store.backupTaskPage({
+              after: { taskId: "", updatedAt: 0 },
+              budgetBytes: 10_000_000,
+              taskIds: [],
+            })
+            const left = new Set(
+              [...page.changed, ...page.current].map((task) => task.taskId)
+            )
+            for (let n = 1; n <= 32; n += 1) {
+              assert.strictEqual(left.has(id(n)), n >= first, `task ${n}`)
+            }
+          })
+
+        // On day 15, those that ended before day 8 are a week old.
+        yield* store.pruneBackupJournal(15 * day)
+        yield* keptFrom(8)
+        // On day 33, those that ended before day 26 are, but the latest
+        // twenty finished (days 11 to 30) stay.
+        yield* store.pruneBackupJournal(33 * day)
+        yield* keptFrom(11)
+      })
+  )
+
   stateTest("never runs a create that arrives after its backup's delete", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore
