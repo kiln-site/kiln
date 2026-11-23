@@ -1128,6 +1128,7 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       managedBy: proxy.managedBy,
     },
     recovery: platformRecoveryScope(config, state),
+    restored: state?.restored ?? null,
     services,
   } satisfies RelayPlatformStatus
 })
@@ -2125,6 +2126,7 @@ const CLI_USAGE = `Usage: kiln-relay platform <command>
   repair                         Create what's missing and start what stopped, now
   stop-hearth                    Hold Hearth stopped; its database keeps running
   start-hearth                   Let Hearth run again
+  restore <backup>               Put a platform backup back, here or on a new machine
   recover --confirm <id>         Start an empty database after its volume was lost
   export-kit                     Print the recovery kit (secrets) as JSON
   import-kit <path>              Install from a recovery kit on a new Relay`

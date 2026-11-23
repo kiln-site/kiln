@@ -111,6 +111,39 @@ export const readRelayIdentityMaterial = Effect.fn("RelayIdentity.read")(
   }
 )
 
+/**
+ * Takes on a lost Relay's identity, as a platform backup carried it, so the
+ * Hearth restored with it finds this Relay as the one it knew.
+ */
+export const writeRelayIdentityMaterial = Effect.fn("RelayIdentity.write")(
+  function* (
+    config: RelayConfig,
+    material: {
+      readonly id: string
+      readonly name: string
+      readonly privateKeyPem: string
+      readonly publicKeyPem: string
+    }
+  ) {
+    const identityDirectory = join(config.dataDirectory, "network", "identity")
+    yield* tryPromise("create_directory", () =>
+      mkdir(identityDirectory, { recursive: true, mode: 0o700 })
+    )
+    yield* writeFileAtomic(
+      join(identityDirectory, "identity.key"),
+      material.privateKeyPem,
+      0o600
+    )
+    yield* writeIdentity(join(identityDirectory, "identity.json"), {
+      id: material.id,
+      name: material.name,
+      publicKeyPem: material.publicKeyPem,
+    })
+    // Read back as the Relay will, so a damaged pair fails here.
+    return yield* readRelayIdentityMaterial(config)
+  }
+)
+
 export const renameRelayIdentity = Effect.fn("RelayIdentity.rename")(function* (
   config: RelayConfig,
   identity: RelayIdentity,

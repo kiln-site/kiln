@@ -293,6 +293,21 @@ export function makeRelayScheduleState(sql: SqlClient) {
           })
         )
       ),
+    /**
+     * Drops them all, for Hearth to send those it has: its database was
+     * replaced, and one made since it no longer knows mustn't go on running
+     * where nobody can see or stop it.
+     */
+    forget: () =>
+      run(
+        "forget",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM relay_schedules`
+            yield* sql`DELETE FROM relay_schedule_tombstones`
+          })
+        )
+      ),
     remove: (input: { scheduleId: string; revision: number }) =>
       run(
         "remove",

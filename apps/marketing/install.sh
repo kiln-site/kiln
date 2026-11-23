@@ -37,6 +37,7 @@ volume="kiln-relay-data"
 mode="platform"
 url=""
 port="3000"
+port_given=0
 relay_host=""
 join=""
 game_host=""
@@ -55,6 +56,8 @@ proxy=""
 public_route=""
 # Whether this install may have the Relay connect to Kiln itself by default.
 connects_itself=1
+# A platform backup to restore Kiln from, instead of installing it new.
+restore=""
 
 usage() {
   cat <<'EOF'
@@ -89,6 +92,11 @@ Usage: curl -fsSL https://kiln.site/install | sh -s -- [options]
                      (default: this machine's public IP)
   --join LINK        Join the Kiln whose Add Relay dialog gave this link,
                      instead of printing an invitation (implies --node)
+  --restore FILE     Restore Kiln from a platform backup (.kiln) instead of
+                     installing it new, on a machine without Kiln. Asks for
+                     the recovery code, or reads it from KILN_RECOVERY_CODE.
+                     Kiln opens at the backup's address unless --url says
+                     otherwise. If it fails, run it again
   --cli              Install only the kiln command-line tool, to manage
                      Kiln from this computer (Linux or macOS). With
                      --nightly, the newest nightly; with --url, it shows
@@ -109,7 +117,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --url) url="${2:?--url needs a value}"; shift 2 ;;
     --proxy) proxy="${2:?--proxy needs a value}"; shift 2 ;;
-    --port) port="${2:?--port needs a value}"; shift 2 ;;
+    --port) port="${2:?--port needs a value}"; port_given=1; shift 2 ;;
     --game-host) game_host="${2:?--game-host needs a value}"; shift 2 ;;
     --relay-host) relay_host="${2:?--relay-host needs a value}"; shift 2 ;;
     --join) join="${2:?--join needs a value}"; mode="node"; shift 2 ;;
@@ -120,6 +128,7 @@ while [ "$#" -gt 0 ]; do
     --namespace) namespace="${2:?--namespace needs a value}"; shift 2 ;;
     --nightly) channel="latest-nightly"; shift ;;
     --node) mode="node"; shift ;;
+    --restore) restore="${2:?--restore needs a value}"; shift 2 ;;
     --cli) cli=1; shift ;;
     --skip-docker-install) install_docker_allowed=0; shift ;;
     -y | --yes) assume_yes=1; shift ;;
@@ -134,6 +143,19 @@ if [ "$cli" -eq 1 ]; then
     exit 1
   }
   mode="cli"
+fi
+
+if [ -n "$restore" ]; then
+  [ "$mode" = "platform" ] || {
+    printf 'kiln: --restore restores Kiln itself; add a Relay without it.\n' >&2
+    exit 1
+  }
+  [ -f "$restore" ] || {
+    printf 'kiln: there is no backup at %s.\n' "$restore" >&2
+    exit 1
+  }
+  # Docker mounts it by its full path.
+  restore="$(cd "$(dirname "$restore")" && pwd)/$(basename "$restore")"
 fi
 
 # The link from Hearth's Add Relay dialog: its address, then #kj1. and a
@@ -688,8 +710,45 @@ start_platform_relay() {
     ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
+    ${restore:+--label io.kiln.restore=true} \
     "$image" || remove_unstarted
   remove_relay_cidfile
+}
+
+# Kiln's recovery code, from KILN_RECOVERY_CODE or typed without showing.
+ask_recovery_code() {
+  recovery_code=${KILN_RECOVERY_CODE:-}
+  [ -z "$recovery_code" ] || return 0
+  has_terminal ||
+    fail "Restoring needs Kiln's recovery code: set KILN_RECOVERY_CODE, or run this in a terminal."
+  asked=1
+  printf '  Recovery code (kiln-rk-…): ' >/dev/tty
+  stty -echo </dev/tty 2>/dev/null || true
+  read -r recovery_code </dev/tty || recovery_code=""
+  stty echo </dev/tty 2>/dev/null || true
+  printf '\n' >/dev/tty
+  [ -n "$recovery_code" ] || fail "Restoring needs Kiln's recovery code."
+}
+
+# Puts the backup back into a new Relay's data, before its first start. The
+# code goes on standard input, so it's in no process list or log. Run as a
+# step, in a subshell: where Kiln opens goes to $restored_file.
+restore_backup() {
+  dk volume create "$volume" >/dev/null
+  restored=$(printf '%s\n' "$recovery_code" | dk run --rm -i --entrypoint kiln-relay \
+    --volume /var/run/docker.sock:/var/run/docker.sock \
+    --volume "$volume:/data" \
+    --volume "$restore:/restore.kiln:ro" \
+    --env KILN_RELAY_MODE=platform \
+    ${url:+--env KILN_URL="$url"} \
+    ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
+    ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
+    "$image" platform restore /restore.kiln 2>&1) || {
+    printf '%s\n' "$restored"
+    stop "$(printf '%s\n' "$restored" | sed -n 's/^Error: //p' | tail -n 1)"
+  }
+  printf '%s\n' "$restored"
+  printf '%s\n' "$restored" >"$restored_file"
 }
 
 start_node_relay() {
@@ -810,6 +869,15 @@ port_owner() {
   fi
 }
 
+# Whether something listens on $port at $bind_address, or at every address.
+# In hex, as Linux lists an IPv4 address: the last byte first.
+bind_taken() {
+  awk -v port="$(printf '%04X' "$port")" \
+    -v address="$(printf '%s' "$bind_address" | awk -F. 'NF == 4 { printf "%02X%02X%02X%02X", $4, $3, $2, $1 }')" \
+    'NR > 1 && $4 == "0A" { split($2, local, ":"); if (local[2] == port && (local[1] == address || local[1] ~ /^0+$/)) found = 1 } END { exit !found }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
 # What's listening on ports 80 or 443, the same way.
 web_ports_owner() {
   for published in 80 443; do
@@ -832,6 +900,18 @@ check_ports() {
     owner=$(port_owner 4100)
     [ -z "$owner" ] ||
       fail "Port 4100 is in use by $owner, and a Relay needs it for Kiln to reach it."
+  fi
+  if [ "$mode" = "platform" ]; then
+    owner=$(port_owner "$port")
+    # Bound to one address, Kiln can share the port with another's.
+    case "$bind_address" in
+      "" | 0.0.0.0 | ::) ;;
+      *) bind_taken || owner="" ;;
+    esac
+    case "$owner" in
+      "" | "$hearth") ;;
+      *) fail "Port $port, for Kiln, is in use by $owner. Free it, or run this again with another --port, and --url if Kiln's address names the port." ;;
+    esac
   fi
   owner=$(port_owner "$sftp_port")
   [ -n "$owner" ] || return 0
@@ -1041,6 +1121,9 @@ choose_proxy() {
     return 0
   fi
   log "ports 80/443 are used by: $owner"
+  # A restore keeps the backup's address, so it isn't asked about another.
+  [ -z "$restore" ] ||
+    fail "Port 80 or 443 is in use by $owner. Free them, or run this again with --proxy none if your own proxy serves Kiln's address."
   say "  Port 80 or 443 is already in use by $owner,"
   say "  so Kiln can't set up HTTPS."
   asked=1
@@ -1391,6 +1474,18 @@ if docker_reachable; then
   fi
 fi
 
+# A restore whose Kiln didn't come up, as when its port was taken, starts over
+# with the options given now: its Relay goes, and its data stays. Any other
+# Relay here is left as it is.
+if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
+  if [ "$(dk inspect --format '{{index .Config.Labels "io.kiln.restore"}}' "$container" 2>/dev/null)" != "true" ] ||
+    [ "$(dk inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$hearth" 2>/dev/null)" = "healthy" ]; then
+    fail "Kiln is already on this machine. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
+  fi
+  log "starting over a restore whose Kiln didn't come up"
+  dk rm -f "$container" >/dev/null 2>&1 || true
+fi
+
 # Already here: the Relay starts afresh from the downloaded image, keeping
 # its settings and data, so running this again updates and restarts it.
 # Then it joins Kiln, or this says where it's at.
@@ -1440,11 +1535,13 @@ if [ "$mode" = "node" ]; then
   choose_node_proxy
 else
   choose_proxy
-  choose_url
+  # A restore opens at the backup's address unless --url says otherwise.
+  [ -n "$restore" ] || choose_url
   case "$url" in
-    http://* | https://*) ;;
+    "" | http://* | https://*) ;;
     *) fail "The address must start with http:// or https://" ;;
   esac
+  [ -z "$restore" ] || ask_recovery_code
 fi
 [ "$asked" -eq 0 ] || say ""
 
@@ -1455,7 +1552,8 @@ if [ "$docker_missing" -eq 1 ]; then
 fi
 step "Checking Docker" check_docker
 check_memory
-check_ports
+# A restore's port is in the backup, checked once it's read.
+[ -n "$restore" ] || check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
 
@@ -1538,6 +1636,25 @@ if [ "$mode" = "node" ]; then
   exit 0
 fi
 
+if [ -n "$restore" ]; then
+  restored_file=$(mktemp)
+  step "Restoring the backup" restore_backup
+  # One run again may be given another address than the first was.
+  [ -n "$url" ] || url=$(sed -n 's/^KILN_URL=//p' "$restored_file" | tail -n 1)
+  if [ "$port_given" -eq 0 ]; then
+    port=$(sed -n 's/^KILN_PLATFORM_HEARTH_PORT=//p' "$restored_file" | tail -n 1)
+  fi
+  if [ -z "$bind_address" ]; then
+    bind_address=$(sed -n 's/^KILN_PLATFORM_HEARTH_BIND=//p' "$restored_file" | tail -n 1)
+    [ "$bind_address" != "0.0.0.0" ] || bind_address=""
+    if [ -n "$bind_address" ] && command -v ip >/dev/null 2>&1 &&
+      ! ip -o addr | grep -qF " $bind_address/"; then
+      fail "Kiln listened only on $bind_address, which this machine doesn't have. Run this again with --bind and an address it has, or --bind 0.0.0.0 for all."
+    fi
+  fi
+  rm -f "$restored_file"
+  check_ports
+fi
 step "Starting Kiln's Relay" start_platform_relay
 step "Setting up the database" wait_healthy "$database" 600
 step "Starting Kiln" wait_healthy "$hearth" 900
@@ -1551,6 +1668,20 @@ case "$url" in
     fi
     ;;
 esac
+
+if [ -n "$restore" ]; then
+  say ""
+  say "  ${green}${bold}Kiln is restored$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
+  say ""
+  say "  Sign in as before:"
+  say "  $arrow $bold$url$reset"
+  say ""
+  say "  Keep the old machine off: it would be this same Kiln."
+  say ""
+  say "  ${dim}Install log: $log_file$reset"
+  say ""
+  exit 0
+fi
 
 setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file" || true)
 [ -n "$setup" ] || fail "Kiln started, but didn't give a setup link."

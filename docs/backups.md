@@ -460,10 +460,9 @@ deleting or editing either sticks. The same sweep resends any schedule a Relay h
 a first deploy that failed is retried.
 Existing installations keep the schedules they chose.
 
-Restoring Kiln stays offline (see below). Its Restore shows the commands for
-the Relay's host and, where the Relay installed Kiln, opens that Relay's
-terminal with `stop-hearth`, the restore, and `start-hearth` typed for the
-operator to send.
+Restoring Kiln stays offline (see below). Its Restore shows the command for the
+Relay's host and, where the Relay installed Kiln, opens that Relay's terminal
+with it typed for the operator to send.
 
 ## Scheduled backups
 
@@ -727,7 +726,19 @@ default recommendation.
 
 Kiln platform restore is deliberately offline because importing Hearth's own
 catalog while Hearth is serving requests cannot be made transactionally safe.
-Stop Hearth, keep its MySQL and Relay containers running, and use:
+A Relay in platform mode does it in one command, on the machine that has Kiln
+or on a new one (see [Self-hosting](self-hosting.md#recovery)):
+
+```text
+kiln-relay platform restore /data/backups/<backup-id>.zip
+```
+
+It authenticates the whole bundle before changing anything, holds Hearth
+stopped, saves the database that's there as another platform backup, which
+restoring undoes it, and replaces it. It records no progress: one that fails or
+is stopped is run again from the start, and Hearth stays stopped until one
+finishes. Where the Relay didn't install Kiln, stop Hearth, keep its MySQL and
+Relay containers running, and use:
 
 ```text
 kiln-relay platform-backup inspect /data/backups/<backup-id>.zip
@@ -735,12 +746,11 @@ kiln-relay platform-backup restore /data/backups/<backup-id>.zip \
   --confirm <installation-id>
 ```
 
-`inspect` prints the installation ID the bundle belongs to. The restore
-verifies the authenticated manifest and ciphertext before replacing
-the Hearth database. It refuses a mismatched installation and refuses to run
-while a labeled Hearth application container is running. Start Hearth
-afterward; normal Relay reconciliation repairs the restored catalog's queued
-snapshot of the backup task.
+`inspect` prints the installation ID the bundle belongs to. Either refuses a
+backup of another installation, and the second refuses to run while a labeled
+Hearth application container is running. Start Hearth afterward; normal Relay
+reconciliation repairs the restored catalog's queued snapshot of the backup
+task, and sends a Relay that lost its schedules them again.
 
 Deleting a game server, database, App, or Kiln volume is the durable
 operation `resource.delete` (`apps/web/src/lib/resource-deletion.server.ts`),
