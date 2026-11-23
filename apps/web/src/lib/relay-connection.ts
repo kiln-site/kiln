@@ -565,7 +565,7 @@ export function relayBrowserAuthorizationReady(
   const connection = connections.get(relayId)
   return connection
     ? connection.ensureBrowserAuthorizationReady(minimumIssuerGeneration)
-    : Promise.reject(new Error("Relay browser authorization is not connected"))
+    : Promise.reject(browserAuthorizationNotConnected())
 }
 
 /**
@@ -1024,9 +1024,7 @@ class RelayConnection {
     minimumIssuerGeneration: number
   ): Promise<number> {
     const readiness = this.browserAuthorizationReadiness
-    if (!readiness) {
-      throw new Error("Relay browser authorization is not connected")
-    }
+    if (!readiness) throw browserAuthorizationNotConnected()
     const initialGeneration = await readiness.promise
     if (
       this.browserAuthorizationReadiness !== readiness ||
@@ -1315,6 +1313,9 @@ class RelayConnection {
         this.#connecting ??
         this.#forkConnecting("relay.connection.open", this.#openEffect())
       return Fiber.join(connecting).pipe(
+        // An attempt ends the moment it's interrupted, before what takes its
+        // place has started.
+        Effect.tapCause(() => Effect.yieldNow),
         Effect.catchCause((cause) => {
           // A connection the Relay opened took this attempt's place.
           if (this.#connecting !== null && this.#connecting !== connecting) {
@@ -1325,6 +1326,9 @@ class RelayConnection {
             this.#state.status === "authenticated"
           ) {
             return Effect.void
+          }
+          if (Cause.hasInterruptsOnly(cause)) {
+            return relayConnectionFailure("Relay connection closed")
           }
           const failure = Cause.squash(cause)
           return Effect.fail(
@@ -2828,6 +2832,16 @@ function unknownOutcome(
       retryable: false,
     })
   )
+}
+
+// Expected while a Relay restarts, and browsers ask again on their own: the
+// connection dropping is logged as it does.
+function browserAuthorizationNotConnected(): RelayUnavailableError {
+  return RelayUnavailableError.make({
+    code: "browser_authorization_not_connected",
+    message: "Relay browser authorization is not connected",
+    retryable: true,
+  })
 }
 
 function relayConnectionFailure(
