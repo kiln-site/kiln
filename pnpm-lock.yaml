@@ -179,6 +179,9 @@ importers:
       '@xterm/headless':
         specifier: 6.0.0
         version: 6.0.0
+      compress-commons:
+        specifier: 7.0.1
+        version: 7.0.1
       effect:
         specifier: 4.1.0
         version: 4.1.0
@@ -222,6 +225,9 @@ importers:
       '@effect/vitest':
         specifier: 4.1.0
         version: 4.1.0(effect@4.1.0)(vitest@5.0.1)
+      '@types/compress-commons':
+        specifier: 7.0.1
+        version: 7.0.1
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5

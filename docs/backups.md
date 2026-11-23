@@ -1026,10 +1026,16 @@ exactly one destination. The 5 GiB single-PUT ceiling applies only to full
 archive uploads, not to restic's own pack writes.
 
 Downloading any backup yields the complete file. For restic snapshots (local or
-S3), creating a download link reserves an `export` task. Relay runs
-`restic dump -a zip`, fetching packs from the repository if needed, stages the
-zip locally, and serves it with the existing Relay download token. Export files
-expire after five minutes and are swept on Relay startup.
+S3), creating a download link reserves an `export` task. Relay stages the zip
+locally and serves it with the existing Relay download token. From a bucket it
+restores the snapshot to a folder beside the zip and zips that: a restore reads
+in bulk, where `restic dump` reads each small file from the bucket on its own,
+which is slow and counts against a provider's request limits. That needs room
+for the files as well as the zip. Without it, for a repository on the Relay's
+own disk, and for a snapshot with something Relay's zip can't hold as it is,
+such as a name with a backslash, Relay runs `restic dump -a zip`. Either way the
+zip holds the same files, folders and links. Export files expire after five
+minutes and are swept on Relay startup, as is a folder a stopped Relay left.
 
 Delete runs `restic forget` for the cataloged snapshot, or — when a failed
 create never recorded a snapshot ID — forgets snapshots tagged
