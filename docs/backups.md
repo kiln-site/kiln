@@ -297,11 +297,10 @@ dynamic plugin loading.
 S3 credentials never go to a game container and are not returned to the
 browser. Full archives use Hearth-signed, narrowly scoped object requests,
 by hand or on a schedule: a Relay is never given a bucket's keys for one
-(see [Scheduled backups](#scheduled-backups)). Incremental restic
-repositories cannot be driven with presigned URLs, so Relay receives the
-destination's static keys inside the durable task input (see
+(see [Scheduled backups](#scheduled-backups)). An incremental backup's
+repository is reached the same way, one signed request at a time (see
 [Incremental snapshots](#incremental-snapshots)). A Relay reports its tasks
-to Hearth without those keys, repository passwords or the signed links it
+to Hearth without repository passwords or the signed links it
 was given (`uploadUrl`, `downloadUrl`, `deleteUrl`): Hearth issued the links
 and never reads them back. A full archive is
 staged locally, its size and digest validated, then uploaded in a single
@@ -463,9 +462,8 @@ operator to send.
 ## Scheduled backups
 
 A Relay runs its schedules on its own, so scheduled backups it can make
-alone, to its own disk or a restic repository, go on while Hearth is away.
-Hearth decides whether each one may run as it decides a
-manual backup's reservation, and puts the answer in the schedule it sends
+alone, to its own disk, go on while Hearth is away. Hearth decides whether
+each one may run as it decides a manual backup's reservation, and puts the answer in the schedule it sends
 the Relay, per backup step and target: not while the target is being
 deleted, not where its backups are turned off (a quantity or size ceiling of
 none), and only to a destination that's enabled, not being deleted, and
@@ -504,7 +502,7 @@ that Hearth didn't choose for one of its own backups. Its access key ID
 does, inside every signed URL, as for a manual backup or a download link;
 it can sign nothing on its own. Backups cataloged before this release from a
 Relay's own report keep the object it named; a run's retry matches one
-only at the object Hearth would choose itself. Incremental backups still carry the keys. Nor
+only at the object Hearth would choose itself. Nor
 is it yet a defence against a Relay that lies to Hearth about its own
 work, which Hearth trusts elsewhere too
 ([#1011](https://github.com/kiln-site/kiln/issues/1011)).
@@ -970,28 +968,48 @@ has one restic repository per destination:
   `<objectPrefix>/kiln/<installation>/<relay>/restic/instance/<targetId>/<repositoryId>`
 
 Hearth generates a repository password on first use and encrypts it with the
-installation keyring. For S3 repositories it also sends the destination's
-static access key and secret inside the durable task input. These are the
-destination keys as stored in Hearth, not scoped or temporary credentials —
-Relay receives whatever those keys can do. Use least-privilege keys
-(per-bucket or per-prefix policy) for destinations used with incremental mode.
+installation keyring. A task or schedule carries that password and, for a
+repository in a bucket, the repository's ID: no key, and nothing of where in
+which bucket it is. Relay persists a task's input in its SQLite journal (mode
+0600) before acknowledging; task reports leave the password out, terminal
+journal rows scrub it even when the stored JSON is corrupt, and restic stderr
+is redacted before it becomes a Relay error.
 
-Relay persists complete task input in its SQLite journal before acknowledging,
-so secrets are durably stored while the task is live. Mitigations: mTLS control
-socket, journal file mode 0600, task-list responses redact `repositoryPassword`,
-`accessKeyId`, and `secretAccessKey`, terminal journal rows scrub those keys
-even when the stored JSON is corrupt, and restic stderr is redacted before it
-becomes a Relay error. A task that fails because credentials were rotated is
-terminal; retry the operation so Hearth dispatches a new task with the current
-keys. Queued tasks are not refreshed in place.
+While restic runs on such a repository, the Relay runs a bridge for it on
+`127.0.0.1`: a server of restic's REST protocol at a random port and a secret
+path, gone when restic exits (`restic-bridge.ts`). For each file restic touches
+the bridge asks Hearth (`backup.repository.access`) for one signed request,
+good for ten minutes, and sends it to the bucket itself, so no backup data
+passes through Hearth. A folder's listing Hearth reads from the bucket and
+answers a page at a time. A file restic reads in many ranges is asked for once
+in five minutes, which a download needs: it reads each file in the backup on
+its own.
 
-Restic cannot pin DNS itself. For S3 repositories the Relay starts a
-per-invocation local HTTP CONNECT proxy on `127.0.0.1` and sets `HTTPS_PROXY`
-only for that restic process. Every CONNECT resolves the requested host with the
-same public-address policy as other backup downloads and connects to the vetted
-IP. A derived host allowlist (endpoint, `bucket.endpoint`, and AWS regional /
-dual-stack forms when the endpoint is on `amazonaws.com`) is a secondary
-control that fails closed. TLS stays end-to-end inside the CONNECT tunnel.
+Hearth's rule is one (`backup-repository-access.server.ts`): a Relay reaches
+only its own repositories. Hearth finds the repository by its ID and the Relay
+whose connection asks, and works out the object from the repository's stored
+prefix, under which files are where restic's own S3 backend keeps them. The
+Relay names only a file restic could have there. Hearth refuses a destination
+being deleted. It doesn't check what a Relay does to its own server's
+repositories: that Relay takes the backups, and could as well back up
+something else.
+
+The bridge only goes to a public address over HTTPS unless the destination
+allows private networks, as any backup request does. restic reports the status
+line of a failed request and nothing else, so that is where the bridge puts the
+bucket's reason, and a 403 ends the command at once where a 500 is tried again.
+An incremental backup to a bucket needs Hearth: one that restarts is waited
+for, and one away for two minutes ends the task (`hearth_unreachable`), so it
+doesn't hold up the backups behind it. A scheduled backup then leaves its
+changes to the next run.
+
+A bucket that requires a checksum with every write, as one with Object Lock
+retention by default does, refuses these uploads, since Hearth signs a request
+before there is a body.
+
+Updating from a release that sent keys: Relay migration 52 replaces the
+repository in stored schedules and tasks with its ID, so waiting tasks still
+run. The keys were out until then; rotate them once every Relay has updated.
 
 A live server can have files restic can't read, such as one locked or
 replaced mid-backup. restic still saves the snapshot and exits with code 3;

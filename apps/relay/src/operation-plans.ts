@@ -648,6 +648,7 @@ export function controlRequestLocks(
     case "hearth.terminal.output":
     case "sftp.authorization.resolve":
     case "schedule.backup.take":
+    case "backup.repository.access":
       return null
 
     case "relay.proxy.write":

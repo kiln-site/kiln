@@ -238,7 +238,7 @@ describe("Relay state", () => {
       })
   )
 
-  stateTest("scrubs S3 keys from terminal journal rows", () =>
+  stateTest("scrubs repository passwords from terminal journal rows", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore
       const input: BackupTaskInput = {
@@ -247,15 +247,8 @@ describe("Relay state", () => {
         destination: {
           kind: "restic",
           repository: {
-            accessKeyId: "AKIAEXAMPLE",
-            allowPrivateNetwork: true,
-            bucket: "kiln-backups",
-            endpoint: "https://s3.example.com",
-            forcePathStyle: true,
             kind: "s3",
-            region: "us-east-1",
-            repositoryPrefix: "team/repo",
-            secretAccessKey: "s3-secret",
+            repositoryId: "41100000-0000-4000-8000-000000000021",
           },
           repositoryPassword: "repo-secret",
         },
@@ -289,18 +282,6 @@ describe("Relay state", () => {
       assert.isDefined(destination)
       if (!destination) return
       assert.strictEqual(destination.repositoryPassword, undefined)
-      assert.strictEqual(
-        destination.repository?.kind === "s3"
-          ? destination.repository.accessKeyId
-          : "present",
-        undefined
-      )
-      assert.strictEqual(
-        destination.repository?.kind === "s3"
-          ? destination.repository.secretAccessKey
-          : "present",
-        undefined
-      )
     })
   )
 
@@ -334,9 +315,18 @@ describe("Relay state", () => {
           { backupId, target: { id: "instance-b", kind: "instance" as const } },
         ]) {
           assert.isFalse(
-            yield* store.cancelBackupTask(taskId, 710, undefined, null, expected)
+            yield* store.cancelBackupTask(
+              taskId,
+              710,
+              undefined,
+              null,
+              expected
+            )
           )
-          assert.strictEqual((yield* store.getBackupTask(taskId))?.status, "queued")
+          assert.strictEqual(
+            (yield* store.getBackupTask(taskId))?.status,
+            "queued"
+          )
         }
 
         assert.isTrue(
@@ -928,6 +918,132 @@ describe("Relay state from when schedules came with a bucket's keys", () => {
               schedule.actions[1],
             ],
           })
+        })
+      )
+  )
+
+  it.effect(
+    "names the repositories its schedules and backups hold a bucket's keys for",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const repositoryId = "52000000-0000-4000-8000-000000000001"
+          const waiting = "52000000-0000-4000-8000-000000000002"
+          const finished = "52000000-0000-4000-8000-000000000003"
+          const bucket = {
+            allowPrivateNetwork: false,
+            bucket: "kiln-backups",
+            endpoint: "https://s3.example.test",
+            forcePathStyle: false,
+            kind: "s3",
+            region: "us-east-1",
+            repositoryPrefix: `team/kiln/kiln/relay/restic/instance/server-a/${repositoryId}`,
+          }
+          const keys = {
+            accessKeyId: "AKIAKILNTESTKEY",
+            secretAccessKey: "kiln-test-secret-access-key",
+          }
+          const schedule = (repository: object) => ({
+            actions: [
+              {
+                executions: [
+                  {
+                    destination: {
+                      kind: "restic",
+                      repository,
+                      repositoryPassword: "repo-secret",
+                    },
+                    repositoryId,
+                    targetId: "server-a",
+                  },
+                ],
+                type: "backup",
+              },
+            ],
+            id: "14bb1e12-fab9-45f3-8f85-ae22d2f074e5",
+          })
+          const stored = schedule({ ...bucket, ...keys })
+          const task = (taskId: string, repository: object) => ({
+            artifactKind: "restic_snapshot",
+            backupId: taskId,
+            destination: { kind: "restic", repository },
+            exclude: [],
+            kind: "create",
+            maxBytes: null,
+            mode: "incremental",
+            reason: "scheduled",
+            target: { id: "server-a", kind: "instance" },
+            taskId,
+          })
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`
+                INSERT INTO relay_schedules
+                  (schedule_id, revision, enabled, next_run_at, definition_json)
+                VALUES (${stored.id}, 1, 1, NULL, ${JSON.stringify(stored)})
+              `
+              yield* sql`
+                INSERT INTO relay_backup_tasks
+                  (task_id, backup_id, kind, status, input_json, created_at,
+                   updated_at)
+                VALUES (${waiting}, ${waiting}, 'create', 'queued',
+                  ${JSON.stringify(task(waiting, { ...bucket, ...keys }))}, 1, 1)
+              `
+              // A finished one kept where it went, without the keys.
+              yield* sql`
+                INSERT INTO relay_backup_tasks
+                  (task_id, backup_id, kind, status, input_json, result_json,
+                   created_at, finished_at, updated_at)
+                VALUES (${finished}, ${finished}, 'create', 'succeeded',
+                  ${JSON.stringify(task(finished, bucket))},
+                  ${JSON.stringify({ bytes: 12, snapshotId: "abcdef12", warnings: [] })},
+                  1, 2, 2)
+              `
+              yield* sql`
+                DELETE FROM effect_sql_migrations WHERE migration_id >= 52
+              `
+            })
+          )
+          const read = yield* Effect.gen(function* () {
+            const store = yield* RelayStateStore
+            return {
+              finished: yield* store.getBackupTask(finished),
+              waiting: yield* store.getBackupTask(waiting),
+            }
+          }).pipe(Effect.provide(makeRelayStateLayer(filename)))
+
+          const named = { kind: "s3" as const, repositoryId }
+          assert.strictEqual(read.waiting?.status, "queued")
+          assert.deepStrictEqual(
+            read.waiting?.input.kind === "create" &&
+              read.waiting.input.destination,
+            {
+              kind: "restic",
+              repository: named,
+            }
+          )
+          assert.strictEqual(read.finished?.status, "succeeded")
+          assert.deepStrictEqual(read.finished?.result, {
+            bytes: 12,
+            snapshotId: "abcdef12",
+            warnings: [],
+          })
+          const [kept] = yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{ json: string }>`
+                SELECT definition_json AS json FROM relay_schedules
+              `
+            })
+          )
+          assert.deepStrictEqual(JSON.parse(kept!.json), schedule(named))
         })
       )
   )

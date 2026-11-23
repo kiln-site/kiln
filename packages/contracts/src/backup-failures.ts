@@ -97,6 +97,13 @@ export function describeBackupFailure(
         // The Relay's own network is as likely as the provider.
         external: false,
       }
+    case "hearth_unreachable":
+      return {
+        title: "Couldn't reach Hearth",
+        detail:
+          "Hearth signs each request an incremental backup makes to a bucket, and the Relay couldn't reach it. Check the Relay's connection and try again.",
+        external: false,
+      }
     case "repository_locked":
       return {
         title: "Backup repository is locked",

@@ -4184,7 +4184,7 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
 )
 
 export interface BackupRepositorySecret {
-  objectPrefix: string | null
+  id: string
   password: string
   storageId: string | null
 }
@@ -4241,14 +4241,14 @@ export const loadBackupRepositoryPasswordEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<
     {
-      object_prefix: string | null
+      id: string
       password_ciphertext: string
       storage_id: string | null
     } & RowDataPacket
   >(
     "backup_repository_password",
-    `SELECT repository.password_ciphertext, repository.storage_id,
-            repository.object_prefix
+    `SELECT repository.id, repository.password_ciphertext,
+            repository.storage_id
        FROM ${databaseTable("backup")} backup
        JOIN ${databaseTable("backup_repository")} repository
          ON repository.id = backup.repository_id
@@ -4265,7 +4265,7 @@ export const loadBackupRepositoryPasswordEffect = Effect.fn(
     })
   }
   return {
-    objectPrefix: row.object_prefix,
+    id: row.id,
     password: yield* decryptRepositoryPassword(row.password_ciphertext),
     storageId: row.storage_id,
   } satisfies BackupRepositorySecret

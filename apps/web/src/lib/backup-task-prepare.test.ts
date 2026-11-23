@@ -85,7 +85,7 @@ afterAll(() => {
 describeMysql("restic backup dispatch", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "sends the stored repository prefix and decrypted credentials",
+      "names the repository and sends nothing of its bucket",
       () =>
         Effect.gen(function* () {
           yield* seedResticBackup({ enabled: true })
@@ -100,15 +100,8 @@ describeMysql("restic backup dispatch", () => {
             return assert.fail("expected restic create dispatch")
           }
           assert.deepStrictEqual(prepared.destination.repository, {
-            accessKeyId: "AKIAEXAMPLE",
-            allowPrivateNetwork: true,
-            bucket: "kiln-backups",
-            endpoint: "https://s3.example.com",
-            forcePathStyle: true,
             kind: "s3",
-            region: "us-east-1",
-            repositoryPrefix: storedPrefix,
-            secretAccessKey: "s3-secret",
+            repositoryId,
           })
           assert.strictEqual(
             prepared.destination.repositoryPassword,

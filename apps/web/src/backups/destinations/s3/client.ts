@@ -20,14 +20,18 @@ import { Effect, Result, Schedule } from "effect"
 
 import {
   backupArtifactFilename,
+  resticRepositoryFileNameSchema,
   type BackupArtifactKind,
+  type BackupRepositoryAccessReply,
   type BackupTargetKind,
+  type ResticRepositoryFolder,
 } from "@workspace/contracts"
 
 import { BackupStorageError } from "@/effect/errors"
 
 const CONNECTION_TEST_PREFIX = "kiln/connection-tests"
 const PRESIGNED_UPLOAD_SECONDS = 7 * 24 * 60 * 60
+const PRESIGNED_REPOSITORY_SECONDS = 10 * 60
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 30_000
 const BACKUP_TRANSFER_IDLE_TIMEOUT_MS = 60_000
 const S3_DELETE_PAGE_SIZE = 1_000
@@ -293,6 +297,19 @@ export function isRetryableS3Failure(error: unknown): boolean {
   return true
 }
 
+/** What the bucket said as it refused a request for good, or null. */
+export function s3Refusal(error: unknown): string | null {
+  if (!(error instanceof BackupStorageError)) return null
+  const status = s3FailureStatus(error.cause)
+  if (status === null || status < 400 || status >= 500 || status === 429) {
+    return null
+  }
+  const { cause } = error
+  return cause instanceof Error
+    ? `${cause.name}: ${cause.message}`
+    : `HTTP ${status}`
+}
+
 export function verifyS3BackupCredential(credential: S3BackupCredential) {
   const objectKey = [
     credential.objectPrefix,
@@ -481,6 +498,81 @@ export function signS3BackupUpload(
         kind: "s3" as const,
         objectKey,
         uploadUrl,
+      }))
+    )
+  )
+}
+
+/**
+ * Signs one request to one file of a restic repository. Files are where
+ * restic's own S3 backend keeps them, packs under their first two characters.
+ */
+export function signS3RepositoryFile(
+  credential: S3BackupCredential,
+  input: {
+    file: string
+    method: "DELETE" | "GET" | "HEAD" | "PUT"
+    repositoryPrefix: string
+  }
+) {
+  const object = {
+    Bucket: credential.bucket,
+    Key: `${input.repositoryPrefix}/${input.file.replace(/^data\/(..)/u, "data/$1/$1")}`,
+  }
+  return withS3Client(credential, (client) =>
+    s3Request(`storage.signRepository.${input.method}`, () =>
+      getSignedUrl(
+        client,
+        input.method === "PUT"
+          ? new PutObjectCommand(object)
+          : input.method === "GET"
+            ? new GetObjectCommand(object)
+            : input.method === "HEAD"
+              ? new HeadObjectCommand(object)
+              : new DeleteObjectCommand(object),
+        { expiresIn: PRESIGNED_REPOSITORY_SECONDS }
+      )
+    ).pipe(
+      Effect.map((url): BackupRepositoryAccessReply => ({
+        allowPrivateNetwork: credential.allowPrivateNetwork,
+        status: "signed",
+        url,
+      }))
+    )
+  )
+}
+
+/** One page of the files in a folder of a restic repository. */
+export function listS3RepositoryFolder(
+  credential: S3BackupCredential,
+  input: {
+    after: string | undefined
+    folder: ResticRepositoryFolder
+    repositoryPrefix: string
+  }
+) {
+  return withS3Client(credential, (client) =>
+    s3Request("storage.listRepository", (signal) =>
+      client.send(
+        new ListObjectsV2Command({
+          Bucket: credential.bucket,
+          ContinuationToken: input.after,
+          Prefix: `${input.repositoryPrefix}/${input.folder}/`,
+        }),
+        { abortSignal: signal }
+      )
+    ).pipe(
+      Effect.map((page): BackupRepositoryAccessReply => ({
+        files: (page.Contents ?? []).flatMap((entry) => {
+          const name = resticRepositoryFileNameSchema.safeParse(
+            entry.Key?.split("/").at(-1)
+          )
+          return name.success
+            ? [{ name: name.data, size: entry.Size ?? 0 }]
+            : []
+        }),
+        next: page.IsTruncated ? (page.NextContinuationToken ?? null) : null,
+        status: "listed",
       }))
     )
   )

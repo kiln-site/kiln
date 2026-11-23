@@ -55,29 +55,15 @@ export const s3BackupDestinationTaskDriver = {
         checksumSha256: input.checksumSha256,
       }
     }),
+  // Nothing of the bucket: the Relay asks Hearth for each request it makes
+  // there (`backup.repository.access`).
   prepareResticRepository: (input) =>
-    Effect.gen(function* () {
-      if (!input.objectPrefix) {
-        return yield* invalidBackupDestination(
-          "The restic repository is unavailable"
-        )
-      }
-      const storage = yield* availableStorage(
-        input.storageId,
-        input.requireEnabled
-      )
-      return {
-        accessKeyId: storage.accessKeyId,
-        allowPrivateNetwork: storage.allowPrivateNetwork,
-        bucket: storage.bucket,
-        endpoint: storage.endpoint,
-        forcePathStyle: storage.forcePathStyle,
+    availableStorage(input.storageId, input.requireEnabled).pipe(
+      Effect.as({
         kind: "s3",
-        region: storage.region,
-        repositoryPrefix: input.objectPrefix,
-        secretAccessKey: storage.secretAccessKey,
-      } satisfies ResticRepositoryLocation
-    }),
+        repositoryId: input.repositoryId,
+      } satisfies ResticRepositoryLocation)
+    ),
 } satisfies BackupDestinationTaskDriver<"s3">
 
 const availableStorage = Effect.fnUntraced(function* (

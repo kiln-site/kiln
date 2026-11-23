@@ -109,8 +109,9 @@ import {
   backupArchivePath,
   backupDestinationFor,
   backupDirectoryPath,
-  resticRepositoryString,
+  resticRepositoryKey,
 } from "./backups/destinations/index.js"
+import type { ResticRepositoryAccess } from "./backups/destinations/s3/restic-bridge.js"
 import {
   installPreparedInstanceRestore,
   materializeBackupArtifact,
@@ -292,6 +293,8 @@ export class BackupManager {
      * work on. Without them, they're read now and the lanes told.
      */
     fences?: TarRestoreFences
+    /** How restic repositories in a bucket are reached: through Hearth. */
+    repositoryAccess?: ResticRepositoryAccess
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
@@ -319,6 +322,7 @@ export class BackupManager {
             "restic",
             "cache"
           ),
+          repositoryAccess: options.repositoryAccess,
         }),
         state,
         wake,
@@ -3436,7 +3440,9 @@ function runResticForget(
 function refusedByStorage(code: BackupFailureCode | null): boolean {
   return (
     code !== null &&
-    (code.startsWith("storage_") || code.startsWith("repository_"))
+    (code === "hearth_unreachable" ||
+      code.startsWith("storage_") ||
+      code.startsWith("repository_"))
   )
 }
 
@@ -3458,7 +3464,7 @@ function resticPruneFor(
       target: input.target,
       taskId: randomUUID(),
     },
-    repositoryKey: resticRepositoryString(
+    repositoryKey: resticRepositoryKey(
       resticDriverLocation(config, input.target.id, input.repository)
     ),
   }

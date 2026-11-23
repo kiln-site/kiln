@@ -47,7 +47,10 @@ import type {
   RelaySnapshotDelta,
   RelaySystemUpdate,
 } from "@workspace/contracts"
-import { hearthTerminalOutputSchema } from "@workspace/contracts"
+import {
+  backupRepositoryAccessRequestSchema,
+  hearthTerminalOutputSchema,
+} from "@workspace/contracts"
 import { scheduledBucketBackupRequestSchema } from "@workspace/contracts/schedules"
 
 import {
@@ -61,6 +64,7 @@ import { RelayUnavailableError } from "@/effect/errors"
 import { loadedKilnInstallationId } from "@/effect/installation"
 import {
   forkAppEffect,
+  forkAppWorker,
   forkAppEffectInTrace,
   logAppEvent,
   reportAppError,
@@ -1971,21 +1975,23 @@ class RelayConnection {
         this.#reverseInFlight.delete(message.id)
         return
       }
-      inFlight.fiber = forkAppEffect(
-        `relay.reverse.${message.operation}`,
-        Effect.yieldNow.pipe(
-          Effect.andThen(
-            this.#handleRelayRequestEffect(message, controller, socket)
-          ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (this.#reverseInFlight.get(message.id) === inFlight) {
-                this.#reverseInFlight.delete(message.id)
-              }
-            })
-          )
+      const handled = Effect.yieldNow.pipe(
+        Effect.andThen(
+          this.#handleRelayRequestEffect(message, controller, socket)
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (this.#reverseInFlight.get(message.id) === inFlight) {
+              this.#reverseInFlight.delete(message.id)
+            }
+          })
         )
       )
+      inFlight.fiber =
+        message.operation === "backup.repository.access"
+          ? // One for each file restic touches, so no span for each.
+            forkAppWorker(handled)
+          : forkAppEffect(`relay.reverse.${message.operation}`, handled)
     }
   }
 
@@ -2088,6 +2094,30 @@ class RelayConnection {
         const payload = yield* Effect.tryPromise({
           try: (signal) =>
             takeScheduledBucketBackups(this.#relay.id, asked, signal),
+          catch: asError,
+        })
+        yield* sendSocketEffect(socket, {
+          id: randomUUID(),
+          payload,
+          replyTo: request.id,
+          type: "response",
+          v: 1,
+        })
+      })
+    }
+    // Which Relay asks is the connection's own, never what it says.
+    if (request.operation === "backup.repository.access") {
+      return Effect.gen({ self: this }, function* () {
+        const asked = yield* Effect.try({
+          try: () => backupRepositoryAccessRequestSchema.parse(request.payload),
+          catch: asError,
+        })
+        const { answerBackupRepositoryAccess } = yield* Effect.tryPromise({
+          try: () => import("@/server/backup-repository-access.server"),
+          catch: asError,
+        })
+        const payload = yield* Effect.tryPromise({
+          try: () => answerBackupRepositoryAccess(this.#relay.id, asked),
           catch: asError,
         })
         yield* sendSocketEffect(socket, {

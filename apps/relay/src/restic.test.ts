@@ -17,15 +17,8 @@ import { RelayBackupError } from "./effect/errors.js"
 
 const testDirectory = mkdtempSync(join(tmpdir(), "kiln-restic-"))
 const s3Location: ResticDriverLocation = {
-  accessKeyId: "AKIAEXAMPLE",
-  allowPrivateNetwork: true,
-  bucket: "kiln-backups",
-  endpoint: "https://s3.example.com",
-  forcePathStyle: true,
   kind: "s3",
-  region: "us-east-1",
-  repositoryPrefix: "team/kiln/relay/restic/instance/srv/repo",
-  secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+  repositoryId: "66666666-6666-4666-8666-666666666666",
 }
 
 afterEach(() => {
@@ -69,33 +62,38 @@ describe("restic S3 driver", () => {
     if (!call) return
     expect(call.env.AWS_SESSION_TOKEN).toBeUndefined()
     expect(call.env.HTTP_PROXY).toBeUndefined()
-    expect(call.env.HTTPS_PROXY).toMatch(
-      /^http:\/\/user:[^@]+@127\.0\.0\.1:\d+$/u
-    )
-    expect(call.env.AWS_ACCESS_KEY_ID).toBe(s3Location.accessKeyId)
-    expect(call.env.AWS_SECRET_ACCESS_KEY).toBe(s3Location.secretAccessKey)
+    expect(call.env.HTTPS_PROXY).toBeUndefined()
+    expect(call.env.AWS_ACCESS_KEY_ID).toBeUndefined()
     expect(call.env.RESTIC_PASSWORD).toBe("repo-secret")
-    expect(call.env.RESTIC_REPOSITORY).toBe(
-      "s3:https://s3.example.com/kiln-backups/team/kiln/relay/restic/instance/srv/repo"
+    expect(call.env.RESTIC_REPOSITORY).toMatch(
+      /^rest:http:\/\/127\.0\.0\.1:\d+\/[\w-]{43}\/$/u
     )
     expect(call.env.RESTIC_CACHE_DIR).toBe(cacheDirectory)
     expect(existsSync(cacheDirectory)).toBe(true)
-    const argv = call.args.join(" ")
-    for (const secret of [
-      "repo-secret",
-      s3Location.accessKeyId,
-      s3Location.secretAccessKey,
-    ]) {
-      expect(argv).not.toContain(secret)
-    }
+    expect(call.args.join(" ")).not.toContain("repo-secret")
+  })
+
+  // As a prune leaves one when it can't reach the bucket to remove it.
+  it("opens a repository a dead lock was left in", async () => {
+    let locked = true
+    const { spawn } = fakeRestic((restic) => {
+      if (restic.args.includes("unlock")) locked = false
+      restic.respond({ exitCode: locked ? 11 : 0 })
+    })
+    const snapshots = await createResticDriver({ spawn }).openForBackup({
+      location: s3Location,
+      password: "repo-secret",
+      signal: new AbortController().signal,
+      tag: "task:1",
+    })
+    expect(snapshots).toEqual([])
   })
 
   it("redacts repository secrets from restic stderr", async () => {
     const { spawn } = fakeRestic((restic) =>
       restic.respond({
         exitCode: 1,
-        stderr:
-          "Fatal: could not use AKIAEXAMPLE or wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY with repo-secret",
+        stderr: `Fatal: could not open ${restic.env.RESTIC_REPOSITORY} with repo-secret`,
       })
     )
     const failure = await createResticDriver({ spawn })
@@ -114,10 +112,7 @@ describe("restic S3 driver", () => {
       )
     expect(failure).toBeInstanceOf(RelayBackupError)
     const reason = failure instanceof RelayBackupError ? failure.reason : ""
-    expect(reason).not.toContain("AKIAEXAMPLE")
-    expect(reason).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
-    expect(reason).not.toContain("repo-secret")
-    expect(reason).toContain("[redacted]")
+    expect(reason).toBe("Fatal: could not open the bucket with [redacted]")
   })
 })
 
