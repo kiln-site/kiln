@@ -474,11 +474,10 @@ docker compose run --rm --entrypoint kiln-relay --env KILN_RELAY_CONTAINER= \
 docker compose up -d
 ```
 
-**If it fails, run it again.** Nothing has to be cleaned up first: each run puts
-everything back from the start, and Hearth stays stopped until one finishes. A
-wrong code or a damaged backup stops it before anything is written. Once Kiln's
-Relay has started, the installer asks you to remove it before another try; its
-data stays.
+**If it fails, run it again.** Each run puts everything back from the start, and
+Hearth stays stopped until one finishes. A wrong code or a damaged backup stops
+it before anything is written. If Kiln's Relay had started, the installer stops
+and prints the command that removes its container first; its data stays.
 
 It's the same Kiln on the same Relay: the same installation ID, secrets and
 recovery code, so other Relays reconnect and its backups stay listed. A Relay

@@ -1476,7 +1476,10 @@ fi
 # Whether this Relay's Kiln ever worked isn't known here, so removing it is
 # left to whoever runs this. Its data stays either way.
 if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
-  fail "Kiln's Relay is already on this machine. To put a backup back into a Kiln that has worked, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine. If this is a restore whose Kiln never came up, remove it with \`docker rm -f $container ${prefix}kiln-traefik\`, then run this again."
+  leftover=$container
+  [ "$(dk container inspect --format '{{index .Config.Labels "kiln.relay.infrastructure"}}' "${prefix}kiln-traefik" 2>/dev/null)" != "traefik" ] ||
+    leftover="$container ${prefix}kiln-traefik"
+  fail "Kiln's Relay is already on this machine. To put a backup back into a Kiln that has worked, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine. If this is a restore whose Kiln never came up, remove it with \`$docker_cmd rm -f $leftover\`, then run this again."
 fi
 
 # Already here: the Relay starts afresh from the downloaded image, keeping
