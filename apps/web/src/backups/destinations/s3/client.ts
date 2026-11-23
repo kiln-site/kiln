@@ -511,7 +511,7 @@ export function signS3RepositoryFile(
   credential: S3BackupCredential,
   input: {
     file: string
-    method: "DELETE" | "GET" | "HEAD" | "PUT"
+    method: "DELETE" | "GET" | "PUT"
     repositoryPrefix: string
   }
 ) {
@@ -527,9 +527,7 @@ export function signS3RepositoryFile(
           ? new PutObjectCommand(object)
           : input.method === "GET"
             ? new GetObjectCommand(object)
-            : input.method === "HEAD"
-              ? new HeadObjectCommand(object)
-              : new DeleteObjectCommand(object),
+            : new DeleteObjectCommand(object),
         { expiresIn: PRESIGNED_REPOSITORY_SECONDS }
       )
     ).pipe(

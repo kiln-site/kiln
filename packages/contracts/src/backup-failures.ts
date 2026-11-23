@@ -101,7 +101,7 @@ export function describeBackupFailure(
       return {
         title: "Couldn't reach Hearth",
         detail:
-          "Hearth signs each request an incremental backup makes to a bucket, and the Relay couldn't reach it. Check the Relay's connection and try again.",
+          "Hearth signs and lists what an incremental backup reads and writes in a bucket, and the Relay couldn't get that from it. Check the Relay's connection, and that Hearth can reach the bucket.",
         external: false,
       }
     case "repository_locked":

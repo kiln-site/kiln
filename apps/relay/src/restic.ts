@@ -33,7 +33,6 @@ const RESTIC_TERMINATE_TIMEOUT_MS = 5_000
 const RESTIC_ENV_ALLOWLIST = [
   "HOME",
   "PATH",
-  "RESTIC_CACERT",
   "TMPDIR",
 ] as const
 // restic saved the snapshot but couldn't read some of its source files.
@@ -332,7 +331,9 @@ export function createResticDriver(options?: {
       if (Result.isSuccess(first)) return first.success
       if (
         !(first.failure instanceof RelayBackupError) ||
-        first.failure.exitCode !== RESTIC_EXIT_LOCKED
+        first.failure.exitCode !== RESTIC_EXIT_LOCKED ||
+        // What it was piped into has ended.
+        input.stdoutPipe
       ) {
         throw first.failure
       }

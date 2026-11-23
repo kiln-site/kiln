@@ -175,7 +175,8 @@ const backupFailurePatterns: ReadonlyArray<
   // Backblaze B2's daily transaction and download bandwidth caps; its
   // storage cap matched above.
   ["storage_limit_reached", /cap exceeded/iu],
-  ["hearth_unreachable", /Hearth couldn't be reached/u],
+  // Once the Relay stops waiting; a wait that ended well says so with a 500.
+  ["hearth_unreachable", /403 Hearth couldn't be reached/u],
   [
     "storage_bucket_missing",
     /NoSuchBucket|bucket does not exist|bucket not found/iu,
@@ -188,7 +189,7 @@ const backupFailurePatterns: ReadonlyArray<
   ["relay_disk_full", /no space left on device|\bENOSPC\b/iu],
   [
     "storage_unreachable",
-    /no such host|connection refused|network is unreachable|i\/o timeout|tls handshake|connection reset|dial tcp|S3 backup request timed out/iu,
+    /no such host|connection refused|network is unreachable|i\/o timeout|tls handshake|connection reset|dial tcp|S3 backup request timed out|S3 storage couldn't be reached/iu,
   ],
 ]
 
@@ -365,7 +366,7 @@ export const backupRepositoryAccessRequestSchema = z.discriminatedUnion(
     z
       .object({
         file: resticRepositoryFileSchema,
-        method: z.enum(["DELETE", "GET", "HEAD", "PUT"]),
+        method: z.enum(["DELETE", "GET", "PUT"]),
         repositoryId: z.uuid(),
       })
       .strict(),

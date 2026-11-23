@@ -78,7 +78,7 @@ describeMysql("backup repository access", () => {
         for (const request of [
           read,
           { ...read, method: "PUT" as const },
-          { ...read, file: "config", method: "HEAD" as const },
+          { ...read, file: "config" },
           { ...read, file: `locks/${pack}`, method: "DELETE" as const },
         ]) {
           const reply = yield* backupRepositoryAccessEffect(

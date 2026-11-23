@@ -204,7 +204,9 @@ class ResticBridge {
     switch (method) {
       case "GET":
       case "HEAD": {
-        const answer = await this.#send(method, file.data, {
+        // A bucket says nothing of why it turned a HEAD down, so restic's is
+        // read too, and answered without the body. It asks for `config`.
+        const answer = await this.#send("GET", file.data, {
           headers: request.headers.range
             ? { range: request.headers.range }
             : {},
@@ -267,7 +269,7 @@ class ResticBridge {
 
   /** Sends the bucket one signed request, and fails unless it succeeds. */
   async #send(
-    method: "DELETE" | "GET" | "HEAD" | "PUT",
+    method: "DELETE" | "GET" | "PUT",
     file: string,
     options: {
       body?: Readable
@@ -295,13 +297,26 @@ class ResticBridge {
       request.setTimeout(BUCKET_IDLE_TIMEOUT_MS, () => {
         request.destroy(new Error("S3 backup request timed out"))
       })
-      request.once("error", reject)
+      // Node names a failure to reach any of several addresses only by code.
+      request.once("error", (cause: NodeJS.ErrnoException) => {
+        reject(
+          new Error(
+            `S3 storage couldn't be reached: ${cause.message || cause.code}`,
+            { cause }
+          )
+        )
+      })
       if (options.body) options.body.pipe(request)
       else request.end()
     })
     const status = answer.statusCode ?? 0
     if (status >= 200 && status < 300) return answer
     const said = await errorSaid(answer)
+    // A file that isn't there is for restic to make of what it will; a bucket
+    // that isn't there mustn't pass for a repository still to be made.
+    if (status === 404 && said?.startsWith("NoSuchBucket")) {
+      throw new BridgeFailure(403, said)
+    }
     throw new BridgeFailure(
       // Anything restic can't make right by trying again goes through as it
       // is, as does a bucket with no room. The rest it tries again.
@@ -324,7 +339,7 @@ class ResticBridge {
   }
 
   async #sign(
-    method: "DELETE" | "GET" | "HEAD" | "PUT",
+    method: "DELETE" | "GET" | "PUT",
     file: string
   ): Promise<SignedReply> {
     const reply = await this.#ask({

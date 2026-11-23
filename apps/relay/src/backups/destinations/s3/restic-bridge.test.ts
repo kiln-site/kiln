@@ -11,6 +11,7 @@ import {
 const bucket = vi.hoisted(() => ({
   objects: new Map<string, Buffer>(),
   refuses: null as { body: string; status: number } | null,
+  unreachable: null as Error | null,
   requests: [] as Array<{ lookup: unknown; method?: string }>,
 }))
 
@@ -49,7 +50,9 @@ vi.mock("node:https", async (importOriginal) => {
         finished()
         const object = bucket.objects.get(url.pathname)
         const range = /^bytes=(\d+)-(\d+)$/u.exec(options.headers.range ?? "")
-        if (bucket.refuses) {
+        if (bucket.unreachable) {
+          this.emit("error", bucket.unreachable)
+        } else if (bucket.refuses) {
           answer(bucket.refuses.status, bucket.refuses.body)
         } else if (options.method === "PUT") {
           bucket.objects.set(url.pathname, Buffer.concat(sent))
@@ -77,6 +80,7 @@ afterEach(() => {
   vi.useRealTimers()
   bucket.objects.clear()
   bucket.refuses = null
+  bucket.unreachable = null
   bucket.requests.length = 0
 })
 
@@ -208,9 +212,31 @@ describe("restic bridge", () => {
         403,
         "AccessDenied: Cannot upload files, storage cap exceeded",
       ])
+      // Not a file that isn't there, which restic takes for a repository it
+      // is to make, or one with nothing left to delete.
+      bucket.refuses = {
+        body: "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message></Error>",
+        status: 404,
+      }
+      const missing = await fetch(`${url}config`, { method: "HEAD" })
+      expect([missing.status, missing.statusText]).toEqual([
+        403,
+        "NoSuchBucket: The specified bucket does not exist",
+      ])
       // One that may pass: restic tries a 500 again.
       bucket.refuses = { body: "", status: 503 }
       expect((await fetch(`${url}${pack}`)).status).toBe(500)
+    })
+    // As Node fails for an endpoint with several addresses.
+    bucket.unreachable = Object.assign(new AggregateError([]), {
+      code: "ECONNREFUSED",
+    })
+    await bridged(access, async (url) => {
+      const unreachable = await fetch(`${url}${pack}`)
+      expect([unreachable.status, unreachable.statusText]).toEqual([
+        500,
+        "S3 storage couldn't be reached: ECONNREFUSED",
+      ])
     })
     await bridged(
       async () => ({ reason: "no such repository", status: "refused" }),
@@ -233,16 +259,16 @@ describe("restic bridge", () => {
       async (request) => {
         if (!away) return access(request)
         // A Hearth that fails to answer and one that isn't there.
-        if (request.method === "HEAD") throw new Error("closed")
+        if (request.method === "DELETE") throw new Error("closed")
         return null
       },
       async (url) => {
         const status = async () => (await fetch(`${url}${pack}`)).status
         expect(await status()).toBe(500)
         vi.setSystemTime(Date.now() + 90_000)
-        expect((await fetch(`${url}${pack}`, { method: "HEAD" })).status).toBe(
-          500
-        )
+        expect(
+          (await fetch(`${url}${pack}`, { method: "DELETE" })).status
+        ).toBe(500)
         away = false
         expect(await status()).toBe(200)
         away = true
@@ -292,7 +318,7 @@ describe("asking Hearth for repository access", () => {
   const ask = (payloads: ReadonlyArray<unknown>) =>
     askHearthForRepositoryAccess(
       async () => payloads.map((payload) => ({ payload })),
-      { file: "config", method: "HEAD", repositoryId }
+      { file: "config", method: "GET", repositoryId }
     )
 
   it("takes the Hearth whose repository it is over one it isn't", async () => {

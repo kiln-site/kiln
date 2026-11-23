@@ -1009,7 +1009,9 @@ before there is a body.
 
 Updating from a release that sent keys: Relay migration 52 replaces the
 repository in stored schedules and tasks with its ID, so waiting tasks still
-run. The keys were out until then; rotate them once every Relay has updated.
+run. The keys were out until then; rotate them once every Relay has updated. A
+bucket behind a private CA now needs it in the Relay's `NODE_EXTRA_CA_CERTS`, as
+full backups do; restic's own `RESTIC_CACERT` no longer comes into it.
 
 A live server can have files restic can't read, such as one locked or
 replaced mid-backup. restic still saves the snapshot and exits with code 3;
