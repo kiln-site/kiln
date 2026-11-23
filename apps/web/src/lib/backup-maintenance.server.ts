@@ -35,9 +35,15 @@ declare global {
 
 const seedDefaultSchedule = Effect.fn("backupMaintenance.seedDefault")(
   function* () {
-    const { redeployUnacknowledgedSchedules, seedDefaultKilnBackupSchedule } =
-      yield* promiseEffect(() => import("@/server/schedule-deployment.server"))
+    const {
+      oweLostSchedules,
+      redeployUnacknowledgedSchedules,
+      seedDefaultKilnBackupSchedule,
+    } = yield* promiseEffect(
+      () => import("@/server/schedule-deployment.server")
+    )
     yield* promiseEffect(seedDefaultKilnBackupSchedule)
+    yield* promiseEffect(oweLostSchedules)
     // Including the one just seeded, if its Relay didn't take it.
     yield* promiseEffect(redeployUnacknowledgedSchedules)
   }

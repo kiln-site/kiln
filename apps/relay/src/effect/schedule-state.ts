@@ -522,7 +522,11 @@ export function makeRelayScheduleState(sql: SqlClient) {
           })
         )
       ),
-    overview: (scheduleIds?: ReadonlyArray<string>) =>
+    /** Those it has, and unless `history` is off, their latest runs. */
+    overview: (
+      scheduleIds?: ReadonlyArray<string>,
+      { history = true }: { readonly history?: boolean } = {}
+    ) =>
       run(
         "overview",
         sql.withTransaction(
@@ -544,7 +548,7 @@ export function makeRelayScheduleState(sql: SqlClient) {
             const rows = yield* sql<RunRow>`SELECT * FROM relay_schedule_runs
         WHERE ${ids} IS NULL OR schedule_id IN (SELECT value FROM json_each(${ids}))
         ORDER BY finished_at IS NOT NULL, finished_at DESC, run_id DESC
-        LIMIT ${historyLimit}`
+        LIMIT ${history ? historyLimit : 0}`
             const runs: Array<ScheduleRun> = []
             for (const row of rows) {
               const record = Result.try(() => readRun(row))

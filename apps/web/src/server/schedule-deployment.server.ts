@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
 
-import { Clock, Effect, Result } from "effect"
+import { Clock, Effect, Exit, Result } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
 import {
   relayScheduleDeploymentSchema,
+  relayScheduleOverviewSchema,
   SCHEDULED_APP_BACKUP_GROUP_MAX,
   scheduleActionAppliesToTarget,
   scheduledAppBackupGroup,
@@ -920,27 +921,54 @@ export interface ScheduleRunRow extends RowDataPacket {
   schedule_id: string
 }
 
+/**
+ * Every schedule with its actions and targets, from one snapshot: an edit
+ * between the reads would pair a definition with another revision's parts.
+ */
+function readScheduleDefinitions() {
+  return Effect.runPromise(
+    Effect.acquireUseRelease(
+      promiseEffect(() => databasePool.getConnection()),
+      (connection) =>
+        promiseEffect(async () => {
+          // For this transaction, whatever the server's default is.
+          await connection.query(
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+          )
+          await connection.query("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+          const schedules = await connection.query<ScheduleRow[]>(
+            `SELECT id, name, cron_expression, enabled,
+                    continue_on_failure, revision, created_by, created_at,
+                    updated_at
+               FROM ${databaseTable("schedule")}
+              WHERE deleted_at IS NULL
+              ORDER BY updated_at DESC, id DESC`
+          )
+          const actions = await connection.query<ScheduleActionRow[]>(
+            `SELECT id, schedule_id, position, action_type, action_config
+               FROM ${databaseTable("schedule_action")}
+              ORDER BY schedule_id, position`
+          )
+          const targets = await connection.query<ScheduleTargetRow[]>(
+            `SELECT schedule_id, relay_id, target_kind, target_id, target_name
+               FROM ${databaseTable("schedule_target")}
+              ORDER BY schedule_id, relay_id, target_kind, target_name`
+          )
+          await connection.query("COMMIT")
+          return [schedules, actions, targets] as const
+        }),
+      (connection, exit) =>
+        Effect.sync(() =>
+          Exit.isSuccess(exit) ? connection.release() : connection.destroy()
+        )
+    )
+  )
+}
+
 export async function loadSchedules() {
-  const [scheduleRows, actionRows, targetRows, deploymentRows, runRows] =
+  const [[scheduleRows, actionRows, targetRows], deploymentRows, runRows] =
     await Promise.all([
-      databasePool.query<ScheduleRow[]>(
-        `SELECT id, name, cron_expression, enabled,
-                continue_on_failure, revision, created_by, created_at,
-                updated_at
-           FROM ${databaseTable("schedule")}
-          WHERE deleted_at IS NULL
-          ORDER BY updated_at DESC, id DESC`
-      ),
-      databasePool.query<ScheduleActionRow[]>(
-        `SELECT id, schedule_id, position, action_type, action_config
-           FROM ${databaseTable("schedule_action")}
-          ORDER BY schedule_id, position`
-      ),
-      databasePool.query<ScheduleTargetRow[]>(
-        `SELECT schedule_id, relay_id, target_kind, target_id, target_name
-           FROM ${databaseTable("schedule_target")}
-          ORDER BY schedule_id, relay_id, target_kind, target_name`
-      ),
+      readScheduleDefinitions(),
       databasePool.query<ScheduleDeploymentRow[]>(
         `SELECT schedule_id, relay_id, desired_revision,
                 acknowledged_revision, status, next_run_at, last_error
@@ -1040,6 +1068,64 @@ export function deliverPendingSchedules(): void {
 export async function stopScheduleDeliveries(): Promise<void> {
   deliveriesStopped = true
   await Promise.all(deliveries)
+}
+
+/**
+ * Marks as owed the schedules a Relay took but no longer has, as one restored
+ * or rebuilt from scratch has none, for `redeployUnacknowledgedSchedules` to
+ * send. A Relay that can't be asked is asked by the next sweep.
+ */
+export async function oweLostSchedules(): Promise<void> {
+  const [rows] = await databasePool.query<
+    Array<{ relay_id: string; schedule_id: string } & RowDataPacket>
+  >(
+    `SELECT deployment.relay_id, deployment.schedule_id
+       FROM ${databaseTable("schedule_deployment")} deployment
+       JOIN ${databaseTable("schedule")} schedule
+         ON schedule.id = deployment.schedule_id
+      WHERE deployment.status = 'applied' AND schedule.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM ${databaseTable("schedule_target")} target
+           WHERE target.schedule_id = deployment.schedule_id
+             AND target.relay_id = deployment.relay_id
+        )`
+  )
+  const taken = groupRows(rows, (row) => row.relay_id)
+  const relays = (await listPersistedRelays()).filter(
+    (relay) => relay.enabled && taken.has(relay.id)
+  )
+  await Effect.runPromise(
+    Effect.forEach(
+      relays,
+      (relay) =>
+        promiseEffect(async () => {
+          const scheduleIds = (taken.get(relay.id) ?? []).map(
+            (row) => row.schedule_id
+          )
+          const { deployments } = relayScheduleOverviewSchema.parse(
+            await relayRpc(
+              relay,
+              "schedule.overview",
+              { history: false, scheduleIds },
+              15_000
+            )
+          )
+          const had = new Set(
+            deployments.map((deployment) => deployment.scheduleId)
+          )
+          const lost = scheduleIds.filter((id) => !had.has(id))
+          if (lost.length === 0) return
+          await databasePool.query(
+            `UPDATE ${databaseTable("schedule_deployment")}
+                SET status = 'pending', updated_at = ?
+              WHERE relay_id = ? AND schedule_id IN (?)
+                AND status = 'applied'`,
+            [Date.now(), relay.id, lost]
+          )
+        }).pipe(Effect.ignore),
+      { concurrency: scheduleReconciliationConcurrency, discard: true }
+    )
+  )
 }
 
 /**
