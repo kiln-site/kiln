@@ -1,4 +1,9 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto"
 
 import {
   cliAccessTokenPrefix,
@@ -25,6 +30,7 @@ import { betterAuthSecrets, cliDefaultAccessDays } from "@/lib/environment"
 import type { PlatformRole } from "@/lib/permissions"
 
 const DEVICE_CODE_TTL_MS = 10 * 60_000
+const MOBILE_CODE_TTL_MS = 2 * 60_000
 const DEVICE_POLL_INTERVAL_SECONDS = 3
 const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const TOKEN_ENCRYPTION_PURPOSE = "cli-device-access-token"
@@ -378,6 +384,175 @@ export const denyCliAuthorizationEffect = Effect.fn("cli.device.deny")(
   }
 )
 
+/**
+ * A phone signed in through Hearth's sign-in page. Hearth records the sign-in
+ * as an answered device request: the hash of the verifier the phone keeps
+ * stands in for the device code, and a one-time code, which the browser
+ * carries back to the app, for the user code. Nothing is linked until the
+ * phone redeems both, so a sign-in someone else started gets them nothing.
+ */
+export const authorizeMobileSignInEffect = Effect.fn("cli.mobile.authorize")(
+  function* (input: {
+    challenge: string
+    name: string
+    user: AuthenticatedUser
+  }) {
+    if (!isAccountEnabled(input.user) || !isAccountVerified(input.user)) {
+      return yield* CliAccessError.make({
+        code: "forbidden",
+        message: "An enabled, verified account is required.",
+        retryable: false,
+      })
+    }
+    if (input.user.isDevelopmentBypass) {
+      return yield* CliAccessError.make({
+        code: "forbidden",
+        message: "Sign in with a persisted account to use the Kiln app.",
+        retryable: false,
+      })
+    }
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const code = randomBytes(32).toString("base64url")
+    const existing = yield* database.queryRows<RowDataPacket & { id: string }>(
+      "cli.mobile.challenge",
+      `SELECT id FROM ${databaseTable("cli_device")}
+        WHERE device_code_hash = ?
+        LIMIT 1`,
+      [input.challenge]
+    )
+    if (existing.length > 0) {
+      return yield* invalidGrant("This sign-in was already used. Start again.")
+    }
+    yield* database.execute(
+      "cli.device.prune",
+      `DELETE FROM ${databaseTable("cli_device")}
+        WHERE expires_at < ?`,
+      [now - 24 * 60 * 60_000]
+    )
+    yield* database.execute(
+      "cli.mobile.authorize",
+      `INSERT INTO ${databaseTable("cli_device")}
+         (id, device_code_hash, user_code_hash, client_name, status, user_id,
+          access_mode, authorized_at, expires_at, created_at)
+       VALUES (?, ?, ?, ?, 'approved', ?, 'full_access', ?, ?, ?)`,
+      [
+        randomUUID(),
+        input.challenge,
+        digest(code),
+        input.name,
+        input.user.id,
+        now,
+        now + MOBILE_CODE_TTL_MS,
+        now,
+      ]
+    )
+    return { code }
+  }
+)
+
+/** Trades a phone's one-time code and verifier for its CLI credential. */
+export const redeemMobileSignInEffect = Effect.fn("cli.mobile.redeem")(
+  function* (input: { code: string; verifier: string }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const accessToken = `kiln_cli_${randomBytes(32).toString("base64url")}`
+    const credentialId = randomUUID()
+    const credentialExpiresAt = expirationForDuration("30d", now)
+    const request = yield* database.transaction(
+      "cli.mobile.redeem",
+      (transaction) =>
+        Effect.gen(function* () {
+          const rows = yield* transaction.queryRows<
+            CliDeviceRow & { device_code_hash: string }
+          >(
+            `SELECT client_name, device_code_hash, expires_at, status,
+                    access_mode, authorized_at, credential_expires_at,
+                    credential_id, last_polled_at, token_ciphertext, user_id
+               FROM ${databaseTable("cli_device")}
+              WHERE user_code_hash = ?
+              LIMIT 1
+              FOR UPDATE`,
+            [digest(input.code)]
+          )
+          const row = rows[0]
+          if (
+            !row ||
+            row.expires_at <= now ||
+            row.status !== "approved" ||
+            row.credential_id !== null ||
+            row.token_ciphertext !== null ||
+            row.user_id === null
+          ) {
+            return yield* invalidGrant("This sign-in expired. Start again.")
+          }
+          if (!sameHash(row.device_code_hash, digest(input.verifier))) {
+            // A code without its verifier was intercepted; it dies here.
+            // Failing would roll the burn back, so the transaction commits it.
+            yield* transaction.execute(
+              `UPDATE ${databaseTable("cli_device")}
+                  SET expires_at = ?
+                WHERE user_code_hash = ?`,
+              [now, digest(input.code)]
+            )
+            return null
+          }
+          const userId = row.user_id
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("cli_credential")}
+               (id, user_id, name, token_hash, access_mode, expires_at, created_at)
+             VALUES (?, ?, ?, ?, 'full_access', ?, ?)`,
+            [
+              credentialId,
+              userId,
+              row.client_name,
+              digest(accessToken),
+              credentialExpiresAt,
+              now,
+            ]
+          )
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("cli_device")}
+                SET credential_id = ?, credential_expires_at = ?,
+                    expires_at = ?
+              WHERE user_code_hash = ?`,
+            [credentialId, credentialExpiresAt, now, digest(input.code)]
+          )
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("auth_audit")}
+               (user_id, event, metadata, created_at)
+             VALUES (?, 'cli.credential.created', ?, ?)`,
+            [
+              userId,
+              JSON.stringify({
+                credentialId,
+                duration: "30d",
+                mode: "full_access",
+                name: row.client_name,
+                source: "mobile",
+              }),
+              now,
+            ]
+          )
+          return row
+        })
+    )
+    if (!request) {
+      return yield* invalidGrant("This sign-in expired. Start again.")
+    }
+    return {
+      accessToken,
+      credential: {
+        expiresAt: isoOrNull(credentialExpiresAt),
+        id: credentialId,
+        mode: "full_access",
+        name: request.client_name,
+      },
+      tokenType: "Bearer" as const,
+    } satisfies CliDeviceTokenResponse
+  }
+)
+
 export const pollCliDeviceTokenEffect = Effect.fn("cli.device.poll")(function* (
   deviceCode: string
 ) {
@@ -710,6 +885,12 @@ function expirationForDuration(
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex")
+}
+
+function sameHash(left: string, right: string): boolean {
+  const a = Buffer.from(left)
+  const b = Buffer.from(right)
+  return a.length === b.length && timingSafeEqual(a, b)
 }
 
 function normalizeUserCode(value: string): string {

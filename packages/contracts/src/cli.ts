@@ -64,6 +64,19 @@ export const cliDeviceTokenRequestSchema = z
   })
   .strict()
 
+// A phone signs in through Hearth's own sign-in page instead of a device
+// code. It keeps a random verifier and sends only its SHA-256 (hex) with the
+// sign-in; Hearth hands the browser a one-time code for the app's redirect,
+// and only the code with the verifier redeems a credential.
+export const cliMobileChallengeSchema = z.string().regex(/^[0-9a-f]{64}$/u)
+
+export const cliMobileTokenRequestSchema = z
+  .object({
+    code: z.string().min(32).max(256),
+    verifier: z.string().min(43).max(128),
+  })
+  .strict()
+
 export const cliDeviceTokenResponseSchema = z
   .object({
     accessToken: z.string().startsWith(cliAccessTokenPrefix),

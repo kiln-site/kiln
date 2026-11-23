@@ -1,0 +1,13 @@
+{
+  "extends": "expo/tsconfig.base.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "paths": {
+      "@workspace/contracts/cli": ["../../packages/contracts/src/cli.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", "uniwind-types.d.ts"],
+  "exclude": ["node_modules", "ios", "android"]
+}
