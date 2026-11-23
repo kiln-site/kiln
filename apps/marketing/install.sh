@@ -1445,6 +1445,10 @@ address=$(public_ip)
 [ -n "$address" ] || address="localhost"
 log "public address: $address"
 
+if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
+  fail "Kiln's Relay is already on this machine. Run this without --restore to start it and see how it's doing. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
+fi
+
 # A Relay container that never started, left by an install that failed
 # before it could, isn't a Relay; its volume, if any, stays. Removed by the
 # ID inspected, and not forced, so Docker refuses if another install
@@ -1455,10 +1459,6 @@ if docker_reachable; then
     log "removing $container, which never started"
     dk rm "$unstarted" >/dev/null 2>&1 || true
   fi
-fi
-
-if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
-  fail "Kiln's Relay is already on this machine. Run this without --restore to start it and see how it's doing. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
 fi
 
 # Already here: the Relay starts afresh from the downloaded image, keeping
@@ -1633,20 +1633,17 @@ if [ -n "$restore" ]; then
   say ""
   say "  Keep the old machine off: it would be this same Kiln."
   say ""
-  say "  ${dim}Install log: $log_file$reset"
+else
+  setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file" || true)
+  [ -n "$setup" ] || fail "Kiln started, but didn't give a setup link."
+  log "setup link printed"
   say ""
-  exit 0
+  say "  ${green}${bold}Kiln is ready$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
+  say ""
+  say "  Open this link to create your account:"
+  say "  $arrow $bold$setup$reset"
+  say ""
 fi
-
-setup=$(dk exec "$container" kiln-relay platform setup-url 2>>"$log_file" || true)
-[ -n "$setup" ] || fail "Kiln started, but didn't give a setup link."
-log "setup link printed"
-say ""
-say "  ${green}${bold}Kiln is ready$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
-say ""
-say "  Open this link to create your account:"
-say "  $arrow $bold$setup$reset"
-say ""
 if [ "$https_ok" -eq 0 ]; then
   say "  ${dim}HTTPS can take a few minutes. Until then Kiln is at$reset"
   say "  ${dim}http://$address:$port$reset"

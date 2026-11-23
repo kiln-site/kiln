@@ -999,6 +999,10 @@ export class RelayStateStore extends Context.Service<
         Omit<RelayClientRecord, "lastAddress" | "lastSeenAt">
       >
     ) => Effect.Effect<void, RelayStateError>
+    readonly setClientOrigins: (
+      clientId: string,
+      origins: ReadonlyArray<string>
+    ) => Effect.Effect<void, RelayStateError>
     readonly revokeClient: (
       clientId: string,
       revokedAt: number
@@ -4869,6 +4873,15 @@ const makeRelayStateStore = Effect.gen(function* () {
             { discard: true }
           )
         )
+      ),
+    setClientOrigins: (clientId, origins) =>
+      run(
+        "set_client_origins",
+        sql`
+          UPDATE relay_clients
+          SET origins_json = ${JSON.stringify(origins)}
+          WHERE id = ${clientId}
+        `.pipe(Effect.asVoid)
       ),
     revokeClient: (clientId, revokedAt) =>
       run(

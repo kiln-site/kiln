@@ -1074,6 +1074,26 @@ export function isPlatformOwner(
   )
 }
 
+/**
+ * Keeps the Hearth this Relay installed able to open terminals and files from
+ * a browser once its address changes, as a restore or `KILN_URL` can do: the
+ * Relay accepts only the address it was paired at.
+ */
+export const followHearthAddress = Effect.fn(
+  "Relay.platform.followHearthAddress"
+)(function* (
+  platform: PlatformState,
+  store: Pick<RelayStateStore["Service"], "listClients" | "setClientOrigins">
+) {
+  const origin = new URL(platform.hearth.url).origin
+  for (const client of yield* store.listClients()) {
+    if (!isPlatformOwner(platform, client) || client.origins.includes(origin)) {
+      continue
+    }
+    yield* store.setClientOrigins(client.id, [origin])
+  }
+})
+
 export const platformStatus = Effect.fn("Relay.platform.status")(function* (
   context: PlatformReadContext,
   client: Pick<RelayClientRecord, "invitationId" | "role"> | null

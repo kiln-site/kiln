@@ -482,12 +482,13 @@ and what's left is [an ordinary install](#install): run the installer without
 isn't up.
 
 It's the same Kiln on the same Relay: the same installation ID, secrets and
-recovery code, so other Relays reconnect and its backups stay listed. A Relay
-that connects to Kiln itself, such as one behind NAT, looks for Kiln at the
-address it joined: keep that address, or add the Relay again from Hearth. Kiln → Info says when it was restored, and from how old a backup. Game
-servers, Apps and databases that ran on the lost machine come back from their
-own backups. Settings passed to the lost Relay's container, such as email, are
-given again when it's installed.
+recovery code, so other Relays reconnect and its backups stay listed. Keep the
+address, too: other Relays accept Kiln's pages, and some look for Kiln, at the
+one they were added at. If it changes, add each of them again from Hearth. Kiln
+→ Info says when it was restored, and from how old a backup. Game servers, Apps
+and databases that ran on the lost machine come back from their own backups.
+Settings passed to the lost Relay's container, such as email, are given again
+when it's installed.
 
 ### Restoring on the same machine
 

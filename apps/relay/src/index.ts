@@ -321,6 +321,7 @@ import {
   addOwnerInvitation,
   checkHearthRestart,
   externalPlatformPresent,
+  followHearthAddress,
   isPlatformOwner,
   identifyHearth,
   platformAction,
@@ -421,10 +422,18 @@ const platformStartup = await runRelayEffect(
   "relay.startup.platform",
   Effect.gen(function* () {
     const clients = yield* startupCore.state.listClients()
-    return yield* startPlatform(config, new DockerEngine(config.dockerSocket), {
-      pairedClients: clients.length,
-      saveInputs: cliArguments.length === 0,
-    })
+    const startup = yield* startPlatform(
+      config,
+      new DockerEngine(config.dockerSocket),
+      {
+        pairedClients: clients.length,
+        saveInputs: cliArguments.length === 0,
+      }
+    )
+    if (startup.state && cliArguments.length === 0) {
+      yield* followHearthAddress(startup.state, startupCore.state)
+    }
+    return startup
   })
 )
 if (platformStartup.refused && cliArguments.length === 0) {

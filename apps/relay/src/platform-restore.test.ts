@@ -13,6 +13,8 @@ import {
   readRelayIdentityMaterial,
 } from "./effect/identity.js"
 import {
+  addOwnerInvitation,
+  followHearthAddress,
   platformRecoveryCode,
   reconcilePlatform,
   startPlatform,
@@ -93,14 +95,17 @@ async function machine() {
           state,
         })
       ),
-    start: (environment: NodeJS.ProcessEnv = {}) =>
-      run(
+    // As `index.ts` does.
+    start: async (environment: NodeJS.ProcessEnv = {}) => {
+      const startup = await run(
         startPlatform(config, engine, {
           environment: { KILN_URL: url, ...environment },
           pairedClients: 0,
           saveInputs: true,
         })
-      ),
+      )
+      await run(followHearthAddress(startup.state!, state))
+    },
     state,
   }
 }
@@ -123,6 +128,9 @@ async function runningKiln(environment: NodeJS.ProcessEnv = {}) {
   await kiln.start(environment)
   await kiln.pass()
   const identity = await run(loadOrCreateRelayIdentity(kiln.config))
+  await run(
+    addOwnerInvitation(kiln.config.dataDirectory, hearthClient.invitationId)
+  )
   await run(kiln.state.restoreClients([hearthClient]))
   fakeDocker.container(names.database)!.sqlDump = "CREATE TABLE kept (id int);"
   const backup = await kiln.backup("kiln.kiln")
@@ -155,6 +163,32 @@ describe("restoring Kiln", () => {
     await fresh.start()
     await fresh.pass()
     expect(fresh.hearthRuns()).toBe(true)
+  })
+
+  it("lets its Hearth's pages reach the Relay at a new address, and no other's", async () => {
+    const lost = await runningKiln()
+    const fresh = await machine()
+    await fresh.restore(lost.backup, lost.code)
+    const other = {
+      ...hearthClient,
+      id: "other",
+      invitationId: "by-hand",
+      publicKey: "other-public-key",
+    }
+    await run(fresh.state.restoreClients([other]))
+
+    await fresh.start({ KILN_URL: "http://203.0.113.10:3000" })
+
+    const origins = Object.fromEntries(
+      (await run(fresh.state.listClients())).map((client) => [
+        client.id,
+        client.origins,
+      ])
+    )
+    expect(origins).toEqual({
+      [hearthClient.id]: ["http://203.0.113.10:3000"],
+      other: [url],
+    })
   })
 
   it("finishes when it's run again after the import fails partway", async () => {
