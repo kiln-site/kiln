@@ -14,17 +14,28 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { BackupManager } from "./backups.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
+import {
+  loadOrCreateRelayIdentity,
+  readRelayIdentityMaterial,
+} from "./effect/identity.js"
 import { RelayStateStore } from "./effect/state.js"
 import { controlRequestLocks } from "./operation-plans.js"
 import {
   createEncryptedPlatformBackup,
   inspectEncryptedPlatformBackup,
   type PlatformBackupManifest,
+  readPlatformBackupRecovery,
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
+import { collectPlatformRecovery } from "./platform-recovery.js"
+import { writePlatformState, type PlatformState } from "./platform-state.js"
 import { DockerEngine } from "./docker-engine.js"
 import { adoptProvenHearth } from "./installation.js"
-import { provenHearthContainer } from "./platform.js"
+import {
+  newPlatformState,
+  platformInputs,
+  provenHearthContainer,
+} from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
@@ -177,7 +188,8 @@ describe("Kiln platform backups deployed by Coolify", () => {
       } as unknown as BackupCreateTaskInput,
       backup,
       { completed: 0, total: 0 },
-      new AbortController().signal
+      new AbortController().signal,
+      null
     )
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, backup)
@@ -360,7 +372,8 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
       } as unknown as BackupCreateTaskInput,
       backup,
       { completed: 0, total: 0 },
-      new AbortController().signal
+      new AbortController().signal,
+      null
     )
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, backup)
@@ -369,6 +382,64 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
       [...fakeDocker.execs.values()].map(({ env }) => env),
       { MYSQL_DATABASE: database }
     )
+
+    await restoreEncryptedPlatformBackup(
+      kiln.harness.config,
+      backup,
+      "kiln-test"
+    )
+
+    expect(kiln.mysql.executedSql.join("\n")).toContain(
+      "CREATE TABLE dumped (id int);"
+    )
+  })
+
+  it("carries what restores Kiln on a new machine, and restores the dump past it", async () => {
+    const kiln = await sharedKiln()
+    kiln.mysql.sqlDump = "CREATE TABLE dumped (id int);"
+    const installation: PlatformState = {
+      ...newPlatformState(
+        kiln.harness.config,
+        platformInputs({ KILN_URL: "https://kiln.example.test" }),
+        "hearth:test"
+      ),
+      installationId: "kiln-test",
+    }
+    await Effect.runPromise(
+      writePlatformState(kiln.harness.config.dataDirectory, installation)
+    )
+    await Effect.runPromise(loadOrCreateRelayIdentity(kiln.harness.config))
+    const backup = join(testDirectory, `recovery-${randomUUID()}.kiln`)
+    await createEncryptedPlatformBackup(
+      kiln.harness.config,
+      {
+        backupId: "e".repeat(40),
+        maxBytes: null,
+        target: { id: "kiln-test", kind: "platform" },
+      } as unknown as BackupCreateTaskInput,
+      backup,
+      { completed: 0, total: 0 },
+      new AbortController().signal,
+      await Effect.runPromise(
+        collectPlatformRecovery(kiln.harness.config, kiln.harness.state)
+      )
+    )
+    const read = await readPlatformBackupRecovery(recoveryKey, backup)
+    expect(read.manifest).toMatchObject({
+      databaseName: database,
+      formatVersion: 2,
+    })
+    expect(read.recovery).toMatchObject({
+      installation,
+      relay: {
+        identity: await Effect.runPromise(
+          readRelayIdentityMaterial(kiln.harness.config)
+        ),
+      },
+    })
+    await expect(
+      readPlatformBackupRecovery(`${recoveryKey}x`, backup)
+    ).rejects.toThrow()
 
     await restoreEncryptedPlatformBackup(
       kiln.harness.config,

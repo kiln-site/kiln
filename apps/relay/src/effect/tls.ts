@@ -129,6 +129,28 @@ const loadOrCreateManagedTls = Effect.fn("RelayTls.loadOrCreateManaged")(
   }
 )
 
+/**
+ * The private authority the Relay's certificates come from, which Hearth
+ * pins, for a platform backup to carry to a new machine; null when the
+ * Relay never made one, behind a proxy or with the operator's certificate.
+ */
+export const readRelayCertificateAuthority = Effect.fn("RelayTls.readCa")(
+  function* (config: RelayConfig) {
+    const directory = join(config.dataDirectory, "network", "tls")
+    return yield* readPair(
+      join(directory, "ca.crt"),
+      join(directory, "ca.key"),
+      "managed_ca_missing",
+      "read_managed_ca"
+    ).pipe(
+      Effect.catchIf(
+        (error) => error.operation === "managed_ca_missing",
+        () => Effect.succeed(null)
+      )
+    )
+  }
+)
+
 const loadManagedCa = Effect.fn("RelayTls.loadManagedCa")(function* (
   certificatePath: string,
   keyPath: string,
