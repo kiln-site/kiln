@@ -1,4 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
+import { relayFileRootId } from "@workspace/contracts"
+
 import { RelayFilesPage } from "@/components/relay/relay-files-page"
 import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import { filePageLocation, startFilePageReads } from "@/lib/file-page-reads"
@@ -24,7 +26,7 @@ export const Route = createFileRoute("/_app/relay/$relayId/files")({
     )
     startFilePageReads(
       queryClient,
-      { instanceId: relay.id, relayId: relay.id },
+      { instanceId: relayFileRootId(relay.id), relayId: relay.id },
       filePageLocation({ location, params })
     )
   },

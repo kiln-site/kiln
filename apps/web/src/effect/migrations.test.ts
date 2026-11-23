@@ -25,6 +25,7 @@ import {
   insertBackup,
   insertBackupStorage,
   insertGrant,
+  insertInstance,
   insertRelay,
   insertRows,
   insertUser,
@@ -2865,6 +2866,50 @@ describeMysql("database migrations", () => {
             `
           ).toEqual([{ kind: "destination", legacy_id: old }])
           vi.unstubAllEnvs()
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "removes a Relay's own ID from the game servers, and no real one",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const relayId = "1".repeat(12)
+          const serverId = "a".repeat(12)
+          const file = (rootId: string, instanceId: string | null) => ({
+            created_at: 1,
+            instance_id: instanceId,
+            last_viewed_at: 1,
+            path: "file",
+            path_hash: "f".repeat(64),
+            pinned: true,
+            relay_id: relayId,
+            root_id: rootId,
+            updated_at: 1,
+          })
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 96)
+          )
+          yield* insertRelay(relayId)
+          // A server being created has no details yet either.
+          yield* insertInstance(relayId, serverId)
+          yield* insertInstance(relayId, relayId)
+          yield* insertRows("file_activity", [
+            file(relayId, relayId),
+            file(serverId, serverId),
+            file(`relay:${relayId}`, null),
+          ])
+
+          yield* applyMigrations(migrations)
+
+          expect(yield* sql`SELECT instance_id FROM kiln_instance`).toEqual([
+            { instance_id: serverId },
+          ])
+          expect(
+            yield* sql`SELECT root_id FROM kiln_file_activity ORDER BY root_id`
+          ).toEqual([{ root_id: serverId }, { root_id: `relay:${relayId}` }])
         }),
       schemaBuildTimeout
     )

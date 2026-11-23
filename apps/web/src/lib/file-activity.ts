@@ -4,6 +4,7 @@ import {
   appIdFromFileRoot,
   isServerFileRoot,
   relayFileActivitySchema,
+  relayFileRootId,
   type RelayFileActivity,
 } from "@workspace/contracts"
 import type { RowDataPacket } from "mysql2/promise"
@@ -251,21 +252,18 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
   if (!updated) return yield* FilePinLimitError.make({ limit: pinnedFileLimit })
 })
 
-// Pins files that have no activity yet, so one someone unpinned stays
-// unpinned, as long as the root has room. Run it holding the root's pins
-// (`filePinsKey`), as setting a pin does, so concurrent pins can't pass the
-// limit. Whether it pinned any.
-const pinFilesByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
-  function* (
-    relayId: string,
-    instanceId: string,
-    paths: ReadonlyArray<string>
-  ) {
+/**
+ * Pins a Relay's host files that have no activity yet, so one someone
+ * unpinned stays unpinned, as long as there's room. Run it holding the host
+ * files' pins (`filePinsKey`), as setting a pin does, so concurrent pins
+ * can't pass the limit. Whether it pinned any.
+ */
+export const pinRelayHostFilesEffect = Effect.fn("files.activity.pinByDefault")(
+  function* (relayId: string, paths: ReadonlyArray<string>) {
     if (paths.length === 0) return false
+    const rootId = relayFileRootId(relayId)
     const now = yield* Clock.currentTimeMillis
-    yield* ensureActivityInstanceEffect(relayId, instanceId, now)
     const database = yield* Database
-    const { appId, serverId } = rootColumns(instanceId)
     return yield* database.transaction(
       "file_activity_pin_by_default",
       (transaction) =>
@@ -275,7 +273,7 @@ const pinFilesByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
           >(
             `SELECT COUNT(*) AS count FROM ${databaseTable("file_activity")}
               WHERE relay_id = ? AND root_id = ? AND pinned = TRUE`,
-            [relayId, instanceId]
+            [relayId, rootId]
           )
           let room = pinnedFileLimit - Number(pins?.count ?? 0)
           let pinned = false
@@ -283,20 +281,10 @@ const pinFilesByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
             if (room <= 0) break
             const result = yield* transaction.execute(
               `INSERT IGNORE INTO ${databaseTable("file_activity")}
-                 (relay_id, root_id, instance_id, app_id, path_hash, path,
-                  pinned, last_viewed_at, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)`,
-              [
-                relayId,
-                instanceId,
-                serverId,
-                appId,
-                pathHash(path),
-                path,
-                now,
-                now,
-                now,
-              ]
+                 (relay_id, root_id, path_hash, path, pinned, last_viewed_at,
+                  created_at, updated_at)
+               VALUES (?, ?, ?, ?, TRUE, ?, ?, ?)`,
+              [relayId, rootId, pathHash(path), path, now, now, now]
             )
             if (result.affectedRows === 1) {
               room -= 1
@@ -308,17 +296,6 @@ const pinFilesByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
     )
   }
 )
-
-export function pinFilesByDefault(
-  relayId: string,
-  instanceId: string,
-  paths: ReadonlyArray<string>
-): Promise<boolean> {
-  return runAppEffect(
-    "files.activity.pinByDefault",
-    pinFilesByDefaultEffect(relayId, instanceId, paths)
-  )
-}
 
 export function listFileActivity(
   relayId: string,
