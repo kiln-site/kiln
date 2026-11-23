@@ -98,7 +98,7 @@ it.effect("zips files, folders and links as restic does", () =>
 // Their writer would name one as the other, and unpacking keep only the last.
 it.effect("won't write a zip that names a file otherwise", () =>
   Effect.forEach(
-    ["mod:config", "world\\level"],
+    ["mod:config", "world\\level", "caf\ufffd.txt"],
     (name) =>
       withTree((root, destination) =>
         Effect.gen(function* () {

@@ -84,14 +84,18 @@ export function zipTree(
         const children = yield* promiseEffect(() => readdir(directory))
         for (const child of children.sort()) {
           const path = join(directory, child)
-          const metadata = yield* promiseEffect(() => lstat(path))
           const name = `${prefix}${child}`
+          // Read from a name in another encoding than UTF-8.
+          if (child.includes("\ufffd")) {
+            return yield* new UnzippableEntryError({ name })
+          }
+          const metadata = yield* promiseEffect(() => lstat(path))
           if (metadata.isDirectory()) {
             yield* add(`${name}/`, () => Buffer.alloc(0), metadata, true)
             yield* visit(path, `${name}/`)
           } else if (metadata.isSymbolicLink()) {
-            const target = yield* promiseEffect(() => readlink(path))
-            yield* add(name, () => Buffer.from(target), metadata, true)
+            const target = yield* promiseEffect(() => readlink(path, "buffer"))
+            yield* add(name, () => target, metadata, true)
           } else if (metadata.isFile()) {
             yield* add(name, () => createReadStream(path), metadata, false)
           } else {
