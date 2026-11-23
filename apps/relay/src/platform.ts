@@ -91,6 +91,8 @@ const resourceLabels: Record<RelayPlatformServiceRole, string> = {
 }
 
 const DEFAULT_DATABASE_IMAGE = "mysql:8.4"
+/** Hearth listens at every address of the machine. */
+export const DEFAULT_BIND_ADDRESS = "0.0.0.0"
 const DEFAULT_CACHE_IMAGE = "valkey/valkey:9.1.2-alpine"
 const HEARTH_CONTAINER_PORT = 3000
 const DATABASE_NAME = "hearth"
@@ -261,7 +263,7 @@ export function newPlatformState(
     databaseInitializedAt: null,
     formatVersion: PLATFORM_STATE_FORMAT_VERSION,
     hearth: {
-      bindAddress: inputs.bindAddress ?? "0.0.0.0",
+      bindAddress: inputs.bindAddress ?? DEFAULT_BIND_ADDRESS,
       environment: inputs.environment,
       image: inputs.hearthImage ?? hearthImage,
       port: inputs.port ?? HEARTH_CONTAINER_PORT,
@@ -1072,6 +1074,26 @@ export function isPlatformOwner(
   )
 }
 
+/**
+ * Keeps the Hearth this Relay installed able to open terminals and files from
+ * a browser once its address changes, as a restore or `KILN_URL` can do: the
+ * Relay accepts only the address it was paired at.
+ */
+export const followHearthAddress = Effect.fn(
+  "Relay.platform.followHearthAddress"
+)(function* (
+  platform: PlatformState,
+  store: Pick<RelayStateStore["Service"], "listClients" | "setClientOrigins">
+) {
+  const origin = new URL(platform.hearth.url).origin
+  for (const client of yield* store.listClients()) {
+    if (!isPlatformOwner(platform, client) || client.origins.includes(origin)) {
+      continue
+    }
+    yield* store.setClientOrigins(client.id, [origin])
+  }
+})
+
 export const platformStatus = Effect.fn("Relay.platform.status")(function* (
   context: PlatformReadContext,
   client: Pick<RelayClientRecord, "invitationId" | "role"> | null
@@ -1128,6 +1150,7 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       managedBy: proxy.managedBy,
     },
     recovery: platformRecoveryScope(config, state),
+    restored: state?.restored ?? null,
     services,
   } satisfies RelayPlatformStatus
 })
@@ -2125,6 +2148,7 @@ const CLI_USAGE = `Usage: kiln-relay platform <command>
   repair                         Create what's missing and start what stopped, now
   stop-hearth                    Hold Hearth stopped; its database keeps running
   start-hearth                   Let Hearth run again
+  restore <backup>               Put a platform backup back, here or on a new machine
   recover --confirm <id>         Start an empty database after its volume was lost
   export-kit                     Print the recovery kit (secrets) as JSON
   import-kit <path>              Install from a recovery kit on a new Relay`

@@ -7,7 +7,14 @@ import {
   scrypt,
 } from "node:crypto"
 import { createReadStream, createWriteStream } from "node:fs"
-import { mkdir, open, rm, stat, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  open,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { resolve } from "node:path"
 import { Transform, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -68,7 +75,7 @@ export interface PlatformBackupManifest {
 
 export async function createEncryptedPlatformBackup(
   config: RelayConfig,
-  input: BackupCreateTaskInput,
+  input: Pick<BackupCreateTaskInput, "backupId" | "maxBytes" | "target">,
   destination: string,
   progress: { completed: number; total: number },
   signal: AbortSignal,
@@ -305,6 +312,19 @@ function sectionReader(present: boolean) {
   }
 }
 
+/** Removes what a restore that was killed left: secrets, and room one needs. */
+export async function clearPlatformStaging(
+  config: Pick<RelayConfig, "dataDirectory">
+): Promise<void> {
+  const directory = resolve(config.dataDirectory, "restores")
+  await mkdir(directory, { mode: 0o700, recursive: true })
+  for (const left of await readdir(directory)) {
+    if (left.startsWith(".platform-")) {
+      await rm(resolve(directory, left), { force: true })
+    }
+  }
+}
+
 export async function restoreEncryptedPlatformBackup(
   config: RelayConfig,
   source: string,
@@ -350,7 +370,7 @@ export async function restoreEncryptedPlatformBackup(
     restoreDirectory,
     `.platform-${randomUUID()}.dmp.gz`
   )
-  await mkdir(restoreDirectory, { mode: 0o700, recursive: true })
+  await clearPlatformStaging(config)
   const decrypted = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
@@ -403,6 +423,7 @@ export async function restoreEncryptedPlatformBackup(
                     createReadStream(stagedDump, { start: dumpOffset }),
                     createGunzip(),
                     byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
+                    endingWith(PLATFORM_SIGN_OUT),
                     child.stdin
                   ),
                 () => requireSuccessfulProcess(child, stderr)
@@ -606,8 +627,24 @@ function platformHeader(
 
 const PLATFORM_DUMP =
   'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump --user=root --single-transaction --skip-lock-tables --no-tablespaces --routines --events --triggers --add-drop-database --databases "$MYSQL_DATABASE"'
+// The database is created first if it's missing, as after an import that
+// stopped between the dump's DROP DATABASE and CREATE DATABASE: the client
+// can't connect to it otherwise, and the dump recreates it anyway.
 const PLATFORM_IMPORT =
-  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root "$MYSQL_DATABASE"'
+  'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --user=root -e "CREATE DATABASE IF NOT EXISTS \\`$MYSQL_DATABASE\\`"; exec mysql --user=root "$MYSQL_DATABASE"'
+
+// Everyone signs in again: the dump has the sessions of its time, and one
+// revoked since, as for a lost laptop, would be back. The dump left its
+// database selected. A Hearth run by hand may name the table otherwise.
+const PLATFORM_SIGN_OUT = `
+SET @kiln_sign_out = IF(
+  (SELECT COUNT(*) FROM information_schema.tables
+   WHERE table_schema = DATABASE() AND table_name = 'kiln_session') = 1,
+  'DELETE FROM kiln_session', 'DO 0');
+PREPARE kiln_sign_out FROM @kiln_sign_out;
+EXECUTE kiln_sign_out;
+DEALLOCATE PREPARE kiln_sign_out;
+`
 
 function startPlatformClient(
   config: RelayConfig,
@@ -649,6 +686,18 @@ function parsePlatformManifest(value: Buffer): PlatformBackupManifest {
     throw new Error("The Kiln platform backup manifest is invalid")
   }
   return parsed as PlatformBackupManifest
+}
+
+/** Passes its stream through, then `last`. */
+function endingWith(last: string): Transform {
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      done(null, chunk)
+    },
+    flush(done) {
+      done(null, last)
+    },
+  })
 }
 
 /** Passes its stream through, after `first` when there is one. */

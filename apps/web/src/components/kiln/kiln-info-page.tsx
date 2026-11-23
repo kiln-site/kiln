@@ -442,6 +442,17 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
             <span className="text-muted-foreground">—</span>
           )}
         </InfoFact>
+        {status?.restored ? (
+          <InfoFact label="Restored">
+            <span>
+              <RelativeTime timestamp={Date.parse(status.restored.at)} />
+              <span className="text-muted-foreground"> from a backup made </span>
+              <RelativeTime
+                timestamp={Date.parse(status.restored.backupCreatedAt)}
+              />
+            </span>
+          </InfoFact>
+        ) : null}
       </InfoRailCard>
       {relay ? <KilnNodeCard relay={relay.entry} /> : null}
     </>

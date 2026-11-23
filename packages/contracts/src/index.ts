@@ -2585,6 +2585,10 @@ export const relayPlatformStatusSchema = z.object({
    * (`relay.platform.recovery.read`), and for what; null when it doesn't.
    */
   recovery: relayRecoveryScopeSchema.nullable(),
+  /** When Kiln was last restored from a platform backup, and how old it was. */
+  restored: z
+    .object({ at: z.string().datetime(), backupCreatedAt: z.string().datetime() })
+    .nullable(),
   services: z.array(relayPlatformServiceSchema).max(8),
 })
 

@@ -989,6 +989,20 @@ export class RelayStateStore extends Context.Service<
     readonly pairClient: (
       input: PairRelayClientInput
     ) => Effect.Effect<void, RelayStateError>
+    /**
+     * Puts back the Hearths a lost Relay trusted, as a platform backup
+     * carried them, onto the new Relay that takes its identity. Putting them
+     * back again changes nothing.
+     */
+    readonly restoreClients: (
+      clients: ReadonlyArray<
+        Omit<RelayClientRecord, "lastAddress" | "lastSeenAt">
+      >
+    ) => Effect.Effect<void, RelayStateError>
+    readonly setClientOrigins: (
+      clientId: string,
+      origins: ReadonlyArray<string>
+    ) => Effect.Effect<void, RelayStateError>
     readonly revokeClient: (
       clientId: string,
       revokedAt: number
@@ -4320,6 +4334,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       run(
         "browser_authority",
         Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
           const generations = yield* sql<{ generation: number }>`
             SELECT generation
             FROM relay_browser_issuer_generations
@@ -4331,6 +4346,9 @@ const makeRelayStateStore = Effect.gen(function* () {
             FROM relay_browser_authorization_floors
             WHERE issuer = ${query.issuer}
               AND subject = ${query.subject}
+              -- Past it, no capability from before the revision is left to
+              -- refuse, and a Hearth restored since may be behind it.
+              AND updated_at > ${now - BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS}
               AND (
                 (scope_kind = 'subject_relay' AND scope_id = '')
                 -- Instance floors never have an empty ID, so '' matches none.
@@ -4826,6 +4844,48 @@ const makeRelayStateStore = Effect.gen(function* () {
             `
           })
         )
+      ),
+    restoreClients: (clients) =>
+      run(
+        "restore_clients",
+        sql.withTransaction(
+          Effect.forEach(
+            clients,
+            (client) => sql`
+              INSERT OR REPLACE INTO relay_clients (
+                id,
+                name,
+                public_key,
+                role,
+                actions_json,
+                origins_json,
+                source_cidrs_json,
+                created_at,
+                invitation_id
+              ) VALUES (
+                ${client.id},
+                ${client.name},
+                ${client.publicKey},
+                ${client.role},
+                ${JSON.stringify(client.actions)},
+                ${JSON.stringify(client.origins)},
+                ${JSON.stringify(client.sourceCidrs)},
+                ${client.createdAt},
+                ${client.invitationId}
+              )
+            `,
+            { discard: true }
+          )
+        )
+      ),
+    setClientOrigins: (clientId, origins) =>
+      run(
+        "set_client_origins",
+        sql`
+          UPDATE relay_clients
+          SET origins_json = ${JSON.stringify(origins)}
+          WHERE id = ${clientId}
+        `.pipe(Effect.asVoid)
       ),
     revokeClient: (clientId, revokedAt) =>
       run(

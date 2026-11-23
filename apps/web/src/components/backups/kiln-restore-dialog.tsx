@@ -29,7 +29,7 @@ import {
 
 // Kiln restores with Hearth stopped, since Hearth can't replace its own
 // database while serving from it. So the restore runs on the Relay's host:
-// this shows the commands, and opens the Relay's terminal with them typed
+// this shows the command, and opens the Relay's terminal with it typed
 // for the operator to send. See docs/self-hosting.md#recovery.
 
 // The Relay that installed Kiln is the `kiln-relay` container; under Compose
@@ -57,11 +57,10 @@ export function KilnRestoreDialog({
   )
   const path = local ? `/data/backups/${backup.id}.zip` : "/data/restore.zip"
   const cli = relayCli(managed)
-  const restore = `${cli} platform-backup restore ${path} --confirm ${backup.targetId}`
   const command =
     managed === "relay"
-      ? `${cli} platform stop-hearth && ${restore} && ${cli} platform start-hearth`
-      : restore
+      ? `${cli} platform restore ${path}`
+      : `${cli} platform-backup restore ${path} --confirm ${backup.targetId}`
   const steps = [
     ...(local
       ? []
@@ -75,8 +74,8 @@ export function KilnRestoreDialog({
         ]),
     managed === "relay" ? (
       <>
-        Run this on the host. It holds Hearth stopped, restores, and starts
-        Hearth again.
+        Run this on the host. It saves what&apos;s here first, so you can undo
+        it, and starts Hearth again when it&apos;s done.
       </>
     ) : (
       <>
@@ -94,9 +93,8 @@ export function KilnRestoreDialog({
           <DialogDescription>
             This replaces Hearth&apos;s database with “{backup.name}”. Hearth
             stops while it restores, so it runs on {relay?.name ?? "the Relay"}
-            &apos;s host. Everyone&apos;s pages reconnect once Hearth is back,
-            usually within a minute; game servers, Apps, and databases keep
-            running.
+            &apos;s host. Everyone signs in again once Hearth is back, usually
+            within a minute; game servers, Apps, and databases keep running.
           </DialogDescription>
         </DialogHeader>
         {steps.length > 1 ? (

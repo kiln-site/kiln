@@ -6,7 +6,7 @@ import {
   webcrypto,
   X509Certificate as NodeX509Certificate,
 } from "node:crypto"
-import { chmod, mkdir, readFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, rm } from "node:fs/promises"
 import { isIP } from "node:net"
 import { join } from "node:path"
 import {
@@ -147,6 +147,35 @@ export const readRelayCertificateAuthority = Effect.fn("RelayTls.readCa")(
         (error) => error.operation === "managed_ca_missing",
         () => Effect.succeed(null)
       )
+    )
+  }
+)
+
+/**
+ * Takes on a lost Relay's TLS authority, which the restored Hearth pins. The
+ * certificate it issued here is removed, so the next start issues one from
+ * the restored authority.
+ */
+export const writeRelayCertificateAuthority = Effect.fn("RelayTls.writeCa")(
+  function* (
+    config: RelayConfig,
+    authority: { readonly certificatePem: string; readonly keyPem: string }
+  ) {
+    const directory = join(config.dataDirectory, "network", "tls")
+    yield* tryPromise("create_tls_directory", () =>
+      mkdir(directory, { recursive: true, mode: 0o700 })
+    )
+    yield* tryPromise("remove_tls_leaf", () =>
+      Promise.all([
+        rm(join(directory, "relay.crt"), { force: true }),
+        rm(join(directory, "relay.key"), { force: true }),
+      ])
+    )
+    yield* writeFileAtomic(join(directory, "ca.key"), authority.keyPem, 0o600)
+    yield* writeFileAtomic(
+      join(directory, "ca.crt"),
+      authority.certificatePem,
+      0o644
     )
   }
 )

@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { SqlClient } from "effect/sql"
 import {
   migratedBackupDestinationId,
@@ -172,6 +173,28 @@ describe("Relay state", () => {
         )
         assert.strictEqual(stale.issuerGeneration, 3)
         assert.strictEqual(stale.items[0]?.minimumRevision, 7)
+
+        const authority = {
+          instanceId: "instance-a",
+          issuer: "browser-issuer",
+          loginSessionId: "session-a",
+          subject: "user-a",
+        }
+        yield* TestClock.setTime(
+          now + BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS - 1
+        )
+        assert.strictEqual(
+          (yield* store.browserAuthority(authority)).minimumRevision,
+          9
+        )
+        // Without another revision to clear them out.
+        yield* TestClock.setTime(
+          now + BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS + 1
+        )
+        assert.strictEqual(
+          (yield* store.browserAuthority(authority)).minimumRevision,
+          0
+        )
 
         yield* store.reviseBrowserAuthorization(
           "browser-issuer",
