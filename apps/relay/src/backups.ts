@@ -112,7 +112,7 @@ import {
   resticRepositoryKey,
 } from "./backups/destinations/index.js"
 import type { ResticRepositoryAccess } from "./backups/destinations/s3/restic-bridge.js"
-import { zipTree } from "./backups/zip-tree.js"
+import { UnzippableEntryError, zipTree } from "./backups/zip-tree.js"
 import {
   installPreparedInstanceRestore,
   materializeBackupArtifact,
@@ -3690,22 +3690,34 @@ function runResticExport(
             target: staged,
           })
         }
-        const dumped = bulk
+        const zipped = bulk
           ? await Effect.runPromise(
               zipTree(staged, partial, {
                 onProgress,
                 totalBytes: stats.totalSize,
-              }),
+              }).pipe(
+                // restic writes what that can't, as a name with a backslash.
+                Effect.catchIf(
+                  (cause) => cause instanceof UnzippableEntryError,
+                  () => Effect.succeed(null)
+                )
+              ),
               { signal }
             )
-          : await restic.dumpZip({
-              destination: partial,
-              location,
-              onProgress,
-              password,
-              selector,
-              signal,
-            })
+          : null
+        if (bulk && !zipped) {
+          await rm(staged, { force: true, recursive: true })
+        }
+        const dumped =
+          zipped ??
+          (await restic.dumpZip({
+            destination: partial,
+            location,
+            onProgress,
+            password,
+            selector,
+            signal,
+          }))
         await rename(partial, destination)
         const expiresAt = Date.now() + input.ttlMs
         await writeExportExpiry(

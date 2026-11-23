@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -15,7 +16,7 @@ import { Effect } from "effect"
 import { openPromise } from "yauzl"
 
 import { promiseEffect } from "../effect/promise.js"
-import { zipTree } from "./zip-tree.js"
+import { UnzippableEntryError, zipTree } from "./zip-tree.js"
 
 const options = { onProgress: () => undefined, totalBytes: 100 }
 
@@ -90,6 +91,42 @@ it.effect("zips files, folders and links as restic does", () =>
       // A link, whatever the platform gives its permissions as.
       assert.match(entries.link?.mode ?? "", /^120/u)
       assert.strictEqual(entries.outside?.text, "/etc/passwd")
+    })
+  )
+)
+
+// Their writer would name one as the other, and unpacking keep only the last.
+it.effect("won't write a zip that names a file otherwise", () =>
+  Effect.forEach(
+    ["mod:config", "world\\level"],
+    (name) =>
+      withTree((root, destination) =>
+        Effect.gen(function* () {
+          yield* promiseEffect(() => writeFile(join(root, name), "content"))
+          const cause = yield* Effect.flip(zipTree(root, destination, options))
+          assert.instanceOf(cause, UnzippableEntryError)
+        })
+      ),
+    { discard: true }
+  )
+)
+
+it.effect("keeps when a file was changed, whatever the time zone", () =>
+  withTree((root, destination) =>
+    Effect.gen(function* () {
+      const changed = new Date("2026-03-04T05:06:07Z")
+      yield* promiseEffect(async () => {
+        await writeFile(join(root, "file"), "content")
+        await utimes(join(root, "file"), changed, changed)
+      })
+      yield* zipTree(root, destination, options)
+      const zip = yield* promiseEffect(() => openPromise(destination))
+      const [entry] = yield* promiseEffect(async () => {
+        const entries = []
+        for await (const found of zip.eachEntry()) entries.push(found)
+        return entries
+      })
+      assert.deepStrictEqual(entry?.getLastModDate(), changed)
     })
   )
 )

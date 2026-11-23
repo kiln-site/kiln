@@ -220,7 +220,8 @@ function parseResticJsonLine(line: string): unknown {
 
 function progressFromResticStatus(value: unknown): ResticProgress | null {
   if (!isRecord(value) || value.message_type !== "status") return null
-  const bytesDone = integerField(value, "bytes_done")
+  const bytesDone =
+    integerField(value, "bytes_done") ?? integerField(value, "bytes_restored")
   const totalBytes = integerField(value, "total_bytes")
   if (bytesDone === null && totalBytes === null) return null
   return {

@@ -1031,10 +1031,11 @@ locally and serves it with the existing Relay download token. From a bucket it
 restores the snapshot to a folder beside the zip and zips that: a restore reads
 in bulk, where `restic dump` reads each small file from the bucket on its own,
 which is slow and counts against a provider's request limits. That needs room
-for the files as well as the zip, so without it, and for a repository on the
-Relay's own disk, Relay runs `restic dump -a zip`. Either way the zip holds the
-same files, folders and links. Export files expire after five minutes and are
-swept on Relay startup, as is a folder a stopped Relay left.
+for the files as well as the zip. Without it, for a repository on the Relay's
+own disk, and for a snapshot with something Relay's zip can't hold as it is,
+such as a name with a backslash, Relay runs `restic dump -a zip`. Either way the
+zip holds the same files, folders and links. Export files expire after five
+minutes and are swept on Relay startup, as is a folder a stopped Relay left.
 
 Delete runs `restic forget` for the cataloged snapshot, or — when a failed
 create never recorded a snapshot ID — forgets snapshots tagged

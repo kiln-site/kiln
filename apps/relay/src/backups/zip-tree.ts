@@ -6,14 +6,20 @@ import { Transform, type Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { constants as zlibConstants } from "node:zlib"
 
-import { Effect } from "effect"
-import ZipStream, { type FileDataInput } from "zip-stream"
+import { ZipArchiveEntry, ZipArchiveOutputStream } from "compress-commons"
+import { Data, Effect } from "effect"
 
 import { promiseEffect } from "../effect/promise.js"
 
+/** Something this writer can't put in a zip as it is. */
+export class UnzippableEntryError extends Data.TaggedError(
+  "UnzippableEntryError"
+)<{ readonly name: string }> {}
+
 /**
  * Writes everything under `root` to a new zip, as `restic dump` writes a
- * snapshot: folders and links too, with their modes and times.
+ * snapshot: folders and links too, with their modes and times. It fails
+ * rather than leave something out or name it otherwise.
  */
 export function zipTree(
   root: string,
@@ -21,11 +27,13 @@ export function zipTree(
   options: { onProgress: (bytes: number) => void; totalBytes: number }
 ): Effect.Effect<{ bytes: number; checksumSha256: string }, unknown> {
   return Effect.suspend(() => {
-    const archive = new ZipStream({
+    // Its types leave out its own options.
+    const zipOptions: object = {
       // Some tools can't read it, and only a file over 4 GiB needs it.
       forceZip64: options.totalBytes > 0xffff_ffff,
       zlib: { level: zlibConstants.Z_BEST_SPEED },
-    })
+    }
+    const archive = new ZipArchiveOutputStream(zipOptions)
     const digest = createHash("sha256")
     let bytes = 0
     const meter = new Transform({
@@ -36,12 +44,32 @@ export function zipTree(
         callback(null, chunk)
       },
     })
-    const add = (source: Readable | null, entry: FileDataInput) =>
-      Effect.callback<void, Error>((resume) => {
-        archive.entry(source, entry, (cause) => {
-          resume(cause ? Effect.fail(cause) : Effect.void)
+    const add = (
+      name: string,
+      source: Readable | Buffer,
+      metadata: { mode: number; mtime: Date },
+      stored: boolean
+    ) =>
+      Effect.suspend(() => {
+        const entry = new ZipArchiveEntry()
+        entry.setName(name)
+        // It drops a drive letter and turns backslashes, which Linux allows
+        // in a name, so one file could take another's place.
+        if (entry.getName() !== name) {
+          return Effect.fail(new UnzippableEntryError({ name }))
+        }
+        entry.setTime(metadata.mtime)
+        entry.setExtra(modifiedField(metadata.mtime))
+        entry.setUnixMode(metadata.mode)
+        if (stored) entry.setMethod(0)
+        return Effect.callback<void, Error>((resume) => {
+          archive.entry(entry, source, (cause) => {
+            resume(cause ? Effect.fail(cause) : Effect.void)
+          })
+          return Effect.sync(() => {
+            if (!Buffer.isBuffer(source)) source.destroy()
+          })
         })
-        return Effect.sync(() => source?.destroy())
       })
     const visit = (
       directory: string,
@@ -53,15 +81,16 @@ export function zipTree(
           const path = join(directory, child)
           const metadata = yield* promiseEffect(() => lstat(path))
           const name = `${prefix}${child}`
-          const entry = { date: metadata.mtime, mode: metadata.mode, name }
           if (metadata.isDirectory()) {
-            yield* add(null, { ...entry, name: `${name}/`, type: "directory" })
+            yield* add(`${name}/`, Buffer.alloc(0), metadata, true)
             yield* visit(path, `${name}/`)
           } else if (metadata.isSymbolicLink()) {
-            const linkname = yield* promiseEffect(() => readlink(path))
-            yield* add(null, { ...entry, linkname, type: "symlink" })
+            const target = yield* promiseEffect(() => readlink(path))
+            yield* add(name, Buffer.from(target), metadata, true)
           } else if (metadata.isFile()) {
-            yield* add(createReadStream(path), entry)
+            yield* add(name, createReadStream(path), metadata, false)
+          } else {
+            return yield* new UnzippableEntryError({ name })
           }
         }
       })
@@ -76,10 +105,21 @@ export function zipTree(
       catch: (cause) => cause,
     })
     const read = visit(root, "").pipe(
-      Effect.andThen(Effect.sync(() => archive.finalize()))
+      Effect.andThen(Effect.sync(() => archive.finish()))
     )
     return Effect.all([write, read], { concurrency: 2, discard: true }).pipe(
       Effect.map(() => ({ bytes, checksumSha256: digest.digest("hex") }))
     )
   })
+}
+
+// The zip's own times are in no time zone; this extended timestamp, as restic
+// also writes, is in UTC.
+function modifiedField(modifiedAt: Date): Buffer {
+  const field = Buffer.alloc(9)
+  field.writeUInt16LE(0x5455, 0)
+  field.writeUInt16LE(5, 2)
+  field.writeUInt8(1, 4)
+  field.writeInt32LE(Math.trunc(modifiedAt.getTime() / 1_000) | 0, 5)
+  return field
 }
