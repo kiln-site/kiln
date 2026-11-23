@@ -44,9 +44,11 @@ vi.mock("@/lib/authorization-delivery", () => ({
 
 import {
   closeRelayConnection,
+  relayBrowserAuthorizationReady,
   relayConnectionOpener,
   relayRpc,
 } from "@/lib/relay-connection"
+import { isExpectedAppError } from "@/observability/error-policy"
 import type { RelayEndpoint } from "@/lib/relay-control-endpoint"
 import { handleRelayControlUpgrade } from "@/lib/relay-control-dial.server"
 import { openRelayTunnel } from "@/lib/relay-tunnel.server"
@@ -154,6 +156,39 @@ it("keeps the Relay's connection when someone else says they're that Relay", asy
   const request = await advanceUntil(dialing.nextRequest())
   dialing.answer(request, { mode: "hearth" })
   await expect(advanceUntil(answered)).resolves.toEqual({ mode: "hearth" })
+})
+
+it("answers a request waiting on Hearth's own attempt over the connection that replaces it", async () => {
+  const relay = relayAt(await closedPort(), "relay")
+  // Hearth is still giving the Relay its chance to dial.
+  const answered = Promise.allSettled([relayRpc(relay, "relay.proxy.read", {})])
+  const dialing = await dialHearth()
+  await dialing.authenticate()
+  const request = await advanceUntil(
+    Promise.race([dialing.nextRequest(), answered])
+  )
+  if (!Array.isArray(request)) dialing.answer(request, { mode: "hearth" })
+  await expect(advanceUntil(answered)).resolves.toEqual([
+    { status: "fulfilled", value: { mode: "hearth" } },
+  ])
+})
+
+it("doesn't report a browser asking of a Relay that is away as an error", async () => {
+  await expect(relayBrowserAuthorizationReady(relayId, 0)).rejects.toSatisfy(
+    isExpectedAppError
+  )
+
+  // As it restarts: known, and not connected.
+  const relay = relayAt(await closedPort(), "relay")
+  const waiting = Promise.allSettled([relayRpc(relay, "relay.proxy.read", {})])
+  await expect(relayBrowserAuthorizationReady(relayId, 0)).rejects.toSatisfy(
+    isExpectedAppError
+  )
+  closeRelayConnection(relayId)
+  // Closed while it waited, it says so.
+  await expect(advanceUntil(waiting)).resolves.toMatchObject([
+    { reason: { message: "Relay connection closed" } },
+  ])
 })
 
 it("takes a tunnel only for a token it asked for, and carries bytes through it", async () => {

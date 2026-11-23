@@ -565,7 +565,7 @@ export function relayBrowserAuthorizationReady(
   const connection = connections.get(relayId)
   return connection
     ? connection.ensureBrowserAuthorizationReady(minimumIssuerGeneration)
-    : Promise.reject(new Error("Relay browser authorization is not connected"))
+    : Promise.reject(browserAuthorizationNotConnected())
 }
 
 /**
@@ -1024,9 +1024,7 @@ class RelayConnection {
     minimumIssuerGeneration: number
   ): Promise<number> {
     const readiness = this.browserAuthorizationReadiness
-    if (!readiness) {
-      throw new Error("Relay browser authorization is not connected")
-    }
+    if (!readiness) throw browserAuthorizationNotConnected()
     const initialGeneration = await readiness.promise
     if (
       this.browserAuthorizationReadiness !== readiness ||
@@ -1316,25 +1314,36 @@ class RelayConnection {
         this.#forkConnecting("relay.connection.open", this.#openEffect())
       return Fiber.join(connecting).pipe(
         Effect.catchCause((cause) => {
-          // A connection the Relay opened took this attempt's place.
-          if (this.#connecting !== null && this.#connecting !== connecting) {
-            return this.#connectEffect()
-          }
-          if (
-            this.#socket?.readyState === WebSocket.OPEN &&
-            this.#state.status === "authenticated"
-          ) {
-            return Effect.void
-          }
-          const failure = Cause.squash(cause)
-          return Effect.fail(
-            failure instanceof RelayUnavailableError
-              ? failure
-              : RelayUnavailableError.make({
-                  message: asError(failure).message,
-                  cause: failure,
-                })
-          )
+          const interrupted = Cause.hasInterruptsOnly(cause)
+          const settled = Effect.suspend(() => {
+            // A connection the Relay opened took this attempt's place.
+            if (this.#connecting !== null && this.#connecting !== connecting) {
+              return this.#connectEffect()
+            }
+            if (
+              this.#socket?.readyState === WebSocket.OPEN &&
+              this.#state.status === "authenticated"
+            ) {
+              return Effect.void
+            }
+            if (interrupted) {
+              return relayConnectionFailure("Relay connection closed")
+            }
+            const failure = Cause.squash(cause)
+            return Effect.fail(
+              failure instanceof RelayUnavailableError
+                ? failure
+                : RelayUnavailableError.make({
+                    message: asError(failure).message,
+                    cause: failure,
+                  })
+            )
+          })
+          // An attempt ends the moment it's interrupted, before what took its
+          // place has started.
+          return interrupted
+            ? Effect.andThen(Effect.yieldNow, settled)
+            : settled
         })
       )
     })
@@ -2828,6 +2837,16 @@ function unknownOutcome(
       retryable: false,
     })
   )
+}
+
+// Expected while a Relay restarts, and browsers ask again on their own: the
+// connection dropping is logged as it does.
+function browserAuthorizationNotConnected(): RelayUnavailableError {
+  return RelayUnavailableError.make({
+    code: "browser_authorization_not_connected",
+    message: "Relay browser authorization is not connected",
+    retryable: true,
+  })
 }
 
 function relayConnectionFailure(

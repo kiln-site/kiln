@@ -20,12 +20,14 @@ export function isExpectedAppError(value: unknown): boolean {
   if (!("_tag" in value)) return false
   if (typeof value._tag !== "string") return false
   if (EXPECTED_ERROR_TAGS.has(value._tag)) return true
-  // The Relay refused a change it mustn't make now, as to a resource being
-  // deleted or one an unfinished restore fences, as it should.
   if (
     value._tag === "RelayUnavailableError" &&
     "code" in value &&
-    value.code === "operation_refused"
+    // The Relay refused a change it mustn't make now, as to a resource being
+    // deleted or one an unfinished restore fences, as it should.
+    (value.code === "operation_refused" ||
+      // A browser asked of a Relay that is away, as while it restarts.
+      value.code === "browser_authorization_not_connected")
   ) {
     return true
   }
