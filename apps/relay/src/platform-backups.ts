@@ -170,6 +170,7 @@ export async function createEncryptedPlatformBackup(
     bytes: metadata.size,
     checksumSha256: digest.digest("hex"),
     filename: backupArtifactFilename(input.backupId, "platform_bundle"),
+    ...(recovery && { recoverable: true as const }),
     warnings: [],
   }
 }

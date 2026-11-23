@@ -28,6 +28,7 @@ import { isIP } from "node:net"
 import { join } from "node:path"
 
 import {
+  encodeRecoveryCode,
   hostnameContainerId,
   isKilnInstallationId,
   kilnImageRepository,
@@ -36,6 +37,7 @@ import {
   type RelayPlatformServiceRole,
   type RelayPlatformTarget,
   type RelayPlatformStatus,
+  type RelayRecoveryCode,
 } from "@workspace/contracts"
 import { Effect, Fiber, Option, Result, Schema, Semaphore } from "effect"
 
@@ -319,6 +321,54 @@ export function platformRecoveryKit(state: PlatformState) {
     kind: "kiln-platform-recovery-kit" as const,
     state,
   }
+}
+
+/**
+ * Kiln's recovery code, for Hearth to show its platform administrators: the
+ * platform backup key of the Kiln this Relay installed, whose backups carry
+ * the rest, or else the key it was given, beside the operator's own
+ * environment file.
+ */
+export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
+  function* (
+    config: Pick<
+      RelayConfig,
+      "dataDirectory" | "installationId" | "mode" | "platformBackupKey"
+    >
+  ) {
+    const state =
+      config.mode === "platform"
+        ? yield* readPlatformState(config.dataDirectory)
+        : null
+    if (state) {
+      return {
+        code: encodeRecoveryCode(state.secrets.platformBackupKey),
+        installationId: state.installationId,
+        scope: "installation",
+      } satisfies RelayRecoveryCode
+    }
+    if (config.installationId && config.platformBackupKey) {
+      return {
+        code: encodeRecoveryCode(config.platformBackupKey),
+        installationId: config.installationId,
+        scope: "environment",
+      } satisfies RelayRecoveryCode
+    }
+    return yield* new PlatformError({
+      reason:
+        "This Relay has no recovery code: it didn't install Kiln, and has no KILN_PLATFORM_BACKUP_KEY",
+    })
+  }
+)
+
+function platformRecoveryScope(
+  config: Pick<RelayConfig, "installationId" | "platformBackupKey">,
+  state: PlatformState | null
+): RelayPlatformStatus["recovery"] {
+  if (state) return "installation"
+  return config.installationId && config.platformBackupKey
+    ? "environment"
+    : null
 }
 
 interface ServiceSpec {
@@ -1077,6 +1127,7 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       actions: canManage && proxy.managedBy === "kiln" ? ["restart"] : [],
       managedBy: proxy.managedBy,
     },
+    recovery: platformRecoveryScope(config, state),
     services,
   } satisfies RelayPlatformStatus
 })

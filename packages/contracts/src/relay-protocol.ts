@@ -89,6 +89,7 @@ export const relayControlOperations = [
   "relay.platform.action",
   "relay.platform.database.read",
   "relay.platform.database.write",
+  "relay.platform.recovery.read",
   "relay.installation.read",
   "relay.installation.replace",
   "relay.security.targets",
@@ -298,6 +299,7 @@ export function relayControlOperationChanges(
     case "relay.platform.read":
     case "relay.installation.read":
     case "relay.platform.database.read":
+    case "relay.platform.recovery.read":
     case "relay.security.targets":
     case "relay.security.inventory":
     // Removes only the inventory's own helpers, and is safe to send again.

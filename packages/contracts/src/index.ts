@@ -16,6 +16,7 @@ import {
   brickSourceSchema,
 } from "./brick-recipe.js"
 import { instanceIdSchema } from "./instance-id.js"
+import { relayRecoveryScopeSchema } from "./recovery-code.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import {
   NO_RESOURCE_LIMITS,
@@ -55,6 +56,7 @@ export * from "./web-routes.js"
 export * from "./relay-protocol.js"
 export * from "./relay-transfers.js"
 export * from "./installation-id.js"
+export * from "./recovery-code.js"
 export * from "./container-identity.js"
 export * from "./relay-join.js"
 export * from "./release-version.js"
@@ -2578,6 +2580,11 @@ export const relayPlatformStatusSchema = z.object({
    * when there's none. Only Kiln's own can be restarted from here.
    */
   proxy: relayPlatformProxySchema.nullable(),
+  /**
+   * Whether this Relay holds Kiln's recovery code
+   * (`relay.platform.recovery.read`), and for what; null when it doesn't.
+   */
+  recovery: relayRecoveryScopeSchema.nullable(),
   services: z.array(relayPlatformServiceSchema).max(8),
 })
 

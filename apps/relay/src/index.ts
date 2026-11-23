@@ -327,6 +327,7 @@ import {
   platformStatus,
   platformUpdateRefusal,
   platformManagedContainer,
+  platformRecoveryCode,
   platformTargetContainer,
   reconcilePlatform,
   restartPlatformService,
@@ -4115,6 +4116,16 @@ async function executeControlRequest(
         )
       )
     }
+    // What opens every backup of Kiln: only the Hearth this Relay
+    // installed, or, where it only reports Kiln, a full-access Hearth. Not
+    // a change, so neither the Relay's journal nor Hearth's audit keeps the
+    // answer.
+    case "relay.platform.recovery.read":
+      await requirePlatformReader(client.id, "read Kiln's recovery code")
+      return runRelayEffect(
+        "relay.platform.recovery.read",
+        platformRecoveryCode(config)
+      )
     case "relay.platform.database.write": {
       const input = relayPlatformDatabaseWriteSchema.parse(request.payload)
       await requirePlatformReader(client.id, "change Kiln's database")
