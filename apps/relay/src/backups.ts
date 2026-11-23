@@ -112,6 +112,7 @@ import {
   resticRepositoryKey,
 } from "./backups/destinations/index.js"
 import type { ResticRepositoryAccess } from "./backups/destinations/s3/restic-bridge.js"
+import { zipTree } from "./backups/zip-tree.js"
 import {
   installPreparedInstanceRestore,
   materializeBackupArtifact,
@@ -165,6 +166,7 @@ function withinPage(task: RelayBackupTask): RelayBackupTask {
   }
 }
 const ZIP_OVERHEAD_RESERVE_BYTES = 64 * 1024 * 1024
+const EXPORT_STAGING_SUFFIX = ".files"
 const BACKUP_TIMEOUT_REASON =
   "Cancelled after reaching the configured backup timeout"
 const EXPORT_SWEEP_INTERVAL = "1 hour"
@@ -344,6 +346,7 @@ export class BackupManager {
       yield* manager.#recoverTarRestores()
       yield* manager.#restartStoppedApps()
       yield* state.requeueInterruptedBackupTasks(Date.now())
+      yield* promiseEffect(() => removeStagedExports(options.config))
       yield* promiseEffect(() => sweepExpiredBackupExports(options.config))
       yield* Queue.offer(wake, undefined)
       return manager
@@ -2811,6 +2814,17 @@ function backupExportPartialPath(
   )
 }
 
+/** Removes the files a Relay that stopped was about to zip. */
+async function removeStagedExports(config: RelayConfig): Promise<void> {
+  const directory = backupExportDirectoryPath(config)
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  for await (const entry of await opendir(directory)) {
+    if (entry.isDirectory() && entry.name.endsWith(EXPORT_STAGING_SUFFIX)) {
+      await rm(resolve(directory, entry.name), { force: true, recursive: true })
+    }
+  }
+}
+
 async function sweepExpiredBackupExports(config: RelayConfig): Promise<void> {
   const now = Date.now()
   const directory = backupExportDirectoryPath(config)
@@ -3605,6 +3619,10 @@ function runResticExport(
     )
     const destination = backupExportPath(config, input.backupId)
     const partial = backupExportPartialPath(config, input.backupId, taskId)
+    const staged = resolve(
+      backupExportDirectoryPath(config),
+      `.${input.backupId}.${taskId}${EXPORT_STAGING_SUFFIX}`
+    )
     const existing = yield* promiseEffect(() =>
       reuseValidExport(destination, Date.now() + input.ttlMs)
     )
@@ -3643,22 +3661,51 @@ function runResticExport(
           null,
           "export.preflight"
         )
-        const dumped = await restic.dumpZip({
-          destination: partial,
+        const onProgress = (bytes: number) => {
+          progress.completed = bytes
+        }
+        const selector = await resticSnapshotSource(config, restic, {
+          directory: instance?.directory ?? null,
           location,
-          onProgress: (bytes) => {
-            progress.completed = bytes
-          },
           password,
-          selector: await resticSnapshotSource(config, restic, {
-            directory: instance?.directory ?? null,
-            location,
-            password,
-            signal,
-            snapshotId: input.snapshotId,
-          }),
           signal,
+          snapshotId: input.snapshotId,
         })
+        // restic writes a zip a file at a time, each read from the bucket on
+        // its own. A restore reads them in bulk, where there's room for the
+        // files beside the zip.
+        const bulk =
+          location.kind === "s3" &&
+          (await hasFreeBytes(
+            backupExportDirectoryPath(config),
+            stats.totalSize * 2 + ZIP_OVERHEAD_RESERVE_BYTES
+          ))
+        if (bulk) {
+          await restic.restore({
+            location,
+            onProgress: ({ bytesCompleted }) => onProgress(bytesCompleted),
+            password,
+            selector,
+            signal,
+            target: staged,
+          })
+        }
+        const dumped = bulk
+          ? await Effect.runPromise(
+              zipTree(staged, partial, {
+                onProgress,
+                totalBytes: stats.totalSize,
+              }),
+              { signal }
+            )
+          : await restic.dumpZip({
+              destination: partial,
+              location,
+              onProgress,
+              password,
+              selector,
+              signal,
+            })
         await rename(partial, destination)
         const expiresAt = Date.now() + input.ttlMs
         await writeExportExpiry(
@@ -3687,6 +3734,11 @@ function runResticExport(
     }).pipe(
       Effect.onError(() =>
         promiseEffect(() => rm(partial, { force: true })).pipe(Effect.ignore)
+      ),
+      Effect.ensuring(
+        promiseEffect(() => rm(staged, { force: true, recursive: true })).pipe(
+          Effect.ignore
+        )
       ),
       Effect.ensuring(Fiber.interrupt(progressFiber)),
       Effect.ensuring(
@@ -3869,22 +3921,20 @@ async function requireBackupSpace(
   maxBytes: number | null,
   operation = "create.preflight"
 ): Promise<void> {
-  const filesystem = await statfs(directory)
-  const available = BigInt(filesystem.bavail) * BigInt(filesystem.bsize)
-  const estimate = BigInt(logicalBytes + ZIP_OVERHEAD_RESERVE_BYTES)
-  const required =
-    maxBytes === null
-      ? estimate
-      : estimate < BigInt(maxBytes)
-        ? estimate
-        : BigInt(maxBytes)
-  if (available < required) {
+  const estimate = logicalBytes + ZIP_OVERHEAD_RESERVE_BYTES
+  const required = maxBytes === null ? estimate : Math.min(estimate, maxBytes)
+  if (!(await hasFreeBytes(directory, required))) {
     throw RelayBackupError.make({
       code: "insufficient_space",
       operation,
       reason: "The Relay does not have enough free space to stage this backup",
     })
   }
+}
+
+async function hasFreeBytes(directory: string, bytes: number) {
+  const filesystem = await statfs(directory)
+  return BigInt(filesystem.bavail) * BigInt(filesystem.bsize) >= BigInt(bytes)
 }
 
 async function directoryLogicalBytes(
