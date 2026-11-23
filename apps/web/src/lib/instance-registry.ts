@@ -494,7 +494,10 @@ export const removeDeletedInstanceEffect = Effect.fn(
 /**
  * Reconciles a Relay's records with a fresh snapshot when Hearth starts. The
  * snapshot was read moments before this commits, so servers Hearth created
- * or deleted on the Relay in between keep their outcome.
+ * or deleted on the Relay in between keep their outcome. Only placeholders
+ * of servers no Relay ever reported are removed: one that's gone from its
+ * Relay, as after Kiln is restored on a new machine, keeps its name, access
+ * and backups until someone deletes it.
  */
 export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
   function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
@@ -542,6 +545,7 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
             yield* transaction.execute(
               `DELETE FROM ${databaseTable("instance")}
                 WHERE relay_id = ?
+                  AND directory_metadata IS NULL
                   ${kept.length ? `AND instance_id NOT IN (${kept.map(() => "?").join(", ")})` : ""}
                   AND (
                     provisioning_reserved_until IS NULL
