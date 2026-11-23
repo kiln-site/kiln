@@ -476,7 +476,9 @@ docker compose up -d
 
 **If it fails, run it again.** Nothing has to be cleaned up first: each run puts
 everything back from the start, and Hearth stays stopped until one finishes. A
-wrong code or a damaged backup stops it before anything is written.
+wrong code or a damaged backup stops it before anything is written. Once Kiln's
+Relay has started, the installer asks you to remove it before another try; its
+data stays.
 
 It's the same Kiln on the same Relay: the same installation ID, secrets and
 recovery code, so other Relays reconnect and its backups stay listed. A Relay

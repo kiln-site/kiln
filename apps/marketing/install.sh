@@ -710,7 +710,6 @@ start_platform_relay() {
     ${hearth_image:+--env KILN_PLATFORM_HEARTH_IMAGE="$hearth_image"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
     ${game_host:+--env KILN_RELAY_GAME_HOST="$game_host"} \
-    ${restore:+--label io.kiln.restore=true} \
     "$image" || remove_unstarted
   remove_relay_cidfile
 }
@@ -1474,16 +1473,10 @@ if docker_reachable; then
   fi
 fi
 
-# A restore whose Kiln didn't come up, as when its port was taken, starts over
-# with the options given now: its Relay goes, and its data stays. Any other
-# Relay here is left as it is.
+# Whether this Relay's Kiln ever worked isn't known here, so removing it is
+# left to whoever runs this. Its data stays either way.
 if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
-  if [ "$(dk inspect --format '{{index .Config.Labels "io.kiln.restore"}}' "$container" 2>/dev/null)" != "true" ] ||
-    [ "$(dk inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$hearth" 2>/dev/null)" = "healthy" ]; then
-    fail "Kiln is already on this machine. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
-  fi
-  log "starting over a restore whose Kiln didn't come up"
-  dk rm -f "$container" >/dev/null 2>&1 || true
+  fail "Kiln's Relay is already on this machine. To put a backup back into a Kiln that has worked, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine. If this is a restore whose Kiln never came up, remove it with \`docker rm -f $container ${prefix}kiln-traefik\`, then run this again."
 fi
 
 # Already here: the Relay starts afresh from the downloaded image, keeping
@@ -1647,11 +1640,15 @@ if [ -n "$restore" ]; then
   if [ -z "$bind_address" ]; then
     bind_address=$(sed -n 's/^KILN_PLATFORM_HEARTH_BIND=//p' "$restored_file" | tail -n 1)
     [ "$bind_address" != "0.0.0.0" ] || bind_address=""
-    if [ -n "$bind_address" ] && command -v ip >/dev/null 2>&1 &&
-      ! ip -o addr | grep -qF " $bind_address/"; then
-      fail "Kiln listened only on $bind_address, which this machine doesn't have. Run this again with --bind and an address it has, or --bind 0.0.0.0 for all."
-    fi
   fi
+  case "$bind_address" in
+    "" | 0.0.0.0 | *:*) ;;
+    *)
+      if command -v ip >/dev/null 2>&1 && ! ip -o addr | grep -qF " $bind_address/"; then
+        fail "Kiln can't listen on $bind_address, which this machine doesn't have. Run this again with --bind and an address it has, or --bind 0.0.0.0 for all."
+      fi
+      ;;
+  esac
   rm -f "$restored_file"
   check_ports
 fi
