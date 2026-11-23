@@ -64,6 +64,7 @@ import {
   restoreCompressedDatabaseBackup,
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
+import { collectPlatformRecovery } from "./platform-recovery.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
@@ -1944,23 +1945,32 @@ export class BackupManager {
         )
         yield* promiseEffect(() => rm(destination, { force: true }))
         progress.phase = "dumping"
-        const result = yield* Effect.tryPromise({
-          try: () =>
-            createEncryptedPlatformBackup(
-              this.#config,
-              input,
-              destination,
-              progress,
-              createSignal
-            ),
-          catch: (cause) =>
-            RelayBackupError.make({
-              code: "platform_backup_failed",
-              operation: "create.platform",
-              reason: backupErrorMessage(cause),
-              cause,
-            }),
-        }).pipe(
+        const platformFailure = (cause: unknown) =>
+          RelayBackupError.make({
+            code: "platform_backup_failed",
+            operation: "create.platform",
+            reason: backupErrorMessage(cause),
+            cause,
+          })
+        const result = yield* collectPlatformRecovery(
+          this.#config,
+          this.#state
+        ).pipe(
+          Effect.mapError(platformFailure),
+          Effect.flatMap((recovery) =>
+            Effect.tryPromise({
+              try: () =>
+                createEncryptedPlatformBackup(
+                  this.#config,
+                  input,
+                  destination,
+                  progress,
+                  createSignal,
+                  recovery
+                ),
+              catch: platformFailure,
+            })
+          ),
           Effect.withSpan("Backups.platform.dump"),
           Effect.flatMap((created) =>
             storeCreatedBackup(

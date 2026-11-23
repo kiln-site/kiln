@@ -83,6 +83,34 @@ export const loadOrCreateRelayIdentity = Effect.fn(
   } satisfies RelayIdentity
 })
 
+/**
+ * The identity as stored, key included, for a platform backup to carry to
+ * a new machine. The running Relay has already given it an instance ID.
+ */
+export const readRelayIdentityMaterial = Effect.fn("RelayIdentity.read")(
+  function* (config: RelayConfig) {
+    const identityDirectory = join(config.dataDirectory, "network", "identity")
+    const stored = yield* loadExisting(
+      join(identityDirectory, "identity.json"),
+      join(identityDirectory, "identity.key")
+    )
+    if (stored.id === null) {
+      return yield* Effect.fail(
+        RelayIdentityError.make({
+          operation: "read_identity",
+          cause: new Error("The Relay's identity has no instance ID yet"),
+        })
+      )
+    }
+    return {
+      id: stored.id,
+      name: stored.name,
+      privateKeyPem: stored.privateKeyPem,
+      publicKeyPem: stored.publicKeyPem,
+    }
+  }
+)
+
 export const renameRelayIdentity = Effect.fn("RelayIdentity.rename")(function* (
   config: RelayConfig,
   identity: RelayIdentity,

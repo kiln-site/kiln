@@ -9,7 +9,7 @@ import {
 import { createReadStream, createWriteStream } from "node:fs"
 import { mkdir, open, rm, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
-import { Transform } from "node:stream"
+import { Transform, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { createGunzip, createGzip } from "node:zlib"
 import { Effect, Result } from "effect"
@@ -22,6 +22,10 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
+import {
+  decodePlatformRecovery,
+  type PlatformRecovery,
+} from "./platform-recovery.js"
 import { provenDatabaseContainer, provenHearthRunning } from "./platform.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 import {
@@ -39,7 +43,16 @@ const PLATFORM_MANIFEST_LENGTH_OFFSET = 60
 const PLATFORM_BACKUP_TIMEOUT_MS = 30 * 60_000
 const MAX_PLATFORM_ERROR_BYTES = 64 * 1024
 const MAX_PLATFORM_RESTORE_BYTES = 1024 ** 4
+const MAX_PLATFORM_RECOVERY_BYTES = 1024 ** 2
+const PLATFORM_RECOVERY_LENGTH_BYTES = 4
 
+/**
+ * A platform backup's manifest, unencrypted but authenticated. Format 1
+ * encrypts Hearth's dump, gzipped. Format 2 encrypts the length of its
+ * recovery section (4 bytes, big-endian), that section as JSON (see
+ * `platform-recovery.ts`), then the same gzipped dump, so the backup and its
+ * recovery code alone restore Kiln on a new machine.
+ */
 export interface PlatformBackupManifest {
   compression: "gzip"
   createdAt: string
@@ -48,7 +61,7 @@ export interface PlatformBackupManifest {
   // backups don't say.
   databaseName?: string
   encryption: "aes-256-gcm+scrypt"
-  formatVersion: 1
+  formatVersion: 1 | 2
   installationId: string
   payload: "hearth.dmp"
 }
@@ -58,7 +71,8 @@ export async function createEncryptedPlatformBackup(
   input: BackupCreateTaskInput,
   destination: string,
   progress: { completed: number; total: number },
-  signal: AbortSignal
+  signal: AbortSignal,
+  recovery: PlatformRecovery | null
 ): Promise<BackupArchiveCreateTaskResult> {
   signal.throwIfAborted()
   const installationId = requiredInstallationId(config, input.target.id)
@@ -73,10 +87,11 @@ export async function createEncryptedPlatformBackup(
     databaseEngine: "mysql",
     databaseName,
     encryption: "aes-256-gcm+scrypt",
-    formatVersion: 1,
+    formatVersion: recovery ? 2 : 1,
     installationId,
     payload: "hearth.dmp",
   }
+  const recoverySection = recovery ? encodeRecoverySection(recovery) : null
   const manifestBytes = Buffer.from(JSON.stringify(manifest), "utf8")
   const salt = randomBytes(16)
   const initializationVector = randomBytes(12)
@@ -112,6 +127,7 @@ export async function createEncryptedPlatformBackup(
     child.stdout,
     sourceMeter,
     createGzip({ level: 6 }),
+    startingWith(recoverySection),
     cipher,
     storedLimit,
     createWriteStream(destination, { flags: "a" }),
@@ -212,6 +228,82 @@ export async function inspectEncryptedPlatformBackup(
   return opened.manifest
 }
 
+/**
+ * A platform backup's manifest and recovery section, once the whole backup
+ * has been authenticated with `recoveryKey`; the section is null in format 1.
+ * Nothing decrypted is written anywhere.
+ */
+export async function readPlatformBackupRecovery(
+  recoveryKey: string,
+  source: string
+): Promise<{
+  manifest: PlatformBackupManifest
+  recovery: PlatformRecovery | null
+}> {
+  const opened = await openPlatformBackup(source)
+  const key = await derivePlatformKey(recoveryKey, opened.salt)
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    opened.initializationVector
+  )
+  decipher.setAAD(opened.manifestBytes)
+  decipher.setAuthTag(opened.tag)
+  const section = sectionReader(opened.manifest.formatVersion === 2)
+  await pipeline(
+    createReadStream(source, { start: opened.payloadOffset }),
+    decipher,
+    section.writable
+  )
+  const text = section.text()
+  if (text === null) return { manifest: opened.manifest, recovery: null }
+  return {
+    manifest: opened.manifest,
+    recovery: await Effect.runPromise(decodePlatformRecovery(text)),
+  }
+}
+
+/**
+ * Keeps the recovery section from the start of a decrypted payload and lets
+ * the rest pass to nowhere, so the whole payload is still authenticated.
+ */
+function sectionReader(present: boolean) {
+  let header = Buffer.alloc(0)
+  let body: Buffer | null = null
+  let expected = 0
+  const writable = new Writable({
+    write(chunk: Buffer, _encoding, done) {
+      if (!present || (body && body.byteLength >= expected)) return done()
+      if (!body) {
+        header = Buffer.concat([header, chunk])
+        if (header.byteLength < PLATFORM_RECOVERY_LENGTH_BYTES) return done()
+        expected = header.readUInt32BE(0)
+        if (expected <= 0 || expected > MAX_PLATFORM_RECOVERY_BYTES) {
+          return done(
+            new Error("The Kiln platform backup's recovery section is invalid")
+          )
+        }
+        body = header.subarray(PLATFORM_RECOVERY_LENGTH_BYTES)
+      } else {
+        body = Buffer.concat([body, chunk])
+      }
+      done()
+    },
+  })
+  return {
+    text: () => {
+      if (!present) return null
+      if (!body || body.byteLength < expected) {
+        throw new Error(
+          "The Kiln platform backup's recovery section is cut short"
+        )
+      }
+      return body.subarray(0, expected).toString("utf8")
+    },
+    writable,
+  }
+}
+
 export async function restoreEncryptedPlatformBackup(
   config: RelayConfig,
   source: string,
@@ -261,13 +353,17 @@ export async function restoreEncryptedPlatformBackup(
   const decrypted = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
-        try: () =>
-          pipeline(
+        try: async () => {
+          await pipeline(
             createReadStream(source, { start: opened.payloadOffset }),
             decipher,
             byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
             createWriteStream(stagedDump, { flags: "wx", mode: 0o600 })
-          ),
+          )
+          // On the same installation, its recovery section has nothing to
+          // add.
+          return stagedDumpOffset(stagedDump, opened.manifest)
+        },
         catch: (cause) => cause,
       })
     )
@@ -276,6 +372,7 @@ export async function restoreEncryptedPlatformBackup(
     await rm(stagedDump, { force: true })
     throw decrypted.failure
   }
+  const dumpOffset = decrypted.success
   // The decrypted dump is removed however the import ends, including when
   // the database client can't start.
   const restored = await Effect.runPromise(
@@ -302,7 +399,7 @@ export async function restoreEncryptedPlatformBackup(
                 child,
                 () =>
                   pipeline(
-                    createReadStream(stagedDump),
+                    createReadStream(stagedDump, { start: dumpOffset }),
                     createGunzip(),
                     byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
                     child.stdin
@@ -540,7 +637,7 @@ function parsePlatformManifest(value: Buffer): PlatformBackupManifest {
     parsed.compression !== "gzip" ||
     parsed.databaseEngine !== "mysql" ||
     parsed.encryption !== "aes-256-gcm+scrypt" ||
-    parsed.formatVersion !== 1 ||
+    (parsed.formatVersion !== 1 && parsed.formatVersion !== 2) ||
     parsed.payload !== "hearth.dmp" ||
     typeof parsed.createdAt !== "string" ||
     !Number.isFinite(Date.parse(parsed.createdAt)) ||
@@ -551,6 +648,74 @@ function parsePlatformManifest(value: Buffer): PlatformBackupManifest {
     throw new Error("The Kiln platform backup manifest is invalid")
   }
   return parsed as PlatformBackupManifest
+}
+
+/** Passes its stream through, after `first` when there is one. */
+function startingWith(first: Buffer | null): Transform {
+  let pending = first
+  const release = (stream: Transform) => {
+    if (pending) stream.push(pending)
+    pending = null
+  }
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      release(this)
+      done(null, chunk)
+    },
+    flush(done) {
+      release(this)
+      done()
+    },
+  })
+}
+
+function encodeRecoverySection(recovery: PlatformRecovery): Buffer {
+  const json = Buffer.from(JSON.stringify(recovery), "utf8")
+  if (json.byteLength > MAX_PLATFORM_RECOVERY_BYTES) {
+    throw new Error("The platform backup's recovery section is too large")
+  }
+  const length = Buffer.alloc(PLATFORM_RECOVERY_LENGTH_BYTES)
+  length.writeUInt32BE(json.byteLength)
+  return Buffer.concat([length, json])
+}
+
+/**
+ * Where the gzipped dump starts in a decrypted platform backup: after the
+ * recovery section in format 2, at the start in format 1.
+ */
+async function stagedDumpOffset(
+  staged: string,
+  manifest: PlatformBackupManifest
+): Promise<number> {
+  if (manifest.formatVersion === 1) return 0
+  const file = await open(staged, "r")
+  return Effect.runPromise(
+    Effect.acquireUseRelease(
+      Effect.succeed(file),
+      (handle) =>
+        Effect.tryPromise(async () => {
+          const length = Buffer.alloc(PLATFORM_RECOVERY_LENGTH_BYTES)
+          const { bytesRead } = await handle.read(
+            length,
+            0,
+            length.byteLength,
+            0
+          )
+          const recoveryBytes = length.readUInt32BE(0)
+          if (
+            bytesRead !== length.byteLength ||
+            recoveryBytes <= 0 ||
+            recoveryBytes > MAX_PLATFORM_RECOVERY_BYTES
+          ) {
+            throw new Error(
+              "The Kiln platform backup's recovery section is invalid"
+            )
+          }
+          return PLATFORM_RECOVERY_LENGTH_BYTES + recoveryBytes
+        }),
+      (handle) => Effect.promise(() => handle.close())
+    )
+  )
 }
 
 function collectProcessErrors(child: DockerExecProcess) {
