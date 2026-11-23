@@ -93,9 +93,8 @@ export function KilnRestoreDialog({
           <DialogDescription>
             This replaces Hearth&apos;s database with “{backup.name}”. Hearth
             stops while it restores, so it runs on {relay?.name ?? "the Relay"}
-            &apos;s host. Everyone&apos;s pages reconnect once Hearth is back,
-            usually within a minute; game servers, Apps, and databases keep
-            running.
+            &apos;s host. Everyone signs in again once Hearth is back, usually
+            within a minute; game servers, Apps, and databases keep running.
           </DialogDescription>
         </DialogHeader>
         {steps.length > 1 ? (
