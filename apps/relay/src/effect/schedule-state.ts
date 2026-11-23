@@ -428,12 +428,76 @@ export function makeRelayScheduleState(sql: SqlClient) {
           })
         )
       ),
-    interruptRuns: (now: number) =>
+    /**
+     * Settles what a restart cut short. An occurrence of backups alone is
+     * answered to carry on: its backups have IDs of their own, so asking for
+     * them again finds the ones already queued. Any other is interrupted, and
+     * never runs again, as a command or power change may have gone through.
+     */
+    recoverRuns: (now: number) =>
       run(
-        "interrupt_runs",
-        sql`UPDATE relay_schedule_runs
-      SET status = 'interrupted', finished_at = ${now} WHERE status = 'running'`.pipe(
-          Effect.asVoid
+        "recover_runs",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<
+              RunRow & { definition_json: string | null }
+            >`
+              SELECT runs.*, schedules.definition_json
+              FROM relay_schedule_runs AS runs
+              LEFT JOIN relay_schedules AS schedules
+                ON schedules.schedule_id = runs.schedule_id
+                AND schedules.revision = runs.revision
+              WHERE runs.status = 'running'`
+            const unfinished: Array<ScheduleOccurrence> = []
+            for (const row of rows) {
+              const parsed = Result.getOrNull(
+                Result.try(() => ({
+                  // Saved or removed since, it's no longer what ran.
+                  definition:
+                    row.definition_json === null
+                      ? null
+                      : relayScheduleProjectionSchema.parse(
+                          JSON.parse(row.definition_json)
+                        ),
+                  run: readRun(row),
+                }))
+              )
+              const definition = parsed?.definition ?? null
+              if (
+                parsed &&
+                definition?.actions.every(({ type }) => type === "backup")
+              ) {
+                unfinished.push({
+                  definition,
+                  run: parsed.run,
+                  scheduledAt: row.scheduled_at,
+                })
+                continue
+              }
+              // It keeps how far it got, or else what it was running on.
+              const targetRuns = parsed?.run.targetRuns.length
+                ? parsed.run.targetRuns
+                : (definition?.targets ?? []).map((target) => ({
+                    attempts: [],
+                    error: "The Relay restarted before this finished",
+                    finishedAt: now,
+                    id: scheduleStableId(
+                      row.schedule_id,
+                      row.scheduled_at,
+                      target.kind,
+                      target.id
+                    ),
+                    startedAt: row.started_at,
+                    status: "interrupted" as const,
+                    target,
+                  }))
+              yield* sql`UPDATE relay_schedule_runs
+                SET status = 'interrupted', finished_at = ${now},
+                  target_runs_json = ${JSON.stringify(targetRuns)}
+                WHERE run_id = ${row.run_id}`
+            }
+            return unfinished
+          })
         )
       ),
     /**

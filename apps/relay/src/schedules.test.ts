@@ -152,6 +152,22 @@ const projection: RelayScheduleProjection = {
   ],
 }
 
+const localBackup: RelayScheduleProjection["actions"][number] = {
+  destination: { kind: "local" },
+  executions: [
+    {
+      destination: { kind: "local" },
+      mode: "full",
+      targetId: "server-a",
+      targetKind: "instance",
+    },
+  ],
+  id: "c5a1b9d2-3e4f-4a6b-8c7d-9e0f1a2b3c4d",
+  mode: "full",
+  name: "Nightly",
+  type: "backup",
+}
+
 async function latestRun(schedules: ScheduleManager) {
   return (await schedules.overview([projection.id])).runs[0]
 }
@@ -164,6 +180,97 @@ function runNow(schedules: ScheduleManager) {
 }
 
 describe("Relay schedule persistence", () => {
+  // The Relay requeues the backup itself, under the ID it already has.
+  it("carries on after a restart with a schedule of backups alone", async () => {
+    let status: "running" | "succeeded" = "running"
+    const enqueued: Array<string> = []
+    const task = (taskId: string) =>
+      ({ status, taskId }) as unknown as RelayBackupTask
+    const { restart, schedules } = await manager({
+      enqueueBackup: async ({ taskId }) => {
+        enqueued.push(taskId)
+        return task(taskId)
+      },
+      findInstance: async () => ({}),
+      getBackup: async (taskId) => task(taskId),
+    })
+    await schedules.apply({ ...projection, actions: [localBackup] })
+    await runNow(schedules)
+    await advanceUntil(() => expect(enqueued).toHaveLength(1))
+    schedules.close()
+
+    const recovered = await restart()
+    expect((await latestRun(recovered))?.status).toBe("running")
+    const worker = Effect.runFork(recovered.run())
+    try {
+      await advanceUntil(() => expect(enqueued).toHaveLength(2))
+      status = "succeeded"
+      await advanceUntil(
+        async () =>
+          expect((await latestRun(recovered))?.status).toBe("succeeded"),
+        1_000
+      )
+      expect(new Set(enqueued).size).toBe(1)
+      const { runs } = await recovered.overview([projection.id])
+      expect(runs).toHaveLength(1)
+      expect(runs[0]?.targetRuns).toMatchObject([
+        { attempts: [{ status: "succeeded" }], status: "succeeded" },
+      ])
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(worker))
+    }
+  })
+
+  it("interrupts a restarted schedule with more than backups, keeping its targets, and never runs it again", async () => {
+    const enqueued: Array<string> = []
+    const power: Array<string> = []
+    const { restart, schedules } = await manager({
+      enqueueBackup: async ({ taskId }) => {
+        enqueued.push(taskId)
+        return { status: "running", taskId } as unknown as RelayBackupTask
+      },
+      findInstance: async () => ({}),
+      runPower: async (kind, id, action) => {
+        power.push(`${kind}:${id}:${action}`)
+      },
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          action: "stop",
+          id: "0e9a7f5c-77e8-4b39-8c1a-6d5bb9c0b3a1",
+          type: "power",
+        },
+        localBackup,
+      ],
+    })
+    await runNow(schedules)
+    await advanceUntil(() => expect(enqueued).toHaveLength(1))
+    schedules.close()
+
+    const recovered = await restart()
+    const worker = Effect.runFork(recovered.run())
+    try {
+      await vi.advanceTimersByTimeAsync(30 * minuteMs)
+      await yieldToEventLoop()
+      expect(await latestRun(recovered)).toMatchObject({
+        status: "interrupted",
+        targetRuns: [
+          {
+            error: "The Relay restarted before this finished",
+            status: "interrupted",
+            target: { id: "server-a" },
+          },
+        ],
+      })
+      expect(power).toEqual(["instance:server-a:stop"])
+      expect(enqueued).toHaveLength(1)
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(worker))
+    }
+  })
+
   it("records an occurrence that fell due while the Relay was down as missed", async () => {
     const commands: Array<string> = []
     const { restart, schedules } = await manager({
@@ -888,10 +995,65 @@ describe("Relay scheduled backups to a bucket", () => {
 
     await runNow(schedules)
 
-    await advanceUntil(async () =>
-      expect((await latestRun(schedules))?.status).toBe("failed")
+    // As late as one may reconnect to a Relay that just started.
+    await advanceUntil(
+      async () => expect((await latestRun(schedules))?.status).toBe("failed"),
+      30_000
     )
     expect(hearth.own).toEqual([])
+  })
+
+  it("says at once why Hearth won't take it", async () => {
+    const hearth = hearths(() => [{ reason: "It is disabled", taken: false }])
+    const { schedules } = await manager(hearth.options)
+    await schedules.apply(nightly)
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.targetRuns[0]).toMatchObject({
+        error: "It is disabled",
+        status: "failed",
+      })
+    )
+  })
+
+  it("carries on after a restart, once Hearth is back to say which backup it took", async () => {
+    let connected = true
+    let taken: ReturnType<typeof hearth.take> | undefined
+    const hearth = hearths((request) => {
+      if (!connected) return []
+      // Asked again for the same run, Hearth answers the same IDs.
+      taken ??= hearth.take(request, 60_000)
+      return [taken]
+    })
+    const { restart, schedules } = await manager(hearth.options)
+    await schedules.apply(nightly)
+    await runNow(schedules)
+    await advanceUntil(() => expect(hearth.asked).toHaveLength(1))
+    connected = false
+    schedules.close()
+
+    const recovered = await restart()
+    setTimeout(() => {
+      connected = true
+    }, 20_000)
+    const worker = Effect.runFork(recovered.run())
+    try {
+      await advanceUntil(
+        async () =>
+          expect((await latestRun(recovered))?.status).toBe("succeeded"),
+        1_000
+      )
+      const { runs } = await recovered.overview([projection.id])
+      expect(runs).toHaveLength(1)
+      expect(runs[0]?.targetRuns).toMatchObject([
+        { attempts: [{ status: "succeeded" }], status: "succeeded" },
+      ])
+      expect(hearth.own).toEqual([])
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(worker))
+    }
   })
 
   it("fails the step, rather than wait for good, when the task Hearth took never arrives", async () => {

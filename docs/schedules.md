@@ -184,6 +184,14 @@ Each target finishes as `succeeded`, `noop` (nothing ran), `failed`,
 `partial` when some targets failed, or `failed` when all did. A step
 recorded as `not_run` or skipped doesn't fail its target.
 
+A schedule of backup steps alone carries on after its Relay restarts: each
+backup has an ID of its own, so asking for it again finds the one the Relay
+requeued, and the occurrence ends as its backups do. For a full backup to a
+bucket the Relay waits up to 3 minutes for Hearth to reconnect, then asks it
+again. An occurrence with any other step, or whose schedule was saved since,
+is `interrupted` and never runs again, since a command or power change may
+have gone through.
+
 Occurrences that fell due while a Relay was down are not caught up: on
 start it records one `missed` run per schedule and runs the next one on
 time. Occurrences running when the Relay stopped are marked `interrupted`

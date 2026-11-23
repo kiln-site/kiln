@@ -38,6 +38,7 @@ import {
 import {
   legacyScheduleStateSchema,
   type RelayScheduleState,
+  type ScheduleOccurrence,
 } from "./effect/schedule-state.js"
 import type {
   ContainerCommandResult,
@@ -84,6 +85,12 @@ class ScheduledBackupWaitError extends Data.TaggedError(
   readonly cause?: unknown
   readonly message: string
   readonly taskId: string
+}> {}
+
+class BucketBackupRefusedError extends Data.TaggedError(
+  "BucketBackupRefusedError"
+)<{
+  readonly message: string
 }> {}
 
 export interface ScheduleManagerOptions {
@@ -150,6 +157,8 @@ export class ScheduleManager {
   readonly #options: ScheduleManagerOptions
   readonly #semaphore = Semaphore.makeUnsafe(1)
   readonly #bootAt = Date.now()
+  /** Occurrences a restart cut short, to carry on once the Relay is up. */
+  #unfinished: ReadonlyArray<ScheduleOccurrence> = []
   #nextRunAt: number | null | undefined
   #nextClaimAttemptAt = 0
   #claimFailures = 0
@@ -181,11 +190,18 @@ export class ScheduleManager {
         )
       )
     }
-    await Effect.runPromise(options.state.interruptRuns(manager.#bootAt))
+    manager.#unfinished = await Effect.runPromise(
+      options.state.recoverRuns(manager.#bootAt)
+    )
     return manager
   }
 
   run() {
+    const unfinished = this.#unfinished
+    this.#unfinished = []
+    for (const { definition, scheduledAt } of unfinished) {
+      this.#launchOccurrence(definition, scheduledAt)
+    }
     return promiseEffect(() => this.#tick()).pipe(
       Effect.catch((cause) => Effect.sync(() => this.#claimFailed(cause))),
       Effect.andThen(Effect.sleep(`${scheduleTickIntervalMs} millis`)),
@@ -934,7 +950,7 @@ export class ScheduleManager {
       }
       if (backupExecution(action, target)?.destination?.kind === "s3") {
         const member = { targetId: target.id, targetKind: target.kind }
-        const taken = await this.#options.takeBucketBackups({
+        const taken = await this.#takeBucketBackups({
           actionId: action.id,
           members: [member],
           revision: schedule.revision,
@@ -1152,7 +1168,7 @@ export class ScheduleManager {
           targetKind: "database" as const,
         })),
       ]
-      const taken = await this.#options.takeBucketBackups({
+      const taken = await this.#takeBucketBackups({
         actionId: action.id,
         members: asked,
         revision: schedule.revision,
@@ -1244,6 +1260,20 @@ export class ScheduleManager {
         { concurrency: "unbounded", discard: true }
       ),
       signal ? { signal } : undefined
+    )
+  }
+
+  // A Relay that just started may be asking before Hearth has reconnected.
+  #takeBucketBackups(request: ScheduledBucketBackupRequest) {
+    return Effect.runPromise(
+      promiseEffect(() => this.#options.takeBucketBackups(request)).pipe(
+        Effect.retry({
+          schedule: Schedule.spaced("5 seconds"),
+          while: (cause) =>
+            !(cause instanceof BucketBackupRefusedError) &&
+            Date.now() - this.#bootAt < scheduledBucketBackupArrivalTimeoutMs,
+        })
+      )
     )
   }
 
@@ -1686,9 +1716,10 @@ export async function askHearthForBucketBackups(
   const taken = replies.find((reply) => reply.taken)
   if (taken?.taken) return taken.backups
   const refused = replies.find((reply) => !reply.taken)
+  if (refused && !refused.taken) {
+    throw new BucketBackupRefusedError({ message: refused.reason })
+  }
   throw new Error(
-    refused && !refused.taken
-      ? refused.reason
-      : "Hearth didn't answer in time to take this backup; it may still take it and send it here"
+    "Hearth didn't answer in time to take this backup; it may still take it and send it here"
   )
 }
