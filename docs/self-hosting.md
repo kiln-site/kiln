@@ -460,12 +460,12 @@ and run the installer with it:
 curl -fsSL https://kiln.site/install | sh -s -- --restore ./backup-<id>.kiln
 ```
 
-It asks for the recovery code (or reads `KILN_RECOVERY_CODE`) and opens Kiln at
-the backup's address unless `--url` gives another; point that address's DNS at
-the new machine. Use the same `--namespace` as the lost machine, if it had one:
-Hearth reaches its Relay by that name. With Compose, use the lost machine's
-Compose file and environment, and restore into the Relay's volume before its
-first start:
+It's an ordinary install that takes its data from the backup, so give it the
+options the lost one was given, such as `--url`, `--port` or `--bind`, and the
+same `--namespace`, which Hearth reaches its Relay by. It asks for the recovery
+code, or reads `KILN_RECOVERY_CODE`. Keep the address Kiln had, and point its
+DNS at the new machine. With Compose, use the lost machine's Compose file and
+environment, and restore into the Relay's volume before its first start:
 
 ```sh
 docker compose run --rm --entrypoint kiln-relay --env KILN_RELAY_CONTAINER= \
@@ -476,8 +476,9 @@ docker compose up -d
 
 **If it fails, run it again.** Each run puts everything back from the start, and
 Hearth stays stopped until one finishes. A wrong code or a damaged backup stops
-it before anything is written. If Kiln's Relay had started, the installer stops
-and prints the command that removes its container first; its data stays.
+it before anything is written. Once Kiln's Relay is running the backup is back,
+and what's left is [an ordinary install](#install): run the installer again
+without `--restore`, and it says what's wrong.
 
 It's the same Kiln on the same Relay: the same installation ID, secrets and
 recovery code, so other Relays reconnect and its backups stay listed. A Relay

@@ -1368,7 +1368,7 @@ async function runPlatformRestore(source: string | undefined): Promise<void> {
       "Usage: kiln-relay platform restore <backup>; on a machine without Kiln, the recovery code is read from standard input"
     )
   }
-  const restored = await runRelayEffect(
+  await runRelayEffect(
     "relay.cli.platform.restore",
     Effect.gen(function* () {
       return yield* restorePlatform({
@@ -1382,10 +1382,6 @@ async function runPlatformRestore(source: string | undefined): Promise<void> {
     })
   )
   console.log("Hearth starts as the Relay next checks Kiln's services")
-  // On lines of their own, for the installer.
-  console.log(`KILN_URL=${restored.hearth.url}`)
-  console.log(`KILN_PLATFORM_HEARTH_PORT=${restored.hearth.port}`)
-  console.log(`KILN_PLATFORM_HEARTH_BIND=${restored.hearth.bindAddress}`)
 }
 
 async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {

@@ -29,6 +29,7 @@ import type { RelayStateStore } from "./effect/state.js"
 import { writeRelayCertificateAuthority } from "./effect/tls.js"
 import { savedInstallationId } from "./installation.js"
 import {
+  DEFAULT_BIND_ADDRESS,
   defaultHearthImage,
   ownContainer,
   platformInputs,
@@ -208,18 +209,29 @@ const putBack = Effect.fnUntraced(function* (
         "This machine already has another Relay. Restore Kiln on a machine without one, or use another KILN_RELAY_RESOURCE_NAMESPACE and volume.",
     })
   }
+  const inputs = platformInputs(environment)
+  const { installation } = recovery
+  // That address isn't this machine's, and every address would open up a
+  // Hearth that wasn't.
+  if (
+    !inputs.bindAddress &&
+    installation.hearth.bindAddress !== DEFAULT_BIND_ADDRESS
+  ) {
+    return yield* new PlatformError({
+      reason: `That Kiln listened only on ${installation.hearth.bindAddress}. Say where it listens on this machine, with --bind when installing or with KILN_PLATFORM_HEARTH_BIND; ${DEFAULT_BIND_ADDRESS} is every address.`,
+    })
+  }
   const relayImage = yield* ownContainer(engine, config).pipe(
     Effect.map((own) => own?.Config.Image ?? null),
     Effect.catch(() => Effect.succeed(null))
   )
-  const inputs = platformInputs(environment)
-  const { installation } = recovery
   // This release's Hearth, at the address it had unless given another.
   const restored: PlatformState = {
     ...installation,
     databaseInitializedAt: null,
     hearth: {
       ...installation.hearth,
+      bindAddress: inputs.bindAddress ?? DEFAULT_BIND_ADDRESS,
       image:
         inputs.hearthImage ??
         defaultHearthImage(relayImage, config.gitRepository),

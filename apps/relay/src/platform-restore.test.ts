@@ -77,22 +77,26 @@ async function machine() {
     pass: () => run(reconcilePlatform({ attachRelay: true, config, engine })),
     record: () => run(readPlatformState(config.dataDirectory)),
     printed,
-    restore: (source: string, code: string) =>
+    restore: (
+      source: string,
+      code: string,
+      environment: NodeJS.ProcessEnv = {}
+    ) =>
       run(
         restorePlatform({
           config,
           engine,
-          environment: {},
+          environment,
           print: (text) => printed.push(text),
           recoveryCode: async () => code,
           source,
           state,
         })
       ),
-    start: () =>
+    start: (environment: NodeJS.ProcessEnv = {}) =>
       run(
         startPlatform(config, engine, {
-          environment: { KILN_URL: url },
+          environment: { KILN_URL: url, ...environment },
           pairedClients: 0,
           saveInputs: true,
         })
@@ -114,9 +118,9 @@ const hearthClient = {
 }
 
 // A Kiln that's running, its backup, and what opens it.
-async function runningKiln() {
+async function runningKiln(environment: NodeJS.ProcessEnv = {}) {
   const kiln = await machine()
-  await kiln.start()
+  await kiln.start(environment)
   await kiln.pass()
   const identity = await run(loadOrCreateRelayIdentity(kiln.config))
   await run(kiln.state.restoreClients([hearthClient]))
@@ -192,6 +196,24 @@ describe("restoring Kiln", () => {
 
     await fresh.restore(lost.backup, lost.code)
     expect(await fresh.record()).toMatchObject({ phase: "ready" })
+  })
+
+  it("asks where a Kiln that listened on one address listens here", async () => {
+    const lost = await runningKiln({ KILN_PLATFORM_HEARTH_BIND: "127.0.0.1" })
+    const fresh = await machine()
+
+    await expect(fresh.restore(lost.backup, lost.code)).rejects.toThrow(
+      "listened only on 127.0.0.1"
+    )
+    expect(await fresh.record()).toBeNull()
+
+    await fresh.restore(lost.backup, lost.code, {
+      KILN_PLATFORM_HEARTH_BIND: "127.0.0.1",
+    })
+    expect(await fresh.record()).toMatchObject({
+      hearth: { bindAddress: "127.0.0.1" },
+      phase: "ready",
+    })
   })
 
   it("leaves another Relay, or another Kiln, on the machine as it is", async () => {

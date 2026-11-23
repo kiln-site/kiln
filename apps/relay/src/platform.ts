@@ -91,6 +91,8 @@ const resourceLabels: Record<RelayPlatformServiceRole, string> = {
 }
 
 const DEFAULT_DATABASE_IMAGE = "mysql:8.4"
+/** Hearth listens at every address of the machine. */
+export const DEFAULT_BIND_ADDRESS = "0.0.0.0"
 const DEFAULT_CACHE_IMAGE = "valkey/valkey:9.1.2-alpine"
 const HEARTH_CONTAINER_PORT = 3000
 const DATABASE_NAME = "hearth"
@@ -261,7 +263,7 @@ export function newPlatformState(
     databaseInitializedAt: null,
     formatVersion: PLATFORM_STATE_FORMAT_VERSION,
     hearth: {
-      bindAddress: inputs.bindAddress ?? "0.0.0.0",
+      bindAddress: inputs.bindAddress ?? DEFAULT_BIND_ADDRESS,
       environment: inputs.environment,
       image: inputs.hearthImage ?? hearthImage,
       port: inputs.port ?? HEARTH_CONTAINER_PORT,
