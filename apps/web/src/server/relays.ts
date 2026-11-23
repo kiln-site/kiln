@@ -5,6 +5,7 @@ import {
   relayIdSchema as relayFingerprintSchema,
   relayJoinIdPattern,
   relayNameSchema,
+  relayFileRootId,
   relayHostAccessSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyDiagnosticsSchema,
@@ -692,11 +693,12 @@ export const getRelayHostFiles = createServerFn({ method: "GET" })
           ? `${root}/infrastructure/traefik/traefik.yaml`
           : null,
     }
-    const [{ pinFilesByDefault }, { filePinsKey, fileRootKey }] =
+    const [{ pinRelayHostFilesEffect }, { filePinsKey, fileRootKey }] =
       await Promise.all([
         import("@/lib/file-activity"),
         import("@/lib/file-lanes"),
       ])
+    const rootId = relayFileRootId(relay.id)
     // Hearth pins these as its own work, in turn with people's pins, so the
     // limit holds.
     const pinned = await runAppEffect(
@@ -705,24 +707,19 @@ export const getRelayHostFiles = createServerFn({ method: "GET" })
         "files.pinByDefault",
         "Pinning this Relay's files",
         [
-          shared(fileRootKey(relay.id, relay.id)),
-          exclusive(filePinsKey(relay.id, relay.id)),
+          shared(fileRootKey(relay.id, rootId)),
+          exclusive(filePinsKey(relay.id, rootId)),
         ],
-        promiseEffect(() =>
-          pinFilesByDefault(
-            relay.id,
-            relay.id,
-            [files.database, files.traefikConfig].filter(
-              (path) => path !== null
-            )
-          )
+        pinRelayHostFilesEffect(
+          relay.id,
+          [files.database, files.traefikConfig].filter((path) => path !== null)
         )
       )
     )
     if (pinned) {
       publishRealtimeChange({
         audience: { kind: "relays", relayIds: [relay.id] },
-        scope: { instanceId: relay.id, relayId: relay.id },
+        scope: { instanceId: rootId, relayId: relay.id },
         topics: ["file-activity"],
         type: "hearth.invalidate",
       })
