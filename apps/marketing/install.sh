@@ -1642,7 +1642,7 @@ if [ -n "$restore" ]; then
     [ "$bind_address" != "0.0.0.0" ] || bind_address=""
   fi
   case "$bind_address" in
-    "" | 0.0.0.0 | *:*) ;;
+    "" | 0.0.0.0 | ::) ;;
     *)
       if command -v ip >/dev/null 2>&1 && ! ip -o addr | grep -qF " $bind_address/"; then
         fail "Kiln can't listen on $bind_address, which this machine doesn't have. Run this again with --bind and an address it has, or --bind 0.0.0.0 for all."
