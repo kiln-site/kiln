@@ -476,9 +476,10 @@ docker compose up -d
 
 **If it fails, run it again.** Each run puts everything back from the start, and
 Hearth stays stopped until one finishes. A wrong code or a damaged backup stops
-it before anything is written. Once Kiln's Relay is running the backup is back,
-and what's left is [an ordinary install](#install): run the installer again
-without `--restore`, and it says what's wrong.
+it before anything is written. Once Kiln's Relay is running, the backup is back
+and what's left is [an ordinary install](#install): run the installer without
+`--restore` to see how it's doing, and `docker logs kiln-relay` for why Hearth
+isn't up.
 
 It's the same Kiln on the same Relay: the same installation ID, secrets and
 recovery code, so other Relays reconnect and its backups stay listed. A Relay
