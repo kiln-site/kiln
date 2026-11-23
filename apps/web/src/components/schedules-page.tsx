@@ -1052,15 +1052,18 @@ const ScheduleLastRun = React.memo(function ScheduleLastRun({
 
 const latestRunResultClassName = {
   Failed: "text-destructive",
+  Interrupted: "text-destructive",
   Success: "text-emerald-700 dark:text-emerald-300",
 } as const satisfies Record<ReturnType<typeof latestRunResult>, string>
 
 const latestRunResultDotClassName = {
   Failed: "bg-destructive",
+  Interrupted: "bg-destructive",
   Success: "bg-emerald-500 dark:bg-emerald-400",
 } as const satisfies Record<ReturnType<typeof latestRunResult>, string>
 
 function latestRunResult(run: ScheduleRunWithRelay) {
+  if (run.status === "interrupted") return "Interrupted" as const
   const attempts = [
     ...run.sequenceAttempts,
     ...run.targetRuns.flatMap((targetRun) => targetRun.attempts),
