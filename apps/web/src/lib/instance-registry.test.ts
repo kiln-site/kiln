@@ -96,6 +96,31 @@ describeMysql("instance registry", () => {
     )
 
     it.effect(
+      "keeps a server its Relay no longer has, and drops a placeholder no Relay reported",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* syncInstanceRegistryEffect("relay-one", [
+            server({ id: "survival", name: "Survival" }),
+          ])
+          yield* reservePreparedInstanceEffect(
+            "relay-one",
+            { id: "never-made" },
+            "user-one"
+          )
+          yield* TestClock.adjust("1 day")
+
+          // As from a Relay restored on a new machine, after Hearth started.
+          yield* syncInstanceRegistryEffect("relay-one", [])
+
+          assert.deepEqual(
+            Object.values(yield* instances).map((kept) => kept.sourceName),
+            ["Survival"]
+          )
+        })
+    )
+
+    it.effect(
       "gives a server to the person who created it even if a snapshot recorded it first",
       () =>
         Effect.gen(function* () {
