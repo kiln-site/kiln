@@ -423,6 +423,7 @@ export async function restoreEncryptedPlatformBackup(
                     createReadStream(stagedDump, { start: dumpOffset }),
                     createGunzip(),
                     byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
+                    endingWith(PLATFORM_SIGN_OUT),
                     child.stdin
                   ),
                 () => requireSuccessfulProcess(child, stderr)
@@ -632,6 +633,19 @@ const PLATFORM_DUMP =
 const PLATFORM_IMPORT =
   'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --user=root -e "CREATE DATABASE IF NOT EXISTS \\`$MYSQL_DATABASE\\`"; exec mysql --user=root "$MYSQL_DATABASE"'
 
+// Everyone signs in again: the dump has the sessions of its time, and one
+// revoked since, as for a lost laptop, would be back. The dump left its
+// database selected. A Hearth run by hand may name the table otherwise.
+const PLATFORM_SIGN_OUT = `
+SET @kiln_sign_out = IF(
+  (SELECT COUNT(*) FROM information_schema.tables
+   WHERE table_schema = DATABASE() AND table_name = 'kiln_session') = 1,
+  'DELETE FROM kiln_session', 'DO 0');
+PREPARE kiln_sign_out FROM @kiln_sign_out;
+EXECUTE kiln_sign_out;
+DEALLOCATE PREPARE kiln_sign_out;
+`
+
 function startPlatformClient(
   config: RelayConfig,
   container: string,
@@ -672,6 +686,18 @@ function parsePlatformManifest(value: Buffer): PlatformBackupManifest {
     throw new Error("The Kiln platform backup manifest is invalid")
   }
   return parsed as PlatformBackupManifest
+}
+
+/** Passes its stream through, then `last`. */
+function endingWith(last: string): Transform {
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      done(null, chunk)
+    },
+    flush(done) {
+      done(null, last)
+    },
+  })
 }
 
 /** Passes its stream through, after `first` when there is one. */

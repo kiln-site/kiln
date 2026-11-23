@@ -485,10 +485,12 @@ It's the same Kiln on the same Relay: the same installation ID, secrets and
 recovery code, so other Relays reconnect and its backups stay listed. Keep the
 address, too: other Relays accept Kiln's pages, and some look for Kiln, at the
 one they were added at. If it changes, add each of them again from Hearth. Kiln
-→ Info says when it was restored, and from how old a backup. Game servers, Apps
-and databases that ran on the lost machine come back from their own backups.
-Settings passed to the lost Relay's container, such as email, are given again
-when it's installed.
+→ Info says when it was restored, and from how old a backup. Everyone signs in
+again, and access is as it was in the backup: revoke again what was revoked
+since, such as users, invitations or CLI links. Game servers, Apps and databases
+that ran on the lost machine come back from their own backups. Settings passed
+to the lost Relay's container, such as email, are given again when it's
+installed.
 
 ### Restoring on the same machine
 
