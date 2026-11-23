@@ -1458,7 +1458,7 @@ if docker_reachable; then
 fi
 
 if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
-  fail "Kiln's Relay is already on this machine. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
+  fail "Kiln's Relay is already on this machine. Run this without --restore to start it and see how it's doing. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
 fi
 
 # Already here: the Relay starts afresh from the downloaded image, keeping
