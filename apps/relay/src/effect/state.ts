@@ -4334,6 +4334,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       run(
         "browser_authority",
         Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
           const generations = yield* sql<{ generation: number }>`
             SELECT generation
             FROM relay_browser_issuer_generations
@@ -4345,6 +4346,9 @@ const makeRelayStateStore = Effect.gen(function* () {
             FROM relay_browser_authorization_floors
             WHERE issuer = ${query.issuer}
               AND subject = ${query.subject}
+              -- Past it, no capability from before the revision is left to
+              -- refuse, and a Hearth restored since may be behind it.
+              AND updated_at > ${now - BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS}
               AND (
                 (scope_kind = 'subject_relay' AND scope_id = '')
                 -- Instance floors never have an empty ID, so '' matches none.

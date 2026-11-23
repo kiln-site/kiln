@@ -291,7 +291,13 @@ const saveDatabase = Effect.fnUntraced(function* (
         ? Effect.succeed(null)
         : Effect.fail(
             new PlatformError({
-              reason: `Couldn't save what's in Kiln's database first, so nothing was restored: ${reason}. Start Hearth again with \`kiln-relay platform start-hearth\`, or restore without saving it: \`kiln-relay platform-backup restore <backup> --confirm ${installation.installationId}\``,
+              reason: `Couldn't save what's in Kiln's database first, so nothing was restored: ${reason}. ${
+                // One that started with Hearth held stopped may have part of
+                // another's import in its database.
+                installation.phase === "ready"
+                  ? "Start Hearth again with `kiln-relay platform start-hearth`"
+                  : "Run this again once that's fixed"
+              }, or restore without saving it: \`kiln-relay platform-backup restore <backup> --confirm ${installation.installationId}\``,
               cause,
             })
           )

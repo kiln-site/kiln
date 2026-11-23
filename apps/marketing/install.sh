@@ -1445,8 +1445,9 @@ address=$(public_ip)
 [ -n "$address" ] || address="localhost"
 log "public address: $address"
 
-if [ -n "$restore" ] && docker_reachable && dk container inspect "$container" >/dev/null 2>&1; then
-  fail "Kiln's Relay is already on this machine. Run this without --restore to start it and see how it's doing. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
+if [ -n "$restore" ] && docker_reachable &&
+  { dk container inspect "$container" || dk container inspect "$hearth"; } >/dev/null 2>&1; then
+  fail "Kiln is already on this machine. Run this without --restore to start it and see how it's doing. To put a backup back into it, see https://github.com/kiln-site/kiln/blob/main/docs/self-hosting.md#restoring-on-the-same-machine."
 fi
 
 # A Relay container that never started, left by an install that failed
