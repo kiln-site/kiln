@@ -25,6 +25,13 @@ import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 export const cliAccessModes = ["full_access", "read_only"] as const
 export const cliAccessModeSchema = z.enum(cliAccessModes)
 
+export const cliAccessTokenPrefix = "kiln_cli_"
+
+/** Whether Hearth could have issued this, so it's worth looking up. */
+export function couldBeCliAccessToken(value: string): boolean {
+  return value.startsWith(cliAccessTokenPrefix) && value.length <= 256
+}
+
 export const cliAccessDurations = [
   "1h",
   "1d",
@@ -59,7 +66,7 @@ export const cliDeviceTokenRequestSchema = z
 
 export const cliDeviceTokenResponseSchema = z
   .object({
-    accessToken: z.string().startsWith("kiln_cli_"),
+    accessToken: z.string().startsWith(cliAccessTokenPrefix),
     credential: z.object({
       expiresAt: z.iso.datetime().nullable(),
       id: z.uuid(),

@@ -259,6 +259,51 @@ describeLinux("Relay SFTP server", () => {
     }
   })
 
+  it("sends Hearth a CLI token, and never a guessed password", async () => {
+    const dataDirectory = await temporaryDirectory()
+    const token = `kiln_cli_${"a".repeat(43)}`
+    const asked: Array<unknown> = []
+    const server = await attachSftpServer({
+      lanes: new OperationLanes(),
+      clientActions: allowFileAccess,
+      // As in production, where nothing else lets anyone in.
+      config: { ...testConfig(dataDirectory), sftpDevAuthentication: false },
+      control: {
+        requestClients: async (_operation, payload) => {
+          asked.push(payload)
+          return [
+            {
+              clientId: "hearth-test",
+              payload: {
+                instances: [
+                  { actions: ["instance.files.list"], id: "e".repeat(12) },
+                ],
+                userId: "user-test",
+                username: "user@example.test",
+              },
+            },
+          ]
+        },
+      },
+      docker: { findInstance: async () => null },
+    })
+    try {
+      for (const guess of ["", "dev123", "hunter2", `x${token}`]) {
+        await expect(connect(server.port, guess)).rejects.toThrow(
+          "All configured authentication methods failed"
+        )
+      }
+      expect(asked).toEqual([])
+      const client = await connect(server.port, token)
+      client.end()
+      expect(asked).toEqual([
+        { credential: token, username: "user@example.test" },
+      ])
+    } finally {
+      await server.close()
+    }
+  })
+
   it("rejects an email claimed by more than one connected Hearth", async () => {
     const dataDirectory = await temporaryDirectory()
     await mkdir(resolve(dataDirectory, "instances"), { recursive: true })

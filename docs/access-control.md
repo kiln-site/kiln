@@ -200,7 +200,9 @@ inviter leaves the people they invited alone.
 **Ceilings** limit credentials further but never add authority. A read-only
 CLI link refuses every mutation, and a link with no expiry must be read-only.
 SFTP gives each game server only the file actions its effective permissions
-allow, minus the writes a read-only CLI token can't make. To create a Relay
+allow, minus the writes a read-only CLI token can't make, and its password is
+that token: the Relay refuses any other without asking Hearth, and counts it in
+`relay.sftp.logins.failed`. To create a Relay
 machine client, a person must hold, on that Relay, every permission the
 client's role or actions map to (`permissionsForRelayClientPolicy`). The
 Relay enforces the read-only action list itself.

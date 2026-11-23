@@ -1,10 +1,12 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
-import type {
-  CliAccessDuration,
-  CliAccessMode,
-  CliDeviceCodeResponse,
-  CliDeviceTokenResponse,
+import {
+  cliAccessTokenPrefix,
+  couldBeCliAccessToken,
+  type CliAccessDuration,
+  type CliAccessMode,
+  type CliDeviceCodeResponse,
+  type CliDeviceTokenResponse,
 } from "@workspace/contracts"
 import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
@@ -241,7 +243,7 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
 
     const database = yield* Database
     const credentialId = randomUUID()
-    const accessToken = `kiln_cli_${randomBytes(32).toString("base64url")}`
+    const accessToken = `${cliAccessTokenPrefix}${randomBytes(32).toString("base64url")}`
     const now = yield* Clock.currentTimeMillis
     const credentialExpiresAt = expirationForDuration(input.duration, now)
     yield* database.transaction("cli.device.approve", (transaction) =>
@@ -486,7 +488,7 @@ export const pollCliDeviceTokenEffect = Effect.fn("cli.device.poll")(function* (
 
 export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
   function* (accessToken: string) {
-    if (!accessToken.startsWith("kiln_cli_") || accessToken.length > 256) {
+    if (!couldBeCliAccessToken(accessToken)) {
       return yield* authenticationRequired()
     }
     const database = yield* Database

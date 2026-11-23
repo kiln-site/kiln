@@ -16,7 +16,8 @@ import { constants as fsConstants } from "node:fs"
 import type { Stats } from "node:fs"
 import type { AddressInfo } from "node:net"
 import { dirname, posix, resolve, sep } from "node:path"
-import { Effect, Fiber, Semaphore } from "effect"
+import { couldBeCliAccessToken } from "@workspace/contracts"
+import { Effect, Fiber, Metric, Semaphore } from "effect"
 import ssh2 from "ssh2"
 import type { Attributes, Connection, FileEntry, SFTPWrapper } from "ssh2"
 import type { FileHandle } from "node:fs/promises"
@@ -35,6 +36,13 @@ const MAX_DIRECTORY_ENTRIES = 10_000
 const MAX_SFTP_CONNECTIONS = 64
 const HOST_KEY_GENERATION_ATTEMPTS = 8
 const DIRECTORY_MODE = fsConstants.S_IFDIR | 0o755
+// The Relay's SFTP port is usually open to the internet, so most of these are
+// bots guessing passwords. Only a refused token reached Hearth.
+const failedLogins = Metric.counter("relay.sftp.logins.failed", {
+  description: "SFTP logins the Relay refused",
+  attributes: { unit: "{login}" },
+  incremental: true,
+})
 const { Server, utils } = ssh2
 const { OPEN_MODE, STATUS_CODE } = utils.sftp
 
@@ -141,6 +149,7 @@ export async function attachSftpServer(options: {
           options.config.sftpDevAuthentication
         )
         if (!authentication) {
+          countFailedLogin("not_a_token")
           context.reject(["password"])
           return
         }
@@ -157,6 +166,7 @@ export async function attachSftpServer(options: {
             Effect.match({
               onSuccess: (authorized) => {
                 if (!authorized.length) {
+                  countFailedLogin("refused")
                   context.reject(["password"])
                   return
                 }
@@ -1207,7 +1217,14 @@ function resolveSftpAuthentication(
   if (developmentAuthentication && safeEqual(password, DEVELOPMENT_PASSWORD)) {
     return { credential: undefined }
   }
-  return password.length === 0 ? null : { credential: password }
+  // Hearth would refuse anything else, so a guessed password stops here.
+  return couldBeCliAccessToken(password) ? { credential: password } : null
+}
+
+function countFailedLogin(reason: "not_a_token" | "refused"): void {
+  Effect.runSync(
+    Metric.update(Metric.withAttributes(failedLogins, { reason }), 1)
+  )
 }
 
 function record(value: unknown): Readonly<Record<string, unknown>> | null {
