@@ -12,7 +12,7 @@ import type {
   BackupTarget,
   BackupTaskStatus,
   BackupTargetKind,
-  RelayBackupTask,
+  RelayBackupTaskReport,
 } from "@workspace/contracts"
 import {
   backupArtifactFilename,
@@ -1050,7 +1050,7 @@ const targetOfAnotherRelay = Effect.fnUntraced(function* (
 const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   relayId: string,
-  task: RelayBackupTask,
+  task: RelayBackupTaskReport,
   now: number
 ) {
   if (
@@ -1504,7 +1504,7 @@ const backupStatusFromCopies = Effect.fnUntraced(function* (
  * own Relay alone, so no other Relay reports one honestly.
  */
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
-  function* (task: RelayBackupTask, relayId: string) {
+  function* (task: RelayBackupTaskReport, relayId: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     let changed = false
@@ -4817,7 +4817,7 @@ export function backupReservation(input: {
 
 export function shouldApplyRelayBackupTaskSnapshot(
   current: BackupTaskReconcileState,
-  incoming: Pick<RelayBackupTask, "bytesCompleted" | "status" | "updatedAt">
+  incoming: Pick<RelayBackupTaskReport, "bytesCompleted" | "status" | "updatedAt">
 ): boolean {
   if (
     isTerminalBackupTaskStatus(current.status) &&

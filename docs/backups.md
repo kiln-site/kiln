@@ -300,7 +300,10 @@ by hand or on a schedule: a Relay is never given a bucket's keys for one
 (see [Scheduled backups](#scheduled-backups)). Incremental restic
 repositories cannot be driven with presigned URLs, so Relay receives the
 destination's static keys inside the durable task input (see
-[Incremental snapshots](#incremental-snapshots)). A full archive is
+[Incremental snapshots](#incremental-snapshots)). A Relay reports its tasks
+to Hearth without those keys, repository passwords or the signed links it
+was given (`uploadUrl`, `downloadUrl`, `deleteUrl`): Hearth issued the links
+and never reads them back. A full archive is
 staged locally, its size and digest validated, then uploaded in a single
 request, so it has a 5 GiB ceiling; the single queue plus a free-space
 preflight keeps staging bounded. Restic S3 pack writes aren't subject to that

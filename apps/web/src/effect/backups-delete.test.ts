@@ -2,7 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
-import { relayBackupTaskSchema } from "@workspace/contracts"
+import { relayBackupTaskReportSchema } from "@workspace/contracts"
 
 import {
   listDispatchableBackupTasksEffect,
@@ -160,7 +160,7 @@ describeMysql("deleting backups whatever their state", () => {
           // Cancelled on its Relay: the delete goes, and a second request
           // to delete it sends the same task rather than another.
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -221,7 +221,7 @@ describeMysql("deleting backups whatever their state", () => {
 
           // The create finished before the cancel reached it.
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 2048,
               bytesTotal: 2048,
@@ -261,7 +261,7 @@ describeMysql("deleting backups whatever their state", () => {
 
           // Its delete then fails: the backup is whole again.
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -312,7 +312,7 @@ describeMysql("deleting backups whatever their state", () => {
           })
           assert.strictEqual(reservation.kind, "dispatch")
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,

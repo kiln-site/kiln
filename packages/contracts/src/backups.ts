@@ -413,7 +413,13 @@ const backupCreateTaskInputObjectSchema = z
   .strict()
 
 function refineResticCreateInput(
-  input: z.infer<typeof backupCreateTaskInputObjectSchema>,
+  input: Omit<
+    z.infer<typeof backupCreateTaskInputObjectSchema>,
+    "destination" | "replicas"
+  > & {
+    readonly destination: { readonly kind: string }
+    readonly replicas?: ReadonlyArray<unknown> | undefined
+  },
   context: z.RefinementCtx
 ) {
   const resource = input.target.kind === "volume"
@@ -565,17 +571,20 @@ export const backupS3DeleteDestinationSchema =
     deleteUrl: backupHttpsUrlSchema,
   })
 
-export const backupDeleteTaskInputSchema = z
+const backupResticDeleteDestinationSchema =
+  backupResticDestinationSchema.extend({
+    createTaskId: backupTaskIdSchema.optional(),
+    snapshotId: resticSnapshotIdSchema.optional(),
+  })
+
+const backupDeleteTaskInputObjectSchema = z
   .object({
     archive: backupArchiveIdentitySchema.optional(),
     backupId: backupIdSchema,
     destination: z.discriminatedUnion("kind", [
       backupLocalDestinationSchema,
       backupS3DeleteDestinationSchema,
-      backupResticDestinationSchema.extend({
-        createTaskId: backupTaskIdSchema.optional(),
-        snapshotId: resticSnapshotIdSchema.optional(),
-      }),
+      backupResticDeleteDestinationSchema,
     ]),
     replicas: z
       .array(
@@ -590,26 +599,38 @@ export const backupDeleteTaskInputSchema = z
     taskId: backupTaskIdSchema,
   })
   .strict()
-  .superRefine((input, context) => {
-    if (input.destination.kind !== "restic") return
-    if ((input.replicas?.length ?? 0) > 0) {
-      context.addIssue({
-        code: "custom",
-        message: "Restic deletes cannot target additional destinations",
-        path: ["replicas"],
-      })
-    }
-    const hasSnapshot = input.destination.snapshotId !== undefined
-    const hasCreateTask = input.destination.createTaskId !== undefined
-    if (hasSnapshot === hasCreateTask) {
-      context.addIssue({
-        code: "custom",
-        message:
-          "Restic deletes require exactly one of snapshotId or createTaskId",
-        path: ["destination", hasSnapshot ? "createTaskId" : "snapshotId"],
-      })
-    }
-  })
+
+function refineDeleteInput(
+  input: {
+    readonly destination:
+      | { readonly kind: "local" | "s3" }
+      | z.infer<typeof backupResticDeleteDestinationSchema>
+    readonly replicas?: ReadonlyArray<unknown> | undefined
+  },
+  context: z.RefinementCtx
+) {
+  if (input.destination.kind !== "restic") return
+  if ((input.replicas?.length ?? 0) > 0) {
+    context.addIssue({
+      code: "custom",
+      message: "Restic deletes cannot target additional destinations",
+      path: ["replicas"],
+    })
+  }
+  const hasSnapshot = input.destination.snapshotId !== undefined
+  const hasCreateTask = input.destination.createTaskId !== undefined
+  if (hasSnapshot === hasCreateTask) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "Restic deletes require exactly one of snapshotId or createTaskId",
+      path: ["destination", hasSnapshot ? "createTaskId" : "snapshotId"],
+    })
+  }
+}
+
+export const backupDeleteTaskInputSchema =
+  backupDeleteTaskInputObjectSchema.superRefine(refineDeleteInput)
 
 export const BACKUP_EXPORT_TTL_MIN_MS = 60_000
 export const BACKUP_EXPORT_TTL_MAX_MS = 7 * 24 * 60 * 60 * 1_000
@@ -652,6 +673,62 @@ export const backupTaskInputSchema = z.discriminatedUnion("kind", [
     .superRefine(refineResticCreateInput),
   backupRestoreTaskInputSchema.extend({ kind: z.literal("restore") }),
   backupDeleteTaskInputSchema.extend({ kind: z.literal("delete") }),
+  backupExportTaskInputSchema.extend({ kind: z.literal("export") }),
+  backupPruneTaskInputSchema.extend({ kind: z.literal("prune") }),
+])
+
+// A task's input as a Relay reports it: without the signed links Hearth gave
+// it to do the work (`uploadUrl`, `downloadUrl`, `deleteUrl`). Hearth issued
+// them and never reads them back, and each is a live capability.
+const backupS3SignedReportDestinationSchema =
+  backupS3PresignedUploadDestinationSchema.omit({ uploadUrl: true })
+const backupArchiveReportDestinationSchema = z.union([
+  backupLocalDestinationSchema,
+  backupS3SignedReportDestinationSchema,
+  backupS3CredentialUploadDestinationSchema,
+])
+
+export const backupTaskReportInputSchema = z.discriminatedUnion("kind", [
+  backupCreateTaskInputObjectSchema
+    .extend({
+      destination: z.union([
+        backupArchiveReportDestinationSchema,
+        backupResticDestinationSchema,
+      ]),
+      kind: z.literal("create"),
+      replicas: z
+        .array(backupArchiveReportDestinationSchema)
+        .max(15)
+        .optional(),
+    })
+    .superRefine(refineResticCreateInput),
+  backupRestoreTaskInputSchema.extend({
+    kind: z.literal("restore"),
+    source: z.discriminatedUnion("kind", [
+      backupLocalSourceSchema,
+      backupRemoteSourceSchema.omit({ downloadUrl: true }),
+      backupResticSourceSchema,
+    ]),
+  }),
+  backupDeleteTaskInputObjectSchema
+    .extend({
+      destination: z.discriminatedUnion("kind", [
+        backupLocalDestinationSchema,
+        backupS3SignedReportDestinationSchema,
+        backupResticDeleteDestinationSchema,
+      ]),
+      kind: z.literal("delete"),
+      replicas: z
+        .array(
+          z.discriminatedUnion("kind", [
+            backupLocalDestinationSchema,
+            backupS3SignedReportDestinationSchema,
+          ])
+        )
+        .max(15)
+        .optional(),
+    })
+    .superRefine(refineDeleteInput),
   backupExportTaskInputSchema.extend({ kind: z.literal("export") }),
   backupPruneTaskInputSchema.extend({ kind: z.literal("prune") }),
 ])
@@ -933,7 +1010,7 @@ export type BackupTaskCancelRequest = z.infer<
   typeof backupTaskCancelRequestSchema
 >
 
-export const relayBackupTaskSchema = z
+const relayBackupTaskObjectSchema = z
   .object({
     backupId: backupIdSchema,
     bytesCompleted: z.number().int().nonnegative(),
@@ -955,58 +1032,74 @@ export const relayBackupTaskSchema = z
     updatedAt: z.number().int().nonnegative(),
   })
   .strict()
-  .superRefine((task, context) => {
-    if (
-      task.kind !== task.input.kind ||
-      task.backupId !== task.input.backupId ||
-      task.taskId !== task.input.taskId
-    ) {
+
+function refineRelayBackupTask(
+  task: Omit<z.infer<typeof relayBackupTaskObjectSchema>, "input"> & {
+    readonly input: BackupTaskInput | BackupTaskReportInput
+  },
+  context: z.RefinementCtx
+) {
+  if (
+    task.kind !== task.input.kind ||
+    task.backupId !== task.input.backupId ||
+    task.taskId !== task.input.taskId
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "Backup task metadata must match its input",
+    })
+  }
+  if (task.status !== "succeeded") return
+  if (!task.result) {
+    context.addIssue({
+      code: "custom",
+      message: "Succeeded backup tasks require a result",
+    })
+    return
+  }
+  if (task.kind === "create" && task.input.kind === "create") {
+    const restic = task.input.destination.kind === "restic"
+    if (restic && !isResticCreateTaskResult(task.result)) {
       context.addIssue({
         code: "custom",
-        message: "Backup task metadata must match its input",
+        message: "Succeeded restic create tasks require a snapshot result",
       })
     }
-    if (task.status !== "succeeded") return
-    if (!task.result) {
+    if (!restic && !isArchiveCreateTaskResult(task.result)) {
       context.addIssue({
         code: "custom",
-        message: "Succeeded backup tasks require a result",
-      })
-      return
-    }
-    if (task.kind === "create" && task.input.kind === "create") {
-      const restic = task.input.destination.kind === "restic"
-      if (restic && !isResticCreateTaskResult(task.result)) {
-        context.addIssue({
-          code: "custom",
-          message: "Succeeded restic create tasks require a snapshot result",
-        })
-      }
-      if (!restic && !isArchiveCreateTaskResult(task.result)) {
-        context.addIssue({
-          code: "custom",
-          message: "Succeeded create tasks require an artifact result",
-        })
-      }
-    }
-    if (task.kind === "export" && !isExportTaskResult(task.result)) {
-      context.addIssue({
-        code: "custom",
-        message: "Succeeded export tasks require a staged archive result",
+        message: "Succeeded create tasks require an artifact result",
       })
     }
-    if (
-      (task.kind === "restore" ||
-        task.kind === "delete" ||
-        task.kind === "prune") &&
-      !isBackupOperationTaskResult(task.result)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Backup operation tasks cannot return an artifact result",
-      })
-    }
-  })
+  }
+  if (task.kind === "export" && !isExportTaskResult(task.result)) {
+    context.addIssue({
+      code: "custom",
+      message: "Succeeded export tasks require a staged archive result",
+    })
+  }
+  if (
+    (task.kind === "restore" ||
+      task.kind === "delete" ||
+      task.kind === "prune") &&
+    !isBackupOperationTaskResult(task.result)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "Backup operation tasks cannot return an artifact result",
+    })
+  }
+}
+
+/** A task as the Relay holds it, with all it needs to do the work. */
+export const relayBackupTaskSchema = relayBackupTaskObjectSchema.superRefine(
+  refineRelayBackupTask
+)
+
+/** A task as a Relay reports it to Hearth: without secrets or signed links. */
+export const relayBackupTaskReportSchema = relayBackupTaskObjectSchema
+  .extend({ input: backupTaskReportInputSchema })
+  .superRefine(refineRelayBackupTask)
 
 export type BackupArtifactKind = z.infer<typeof backupArtifactKindSchema>
 export type BackupConsistency = z.infer<typeof backupConsistencySchema>
@@ -1043,11 +1136,13 @@ export type BackupStatus = z.infer<typeof backupStatusSchema>
 export type BackupTarget = z.infer<typeof backupTargetSchema>
 export type BackupTargetKind = z.infer<typeof backupTargetKindSchema>
 export type BackupTaskInput = z.infer<typeof backupTaskInputSchema>
+export type BackupTaskReportInput = z.infer<typeof backupTaskReportInputSchema>
 export type BackupTaskKind = z.infer<typeof backupTaskKindSchema>
 export type BackupTaskPhase = z.infer<typeof backupTaskPhaseSchema>
 export type BackupTaskResult = z.infer<typeof backupTaskResultSchema>
 export type BackupTaskStatus = z.infer<typeof backupTaskStatusSchema>
 export type RelayBackupTask = z.infer<typeof relayBackupTaskSchema>
+export type RelayBackupTaskReport = z.infer<typeof relayBackupTaskReportSchema>
 
 /** Where Hearth's read of a Relay's backup tasks is up to. */
 export const backupTaskListCursorSchema = z
@@ -1077,12 +1172,14 @@ export type BackupTaskListRequest = z.infer<typeof backupTaskListRequestSchema>
  */
 export const backupTaskListResponseSchema = z
   .object({
-    changed: z.array(relayBackupTaskSchema),
-    current: z.array(relayBackupTaskSchema),
+    changed: z.array(relayBackupTaskReportSchema),
+    current: z.array(relayBackupTaskReportSchema),
     next: backupTaskListCursorSchema.nullable(),
   })
   .strict()
-export type BackupTaskListResponse = z.infer<typeof backupTaskListResponseSchema>
+export type BackupTaskListResponse = z.infer<
+  typeof backupTaskListResponseSchema
+>
 
 const BACKUP_ARTIFACT_EXTENSIONS = {
   archive: "zip",
@@ -1133,25 +1230,47 @@ const BACKUP_SECRET_KEYS = new Set([
   "secretAccessKey",
 ])
 
-export function redactBackupTaskInput(input: BackupTaskInput): BackupTaskInput {
-  return backupTaskInputSchema.parse(omitBackupSecrets(input))
+// The signed links a Relay is given to do a task's work.
+const BACKUP_SIGNED_URL_KEYS = new Set([
+  "deleteUrl",
+  "downloadUrl",
+  "uploadUrl",
+])
+const BACKUP_REPORT_OMITTED_KEYS = new Set([
+  ...BACKUP_SECRET_KEYS,
+  ...BACKUP_SIGNED_URL_KEYS,
+])
+
+/** A task's input as a Relay reports it: without secrets or signed links. */
+export function redactBackupTaskInput(
+  input: BackupTaskInput
+): BackupTaskReportInput {
+  return backupTaskReportInputSchema.parse(
+    omitBackupKeys(input, BACKUP_REPORT_OMITTED_KEYS)
+  )
 }
 
-/** A task as a Relay sends it: without secrets. */
+/** A task as a Relay sends it: without secrets or signed links. */
 export function redactRelayBackupTask(task: RelayBackupTask): unknown {
-  return relayBackupTaskSchema.parse({
+  return relayBackupTaskReportSchema.parse({
     ...task,
     input: redactBackupTaskInput(task.input),
   })
 }
 
 export function omitBackupSecrets(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(omitBackupSecrets)
+  return omitBackupKeys(value, BACKUP_SECRET_KEYS)
+}
+
+function omitBackupKeys(value: unknown, keys: ReadonlySet<string>): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => omitBackupKeys(entry, keys))
+  }
   if (value === null || typeof value !== "object") return value
   const result: Record<string, unknown> = {}
   for (const [key, entry] of Object.entries(value)) {
-    if (BACKUP_SECRET_KEYS.has(key)) continue
-    result[key] = omitBackupSecrets(entry)
+    if (keys.has(key)) continue
+    result[key] = omitBackupKeys(entry, keys)
   }
   return result
 }
