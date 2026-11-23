@@ -20,6 +20,9 @@ importers:
       '@xterm/headless':
         specifier: 6.0.0
         version: 6.0.0
+      compress-commons:
+        specifier: 7.0.1
+        version: 7.0.1
       effect:
         specifier: 4.1.0
         version: 4.1.0

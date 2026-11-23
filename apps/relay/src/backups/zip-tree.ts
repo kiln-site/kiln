@@ -46,7 +46,7 @@ export function zipTree(
     })
     const add = (
       name: string,
-      source: Readable | Buffer,
+      open: () => Readable | Buffer,
       metadata: { mode: number; mtime: Date },
       stored: boolean
     ) =>
@@ -59,10 +59,15 @@ export function zipTree(
           return Effect.fail(new UnzippableEntryError({ name }))
         }
         entry.setTime(metadata.mtime)
-        entry.setExtra(modifiedField(metadata.mtime))
+        // A large entry's sizes take the place of what `setExtra` was given.
+        const modified = modifiedField(metadata.mtime)
+        const extra = () => Buffer.concat([entry.getExtra(), modified])
+        entry.getLocalFileDataExtra = extra
+        entry.getCentralDirectoryExtra = extra
         entry.setUnixMode(metadata.mode)
         if (stored) entry.setMethod(0)
         return Effect.callback<void, Error>((resume) => {
+          const source = open()
           archive.entry(entry, source, (cause) => {
             resume(cause ? Effect.fail(cause) : Effect.void)
           })
@@ -82,13 +87,13 @@ export function zipTree(
           const metadata = yield* promiseEffect(() => lstat(path))
           const name = `${prefix}${child}`
           if (metadata.isDirectory()) {
-            yield* add(`${name}/`, Buffer.alloc(0), metadata, true)
+            yield* add(`${name}/`, () => Buffer.alloc(0), metadata, true)
             yield* visit(path, `${name}/`)
           } else if (metadata.isSymbolicLink()) {
             const target = yield* promiseEffect(() => readlink(path))
-            yield* add(name, Buffer.from(target), metadata, true)
+            yield* add(name, () => Buffer.from(target), metadata, true)
           } else if (metadata.isFile()) {
-            yield* add(name, createReadStream(path), metadata, false)
+            yield* add(name, () => createReadStream(path), metadata, false)
           } else {
             return yield* new UnzippableEntryError({ name })
           }

@@ -8,6 +8,7 @@
     "@peculiar/x509": "2.1.0",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
+    "compress-commons": "7.0.1",
     "effect": "4.1.0",
     "minimatch": "10.2.6",
     "mysql2": "3.24.5",
