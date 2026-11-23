@@ -264,9 +264,15 @@ export class ScheduleManager {
     })
   }
 
-  overview(scheduleIds?: ReadonlyArray<string>) {
+  overview(
+    scheduleIds?: ReadonlyArray<string>,
+    options?: { readonly history?: boolean }
+  ) {
     return Effect.runPromise(
-      this.#options.state.overview(scheduleIds?.map((id) => z.uuid().parse(id)))
+      this.#options.state.overview(
+        scheduleIds?.map((id) => z.uuid().parse(id)),
+        options
+      )
     )
   }
 

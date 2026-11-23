@@ -3416,7 +3416,9 @@ async function executeControlRequest(
             return value
           })
         : undefined
-      return scheduleManager.overview(scheduleIds)
+      return scheduleManager.overview(scheduleIds, {
+        history: payload.history !== false,
+      })
     }
     case "instance.create": {
       if (!config.canProvisionInstances) {
