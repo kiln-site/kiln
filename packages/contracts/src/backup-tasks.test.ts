@@ -4,6 +4,9 @@ import {
   backupTaskInputSchema,
   omitBackupSecrets,
   redactBackupTaskInput,
+  redactRelayBackupTask,
+  relayBackupTaskReportSchema,
+  relayBackupTaskSchema,
   resticRepositoryLocationSchema,
 } from "./backups.js"
 
@@ -114,5 +117,69 @@ describe("Relay backup task inputs", () => {
     })
 
     expect(JSON.stringify(redacted)).not.toMatch(/AKIAEXAMPLE|s3-secret/u)
+  })
+
+  // A signed link is a live capability Hearth issued: the Relay uses it and
+  // sends it nowhere.
+  it("sends Hearth tasks without the signed links they were given", () => {
+    const signed = (name: string) =>
+      `https://s3.example.test/${name}?X-Amz-Signature=signed-${name}`
+    const s3 = (name: string, link: "deleteUrl" | "uploadUrl") => ({
+      headers: { "content-type": "application/zip" },
+      kind: "s3",
+      objectKey: `team/backups/${name}.zip`,
+      [link]: signed(name),
+    })
+    const task = (input: Record<string, unknown>) =>
+      relayBackupTaskSchema.parse({
+        backupId,
+        bytesCompleted: 0,
+        bytesTotal: null,
+        createdAt: 1,
+        error: null,
+        finishedAt: null,
+        input: { backupId, target, taskId, ...input },
+        inputRefreshRequired: false,
+        kind: input.kind,
+        result: null,
+        startedAt: null,
+        status: "queued",
+        taskId,
+        updatedAt: 1,
+      })
+
+    for (const held of [
+      task({
+        artifactKind: "archive",
+        destination: s3("upload", "uploadUrl"),
+        exclude: [],
+        kind: "create",
+        maxBytes: null,
+        mode: "full",
+        reason: "manual",
+        replicas: [s3("upload-copy", "uploadUrl")],
+      }),
+      task({
+        kind: "restore",
+        source: {
+          bytes: 1,
+          checksumSha256: "a".repeat(64),
+          downloadUrl: signed("download"),
+          kind: "remote",
+        },
+      }),
+      task({
+        destination: s3("delete", "deleteUrl"),
+        kind: "delete",
+        replicas: [s3("delete-copy", "deleteUrl")],
+      }),
+    ]) {
+      const sent = redactRelayBackupTask(held)
+      expect(JSON.stringify(sent)).not.toMatch(/signed-|X-Amz-Signature/u)
+      expect(relayBackupTaskReportSchema.parse(sent)).toMatchObject({
+        input: { kind: held.kind, target },
+        taskId,
+      })
+    }
   })
 })

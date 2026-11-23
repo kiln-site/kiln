@@ -3,9 +3,9 @@ import { logException } from "@workspace/telemetry"
 
 import {
   backupTaskListResponseSchema,
-  relayBackupTaskSchema,
+  relayBackupTaskReportSchema,
   type BackupTaskListCursor,
-  type RelayBackupTask,
+  type RelayBackupTaskReport,
 } from "@workspace/contracts"
 
 import {
@@ -130,9 +130,9 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       readAt === null
         ? undefined
         : { taskId: "", updatedAt: Math.max(0, readAt - READ_AGAIN_MS) }
-    const relayTasksById = new Map<string, RelayBackupTask>()
-    const changed: Array<RelayBackupTask> = []
-    let current: ReadonlyArray<RelayBackupTask> = []
+    const relayTasksById = new Map<string, RelayBackupTaskReport>()
+    const changed: Array<RelayBackupTaskReport> = []
+    let current: ReadonlyArray<RelayBackupTaskReport> = []
     let read = 0
     let pages = 0
     for (;;) {
@@ -240,7 +240,7 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
 // earlier one from those watching, or a finished backup from its checks.
 const applied = Effect.fnUntraced(function* (
   relay: PersistedRelay,
-  tasks: ReadonlyArray<RelayBackupTask>
+  tasks: ReadonlyArray<RelayBackupTaskReport>
 ) {
   const changed = yield* reconcileTasks(relay, tasks)
   publishBackupChanges(
@@ -275,7 +275,7 @@ const applied = Effect.fnUntraced(function* (
 // records.
 const reconcileTasks = Effect.fnUntraced(function* (
   relay: PersistedRelay,
-  tasks: ReadonlyArray<RelayBackupTask>
+  tasks: ReadonlyArray<RelayBackupTaskReport>
 ) {
   const settled = yield* Effect.forEach(
     tasks,
@@ -312,9 +312,9 @@ const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
     // The IDs this pass asked the Relay about.
     readonly asked: ReadonlySet<string>
     // Every task the Relay has queued or running, and those asked about.
-    readonly current: ReadonlyArray<RelayBackupTask>
+    readonly current: ReadonlyArray<RelayBackupTaskReport>
     // What the Relay holds under each ID this pass heard of.
-    readonly held: ReadonlyMap<string, RelayBackupTask>
+    readonly held: ReadonlyMap<string, RelayBackupTaskReport>
     readonly subject: string | undefined
   }
 ) {
@@ -353,7 +353,7 @@ const stopCreatesOfDeletedBackups = Effect.fnUntraced(function* (
  * it: for that backup, of that kind, for that resource.
  */
 export function relayHoldsTask(
-  relayTask: RelayBackupTask,
+  relayTask: RelayBackupTaskReport,
   sent: {
     backupId: string
     kind: string
@@ -376,7 +376,7 @@ export function relayHoldsTask(
 export const relayTaskReply = (reply: unknown, taskId: string) =>
   Effect.try({
     try: () => {
-      const task = relayBackupTaskSchema.parse(reply)
+      const task = relayBackupTaskReportSchema.parse(reply)
       if (task.taskId !== taskId) {
         throw new Error("The Relay answered about another backup task")
       }
@@ -391,7 +391,7 @@ const cancelCreateEffect = Effect.fn("Backups.cancelCreate")(function* (
   createTaskId: string,
   subject?: string,
   // What the Relay listed under the create's ID, when Hearth has read it.
-  listed?: RelayBackupTask
+  listed?: RelayBackupTaskReport
 ) {
   yield* Effect.annotateCurrentSpan({
     "relay.id": relay.id,

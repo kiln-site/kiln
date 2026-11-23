@@ -2,7 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
-import { relayBackupTaskSchema } from "@workspace/contracts"
+import { relayBackupTaskReportSchema } from "@workspace/contracts"
 
 import {
   reconcileBackupTaskEffect,
@@ -61,7 +61,7 @@ const seedRunning = Effect.gen(function* () {
   })
 })
 
-const finishedCreate = relayBackupTaskSchema.parse({
+const finishedCreate = relayBackupTaskReportSchema.parse({
   backupId,
   bytesCompleted: 2048,
   bytesTotal: 2048,
@@ -116,7 +116,7 @@ const scheduledReport = (ids: {
   target?: { id: string; kind: "database" | "instance" }
   taskId: string
 }) =>
-  relayBackupTaskSchema.parse({
+  relayBackupTaskReportSchema.parse({
     backupId: ids.backupId,
     bytesCompleted: 0,
     bytesTotal: null,
@@ -160,7 +160,7 @@ describeMysql("Relay backup reports", () => {
           // Reported again, newer: failed, then succeeded at another size.
           assert.isFalse(
             yield* reconcileBackupTaskEffect(
-              relayBackupTaskSchema.parse({
+              relayBackupTaskReportSchema.parse({
                 ...finishedCreate,
                 error: "The archive could not be written",
                 result: null,
@@ -172,7 +172,7 @@ describeMysql("Relay backup reports", () => {
           )
           assert.isFalse(
             yield* reconcileBackupTaskEffect(
-              relayBackupTaskSchema.parse({
+              relayBackupTaskReportSchema.parse({
                 ...finishedCreate,
                 bytesCompleted: 4096,
                 bytesTotal: 4096,
@@ -215,7 +215,7 @@ describeMysql("Relay backup reports", () => {
           // The Relay has said it holds the create, queued; then Hearth,
           // failing to send it again, records it failed.
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               ...finishedCreate,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -278,7 +278,7 @@ describeMysql("Relay backup reports", () => {
         // The backup's own Relay reports its create as a delete that
         // succeeded.
         const changed = yield* reconcileBackupTaskEffect(
-          relayBackupTaskSchema.parse({
+          relayBackupTaskReportSchema.parse({
             backupId,
             bytesCompleted: 0,
             bytesTotal: null,
@@ -318,7 +318,7 @@ describeMysql("Relay backup reports", () => {
         // Its create reported finished, naming another game server.
         assert.isFalse(
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               ...finishedCreate,
               input: { ...finishedCreate.input, target: elsewhere },
             }),
@@ -340,7 +340,7 @@ describeMysql("Relay backup reports", () => {
         })
         assert.isFalse(
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -410,7 +410,7 @@ describeMysql("Relay backup reports", () => {
           [20, []],
         ] as const) {
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               ...finishedCreate,
               result: { ...finishedCreate.result, artifacts },
               updatedAt: now + later,
@@ -447,7 +447,7 @@ describeMysql("Relay backup reports", () => {
           taskId: string,
           into: { id: string; kind: "instance" }
         ) =>
-          relayBackupTaskSchema.parse({
+          relayBackupTaskReportSchema.parse({
             backupId,
             bytesCompleted: 2048,
             bytesTotal: 2048,
@@ -498,7 +498,7 @@ describeMysql("Relay backup reports", () => {
         // parse names no resource it knows, and still ends the task.
         assert.isTrue(
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               ...restored(restores[1], { id: "unknown", kind: "instance" }),
               error: "The Relay journal row could not be parsed",
               result: null,

@@ -5,7 +5,7 @@ import { afterAll, vi } from "vite-plus/test"
 
 import type { BackupStorageError } from "@/effect/errors"
 
-import { relayBackupTaskSchema } from "@workspace/contracts"
+import { relayBackupTaskReportSchema } from "@workspace/contracts"
 
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import {
@@ -196,7 +196,7 @@ const createReport = (
   artifacts?: Array<{ artifactId: string }>,
   report: { bytes?: number; finishedAt?: number | null } = {}
 ) =>
-  relayBackupTaskSchema.parse({
+  relayBackupTaskReportSchema.parse({
     backupId,
     bytesCompleted: report.bytes ?? uploaded,
     bytesTotal: report.bytes ?? uploaded,
@@ -210,7 +210,6 @@ const createReport = (
         artifactId: bucketCopy,
         kind: "s3",
         objectKey,
-        uploadUrl: "https://s3.example.test/upload",
       },
       exclude: [],
       kind: "create",
@@ -490,7 +489,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
           const report = createReport(10)
           assert.isTrue(
             (yield* reconcileBackupTaskEffect(
-              relayBackupTaskSchema.parse({
+              relayBackupTaskReportSchema.parse({
                 ...report,
                 error: "The upload failed",
                 result: null,
@@ -667,7 +666,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
 
         // The delete ends, but the bucket refused to delete the copy.
         yield* reconcileBackupTaskEffect(
-          relayBackupTaskSchema.parse({
+          relayBackupTaskReportSchema.parse({
             backupId,
             bytesCompleted: 0,
             bytesTotal: null,
@@ -902,7 +901,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
             taskId: deleteTaskId,
           })
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -1023,7 +1022,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
           })
           bucket.objects.delete(objectKey)
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -1073,7 +1072,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
             taskId: deleteTaskId,
           })
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               backupId,
               bytesCompleted: 0,
               bytesTotal: null,
@@ -1195,7 +1194,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
         })
 
         yield* reconcileBackupTaskEffect(
-          relayBackupTaskSchema.parse({
+          relayBackupTaskReportSchema.parse({
             backupId,
             bytesCompleted: 0,
             bytesTotal: null,
@@ -1264,7 +1263,7 @@ describeMysql("Bucket copies Hearth looks for", () => {
           // The Relay has said it holds the create, queued.
           const queued = createReport(2)
           yield* reconcileBackupTaskEffect(
-            relayBackupTaskSchema.parse({
+            relayBackupTaskReportSchema.parse({
               ...queued,
               bytesCompleted: 0,
               bytesTotal: null,

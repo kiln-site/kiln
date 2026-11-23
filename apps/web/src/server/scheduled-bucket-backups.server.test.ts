@@ -2,6 +2,8 @@ import { assert, layer } from "@effect/vitest"
 import {
   backupArtifactFilename,
   backupTaskInputSchema,
+  redactRelayBackupTask,
+  relayBackupTaskReportSchema,
   relayBackupTaskSchema,
 } from "@workspace/contracts"
 import {
@@ -30,6 +32,12 @@ import { takeScheduledBucketBackups } from "@/server/scheduled-bucket-backups.se
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRelay, selectRows } from "@/test/seed"
 import { relayBackupTaskPage } from "@/test/relay-backup-tasks"
+
+// A task as the Relay sends it, without the signed link it was given.
+const reported = (task: unknown) =>
+  relayBackupTaskReportSchema.parse(
+    redactRelayBackupTask(relayBackupTaskSchema.parse(task))
+  )
 
 // The Relay is the only boundary. It takes a schedule and a backup task as
 // a Relay does, refusing what it can't parse, and keeps what it was sent.
@@ -104,12 +112,14 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       await relay.listingHeld
       relay.listing -= 1
       return relayBackupTaskPage(
-        held.map((task) => ({
-          ...task,
-          error: "This Relay makes no backups",
-          finishedAt: at,
-          status: "failed",
-        })),
+        held.map((task) =>
+          reported({
+            ...task,
+            error: "This Relay makes no backups",
+            finishedAt: at,
+            status: "failed",
+          })
+        ),
         payload
       )
     }
@@ -137,7 +147,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         updatedAt: at,
       }
       relay.tasks.set(input.taskId, task)
-      return task
+      return reported(task)
     }
     throw new Error(`Unexpected Relay request ${operation}`)
   },
@@ -562,7 +572,7 @@ describeMysql("A schedule's backups to a bucket", () => {
           )
           // The one it leaves out isn't news when it is reported again, as
           // the Relay reports it on every pass.
-          const inBucket = relayBackupTaskSchema.parse(
+          const inBucket = reported(
             relay.tasks.get("00000001-0000-4000-8000-000000000002")
           )
           assert.isFalse(yield* reconcileBackupTaskEffect(inBucket, relayId))

@@ -2,7 +2,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { relayBackupTaskSchema } from "@workspace/contracts"
+import { relayBackupTaskReportSchema } from "@workspace/contracts"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
 
@@ -184,7 +184,7 @@ describeMysql("A Relay's answer about a backup task", () => {
             await runAppEffect(
               "test.success",
               reconcileBackupTaskEffect(
-                relayBackupTaskSchema.parse({
+                relayBackupTaskReportSchema.parse({
                   ...createTask(first, "queued"),
                   bytesCompleted: 2048,
                   bytesTotal: 2048,
