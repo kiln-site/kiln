@@ -109,7 +109,7 @@ export type BackupDestinationTaskDriver<
     Database
   >
   prepareResticRepository: (input: {
-    objectPrefix: string | null
+    repositoryId: string
     requireEnabled: boolean
     storageId: string | null
   }) => Effect.Effect<ResticRepositoryLocation, unknown, Database>

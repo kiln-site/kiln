@@ -2067,7 +2067,63 @@ const migrations = SqliteMigrator.fromRecord({
       `
     }
   }),
+  // Hearth signs each request to a restic repository in a bucket, so a
+  // schedule or task names the repository and holds nothing of the bucket.
+  // Every stored one came with where it is, and any not yet finished with
+  // the bucket's keys. All of them are rewritten, finished ones too, so each
+  // can still be read and what waits still runs.
+  "52_repository_bucket_keys": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const schedules = yield* sql<{ id: string; json: string }>`
+      SELECT schedule_id AS id, definition_json AS json FROM relay_schedules
+    `
+    for (const row of schedules) {
+      const named = withNamedRepositories(row.json)
+      if (named === null) continue
+      yield* sql`
+        UPDATE relay_schedules SET definition_json = ${named}
+        WHERE schedule_id = ${row.id}
+      `
+    }
+    const tasks = yield* sql<{ id: string; json: string }>`
+      SELECT task_id AS id, input_json AS json FROM relay_backup_tasks
+    `
+    for (const row of tasks) {
+      const named = withNamedRepositories(row.json)
+      if (named === null) continue
+      yield* sql`
+        UPDATE relay_backup_tasks SET input_json = ${named}
+        WHERE task_id = ${row.id}
+      `
+    }
+  }),
 })
+
+// Stored JSON with each restic repository in a bucket as its ID alone, which
+// ends its folder in the bucket; or null when it holds none.
+function withNamedRepositories(json: string): string | null {
+  let changed = false
+  const named = Result.getOrNull(
+    Result.try(
+      () =>
+        JSON.parse(json, (_key, value: unknown) => {
+          if (
+            !Predicate.isObject(value) ||
+            !("repositoryPrefix" in value) ||
+            !Predicate.isString(value.repositoryPrefix)
+          ) {
+            return value
+          }
+          changed = true
+          return {
+            kind: "s3",
+            repositoryId: value.repositoryPrefix.split("/").at(-1),
+          }
+        }) as unknown
+    )
+  )
+  return changed ? JSON.stringify(named) : null
+}
 
 // A waiting create's input without the keys of the bucket it was to be
 // uploaded to, or null for one that held none.

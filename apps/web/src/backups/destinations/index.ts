@@ -68,7 +68,7 @@ export function prepareFullBackupRestoreSource(
 }
 
 export function prepareResticRepositoryLocation(input: {
-  objectPrefix: string | null
+  repositoryId: string
   requireEnabled: boolean
   storageId: string | null
 }) {

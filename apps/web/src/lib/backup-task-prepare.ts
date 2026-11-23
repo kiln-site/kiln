@@ -162,7 +162,7 @@ const resticRepositoryForBackup = Effect.fnUntraced(function* (
   const repository = yield* loadBackupRepositoryPasswordEffect(backupId)
   return {
     location: yield* prepareResticRepositoryLocation({
-      objectPrefix: repository.objectPrefix,
+      repositoryId: repository.id,
       requireEnabled: options?.requireEnabled ?? false,
       storageId: repository.storageId,
     }),

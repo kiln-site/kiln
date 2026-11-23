@@ -167,6 +167,7 @@ import {
 } from "./transfers/peer/roots.js"
 import { TransferSources } from "./transfers/peer/sources.js"
 import { BackupManager } from "./backups.js"
+import { askHearthForRepositoryAccess } from "./backups/destinations/s3/restic-bridge.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { attachBrowserSocket } from "./browser-socket.js"
 import {
@@ -1048,6 +1049,11 @@ const backupManager = await runRelayEffect(
     databases,
     fences: restoreFences,
     lanes,
+    repositoryAccess: (request) =>
+      askHearthForRepositoryAccess(
+        (...ask) => controlSocket.requestClients(...ask),
+        request
+      ),
     volumes,
     findInstance: (instanceId) => docker.findInstance(instanceId),
     isInstanceStopped: async (instanceId) => {

@@ -7,6 +7,7 @@ import {
   redactRelayBackupTask,
   relayBackupTaskReportSchema,
   relayBackupTaskSchema,
+  resticRepositoryFileSchema,
   resticRepositoryLocationSchema,
 } from "./backups.js"
 
@@ -15,15 +16,8 @@ const taskId = "22222222-2222-4222-8222-222222222222"
 const target = { id: "instance-one", kind: "instance" as const }
 
 const s3Repository = {
-  accessKeyId: "AKIAEXAMPLE",
-  allowPrivateNetwork: true,
-  bucket: "kiln-backups",
-  endpoint: "https://s3.example.com",
-  forcePathStyle: true,
   kind: "s3" as const,
-  region: "us-east-1",
-  repositoryPrefix: "team/kiln/relay/restic/instance/srv/repo",
-  secretAccessKey: "s3-secret",
+  repositoryId: "55555555-5555-4555-8555-555555555555",
 }
 
 describe("Relay backup task inputs", () => {
@@ -46,23 +40,43 @@ describe("Relay backup task inputs", () => {
     expect(read).toMatchObject({ kind: "create", target: stored.target })
   })
 
-  it("rejects S3 repositories with plaintext endpoints, invalid ports, or escaping prefixes", () => {
+  it("names a repository in a bucket and takes nothing else of the bucket", () => {
     expect(resticRepositoryLocationSchema.safeParse(s3Repository).success).toBe(
       true
     )
-    for (const unsafe of [
-      { endpoint: "http://minio:9000" },
-      { endpoint: "https://minio:0" },
-      { repositoryPrefix: "../escape" },
-    ]) {
+    for (const key of ["accessKeyId", "secretAccessKey", "repositoryPrefix"]) {
       expect(
-        resticRepositoryLocationSchema.safeParse({ ...s3Repository, ...unsafe })
-          .success
+        resticRepositoryLocationSchema.safeParse({
+          ...s3Repository,
+          [key]: "anything",
+        }).success
       ).toBe(false)
     }
   })
 
-  it("strips repository passwords and S3 keys from restic task input", () => {
+  it("lets a Relay name only the files restic keeps in a repository", () => {
+    const pack = "ab".repeat(32)
+    for (const file of ["config", `data/${pack}`, `locks/${pack}`]) {
+      expect(resticRepositoryFileSchema.safeParse(file).success).toBe(true)
+    }
+    for (const file of [
+      "",
+      "../config",
+      "config/",
+      "data/",
+      "data/..",
+      `data/../${pack}`,
+      `data/${pack}/`,
+      `data/${pack}\n`,
+      `data/${pack.toUpperCase()}`,
+      `other/${pack}`,
+      `/data/${pack}`,
+    ]) {
+      expect(resticRepositoryFileSchema.safeParse(file).success).toBe(false)
+    }
+  })
+
+  it("strips repository passwords from restic task input", () => {
     const redacted = redactBackupTaskInput({
       artifactKind: "restic_snapshot",
       backupId,
@@ -80,9 +94,7 @@ describe("Relay backup task inputs", () => {
       taskId,
     })
 
-    expect(JSON.stringify(redacted)).not.toMatch(
-      /repo-secret|AKIAEXAMPLE|s3-secret/u
-    )
+    expect(JSON.stringify(redacted)).not.toContain("repo-secret")
     expect(
       omitBackupSecrets({
         accessKeyId: "AKIAEXAMPLE",

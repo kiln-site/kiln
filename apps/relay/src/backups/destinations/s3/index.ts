@@ -5,113 +5,18 @@ import { Transform } from "node:stream"
 
 import { Effect } from "effect"
 
-import {
-  resticRepositoryPrefixSchema,
-  resticS3BucketSchema,
-  resticS3RegionSchema,
-  type ResticRepositoryLocation,
-} from "@workspace/contracts"
-
 import { RelayBackupError } from "../../../effect/errors.js"
 import {
   isPublicRemoteAddress,
   secureRemoteLookup,
 } from "../../../source-policy.js"
 import { backupArchivePath } from "../local/index.js"
-import {
-  defineBackupDestination,
-  type ResticS3DriverLocation,
-} from "../types.js"
+import { defineBackupDestination } from "../types.js"
 
 const MAX_S3_SINGLE_PUT_BYTES = 5 * 1024 ** 3
 const BACKUP_TRANSFER_IDLE_TIMEOUT_MS = 30_000
 const MAX_S3_RESPONSE_BYTES = 64 * 1024
 const MAX_S3_ERROR_FIELD_LENGTH = 512
-
-export function s3ResticDriverLocation(
-  location: Extract<ResticRepositoryLocation, { kind: "s3" }>
-): ResticS3DriverLocation {
-  if (!location.accessKeyId || !location.secretAccessKey) {
-    throw RelayBackupError.make({
-      code: "repository_credentials_missing",
-      operation: "restic.repository",
-      reason: "The restic S3 repository credentials were not provided to Relay",
-    })
-  }
-  const parsedBucket = resticS3BucketSchema.safeParse(location.bucket)
-  if (!parsedBucket.success) {
-    throw RelayBackupError.make({
-      code: "invalid_restic_repository",
-      operation: "restic.repository",
-      reason:
-        parsedBucket.error.issues[0]?.message ??
-        "The restic S3 bucket name is invalid",
-    })
-  }
-  const parsedRegion = resticS3RegionSchema.safeParse(location.region)
-  if (!parsedRegion.success) {
-    throw RelayBackupError.make({
-      code: "invalid_restic_repository",
-      operation: "restic.repository",
-      reason:
-        parsedRegion.error.issues[0]?.message ??
-        "The restic S3 region is invalid",
-    })
-  }
-  const parsedPrefix = resticRepositoryPrefixSchema.safeParse(
-    location.repositoryPrefix
-  )
-  if (!parsedPrefix.success) {
-    throw RelayBackupError.make({
-      code: "invalid_restic_repository",
-      operation: "restic.repository",
-      reason:
-        parsedPrefix.error.issues[0]?.message ??
-        "The restic S3 repository prefix is invalid",
-    })
-  }
-  return {
-    accessKeyId: location.accessKeyId,
-    allowPrivateNetwork: location.allowPrivateNetwork,
-    bucket: location.bucket,
-    endpoint: location.endpoint,
-    forcePathStyle: location.forcePathStyle,
-    kind: "s3",
-    region: location.region,
-    repositoryPrefix: location.repositoryPrefix,
-    secretAccessKey: location.secretAccessKey,
-  }
-}
-
-export function s3ResticRepositoryString(
-  location: ResticS3DriverLocation
-): string {
-  return `s3:${new URL(location.endpoint).origin}/${location.bucket}/${location.repositoryPrefix}`
-}
-
-export function s3ResticGlobalArgs(
-  location: ResticS3DriverLocation
-): Array<string> {
-  const args = ["-o", `s3.region=${location.region}`]
-  if (location.forcePathStyle) args.push("-o", "s3.bucket-lookup=path")
-  return args
-}
-
-export function applyS3ResticEnvironment(
-  env: NodeJS.ProcessEnv,
-  location: ResticS3DriverLocation,
-  options: { cacheDirectory?: string; proxyUrl?: string }
-): void {
-  env.AWS_ACCESS_KEY_ID = location.accessKeyId
-  env.AWS_SECRET_ACCESS_KEY = location.secretAccessKey
-  if (options.cacheDirectory) env.RESTIC_CACHE_DIR = options.cacheDirectory
-  if (options.proxyUrl) env.HTTPS_PROXY = options.proxyUrl
-}
-
-export function resticS3EndpointPort(endpoint: string): number {
-  const parsed = new URL(endpoint)
-  return parsed.port ? Number(parsed.port) : 443
-}
 
 export const s3BackupDestination = defineBackupDestination({
   deleteFullBackup: ({ destination }) =>
@@ -196,7 +101,7 @@ function errorMessage(cause: unknown): string {
  * "AccessDenied: Cannot upload files, storage cap exceeded", so failures say
  * what the provider refused. Provider text, so bounded and stripped of markup.
  */
-function s3ErrorDetail(body: string): string | null {
+export function s3ErrorDetail(body: string): string | null {
   const field = (name: string) =>
     new RegExp(`<${name}>([^<]{1,${MAX_S3_ERROR_FIELD_LENGTH}})</${name}>`, "u")
       .exec(body)?.[1]
@@ -208,6 +113,31 @@ function s3ErrorDetail(body: string): string | null {
   return code ?? message
 }
 
+/**
+ * A signed request's address, which must be HTTPS and, unless the
+ * destination allows private networks, not a private one.
+ */
+export function signedBackupUrl(input: {
+  allowPrivateNetwork: boolean
+  url: string
+}): URL {
+  const url = new URL(input.url)
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error("Signed backup URLs must use HTTPS")
+  }
+  const literal = url.hostname.replace(/^\[|\]$/gu, "")
+  if (
+    !input.allowPrivateNetwork &&
+    isIP(literal) !== 0 &&
+    !isPublicRemoteAddress(literal)
+  ) {
+    throw new Error(
+      "Signed backup URL resolves to a private or reserved address"
+    )
+  }
+  return url
+}
+
 function sendSignedBackupRequest(input: {
   allowPrivateNetwork: boolean
   bodyPath?: string
@@ -217,21 +147,8 @@ function sendSignedBackupRequest(input: {
   signal?: AbortSignal
   url: string
 }): Promise<void> {
-  const url = new URL(input.url)
-  if (url.protocol !== "https:" || url.username || url.password) {
-    return Promise.reject(new Error("Signed backup URLs must use HTTPS"))
-  }
-  const literal = url.hostname.replace(/^\[|\]$/gu, "")
-  if (
-    !input.allowPrivateNetwork &&
-    isIP(literal) !== 0 &&
-    !isPublicRemoteAddress(literal)
-  ) {
-    return Promise.reject(
-      new Error("Signed backup URL resolves to a private or reserved address")
-    )
-  }
   return new Promise((resolveRequest, rejectRequest) => {
+    const url = signedBackupUrl(input)
     const request = httpsRequest(
       url,
       {

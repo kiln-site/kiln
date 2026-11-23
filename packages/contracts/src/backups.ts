@@ -151,6 +151,8 @@ export const backupFailureCodes = [
   "storage_access_denied",
   "storage_bucket_missing",
   "storage_unreachable",
+  // Hearth, which signs a Relay's requests to a bucket, couldn't be asked.
+  "hearth_unreachable",
   // Another restic process holds the repository lock.
   "repository_locked",
   "repository_password_incorrect",
@@ -173,6 +175,8 @@ const backupFailurePatterns: ReadonlyArray<
   // Backblaze B2's daily transaction and download bandwidth caps; its
   // storage cap matched above.
   ["storage_limit_reached", /cap exceeded/iu],
+  // Once the Relay stops waiting; a wait that ended well says so with a 500.
+  ["hearth_unreachable", /403 Hearth couldn't be reached/u],
   [
     "storage_bucket_missing",
     /NoSuchBucket|bucket does not exist|bucket not found/iu,
@@ -185,7 +189,7 @@ const backupFailurePatterns: ReadonlyArray<
   ["relay_disk_full", /no space left on device|\bENOSPC\b/iu],
   [
     "storage_unreachable",
-    /no such host|connection refused|network is unreachable|i\/o timeout|tls handshake|connection reset|dial tcp|S3 backup request timed out/iu,
+    /no such host|connection refused|network is unreachable|i\/o timeout|tls handshake|connection reset|dial tcp|S3 backup request timed out|S3 storage couldn't be reached/iu,
   ],
 ]
 
@@ -250,24 +254,6 @@ export const resticS3RegionSchema = z
   .regex(/^[a-z0-9-]+$/u, {
     message:
       "S3 regions must contain only lowercase letters, digits, and hyphens",
-  })
-
-export const resticRepositoryPrefixSchema = z
-  .string()
-  .min(1)
-  .max(1_024)
-  .regex(/^[A-Za-z0-9._/-]+$/u, {
-    message:
-      "Restic repository prefixes can contain only letters, digits, dots, underscores, slashes, and hyphens",
-  })
-  .refine((value) => !value.startsWith("/"), {
-    message: "Backup object keys must be relative",
-  })
-  .refine((value) => !value.split("/").includes(".."), {
-    message: "Backup object keys cannot traverse parent directories",
-  })
-  .refine((value) => !hasUnsafeControlCharacter(value), {
-    message: "Backup object keys cannot contain control characters",
   })
 
 const resticS3EndpointSchema = backupHttpsUrlSchema.refine(
@@ -335,18 +321,104 @@ const resticLocalRepositoryLocationSchema = z
   })
   .strict()
 
-const resticS3RepositoryLocationObjectSchema = backupS3CredentialSchema
-  .partial({ accessKeyId: true, secretAccessKey: true })
-  .safeExtend({
+// Only which repository it is: Hearth holds where it is and the bucket's keys,
+// and signs each request to it (`backup.repository.access`).
+const resticS3RepositoryLocationSchema = z
+  .object({
     kind: z.literal("s3"),
-    repositoryPrefix: resticRepositoryPrefixSchema,
+    repositoryId: z.uuid(),
   })
   .strict()
 
 export const resticRepositoryLocationSchema = z.discriminatedUnion("kind", [
   resticLocalRepositoryLocationSchema,
-  resticS3RepositoryLocationObjectSchema,
+  resticS3RepositoryLocationSchema,
 ])
+
+export const resticRepositoryFolderSchema = z.enum([
+  "data",
+  "index",
+  "keys",
+  "locks",
+  "snapshots",
+])
+export type ResticRepositoryFolder = z.infer<
+  typeof resticRepositoryFolderSchema
+>
+
+export const resticRepositoryFileNameSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/u)
+
+/** A file of a restic repository, by the path restic's REST protocol uses. */
+export const resticRepositoryFileSchema = z
+  .string()
+  .regex(/^(?:config|(?:data|index|keys|locks|snapshots)\/[0-9a-f]{64})$/u)
+
+/**
+ * A Relay asking Hearth for one request to a restic repository in a bucket
+ * (`backup.repository.access`): a file's, signed, or a page of a folder's
+ * files.
+ */
+export const backupRepositoryAccessRequestSchema = z.discriminatedUnion(
+  "method",
+  [
+    z
+      .object({
+        file: resticRepositoryFileSchema,
+        method: z.enum(["DELETE", "GET", "PUT"]),
+        repositoryId: z.uuid(),
+      })
+      .strict(),
+    z
+      .object({
+        after: z.string().min(1).max(2_048).optional(),
+        folder: resticRepositoryFolderSchema,
+        method: z.literal("LIST"),
+        repositoryId: z.uuid(),
+      })
+      .strict(),
+  ]
+)
+export type BackupRepositoryAccessRequest = z.infer<
+  typeof backupRepositoryAccessRequestSchema
+>
+
+export const backupRepositoryAccessReplySchema = z.discriminatedUnion(
+  "status",
+  [
+    z
+      .object({
+        allowPrivateNetwork: z.boolean(),
+        status: z.literal("signed"),
+        url: backupHttpsUrlSchema,
+      })
+      .strict(),
+    z
+      .object({
+        files: z.array(
+          z
+            .object({
+              name: resticRepositoryFileNameSchema,
+              size: z.number().int().nonnegative(),
+            })
+            .strict()
+        ),
+        next: z.string().min(1).max(2_048).nullable(),
+        status: z.literal("listed"),
+      })
+      .strict(),
+    z
+      .object({
+        reason: z.string().min(1).max(600),
+        status: z.literal("refused"),
+      })
+      .strict(),
+  ]
+)
+export type BackupRepositoryAccessReply = z.infer<
+  typeof backupRepositoryAccessReplySchema
+>
 
 const defaultLocalResticRepository = { kind: "local" as const }
 

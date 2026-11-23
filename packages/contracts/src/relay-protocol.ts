@@ -180,6 +180,7 @@ export const relayControlOperations = [
   "hearth.terminal.output",
   "sftp.authorization.resolve",
   "schedule.backup.take",
+  "backup.repository.access",
   "operation.get",
   "relay.pause.write",
   "resource.freeze",
@@ -344,6 +345,7 @@ export function relayControlOperationChanges(
     case "hearth.terminal.output":
     case "sftp.authorization.resolve":
     case "schedule.backup.take":
+    case "backup.repository.access":
     case "operation.get":
       return false
     case "relay.pause.write":

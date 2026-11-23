@@ -10,19 +10,16 @@ import { Effect, Result, Schedule } from "effect"
 
 import { RelayBackupError } from "./effect/errors.js"
 import {
-  applyResticDestinationEnvironment,
-  resticDestinationEndpointPort,
   resticDriverLocation,
   resticGlobalArgs,
+  resticRepositoryKey,
   resticRepositoryPath,
-  resticRepositoryString,
   type ResticDriverLocation,
 } from "./backups/destinations/index.js"
 import {
-  resticS3ProxyAllowedHosts,
-  resticS3ProxyToken,
-  withResticS3Proxy,
-} from "./backups/destinations/s3/proxy.js"
+  withResticBridge,
+  type ResticRepositoryAccess,
+} from "./backups/destinations/s3/restic-bridge.js"
 import { backupFailureCode } from "./backups/failure.js"
 import { traceResticCommand } from "./backups/telemetry.js"
 
@@ -36,7 +33,6 @@ const RESTIC_TERMINATE_TIMEOUT_MS = 5_000
 const RESTIC_ENV_ALLOWLIST = [
   "HOME",
   "PATH",
-  "RESTIC_CACERT",
   "TMPDIR",
 ] as const
 // restic saved the snapshot but couldn't read some of its source files.
@@ -286,16 +282,18 @@ function unreadableFileWarnings(stderr: string): Array<string> {
 
 export function createResticDriver(options?: {
   cacheDirectory?: string
+  /** How a repository in a bucket is reached; without it, none is. */
+  repositoryAccess?: ResticRepositoryAccess
   spawn?: ResticSpawn
 }): ResticDriver {
   const spawnRestic = options?.spawn ?? defaultSpawn
   const cacheDirectory = options?.cacheDirectory
+  const repositoryAccess = options?.repositoryAccess
   const run = (
     args: ReadonlyArray<string>,
     input: {
       cwd?: string
       location: ResticDriverLocation
-      mutating?: boolean
       onJson?: (value: unknown) => void
       password: string
       /**
@@ -318,6 +316,7 @@ export function createResticDriver(options?: {
         onJson: input.onJson,
         tolerateIncomplete: input.tolerateIncomplete,
         password: input.password,
+        repositoryAccess,
         signal: input.signal,
         stdoutPipe: input.stdoutPipe,
       })
@@ -331,9 +330,10 @@ export function createResticDriver(options?: {
       const first = await resultOf(attempt)
       if (Result.isSuccess(first)) return first.success
       if (
-        !input.mutating ||
         !(first.failure instanceof RelayBackupError) ||
-        first.failure.exitCode !== RESTIC_EXIT_LOCKED
+        first.failure.exitCode !== RESTIC_EXIT_LOCKED ||
+        // What it was piped into has ended.
+        input.stdoutPipe
       ) {
         throw first.failure
       }
@@ -341,6 +341,7 @@ export function createResticDriver(options?: {
         cacheDirectory,
         location: input.location,
         password: input.password,
+        repositoryAccess,
         signal: input.signal,
       })
       return attempt()
@@ -384,7 +385,6 @@ export function createResticDriver(options?: {
         {
           cwd: input.cwd,
           location: input.location,
-          mutating: true,
           password: input.password,
           signal: input.signal,
           tolerateIncomplete: true,
@@ -468,7 +468,6 @@ export function createResticDriver(options?: {
       const result = await resultOf(() =>
         run(["forget", input.snapshotId], {
           location: input.location,
-          mutating: true,
           password: input.password,
           retryable: true,
           signal: input.signal,
@@ -481,7 +480,6 @@ export function createResticDriver(options?: {
     prune: async (input) => {
       await run(["prune", "--json"], {
         location: input.location,
-        mutating: true,
         password: input.password,
         signal: input.signal,
         onJson: (value) => {
@@ -496,7 +494,6 @@ export function createResticDriver(options?: {
         ["restore", "--json", input.selector, "--target", input.target],
         {
           location: input.location,
-          mutating: true,
           password: input.password,
           readOnly: true,
           signal: input.signal,
@@ -669,27 +666,22 @@ async function spawnResticCommand(
     location: ResticDriverLocation
     onJson?: (value: unknown) => void
     password: string
+    repositoryAccess?: ResticRepositoryAccess
     signal: AbortSignal
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
     tolerateIncomplete?: boolean
   }
 ): Promise<SpawnedRestic> {
   const location = input.location
-  const spawnCommand = () => {
-    if (location.kind !== "s3") {
-      return spawnResticOnce(spawnRestic, args, input)
-    }
-    const token = resticS3ProxyToken()
-    return withResticS3Proxy(
-      {
-        allowPrivateNetwork: location.allowPrivateNetwork,
-        allowedHosts: resticS3ProxyAllowedHosts(location),
-        endpointPort: resticDestinationEndpointPort(location) ?? 443,
-        token,
-      },
-      (proxyUrl) => spawnResticOnce(spawnRestic, args, { ...input, proxyUrl })
-    )
-  }
+  const spawnCommand = () =>
+    location.kind === "local"
+      ? spawnResticOnce(spawnRestic, args, input, resticRepositoryKey(location))
+      : withResticBridge(
+          input.repositoryAccess ?? (() => Promise.resolve(null)),
+          location.repositoryId,
+          (repositoryUrl) =>
+            spawnResticOnce(spawnRestic, args, input, repositoryUrl)
+        )
   return traceResticCommand(
     args[0] ?? "restic",
     location.kind,
@@ -707,17 +699,17 @@ async function spawnResticOnce(
     location: ResticDriverLocation
     onJson?: (value: unknown) => void
     password: string
-    proxyUrl?: string
     signal: AbortSignal
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
     tolerateIncomplete?: boolean
-  }
+  },
+  repository: string
 ): Promise<SpawnedRestic> {
   input.signal.throwIfAborted()
   if (input.location.kind === "s3" && input.cacheDirectory) {
     await mkdir(input.cacheDirectory, { recursive: true, mode: 0o700 })
   }
-  const env = resticSpawnEnv(input)
+  const env = resticSpawnEnv(input, repository)
   const child = spawnRestic(
     RESTIC_BINARY,
     [...resticGlobalArgs(input.location), ...args],
@@ -831,14 +823,15 @@ async function spawnResticOnce(
         args[0] ?? "restic",
         redactResticStderr(
           stderr.trim() || `restic exited with code ${exitCode}`,
-          input
+          input.password,
+          repository
         ),
         exitCode
       )
     }
     return {
       exitCode,
-      stderr: redactResticStderr(stderr, input),
+      stderr: redactResticStderr(stderr, input.password, repository),
       stdout,
       stdoutText,
     }
@@ -972,39 +965,41 @@ function resticError(
   })
 }
 
-function resticSpawnEnv(input: {
-  cacheDirectory?: string
-  location: ResticDriverLocation
-  password: string
-  proxyUrl?: string
-}): NodeJS.ProcessEnv {
+function resticSpawnEnv(
+  input: {
+    cacheDirectory?: string
+    location: ResticDriverLocation
+    password: string
+  },
+  repository: string
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const key of RESTIC_ENV_ALLOWLIST) {
     const value = process.env[key]
     if (value) env[key] = value
   }
   env.RESTIC_PASSWORD = input.password
-  env.RESTIC_REPOSITORY = resticRepositoryString(input.location)
-  applyResticDestinationEnvironment(env, input.location, {
-    ...(input.cacheDirectory ? { cacheDirectory: input.cacheDirectory } : {}),
-    ...(input.proxyUrl ? { proxyUrl: input.proxyUrl } : {}),
-  })
+  env.RESTIC_REPOSITORY = repository
+  if (input.location.kind === "s3" && input.cacheDirectory) {
+    env.RESTIC_CACHE_DIR = input.cacheDirectory
+  }
   return env
 }
 
+// The bridge's address is of no use to anyone reading the error.
 function redactResticStderr(
   stderr: string,
-  input: { location: ResticDriverLocation; password: string }
+  password: string,
+  repository: string
 ): string {
-  let redacted = stderr.split(input.password).join("[redacted]")
-  if (input.location.kind === "s3") {
-    redacted = redacted
-      .split(input.location.secretAccessKey)
-      .join("[redacted]")
-      .split(input.location.accessKeyId)
-      .join("[redacted]")
-  }
-  return redacted
+  const redacted = stderr.split(password).join("[redacted]")
+  return repository.startsWith("rest:")
+    ? redacted
+        .split(repository)
+        .join("the bucket")
+        .split(repository.slice("rest:".length))
+        .join("the bucket")
+    : redacted
 }
 
 function retryResticOperation<T>(run: () => Promise<T>): Promise<T> {

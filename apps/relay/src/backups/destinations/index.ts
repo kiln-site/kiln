@@ -7,14 +7,7 @@ import {
   localResticGlobalArgs,
   localResticRepositoryString,
 } from "./local/index.js"
-import {
-  applyS3ResticEnvironment,
-  resticS3EndpointPort,
-  s3BackupDestination,
-  s3ResticDriverLocation,
-  s3ResticGlobalArgs,
-  s3ResticRepositoryString,
-} from "./s3/index.js"
+import { s3BackupDestination } from "./s3/index.js"
 import type {
   BackupDestinationDriver,
   BackupDestinationKind,
@@ -52,35 +45,18 @@ export function resticDriverLocation(
 ): ResticDriverLocation {
   return !location || location.kind === "local"
     ? localResticDriverLocation(config, targetId, location)
-    : s3ResticDriverLocation(location)
+    : location
 }
 
-export function resticRepositoryString(location: ResticDriverLocation): string {
+/** Tells one restic repository from another. */
+export function resticRepositoryKey(location: ResticDriverLocation): string {
   return location.kind === "local"
     ? localResticRepositoryString(location)
-    : s3ResticRepositoryString(location)
+    : `s3:${location.repositoryId}`
 }
 
 export function resticGlobalArgs(
   location: ResticDriverLocation
 ): Array<string> {
-  return location.kind === "local"
-    ? localResticGlobalArgs()
-    : s3ResticGlobalArgs(location)
-}
-
-export function applyResticDestinationEnvironment(
-  env: NodeJS.ProcessEnv,
-  location: ResticDriverLocation,
-  options: { cacheDirectory?: string; proxyUrl?: string }
-): void {
-  if (location.kind === "s3") {
-    applyS3ResticEnvironment(env, location, options)
-  }
-}
-
-export function resticDestinationEndpointPort(
-  location: ResticDriverLocation
-): number | null {
-  return location.kind === "s3" ? resticS3EndpointPort(location.endpoint) : null
+  return location.kind === "local" ? localResticGlobalArgs() : []
 }

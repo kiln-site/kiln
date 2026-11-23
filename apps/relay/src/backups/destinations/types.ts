@@ -20,17 +20,7 @@ export type FullBackupDeleteDestination = Exclude<
 export type BackupDestinationKind = FullBackupCreateDestination["kind"]
 
 export type ResticLocalDriverLocation = { kind: "local"; path: string }
-export type ResticS3DriverLocation = {
-  accessKeyId: string
-  allowPrivateNetwork: boolean
-  bucket: string
-  endpoint: string
-  forcePathStyle: boolean
-  kind: "s3"
-  region: string
-  repositoryPrefix: string
-  secretAccessKey: string
-}
+export type ResticS3DriverLocation = { kind: "s3"; repositoryId: string }
 export type ResticDriverLocation =
   | ResticLocalDriverLocation
   | ResticS3DriverLocation
