@@ -1313,37 +1313,32 @@ class RelayConnection {
         this.#connecting ??
         this.#forkConnecting("relay.connection.open", this.#openEffect())
       return Fiber.join(connecting).pipe(
+        // An attempt ends the moment it's interrupted, before what takes its
+        // place has started.
+        Effect.tapCause(() => Effect.yieldNow),
         Effect.catchCause((cause) => {
-          const interrupted = Cause.hasInterruptsOnly(cause)
-          const settled = Effect.suspend(() => {
-            // A connection the Relay opened took this attempt's place.
-            if (this.#connecting !== null && this.#connecting !== connecting) {
-              return this.#connectEffect()
-            }
-            if (
-              this.#socket?.readyState === WebSocket.OPEN &&
-              this.#state.status === "authenticated"
-            ) {
-              return Effect.void
-            }
-            if (interrupted) {
-              return relayConnectionFailure("Relay connection closed")
-            }
-            const failure = Cause.squash(cause)
-            return Effect.fail(
-              failure instanceof RelayUnavailableError
-                ? failure
-                : RelayUnavailableError.make({
-                    message: asError(failure).message,
-                    cause: failure,
-                  })
-            )
-          })
-          // An attempt ends the moment it's interrupted, before what took its
-          // place has started.
-          return interrupted
-            ? Effect.andThen(Effect.yieldNow, settled)
-            : settled
+          // A connection the Relay opened took this attempt's place.
+          if (this.#connecting !== null && this.#connecting !== connecting) {
+            return this.#connectEffect()
+          }
+          if (
+            this.#socket?.readyState === WebSocket.OPEN &&
+            this.#state.status === "authenticated"
+          ) {
+            return Effect.void
+          }
+          if (Cause.hasInterruptsOnly(cause)) {
+            return relayConnectionFailure("Relay connection closed")
+          }
+          const failure = Cause.squash(cause)
+          return Effect.fail(
+            failure instanceof RelayUnavailableError
+              ? failure
+              : RelayUnavailableError.make({
+                  message: asError(failure).message,
+                  cause: failure,
+                })
+          )
         })
       )
     })
