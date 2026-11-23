@@ -1995,7 +1995,12 @@ class RelayConnection {
         message.operation === "backup.repository.access"
           ? // One for each file restic touches, so no span for each.
             forkAppWorker(handled)
-          : forkAppEffect(`relay.reverse.${message.operation}`, handled)
+          : forkAppEffect(
+              `relay.reverse.${message.operation}`,
+              Effect.annotateCurrentSpan({ "relay.id": this.#relay.id }).pipe(
+                Effect.andThen(handled)
+              )
+            )
     }
   }
 
