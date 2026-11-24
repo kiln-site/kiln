@@ -74,8 +74,8 @@ installs and updates the rest; don't run Hearth, its database, or the Relay
 by hand, since that drifts from what Kiln sets up and supports.
 
 `kiln-relay-data` is the installation: it holds the Relay's state, Kiln's
-generated secrets, and the record of what the Relay installed. Back it up, or
-at least export the recovery kit (see [Recovery](#recovery)).
+generated secrets, and the record of what the Relay installed. Kiln's own
+backups carry what a new machine needs of it (see [Recovery](#recovery)).
 
 ### Adding machines
 
@@ -284,7 +284,7 @@ Set these on the Relay. Everything else is generated.
 | `KILN_RELAY_CONTAINER`             | Found and proven                                | The Relay's own container, where it can't find it (Podman, Docker in Docker)                              |
 | `KILN_INSTALLATION_ID`             | Generated                                       | First start only                                                                                          |
 | `BETTER_AUTH_SECRETS`              | Generated                                       | First start only; for moving an existing Hearth here                                                      |
-| `KILN_PLATFORM_BACKUP_KEY`         | Generated                                       | First start only; encrypts platform backups, and the recovery kit holds it                                |
+| `KILN_PLATFORM_BACKUP_KEY`         | Generated                                       | First start only; encrypts platform backups                                                               |
 
 These are passed on to Hearth when set on the Relay: `KILN_ENABLE_SIGNUPS`,
 `KILN_MARKETING_URL`, `KILN_SUPER_USER_EMAIL`, `KILN_SUPER_USER_PASSWORD`,
@@ -327,8 +327,7 @@ they don't.
 - **Maintenance holds.** While `stop-hearth` holds Hearth stopped, passes keep
   it stopped, restarts and Kiln's updates refuse to start it, and `stop-hearth`
   itself fails rather than claim success while an update still holds Hearth.
-  On a Relay that installed Kiln, `kiln-relay platform-backup restore` runs
-  only in maintenance, holding Hearth's update lock throughout.
+  A restore runs only in maintenance, holding Hearth's update lock throughout.
 - **One change at a time.** The running Relay and `kiln-relay platform`
   commands take an exclusive lock in the data volume that the kernel holds
   for the process and releases if it dies, so nothing ever times out or is
@@ -388,8 +387,7 @@ it covers, and how to turn it off with `KILN_RELAY_WORKLOAD_MEMORY_LIMIT=false`.
 | `stop-hearth`            | Holds Hearth stopped; the database and cache keep running                  |
 | `start-hearth`           | Lets Hearth run again                                                      |
 | `recover --confirm <id>` | Starts an empty database after its volume was lost, holding Hearth stopped |
-| `export-kit`             | Prints the recovery kit                                                    |
-| `import-kit <path>`      | Installs from a recovery kit on a new Relay                                |
+| `restore <backup>`       | Puts a platform backup back, here or on a new machine                      |
 | `pair`                   | Prints an invitation for the installed Hearth, such as after a restore     |
 
 Run them with `docker exec kiln-relay kiln-relay platform <command>`. If the
@@ -500,49 +498,20 @@ volume was lost:
 
 ```sh
 docker cp backup-<id>.kiln kiln-relay:/data/restore.kiln
-docker exec kiln-relay kiln-relay platform restore /data/restore.kiln
+docker exec -it kiln-relay kiln-relay platform restore /data/restore.kiln
 ```
 
 It stops Hearth, saves what's in the database as a platform backup in the
 Relay's `/data/platform`, restores the backup, and lets Hearth run. The Relay's
 schedules become those in the backup; one made since on another Relay stays
-there until that Relay is set up again. To undo it,
-restore the backup it saved; the command prints how. Run again after one that
-failed, it saves the database as that one left it too: to undo, restore the
-first. `platform stop-hearth`,
-`platform-backup restore` and `platform start-hearth` do the same a step at a
-time, without saving anything first.
+there until that Relay is set up again. To undo it, restore the backup it
+saved; the command prints how. `--without-undo` replaces a database that can't
+be saved first.
 
-### Recovery kits
-
-A format 1 backup doesn't carry what restores it on a new machine. It restores
-with a **recovery kit** instead: a Relay in platform mode's whole installation
-record, every secret included, exported before it was lost:
-
-```sh
-docker exec kiln-relay kiln-relay platform export-kit > kiln-recovery.json
-```
-
-Import the kit into the new Relay's data volume before the Relay's first start,
-so it doesn't install a new installation:
-
-```sh
-docker volume create kiln-relay-data
-docker run --rm --entrypoint kiln-relay \
-  --volume /var/run/docker.sock:/var/run/docker.sock \
-  --volume kiln-relay-data:/data \
-  --volume "$PWD/kiln-recovery.json:/kit.json:ro" \
-  ghcr.io/kiln-site/relay:latest platform import-kit /kit.json
-```
-
-Then start the Relay as [Install](#install) shows, with the same `KILN_URL`. It
-creates an empty database and holds Hearth stopped. Restore the platform backup
-into it as [above](#restoring-on-the-same-machine).
-
-A kit doesn't carry the Relay's identity, and the restored Hearth still lists
-the old one at the same address. Remove the old Relay from **Relays**, then
-pair the new one there with the invitation `kiln-relay platform pair` prints,
-which also lets that Hearth restart and repair Kiln's services.
+Where something else runs Hearth, such as Coolify, stop Hearth there first, use
+that Relay's container name, and start Hearth again afterwards. A backup made
+with another recovery code, as on a machine since lost, asks for it, and Kiln
+keeps that code from then on.
 
 ## Kiln's pages
 
@@ -616,29 +585,6 @@ the ports the old one holds. Remove the container it made with
 
 ### Moving under a platform Relay
 
-1. Create a platform backup of it, and note its `KILN_INSTALLATION_ID`,
-   `BETTER_AUTH_SECRETS`, and recovery code, which is what
-   `KILN_PLATFORM_BACKUP_KEY` takes. Hearth encrypts saved credentials with
-   `BETTER_AUTH_SECRETS`, so the new Hearth needs the same value to read them.
-2. Start a platform Relay on a fresh data volume with those three variables
-   set, along with `KILN_URL`. On its first start it uses them instead of
-   generating its own. With Compose, put all four in `.env` and start
-   `compose.yaml`; the Relay reads everything in `.env`. A custom SFTP
-   port from the old `.env` (`KILN_RELAY_SFTP_PORT`) becomes
-   `KILN_SFTP_PORT`. On the same machine, stop the old deployment first,
-   since the new one needs its ports.
-3. Once Hearth is up, run `kiln-relay platform stop-hearth`, restore the backup
-   with `kiln-relay platform-backup restore`, and run `start-hearth`.
-4. Stop the old deployment, so two tools don't manage the same Hearth. If
-   Hearth lists its colocated Relay at the same address as the new one, remove
-   it from Relays, then pair the new Relay with `kiln-relay platform pair`.
-
-`KILN_INSTALLATION_ID`, `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`
-only matter on that first start; afterwards the Relay uses its saved record.
-
-A platform backup recreates the database it came from by name, and the
-platform Relay's database is named `hearth`, so restore refuses a backup of
-a database named anything else (Coolify's MySQL defaults to `default`). Move
-such an installation with Kiln's SQL export instead, which carries only its
-tables: on the old Hearth, **Export SQL** from Kiln's Info page; once the new
-Hearth runs the same version, upload that file into its **Data** section.
+Back Kiln up, stop the old deployment, and restore the backup with the installer,
+as on [a new machine](#restoring-on-a-new-machine). It's the same Kiln, and its
+Relay the same Relay; on the same machine, give it the ports the old one had.

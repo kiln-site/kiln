@@ -59,7 +59,6 @@ import {
 } from "./platform-backup-key.js"
 import { relayOwnerLabels, relayResourceNames } from "./relay-resources.js"
 import {
-  decodePlatformRecoveryKit,
   readOptional,
   renewLease,
   PLATFORM_STATE_FORMAT_VERSION,
@@ -318,16 +317,6 @@ export function platformSetupUrl(state: PlatformState): string {
   const url = new URL("/", state.hearth.url)
   url.searchParams.set("setup", state.secrets.setupToken)
   return url.href
-}
-
-/** A copy of the record to keep offline; see `importPlatformKit`. */
-export function platformRecoveryKit(state: PlatformState) {
-  return {
-    exportedAt: new Date().toISOString(),
-    formatVersion: 1 as const,
-    kind: "kiln-platform-recovery-kit" as const,
-    state,
-  }
 }
 
 /**
@@ -2142,14 +2131,13 @@ function applyPlatformConfig(config: RelayConfig, state: PlatformState) {
   config.installationIdConfigured = true
   // Hearth is given the record's token, so the Relay must expect it.
   config.bootstrapToken = state.secrets.bootstrapToken
-  // The record's key, which recovery kits carry: backups made with another
-  // key couldn't be restored from a kit.
+  // The record's key, which the recovery code people saved holds.
   if (
     config.platformBackupKey &&
     config.platformBackupKey !== state.secrets.platformBackupKey
   ) {
     console.warn(
-      "KILN_PLATFORM_BACKUP_KEY differs from the installed Kiln's backup key; using the installed key, which its recovery kit holds"
+      "KILN_PLATFORM_BACKUP_KEY differs from the installed Kiln's backup key; using the installed key, which its recovery code holds"
     )
   }
   config.platformBackupKey = state.secrets.platformBackupKey
@@ -2206,9 +2194,7 @@ const CLI_USAGE = `Usage: kiln-relay platform <command>
   stop-hearth                    Hold Hearth stopped; its database keeps running
   start-hearth                   Let Hearth run again
   restore <backup>               Put a platform backup back, here or on a new machine
-  recover --confirm <id>         Start an empty database after its volume was lost
-  export-kit                     Print the recovery kit (secrets) as JSON
-  import-kit <path>              Install from a recovery kit on a new Relay`
+  recover --confirm <id>         Start an empty database after its volume was lost`
 
 /**
  * `kiln-relay platform …`, for an operator at the Relay's console. These work
@@ -2223,27 +2209,10 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
   const { config } = context
   const command = args[1]
   const state = yield* readPlatformState(config.dataDirectory)
-  if (command === "import-kit") {
-    const path = args[2]
-    if (!path) return yield* new PlatformError({ reason: CLI_USAGE })
-    if (state) {
-      return yield* new PlatformError({
-        reason:
-          "This Relay already has an installation; import a kit on a new Relay",
-      })
-    }
-    const imported = yield* importPlatformKit(config, path)
-    print(
-      `Imported Kiln ${imported.installationId}. Start the Relay with KILN_RELAY_MODE=platform: it creates an empty database and holds Hearth stopped. Then:\n` +
-        `  kiln-relay platform-backup restore <backup> --confirm ${imported.installationId}\n` +
-        `  kiln-relay platform start-hearth`
-    )
-    return
-  }
   if (!state) {
     return yield* new PlatformError({
       reason:
-        "This Relay hasn't installed Kiln. Start it with KILN_RELAY_MODE=platform to install, or import a recovery kit.",
+        "This Relay hasn't installed Kiln. Start it with KILN_RELAY_MODE=platform to install.",
     })
   }
   switch (command) {
@@ -2306,56 +2275,11 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
       if (result.issue)
         return yield* new PlatformError({ reason: result.issue })
       print(
-        `Hearth's database is empty and Hearth is held stopped. Restore a platform backup with \`kiln-relay platform-backup restore <backup> --confirm ${state.installationId}\`, then run \`kiln-relay platform start-hearth\`.`
+        `Hearth's database is empty and Hearth is held stopped. Restore a platform backup with \`kiln-relay platform restore <backup>\`, or start afresh with \`kiln-relay platform start-hearth\`.`
       )
       return
     }
-    case "export-kit":
-      print(JSON.stringify(platformRecoveryKit(state), null, 2))
-      return
     default:
       return yield* new PlatformError({ reason: CLI_USAGE })
   }
-})
-
-const importPlatformKit = Effect.fnUntraced(function* (
-  config: RelayConfig,
-  path: string
-) {
-  const text = yield* Effect.tryPromise({
-    try: () => readFile(path, "utf8"),
-    catch: (cause) =>
-      new PlatformError({ reason: `Can't read ${path}`, cause }),
-  })
-  const kit = yield* decodePlatformRecoveryKit(text).pipe(
-    Effect.mapError(
-      (cause) =>
-        new PlatformError({
-          reason: "That file isn't a Kiln recovery kit",
-          cause,
-        })
-    )
-  )
-  const state: PlatformState = {
-    ...kit.state,
-    // A new host has none of the old services; the database starts empty
-    // for a platform backup to be restored into.
-    databaseInitializedAt: null,
-    names: platformNames(config),
-    // The new Relay pairs with Hearth through its own invitation.
-    ownerInvitationIds: [],
-    phase: "maintenance",
-  }
-  yield* withPlatformLock(
-    config.dataDirectory,
-    Effect.gen(function* () {
-      if (yield* readPlatformState(config.dataDirectory)) {
-        return yield* new PlatformError({
-          reason: "This Relay already has an installation",
-        })
-      }
-      yield* writePlatformState(config.dataDirectory, state)
-    })
-  )
-  return state
 })

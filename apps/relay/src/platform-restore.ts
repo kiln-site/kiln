@@ -4,16 +4,17 @@
  * On a new machine it first takes back what the backup carries, the
  * installation's record and the Relay's identity, so it's the same Kiln on
  * the same Relay. On a machine that has that Kiln, it first saves what's in
- * the database, so the restore can be undone with another. Either way it then
- * holds Hearth stopped, replaces the database with the backup's, and lets
- * Hearth run.
+ * the database, so the restore can be undone with another. Where this Relay
+ * runs Kiln it then holds Hearth stopped, replaces the database with the
+ * backup's, and lets Hearth run; where something else does, such as Coolify,
+ * Hearth is stopped and started there.
  *
  * Nothing records how far it got. Every step can be repeated, so one that
  * fails or is stopped is run again from the start, and Hearth stays stopped
  * until one finishes.
  */
 import { randomUUID } from "node:crypto"
-import { rm } from "node:fs/promises"
+import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 
 import { decodeRecoveryCode } from "@workspace/contracts"
@@ -28,7 +29,7 @@ import {
 } from "./effect/identity.js"
 import type { RelayStateStore } from "./effect/state.js"
 import { loadRelayTls, writeRelayCertificateAuthority } from "./effect/tls.js"
-import { readHostedKiln } from "./hosted-kiln.js"
+import { type HostedKiln, readHostedKiln } from "./hosted-kiln.js"
 import { savedInstallationId } from "./installation.js"
 import {
   DEFAULT_BIND_ADDRESS,
@@ -36,6 +37,7 @@ import {
   ownContainer,
   platformInputs,
   platformNames,
+  provenHearthRunning,
   reconcilePlatform,
   withPlatformRestoreHold,
 } from "./platform.js"
@@ -75,6 +77,8 @@ export interface PlatformRestoreInput {
   readonly recoveryCode: () => Promise<string>
   readonly source: string
   readonly state: RelayStateStore["Service"]
+  /** Replaces a database that can't be saved first. */
+  readonly withoutUndo?: boolean
 }
 
 export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
@@ -82,6 +86,18 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
 ) {
   const { config, engine, print, source } = input
   const existing = yield* readPlatformState(config.dataDirectory)
+  if (!existing && config.installationId) {
+    const beside = yield* readHostedKiln(input.state, config.installationId)
+    if (beside) {
+      return yield* restoreBeside(input, config.installationId, beside)
+    }
+  }
+  if (!existing && config.mode !== "platform") {
+    return yield* new PlatformError({
+      reason:
+        "Kiln doesn't run beside this Relay. To restore it on a new machine, run the installer there with --restore.",
+    })
+  }
   const key = existing
     ? existing.secrets.platformBackupKey
     : yield* keyFromCode(input.recoveryCode)
@@ -129,9 +145,19 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
     Effect.gen(function* () {
       // Before saving anything, which may need the room.
       yield* Effect.tryPromise(() => clearPlatformStaging(config))
-      const undo = existing
-        ? yield* saveDatabase(restoreConfig, input.state, existing)
-        : null
+      const undo =
+        existing && !input.withoutUndo
+          ? yield* saveDatabase(
+              restoreConfig,
+              input.state,
+              existing.installationId,
+              // One that started with Hearth held stopped may have part of
+              // another's import in its database.
+              existing.phase === "ready"
+                ? "Start Hearth again with `kiln-relay platform start-hearth`"
+                : "Run this again once that's fixed"
+            )
+          : null
       if (undo) print(`Saved what was here to ${undo}`)
       print("Restoring Kiln's database")
       const afterwards = yield* ownRelayAddress(restoreConfig, installed)
@@ -177,20 +203,29 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
   return restored
 })
 
+// Where the undo copy of a restore that hasn't finished is, so one run again
+// keeps what was there first rather than what the failed one left.
+const UNDO_METADATA_KEY = "platform_restore_undo"
+
 /**
- * `kiln-relay platform-backup restore`: replaces Hearth's database alone,
- * where something else runs Hearth. A backup made with another key, as on a
- * machine since lost, asks for its recovery code, and that key is Kiln's from
- * then on: the restored Hearth's code is the one people saved.
+ * Replaces the database of a Kiln something else runs, with Hearth stopped
+ * there. A backup made with another key, as on a machine since lost, asks for
+ * its recovery code, and that key is Kiln's from then on: the restored
+ * Hearth's code is the one people saved.
  */
-export const restorePlatformDatabase = Effect.fn(
-  "Relay.platform.restoreDatabase"
-)(function* (
-  input: Omit<PlatformRestoreInput, "engine" | "environment"> & {
-    readonly installationId: string
-  }
+const restoreBeside = Effect.fnUntraced(function* (
+  {
+    config,
+    engine,
+    print,
+    recoveryCode,
+    source,
+    state,
+    withoutUndo,
+  }: PlatformRestoreInput,
+  installationId: string,
+  hosted: HostedKiln
 ) {
-  const { config, print, source, state } = input
   // What went wrong as its own message, which `tryPromise` alone hides.
   const attempt = <T>(run: () => Promise<T>) =>
     Effect.tryPromise({
@@ -201,38 +236,52 @@ export const restorePlatformDatabase = Effect.fn(
           cause,
         }),
     })
+  if (yield* provenHearthRunning(engine, config)) {
+    return yield* new PlatformError({
+      reason:
+        "Hearth is running. Stop it where it's deployed, such as in Coolify, then run this again.",
+    })
+  }
   const opensWith = (key: string) =>
     attempt(() => platformBackupOpensWith(key, source))
   const own = yield* platformBackupKey(config, state)
   const opens = own !== null && (yield* opensWith(own))
-  // A Kiln this Relay installed keeps its record's key.
-  if (!opens && (yield* readPlatformState(config.dataDirectory))) {
-    return yield* new PlatformError({
-      reason: "That backup doesn't open with this Kiln's key, or it's damaged",
-    })
-  }
   if (!opens) print("This backup was made with another recovery code")
-  const key = opens ? own : yield* keyFromCode(input.recoveryCode)
-  const hosted = yield* readHostedKiln(state, input.installationId)
+  const key = opens ? own : yield* keyFromCode(recoveryCode)
   if (!opens && !(yield* opensWith(key))) {
     return yield* new PlatformError({
       reason:
         "That backup doesn't open with this recovery code, or it's damaged",
     })
   }
-  const restored = yield* withPlatformRestoreHold(
-    config,
-    attempt(() =>
-      restoreEncryptedPlatformBackup(
-        { ...config, platformBackupKey: key },
-        source,
-        input.installationId,
-        { tablePrefix: hosted?.tablePrefix ?? null }
-      )
-    )
+  // What's saved to undo this opens with the key Kiln has afterwards.
+  const restoreConfig: RelayConfig = { ...config, platformBackupKey: key }
+  const earlier = yield* state.getMetadata(UNDO_METADATA_KEY)
+  const undo = withoutUndo
+    ? null
+    : earlier ||
+      (yield* saveDatabase(
+        restoreConfig,
+        state,
+        installationId,
+        "Start Hearth again where it's deployed"
+      ))
+  if (undo && !earlier) {
+    yield* state.setMetadata(UNDO_METADATA_KEY, undo)
+    print(`Saved what was here to ${undo}`)
+  }
+  print("Restoring Kiln's database")
+  const manifest = yield* attempt(() =>
+    restoreEncryptedPlatformBackup(restoreConfig, source, installationId, {
+      tablePrefix: hosted.tablePrefix,
+    })
   )
-  if (!opens) yield* savePlatformBackupKey(state, input.installationId, key)
-  return restored
+  if (!opens) yield* savePlatformBackupKey(state, installationId, key)
+  // Hearth sends those in the database that's there now.
+  yield* state.schedules.forget()
+  yield* state.setMetadata(UNDO_METADATA_KEY, "")
+  print(`Restored Kiln from its backup of ${manifest.createdAt}`)
+  if (undo) print(`To undo: kiln-relay platform restore ${undo}`)
 })
 
 const keyFromCode = Effect.fnUntraced(function* (
@@ -263,7 +312,7 @@ const putBack = Effect.fnUntraced(function* (
   if (!recovery) {
     return yield* new PlatformError({
       reason:
-        "That backup is from before Kiln's backups carried what restores them (format 1). Restore it with its recovery kit: `kiln-relay platform import-kit`, then `kiln-relay platform-backup restore`.",
+        "That backup is from before Kiln's backups carried what a new machine needs. It holds only the database, so restore it where that Kiln runs.",
     })
   }
   const identity = yield* readRelayIdentityMaterial(config).pipe(
@@ -358,13 +407,15 @@ UPDATE ${hearthTable(installation.database.tablePrefix ?? null, "relay")}
 })
 
 /**
- * Saves the database as it is, as a platform backup beside the installation's
- * record; null when there's no database, as after one that stopped partway.
+ * Saves the database as it is, as a platform backup in the Relay's data; null
+ * when there's no database, as after one that stopped partway.
  */
 const saveDatabase = Effect.fnUntraced(function* (
   config: RelayConfig,
   state: RelayStateStore["Service"],
-  installation: PlatformState
+  installationId: string,
+  // What to do when it can't be saved, which stops the restore.
+  otherwise: string
 ) {
   const path = join(
     platformDirectory(config.dataDirectory),
@@ -373,13 +424,17 @@ const saveDatabase = Effect.fnUntraced(function* (
   const recovery = yield* collectPlatformRecovery(config, state)
   return yield* Effect.tryPromise({
     try: async () => {
+      await mkdir(platformDirectory(config.dataDirectory), {
+        mode: 0o700,
+        recursive: true,
+      })
       await rm(path, { force: true })
       await createEncryptedPlatformBackup(
         config,
         {
           backupId: randomUUID(),
           maxBytes: null,
-          target: { id: installation.installationId, kind: "platform" },
+          target: { id: installationId, kind: "platform" },
         },
         path,
         { completed: 0, total: 0 },
@@ -396,13 +451,7 @@ const saveDatabase = Effect.fnUntraced(function* (
         ? Effect.succeed(null)
         : Effect.fail(
             new PlatformError({
-              reason: `Couldn't save what's in Kiln's database first, so nothing was restored: ${reason}. ${
-                // One that started with Hearth held stopped may have part of
-                // another's import in its database.
-                installation.phase === "ready"
-                  ? "Start Hearth again with `kiln-relay platform start-hearth`"
-                  : "Run this again once that's fixed"
-              }, or restore without saving it: \`kiln-relay platform-backup restore <backup> --confirm ${installation.installationId}\``,
+              reason: `Couldn't save what's in Kiln's database first, so nothing was restored: ${reason}. ${otherwise}, or restore without saving it, with --without-undo`,
               cause,
             })
           )
