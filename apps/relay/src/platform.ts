@@ -71,6 +71,7 @@ import {
   withPlatformLock,
   writePlatformState,
 } from "./platform-state.js"
+import type { RestoreOutcome } from "./restore-outcome.js"
 import {
   acquireTargetLockEffect,
   releaseTargetLockEffect,
@@ -1103,7 +1104,8 @@ export const followHearthAddress = Effect.fn(
 
 export const platformStatus = Effect.fn("Relay.platform.status")(function* (
   context: PlatformReadContext,
-  client: Pick<RelayClientRecord, "invitationId" | "role"> | null
+  client: Pick<RelayClientRecord, "invitationId" | "role"> | null,
+  restored: RestoreOutcome | null
 ) {
   const { config, engine } = context
   const state =
@@ -1157,7 +1159,7 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       managedBy: proxy.managedBy,
     },
     recovery: hasRecoveryCode(config, state),
-    restored: state?.restored ?? null,
+    restored: restored && { ...restored, undo: restored.undo !== null },
     services,
   } satisfies RelayPlatformStatus
 })
@@ -1578,6 +1580,26 @@ const runningContainers = Effect.fnUntraced(function* (engine: DockerEngine) {
 })
 
 /**
+ * Stops the Hearth something else runs here, for a restore, and returns what
+ * starts it again.
+ */
+export const stopProvenHearth = Effect.fn("Relay.platform.stopHearth")(
+  function* (
+    engine: DockerEngine,
+    config: Pick<RelayConfig, "installationId" | "provenHearth">
+  ) {
+    const proven = provenHearth(config)
+    const stopped = proven ? yield* sameHearths(engine, proven) : []
+    for (const { Id } of stopped) {
+      yield* engine.stopContainer(Id, { seconds: 30, timeout: 90_000 })
+    }
+    return Effect.forEach(stopped, ({ Id }) => engine.startContainer(Id), {
+      discard: true,
+    })
+  }
+)
+
+/**
  * Whether a Hearth may be using Kiln's database where only its proof finds
  * it, for a restore to refuse: a running container with a secret of the
  * proven Hearth's keyring, or any running Hearth whose DB_HOST reaches the
@@ -1857,7 +1879,7 @@ export const externalPlatformPresent = Effect.fn(
  */
 export const platformAction = Effect.fn("Relay.platform.action")(function* (
   context: PlatformContext,
-  input: RelayPlatformActionInput
+  input: Exclude<RelayPlatformActionInput, { action: "restore" }>
 ) {
   if (input.action === "repair") return yield* reconcilePlatform(context)
   if (input.role === "proxy") return yield* restartPlatformProxy(context)
@@ -2219,6 +2241,7 @@ export const runPlatformCli = Effect.fn("Relay.platform.cli")(function* (
     case "status": {
       const status = yield* platformStatus(
         { blocked: false, config, engine: context.engine, issue: null },
+        null,
         null
       )
       print(

@@ -35,9 +35,22 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
   }
 )
 
+/** Puts a Kiln backup back, or with none, what the last restore replaced. */
+export const restoreKiln = createServerFn({ method: "POST" })
+  .validator(
+    z.strictObject({ backupId: z.uuid().nullable(), relayId: relayIdSchema })
+  )
+  .handler(async ({ data }) => {
+    const { restoreKilnBackup } =
+      await import("@/server/kiln-platform-operations.server")
+    await restoreKilnBackup(data)
+  })
+
 export const runKilnPlatformAction = createServerFn({ method: "POST" })
   .validator(
-    relayPlatformActionInputSchema.and(z.object({ relayId: relayIdSchema }))
+    relayPlatformActionInputSchema
+      .refine(({ action }) => action !== "restore")
+      .and(z.object({ relayId: relayIdSchema }))
   )
   .handler(async ({ data }) => {
     const { runKilnServiceAction } =

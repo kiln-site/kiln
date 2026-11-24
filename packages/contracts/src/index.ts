@@ -7,6 +7,11 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
 import { APP_COMMAND_MAX_LENGTH, APP_IMAGE_MAX_LENGTH } from "./app-bricks.js"
+import {
+  backupIdSchema,
+  backupLocalSourceSchema,
+  backupRemoteSourceSchema,
+} from "./backups.js"
 import { readBrick } from "./brick-conversion.js"
 import {
   brickIdSchema,
@@ -2589,6 +2594,10 @@ export const relayPlatformStatusSchema = z.object({
     .object({
       at: z.string().datetime(),
       backupCreatedAt: z.string().datetime(),
+      /** Why it failed, after which what was there before was put back. */
+      error: z.string().nullable(),
+      /** Whether what it replaced can be put back. */
+      undo: z.boolean(),
     })
     .nullable(),
   services: z.array(relayPlatformServiceSchema).max(8),
@@ -2601,6 +2610,19 @@ export const relayPlatformActionInputSchema = z.discriminatedUnion("action", [
   }),
   // Recreates whatever is missing and starts whatever stopped.
   z.object({ action: z.literal("repair") }),
+  // Stops Hearth, puts a platform backup back, or what the last restore
+  // replaced, and starts Hearth again. Answers once the backup is checked.
+  z.object({
+    action: z.literal("restore"),
+    source: z.discriminatedUnion("kind", [
+      z.object({
+        archive: z.union([backupLocalSourceSchema, backupRemoteSourceSchema]),
+        backupId: backupIdSchema,
+        kind: z.literal("backup"),
+      }),
+      z.object({ kind: z.literal("undo") }),
+    ]),
+  }),
 ])
 
 /** A Relay's Kiln installation ID, and whether it can change (`relay.installation.read`). */

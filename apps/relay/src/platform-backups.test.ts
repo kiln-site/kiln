@@ -21,6 +21,7 @@ import {
   loadOrCreateRelayIdentity,
   readRelayIdentityMaterial,
 } from "./effect/identity.js"
+import { RelayStateError } from "./effect/errors.js"
 import { RelayStateStore } from "./effect/state.js"
 import { controlRequestLocks } from "./operation-plans.js"
 import {
@@ -35,12 +36,13 @@ import {
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
-import { restorePlatform } from "./platform-restore.js"
+import { restoreForHearth, restorePlatform } from "./platform-restore.js"
 import {
   type PlatformState,
   withPlatformLock,
   writePlatformState,
 } from "./platform-state.js"
+import { readRestoreOutcome } from "./restore-outcome.js"
 import { DockerEngine } from "./docker-engine.js"
 import { identifyHearth, newPlatformState, platformInputs } from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
@@ -498,6 +500,138 @@ describe("Kiln platform backups deployed by Coolify", () => {
       )
     )
     expect(kiln.database.executedSql).toEqual([])
+  })
+
+  it("restores for Hearth with it stopped, and starts it again", async () => {
+    const kiln = await coolifyKiln()
+    const { config, state } = kiln.harness
+    kiln.database.sqlDump = "CREATE TABLE before (id int);"
+    const source = join(testDirectory, `panel-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE restored (id int);", {
+        databaseName: "hearth",
+      })
+    )
+    const restore = () =>
+      Effect.runPromise(
+        restoreForHearth(
+          { config, engine: kiln.engine, source, state },
+          manifest.createdAt
+        )
+      )
+    const outcome = () => Effect.runPromise(readRestoreOutcome(state))
+
+    await restore()
+    expect(kiln.database.executedSql.at(-1)).toContain("CREATE TABLE restored")
+    expect(fakeDocker.container("hearth-1")?.state.running).toBe(true)
+    expect(await outcome()).toMatchObject({
+      error: null,
+      undo: expect.stringContaining("before-restore"),
+    })
+
+    // One that can't save what's there first changes nothing.
+    fakeDocker.programFailures.set("mysqldump", "Lost connection")
+    const imported = kiln.database.executedSql.length
+    await restore()
+    fakeDocker.programFailures.delete("mysqldump")
+    expect(kiln.database.executedSql.length).toBe(imported)
+    expect(fakeDocker.container("hearth-1")?.state.running).toBe(true)
+    // The first restore can still be undone.
+    expect(await outcome()).toMatchObject({
+      error: expect.stringContaining("Lost connection"),
+      undo: expect.stringContaining("before-restore"),
+    })
+  })
+
+  it("starts Hearth again when nothing was replaced, though it couldn't put anything back", async () => {
+    const kiln = await coolifyKiln()
+    const { config, state } = kiln.harness
+    const source = join(testDirectory, `panel-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE restored (id int);", {
+        databaseName: "hearth",
+      })
+    )
+    // There's nowhere to decrypt a backup, either of them.
+    const staging = join(config.dataDirectory, "restores")
+    await rm(staging, { force: true, recursive: true })
+    await writeFile(staging, "")
+
+    await Effect.runPromise(
+      restoreForHearth(
+        { config, engine: kiln.engine, source, state },
+        manifest.createdAt
+      )
+    )
+
+    expect(kiln.database.executedSql).toEqual([])
+    expect(fakeDocker.container("hearth-1")?.state.running).toBe(true)
+  })
+
+  it("puts back what was there when a restore fails after replacing it", async () => {
+    const kiln = await coolifyKiln()
+    const { config, state } = kiln.harness
+    kiln.database.sqlDump = "CREATE TABLE before (id int);"
+    const source = join(testDirectory, `panel-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE restored (id int);", {
+        databaseName: "hearth",
+      })
+    )
+    // Once it's imported, the first time.
+    let failed = false
+    const forget: typeof state.schedules.forget = () => {
+      if (failed) return state.schedules.forget()
+      failed = true
+      return Effect.fail(
+        new RelayStateError({
+          cause: new Error("disk I/O error"),
+          operation: "schedules.forget",
+        })
+      )
+    }
+
+    await Effect.runPromise(
+      restoreForHearth(
+        {
+          config,
+          engine: kiln.engine,
+          source,
+          state: { ...state, schedules: { ...state.schedules, forget } },
+        },
+        manifest.createdAt
+      )
+    )
+
+    expect(kiln.database.executedSql.at(-1)).toContain("CREATE TABLE before")
+    expect(fakeDocker.container("hearth-1")?.state.running).toBe(true)
+    expect(await Effect.runPromise(readRestoreOutcome(state))).toMatchObject({
+      error: expect.stringContaining("schedules.forget"),
+      undo: null,
+    })
+  })
+
+  it("leaves Hearth stopped rather than start it on half a database", async () => {
+    const kiln = await coolifyKiln()
+    const { config, state } = kiln.harness
+    const source = join(testDirectory, `panel-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE half (id int);", { databaseName: "hearth" })
+    )
+    fakeDocker.programFailures.set("mysql", "Lost connection")
+    await expect(
+      Effect.runPromise(
+        restoreForHearth(
+          { config, engine: kiln.engine, source, state },
+          manifest.createdAt
+        )
+      )
+    ).rejects.toThrow()
+    expect(fakeDocker.container("hearth-1")?.state.running).toBe(false)
   })
 
   it("won't restore into a container under the database's name that keeps other data where Hearth's was", async () => {

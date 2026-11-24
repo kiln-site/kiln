@@ -61,6 +61,7 @@ const directAdmissions: Record<string, string> = {
   "index.ts:platform.reconcile":
     "The platform worker's pass over Kiln's services",
   "index.ts:platform.restart": "Restarting Hearth once it has its answer",
+  "index.ts:platform.restore": "Restoring Kiln once Hearth has its answer",
   "index.ts:web.certificates.refresh":
     "The certificate worker, applying due certificates to the routes",
 }

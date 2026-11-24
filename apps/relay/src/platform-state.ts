@@ -51,10 +51,6 @@ export const PlatformStateSchema = Schema.Struct({
    */
   ownerInvitationIds: Schema.Array(Schema.String),
   names: PlatformNamesSchema,
-  /** The last restore from a platform backup, if there was one. */
-  restored: Schema.optionalKey(
-    Schema.Struct({ at: Schema.String, backupCreatedAt: Schema.String })
-  ),
   secrets: Schema.Struct({
     /** Better Auth's versioned secret list, `1:<secret>`. */
     authSecrets: Schema.String,
