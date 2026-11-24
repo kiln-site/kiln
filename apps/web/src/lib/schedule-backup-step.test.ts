@@ -89,6 +89,25 @@ describe("a schedule's backup step", () => {
     expect(saved(some)).toEqual(["server"])
   })
 
+  it("covers later game servers past a database this person can't back up", () => {
+    const incremental = step([server, others], { mode: "incremental" })
+    expect(saved(incremental, "incremental")).toBeUndefined()
+    expect(saved(incremental, "full")).toEqual(["server"])
+  })
+
+  it("keeps covering later game servers once its last one is gone", () => {
+    const incremental = step([others], { mode: "incremental" })
+    expect(saved(incremental, "incremental")).toBeUndefined()
+  })
+
+  it("keeps an App it names while its volumes are gone", () => {
+    const named = step([bare, server], {
+      targetKeys: [`${relayId}:app:bare`],
+    })
+    expect(saved(named)).toEqual(["bare"])
+    expect(named.counts).toMatchObject({ apps: 0, volumes: 0 })
+  })
+
   it("keeps one it names that this person can't back up removable", () => {
     const named = step([server, others], {
       targetKeys: [`${relayId}:database:others`],

@@ -200,8 +200,11 @@ function BackupConfigurationForm({
     chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
   // Kiln's own backup goes only where the platform keeps its own.
   const platformChosen = chosen.some(({ kind }) => kind === "platform")
+  // A step left with none keeps its mode for those added later.
   const effectiveMode =
-    mode === "incremental" && onlyInstances ? "incremental" : "full"
+    mode === "incremental" && (onlyInstances || (step && chosen.length === 0))
+      ? "incremental"
+      : "full"
   const availableStorage = React.useMemo(
     () =>
       storage.filter(

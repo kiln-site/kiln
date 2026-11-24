@@ -78,15 +78,15 @@ export interface BackupStep<Option extends BackupStepOption> {
   }>
   /** The keys of those it backs up. */
   readonly chosen: ReadonlyArray<string>
-  /** Left out: Apps that use no volume. */
+  /** Apps that use no volume: listed only while it names them. */
   readonly empty: ReadonlyArray<Option>
   /**
    * What it backs up by kind, an App's volumes among the volumes; those are
    * unsaid while any App's aren't known.
    */
   readonly counts: InstanceKindCountValues
-  /** Choosing all of it takes targets added to the schedule later too. */
-  readonly coversLater: boolean
+  /** What this person can't back up, so it can't be left to reach it. */
+  readonly restricted: ReadonlyArray<Option>
 }
 
 export function backupStep<Option extends BackupStepOption>(
@@ -102,24 +102,24 @@ export function backupStep<Option extends BackupStepOption>(
   const counts = { apps: 0, databases: 0, instances: 0, relays: 0 }
   const volumeKeys = new Set<string>()
   let volumesKnown = true
-  let restricted = false
+  const restricted: Array<Option> = []
   for (const option of targets) {
     if (!scheduleActionSupportsTarget({ ...action, mode: "full" }, option)) {
       continue
     }
     const key = scheduleTargetKey(option)
     if (!option[permission] || !option.permittedActions.includes("backup")) {
-      restricted = true
+      restricted.push(option)
       if (!named?.has(key)) continue
       listed.push({ key, option, removeOnly: true })
       chosen.push(key)
       continue
     }
     const used = option.kind === "app" ? volumes.of(option) : null
-    if (used?.length === 0) {
-      empty.push(option)
-      continue
-    }
+    const bare = used?.length === 0
+    if (bare) empty.push(option)
+    // Named, it stays so: its volumes may be back by the next run.
+    if (bare && !named?.has(key)) continue
     listed.push({ key, option, removeOnly: false })
     // Naming none, it runs on each target its mode supports.
     if (
@@ -129,6 +129,7 @@ export function backupStep<Option extends BackupStepOption>(
       continue
     }
     chosen.push(key)
+    if (bare) continue
     if (option.kind === "relay") counts.relays += 1
     else if (option.kind === "instance") counts.instances += 1
     else if (option.kind === "database") counts.databases += 1
@@ -145,9 +146,9 @@ export function backupStep<Option extends BackupStepOption>(
   return {
     chosen,
     counts: volumesKnown ? { ...counts, volumes: volumeKeys.size } : counts,
-    coversLater: !restricted,
     empty,
     listed,
+    restricted,
   }
 }
 
@@ -157,14 +158,14 @@ export function backupStep<Option extends BackupStepOption>(
  * would then reach one this person can't back up.
  */
 export function backupStepTargetKeys(
-  step: Pick<BackupStep<BackupStepOption>, "coversLater" | "listed">,
+  step: Pick<BackupStep<BackupStepOption>, "listed" | "restricted">,
   mode: ScheduleBackupAction["mode"],
   chosen: ReadonlyArray<string>
 ): ReadonlyArray<string> | undefined {
-  const every = step.listed.filter(({ option }) =>
+  const supports = (option: BackupStepOption) =>
     scheduleActionSupportsTarget({ type: "backup", mode }, option)
-  )
-  return step.coversLater &&
+  const every = step.listed.filter(({ option }) => supports(option))
+  return !step.restricted.some(supports) &&
     every.length === chosen.length &&
     every.every(({ key }) => chosen.includes(key))
     ? undefined
@@ -173,23 +174,17 @@ export function backupStepTargetKeys(
 
 /**
  * Whether a step of these targets can be taken stopped, and what that does:
- * Apps and volumes, which stop what uses them, alone or with databases, each
- * dumped while the Apps are stopped.
+ * Apps and volumes stop what uses them, and each database beside them is
+ * dumped meanwhile. Anything else is backed up as it runs.
  */
 export function backupStepConsistency(
   targets: ReadonlyArray<{ readonly kind: string }>
 ): { stoppedDescription: string; stoppedUnavailable: null } | undefined {
-  const stops = ({ kind }: { readonly kind: string }) =>
-    kind === "app" || kind === "volume"
-  const databases = targets.some(({ kind }) => kind === "database")
-  if (
-    !targets.some(stops) ||
-    !targets.every((target) => stops(target) || target.kind === "database")
-  ) {
+  if (!targets.some(({ kind }) => kind === "app" || kind === "volume")) {
     return undefined
   }
   return {
-    stoppedDescription: databases
+    stoppedDescription: targets.some(({ kind }) => kind === "database")
       ? "Stops each App once, and dumps the databases while they are stopped"
       : "Stops each App that uses a volume it backs up",
     stoppedUnavailable: null,

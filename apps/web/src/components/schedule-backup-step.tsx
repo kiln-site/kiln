@@ -155,7 +155,11 @@ export const ScheduleBackupStep = React.memo(function ScheduleBackupStep({
 
 function appBackupDescription(app: ScheduleOption, appVolumes: AppVolumes) {
   const volumes = appVolumes.of(app)
-  if (volumes) return `Backs up ${volumes.join(", ")}`
+  if (volumes) {
+    return volumes.length > 0
+      ? `Backs up ${volumes.join(", ")}`
+      : "No volumes to back up"
+  }
   return appVolumes.loading
     ? "Finding which volumes it uses…"
     : "Backs up the volumes it uses"
