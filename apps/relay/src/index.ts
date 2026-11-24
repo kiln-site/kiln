@@ -220,7 +220,10 @@ import {
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { composeVolumeId, RelayVolumes } from "./volumes.js"
-import { loadPlatformBackupKey } from "./platform-backup-key.js"
+import {
+  ensurePlatformBackupKey,
+  loadPlatformBackupKey,
+} from "./platform-backup-key.js"
 import { inspectEncryptedPlatformBackup } from "./platform-backups.js"
 import { restorePlatform, restorePlatformDatabase } from "./platform-restore.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
@@ -4211,7 +4214,10 @@ async function executeControlRequest(
       await requirePlatformReader(client.id, "read Kiln's recovery code")
       return runRelayEffect(
         "relay.platform.recovery.read",
-        platformRecoveryCode(config)
+        // A restore in another process may have saved another key.
+        ensurePlatformBackupKey(config, startup.state).pipe(
+          Effect.andThen(platformRecoveryCode(config))
+        )
       )
     case "relay.platform.database.write": {
       const input = relayPlatformDatabaseWriteSchema.parse(request.payload)
