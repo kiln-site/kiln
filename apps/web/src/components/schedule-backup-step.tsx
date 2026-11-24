@@ -74,7 +74,11 @@ export const ScheduleBackupStep = React.memo(function ScheduleBackupStep({
       ...rest
     } = action
     const stopped = configuration.consistency === "stopped"
-    const targetKeys = backupStepTargetKeys(step, configuration.targetKeys)
+    const targetKeys = backupStepTargetKeys(
+      step,
+      configuration.mode,
+      configuration.targetKeys
+    )
     onChange({
       ...rest,
       destination: scheduleBackupDestination(configuration.destinationKeys[0]),
@@ -133,14 +137,14 @@ export const ScheduleBackupStep = React.memo(function ScheduleBackupStep({
         storage={storage}
         submitLabel="Save backup"
         targets={listed}
-        targetsNote={(chosen) => (
+        targetsNote={(chosen, mode) => (
           <>
             {step.empty.length > 0
               ? `${scheduleTargetNames(step.empty)} ${step.empty.length === 1 ? "has" : "have"} no volumes to back up. `
               : null}
-            {backupStepTargetKeys(step, chosen)
+            {backupStepTargetKeys(step, mode, chosen)
               ? "Only what's chosen is backed up."
-              : "Targets added to the schedule later are backed up too."}
+              : `${mode === "incremental" ? "Game servers" : "Targets"} added to the schedule later are backed up too.`}
           </>
         )}
         title="Configure Backup"

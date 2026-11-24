@@ -152,16 +152,21 @@ export function backupStep<Option extends BackupStepOption>(
 }
 
 /**
- * The targets a step names once `chosen` is saved for it. All of them is
- * every target, later ones included, so it names none; unless it would then
- * reach one this person can't back up.
+ * The targets a step names once `chosen` is saved for it. All its mode can
+ * back up is every target, later ones included, so it names none; unless it
+ * would then reach one this person can't back up.
  */
 export function backupStepTargetKeys(
   step: Pick<BackupStep<BackupStepOption>, "coversLater" | "listed">,
+  mode: ScheduleBackupAction["mode"],
   chosen: ReadonlyArray<string>
 ): ReadonlyArray<string> | undefined {
+  const every = step.listed.filter(({ option }) =>
+    scheduleActionSupportsTarget({ type: "backup", mode }, option)
+  )
   return step.coversLater &&
-    step.listed.every(({ key }) => chosen.includes(key))
+    every.length === chosen.length &&
+    every.every(({ key }) => chosen.includes(key))
     ? undefined
     : chosen
 }

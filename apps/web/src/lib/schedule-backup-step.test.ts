@@ -60,28 +60,33 @@ function step(
 const names = (keys: ReadonlyArray<string> | undefined) =>
   keys?.map((key) => key.split(":").at(-1))
 
+/** What a step names once saved, by default with what it chose. */
+const saved = (
+  some: ReturnType<typeof step>,
+  mode: ScheduleBackupAction["mode"] = "full",
+  chosen = some.chosen
+) => names(backupStepTargetKeys(some, mode, chosen))
+
 describe("a schedule's backup step", () => {
   it("takes every target, and later ones, once all are chosen", () => {
     const every = step([server, site])
     expect(names(every.chosen)).toEqual(["server", "site"])
-    expect(backupStepTargetKeys(every, every.chosen)).toBeUndefined()
-    expect(
-      names(backupStepTargetKeys(every, every.chosen.slice(0, 1)))
-    ).toEqual(["server"])
+    expect(saved(every)).toBeUndefined()
+    expect(saved(every, "full", every.chosen.slice(0, 1))).toEqual(["server"])
   })
 
-  it("adds nothing when an incremental step is saved as it was", () => {
+  it("covers later game servers, and nothing more, when incremental", () => {
     const incremental = step([server, site], { mode: "incremental" })
     expect(names(incremental.chosen)).toEqual(["server"])
-    expect(
-      names(backupStepTargetKeys(incremental, incremental.chosen))
-    ).toEqual(["server"])
+    expect(saved(incremental, "incremental")).toBeUndefined()
+    // Made full, naming none would take the App too.
+    expect(saved(incremental, "full")).toEqual(["server"])
   })
 
   it("never reaches what this person can't back up", () => {
     const some = step([server, others])
     expect(names(some.chosen)).toEqual(["server"])
-    expect(names(backupStepTargetKeys(some, some.chosen))).toEqual(["server"])
+    expect(saved(some)).toEqual(["server"])
   })
 
   it("keeps one it names that this person can't back up removable", () => {

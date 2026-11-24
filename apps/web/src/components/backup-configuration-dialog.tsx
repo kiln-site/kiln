@@ -96,8 +96,11 @@ interface BackupConfigurationFormProps {
    * however many, or none.
    */
   step?: boolean
-  /** Beneath the targets, for the keys chosen. */
-  targetsNote?: (chosen: ReadonlyArray<string>) => React.ReactNode
+  /** Beneath the targets, for the keys chosen and how they're backed up. */
+  targetsNote?: (
+    chosen: ReadonlyArray<string>,
+    mode: BackupConfiguration["mode"]
+  ) => React.ReactNode
   title: string
 }
 
@@ -274,7 +277,10 @@ function BackupConfigurationForm({
             />
             {targetsNote ? (
               <p className="type-meta mt-1.5 text-muted-foreground">
-                {targetsNote(selectedKeys)}
+                {targetsNote(
+                  chosen.map(({ key }) => key),
+                  effectiveMode
+                )}
               </p>
             ) : null}
             {tooMany ? (
