@@ -464,7 +464,7 @@ const saveDatabase = Effect.fnUntraced(function* (
         ? Effect.succeed(null)
         : Effect.fail(
             new PlatformError({
-              reason: `Couldn't save what's in Kiln's database first, so nothing was restored: ${reason}. ${otherwise}, or restore without saving it, with --without-undo`,
+              reason: `Couldn't save what's in Kiln's database first, so nothing was restored: ${reason.replace(/\.$/u, "")}. ${otherwise}, or restore without saving it, with --without-undo`,
               cause,
             })
           )
