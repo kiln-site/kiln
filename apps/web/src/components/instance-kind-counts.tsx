@@ -55,38 +55,27 @@ const instanceKinds = [
  * events, so a click reaches whatever sits behind or around them.
  */
 export const InstanceKindCounts = React.memo(function InstanceKindCounts({
-  atLeast,
   counts,
-  volumes = "some",
 }: {
-  /** Kinds there may be more of than counted, as volumes not yet known. */
-  atLeast?: ReadonlyArray<keyof InstanceKindCountValues>
   counts: InstanceKindCountValues
-  /** `always` counts volumes at zero too, where they're among what's said. */
-  volumes?: "always" | "some"
 }) {
   return instanceKinds.map(({ key, icon: Icon, one, other }) => {
-    const count = counts[key] ?? 0
+    const count = counts[key]
     // Shown only where there are some, so a list without any keeps its
     // four kinds.
-    if (key === "volumes" && !count && volumes === "some") return null
-    const more = atLeast?.includes(key) === true
+    if (key === "volumes" && !count) return null
     return (
       <span
         key={key}
-        title={`${more ? "At least " : ""}${count} ${count === 1 && !more ? one : other}`}
+        title={`${count} ${count === 1 ? one : other}`}
         className={cn(
           "pointer-events-none flex items-center gap-1 tabular-nums",
-          count || more ? "text-foreground" : "opacity-40"
+          count ? "text-foreground" : "opacity-40"
         )}
       >
         <Icon className="size-3.5" aria-hidden="true" />
         {count}
-        {more ? "+" : null}
-        <span className="sr-only">
-          {more ? " or more " : ""}
-          {count === 1 && !more ? one : other}
-        </span>
+        <span className="sr-only">{count === 1 ? one : other}</span>
       </span>
     )
   })

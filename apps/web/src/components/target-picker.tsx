@@ -10,7 +10,10 @@ import {
 } from "@/components/drawer-popover"
 import { GroupPickerCard } from "@/components/group-picker-card"
 import { InstanceCard } from "@/components/instance-card"
-import { InstancePickerContent } from "@/components/instance-picker"
+import {
+  InstancePickerChecklist,
+  InstancePickerContent,
+} from "@/components/instance-picker"
 import { VolumePickerCard } from "@/components/volumes/volume-field"
 import type { AnyInstancePickerItem } from "@/lib/instance-picker-filters"
 
@@ -82,16 +85,47 @@ export const TargetPicker = React.memo(function TargetPicker({
   targets: ReadonlyArray<PickerTarget>
 }) {
   const [open, setOpen] = React.useState(false)
-  const { chosen, shown, toggleItem } = useTargetRows(
-    groups,
-    targets,
-    selectedKeys,
-    onToggle
+  // Groups first: each is a quick way to what follows it.
+  const items = React.useMemo(
+    () => [
+      ...groups.map(targetPickerGroupItem),
+      ...targets.map(targetPickerItem),
+    ],
+    [groups, targets]
+  )
+  // One that's gone stays removable while chosen. Only those rows change
+  // with what is chosen; the rest are the same rows every time.
+  const shown = React.useMemo(() => {
+    if (!targets.some((target) => target.unavailable)) return items
+    const removable = new Set(
+      targets.flatMap((target) =>
+        target.unavailable && selectedKeys.has(target.key) ? [target.key] : []
+      )
+    )
+    if (removable.size === 0) return items
+    return items.map((item) =>
+      removable.has(item.key) ? { ...item, disabled: false } : item
+    )
+  }, [items, selectedKeys, targets])
+  // What is chosen, in the order it is listed.
+  const chosen = React.useMemo(
+    () => targets.filter((target) => selectedKeys.has(target.key)),
+    [selectedKeys, targets]
   )
   const [only] = chosen.length === 1 ? chosen : []
   const onlyItem = React.useMemo(
     () => (only ? targetPickerItem(only) : null),
     [only]
+  )
+  // Several can be chosen, so the list stays open as each is ticked. A
+  // row that stands for others only ticks them: all of them, or none when
+  // they all are already.
+  const toggleItem = React.useCallback(
+    (item: AnyInstancePickerItem) => {
+      const keys = item.stands ?? [item.key]
+      onToggle(keys, !keys.every((key) => selectedKeys.has(key)))
+    },
+    [onToggle, selectedKeys]
   )
 
   return (
@@ -162,91 +196,48 @@ export const TargetPicker = React.memo(function TargetPicker({
 })
 
 /**
- * The same list, open in place rather than behind a field, for a form
- * that's already about what it lists, as a backup step's own targets.
+ * Targets to tick in place, for a form that's already about a few of them,
+ * as a schedule's backup step is about the schedule's.
  */
-export const TargetPickerList = React.memo(function TargetPickerList({
+export const TargetChecklist = React.memo(function TargetChecklist({
   ariaLabel,
   emptyMessage,
-  groups = noGroups,
   onToggle,
   selectedKeys,
   targets,
 }: {
   ariaLabel: string
   emptyMessage: string
-  groups?: ReadonlyArray<PickerGroup>
   onToggle: (keys: ReadonlyArray<string>, selected: boolean) => void
   selectedKeys: ReadonlySet<string>
   targets: ReadonlyArray<PickerTarget>
 }) {
-  const { shown, toggleItem } = useTargetRows(
-    groups,
-    targets,
-    selectedKeys,
-    onToggle
-  )
-  return (
-    <div className="overflow-hidden rounded-md border">
-      <InstancePickerContent
-        ariaLabel={ariaLabel}
-        emptyMessage={emptyMessage}
-        filterBar={false}
-        items={shown}
-        multiple
-        selectedKeys={selectedKeys}
-        onSelect={toggleItem}
-        onSelectMany={onToggle}
-      />
-    </div>
-  )
-})
-
-// The rows of either: groups first, each a quick way to what follows it.
-function useTargetRows(
-  groups: ReadonlyArray<PickerGroup>,
-  targets: ReadonlyArray<PickerTarget>,
-  selectedKeys: ReadonlySet<string>,
-  onToggle: (keys: ReadonlyArray<string>, selected: boolean) => void
-) {
+  // One that's gone stays removable while chosen.
   const items = React.useMemo(
-    () => [
-      ...groups.map(targetPickerGroupItem),
-      ...targets.map(targetPickerItem),
-    ],
-    [groups, targets]
-  )
-  // One that's gone stays removable while chosen. Only those rows change
-  // with what is chosen; the rest are the same rows every time.
-  const shown = React.useMemo(() => {
-    if (!targets.some((target) => target.unavailable)) return items
-    const removable = new Set(
-      targets.flatMap((target) =>
-        target.unavailable && selectedKeys.has(target.key) ? [target.key] : []
-      )
-    )
-    if (removable.size === 0) return items
-    return items.map((item) =>
-      removable.has(item.key) ? { ...item, disabled: false } : item
-    )
-  }, [items, selectedKeys, targets])
-  // What is chosen, in the order it is listed.
-  const chosen = React.useMemo(
-    () => targets.filter((target) => selectedKeys.has(target.key)),
+    () =>
+      targets.map((target) => {
+        const item = targetPickerItem(target)
+        return target.unavailable && selectedKeys.has(target.key)
+          ? { ...item, disabled: false }
+          : item
+      }),
     [selectedKeys, targets]
   )
-  // Several can be chosen, so the list stays open as each is ticked. A
-  // row that stands for others only ticks them: all of them, or none when
-  // they all are already.
-  const toggleItem = React.useCallback(
-    (item: AnyInstancePickerItem) => {
-      const keys = item.stands ?? [item.key]
-      onToggle(keys, !keys.every((key) => selectedKeys.has(key)))
-    },
+  const toggle = React.useCallback(
+    (item: AnyInstancePickerItem) =>
+      onToggle([item.key], !selectedKeys.has(item.key)),
     [onToggle, selectedKeys]
   )
-  return { chosen, shown, toggleItem }
-}
+  return (
+    <InstancePickerChecklist
+      ariaLabel={ariaLabel}
+      emptyMessage={emptyMessage}
+      items={items}
+      selectedKeys={selectedKeys}
+      onToggle={toggle}
+    />
+  )
+})
 
 const kindLabels: Record<PickerTarget["kind"], string> = {
   app: "App",
