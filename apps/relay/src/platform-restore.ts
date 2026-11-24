@@ -181,10 +181,16 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
           ),
         catch: (cause) =>
           new PlatformError({
-            reason: `Couldn't restore Kiln's database: ${cause instanceof Error ? cause.message : String(cause)}. Hearth is stopped until a restore finishes; run this again`,
+            reason: `Couldn't restore Kiln's database: ${cause instanceof Error ? cause.message : String(cause)}`,
             cause,
           }),
-      })
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() =>
+            print("Hearth is stopped until a restore finishes. Run this again.")
+          )
+        )
+      )
       return undo
     })
   )
@@ -213,6 +219,17 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
 // Where the undo copy of a restore that hasn't finished is, so one run again
 // keeps what was there first rather than what the failed one left.
 const UNDO_METADATA_KEY = "platform_restore_undo"
+
+/** Whether Kiln's database may hold part of a restore that hasn't finished. */
+export const restoreUnfinished = Effect.fnUntraced(function* (
+  config: Pick<RelayConfig, "dataDirectory">,
+  state: RelayStateStore["Service"]
+) {
+  const installed = yield* readPlatformState(config.dataDirectory)
+  return installed
+    ? installed.phase === "maintenance"
+    : Boolean(yield* state.getMetadata(UNDO_METADATA_KEY))
+})
 
 /**
  * Replaces the database of a Kiln something else runs, with Hearth stopped

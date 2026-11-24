@@ -66,7 +66,8 @@ import {
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { platformBackupKey } from "./platform-backup-key.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
-import { withPlatformLock } from "./platform-state.js"
+import { restoreUnfinished } from "./platform-restore.js"
+import { PlatformError, withPlatformLock } from "./platform-state.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
@@ -1954,30 +1955,36 @@ export class BackupManager {
             reason: backupErrorMessage(cause),
             cause,
           })
-        const result = yield* Effect.all([
-          platformBackupKey(this.#config, this.#state),
-          collectPlatformRecovery(this.#config, this.#state),
-        ]).pipe(
-          Effect.mapError(platformFailure),
-          Effect.flatMap(([key, recovery]) =>
-            // So a restore on the host, by another process, isn't dumped
-            // partway and kept as a whole backup.
-            withPlatformLock(
-              this.#config.dataDirectory,
-              Effect.tryPromise({
-                try: () =>
-                  createEncryptedPlatformBackup(
-                    { ...this.#config, platformBackupKey: key },
-                    input,
-                    destination,
-                    progress,
-                    createSignal,
-                    recovery
-                  ),
-                catch: (cause) => cause,
+        // Holding the lock, so a restore on the host, by another process,
+        // isn't dumped partway and kept as a whole backup.
+        const result = yield* withPlatformLock(
+          this.#config.dataDirectory,
+          Effect.gen({ self: this }, function* () {
+            if (yield* restoreUnfinished(this.#config, this.#state)) {
+              return yield* new PlatformError({
+                reason:
+                  "A restore of Kiln hasn't finished, so there may be only part of its database. Run it again first.",
               })
-            ).pipe(Effect.mapError(platformFailure))
-          ),
+            }
+            const [key, recovery] = yield* Effect.all([
+              platformBackupKey(this.#config, this.#state),
+              collectPlatformRecovery(this.#config, this.#state),
+            ])
+            return yield* Effect.tryPromise({
+              try: () =>
+                createEncryptedPlatformBackup(
+                  { ...this.#config, platformBackupKey: key },
+                  input,
+                  destination,
+                  progress,
+                  createSignal,
+                  recovery
+                ),
+              catch: (cause) => cause,
+            })
+          })
+        ).pipe(
+          Effect.mapError(platformFailure),
           Effect.withSpan("Backups.platform.dump"),
           Effect.flatMap((created) =>
             storeCreatedBackup(

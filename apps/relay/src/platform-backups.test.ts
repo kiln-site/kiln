@@ -183,6 +183,47 @@ async function coolifyKiln(
   }
 }
 
+// As a schedule or the panel has the Relay back Kiln up.
+async function backupManager(kiln: Awaited<ReturnType<typeof coolifyKiln>>) {
+  const { harness } = kiln
+  const manager = await Effect.runPromise(
+    BackupManager.make({
+      apps: {
+        isRunning: async () => false,
+        start: async () => {},
+        stop: async () => {},
+        volumes: async () => [],
+      },
+      config: harness.config,
+      fences: await TarRestoreFences.load(harness.config),
+      findInstance: async () => null,
+      isInstanceStopped: async () => true,
+      lanes: harness.lanes,
+      volumes: harness.volumes,
+    }).pipe(Effect.provideService(RelayStateStore, harness.state))
+  )
+  const backUp = (taskId: string = randomUUID()) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* manager.enqueue({
+          artifactKind: "platform_bundle",
+          backupId: randomUUID(),
+          destination: { kind: "local" },
+          exclude: [],
+          kind: "create",
+          maxBytes: null,
+          mode: "full",
+          reason: "manual",
+          target: { id: "kiln-test", kind: "platform" },
+          taskId,
+        })
+        yield* manager.runPending()
+        return (yield* manager.get(taskId))!
+      })
+    )
+  return { backUp, manager }
+}
+
 describe("Kiln platform backups deployed by Coolify", () => {
   it("backs up Hearth's database, and restores it once Coolify removes Hearth's container", async () => {
     const kiln = await coolifyKiln()
@@ -273,22 +314,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
     const kiln = await coolifyKiln()
     kiln.database.sqlDump = "CREATE TABLE kept (id int);"
     const { harness } = kiln
-    const manager = await Effect.runPromise(
-      BackupManager.make({
-        apps: {
-          isRunning: async () => false,
-          start: async () => {},
-          stop: async () => {},
-          volumes: async () => [],
-        },
-        config: harness.config,
-        fences: await TarRestoreFences.load(harness.config),
-        findInstance: async () => null,
-        isInstanceStopped: async () => true,
-        lanes: harness.lanes,
-        volumes: harness.volumes,
-      }).pipe(Effect.provideService(RelayStateStore, harness.state))
-    )
+    const { backUp, manager } = await backupManager(kiln)
     const restarted = Deferred.makeUnsafe<void>()
     const restart = Effect.runFork(
       harness.lanes.run(
@@ -305,24 +331,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
       )
     )
     const taskId = randomUUID()
-    const backup = Effect.runPromise(
-      Effect.gen(function* () {
-        yield* manager.enqueue({
-          artifactKind: "platform_bundle",
-          backupId: randomUUID(),
-          destination: { kind: "local" },
-          exclude: [],
-          kind: "create",
-          maxBytes: null,
-          mode: "full",
-          reason: "manual",
-          target: { id: "kiln-test", kind: "platform" },
-          taskId,
-        })
-        yield* manager.runPending()
-        return (yield* manager.get(taskId))!
-      })
-    )
+    const backup = backUp(taskId)
 
     // It waits its turn rather than dump a database being restarted.
     await vi.waitFor(() => expect(harness.lanes.pending.waiting).toBe(1))
@@ -417,6 +426,21 @@ describe("Kiln platform backups deployed by Coolify", () => {
     expect(kiln.database.executedSql.at(-1)).toContain(
       "CREATE TABLE before (id int);"
     )
+  })
+
+  it("isn't backed up with part of a failed restore in its database", async () => {
+    const kiln = await coolifyKiln()
+    fakeDocker.removeContainer("hearth-1")
+    const { restore } = await restoring(kiln)
+    const { backUp } = await backupManager(kiln)
+
+    fakeDocker.programFailures.set("mysql", "Lost connection")
+    await expect(restore("")).rejects.toThrow()
+    fakeDocker.programFailures.delete("mysql")
+    expect(await backUp()).toMatchObject({ status: "failed" })
+
+    await restore("")
+    expect(await backUp()).toMatchObject({ status: "succeeded" })
   })
 
   it("saves again what's there after a try that changed nothing", async () => {
