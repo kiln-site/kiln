@@ -537,9 +537,10 @@ describe("Kiln platform backups deployed by Coolify", () => {
     fakeDocker.programFailures.delete("mysqldump")
     expect(kiln.database.executedSql.length).toBe(imported)
     expect(fakeDocker.container("hearth-1")?.state.running).toBe(true)
+    // The first restore can still be undone.
     expect(await outcome()).toMatchObject({
       error: expect.stringContaining("Lost connection"),
-      undo: null,
+      undo: expect.stringContaining("before-restore"),
     })
   })
 

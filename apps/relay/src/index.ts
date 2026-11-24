@@ -4224,11 +4224,13 @@ async function executeControlRequest(
             "Only the Hearth that runs beside this Relay can restore Kiln"
           )
         }
+        // Read first: once it has started, Hearth isn't told it failed.
+        const status = await kilnStatus(record)
         await startKilnRestore(input.source, signal)
         await appendRelayAudit("platform.action", client.id, request.id, {
           action: input.action,
         })
-        return kilnStatus(record)
+        return status
       }
       if (
         !platformStartup.state ||

@@ -68,7 +68,7 @@ import {
   writePlatformState,
   type PlatformState,
 } from "./platform-state.js"
-import { saveRestoreOutcome } from "./restore-outcome.js"
+import { readRestoreOutcome, saveRestoreOutcome } from "./restore-outcome.js"
 
 export interface PlatformRestoreInput {
   readonly config: RelayConfig
@@ -233,9 +233,16 @@ export const restoreForHearth = Effect.fn("Relay.platform.restoreForHearth")(
     const { config, engine, state } = input
     const { installationId } = config
     const installed = yield* readPlatformState(config.dataDirectory)
+    // It starts Hearth again below, which another restore may hold stopped.
+    if (installed && installed.phase !== "ready") {
+      return yield* new PlatformError({
+        reason: "Hearth is held stopped, as by a restore on the Relay's host",
+      })
+    }
     const hosted = installationId
       ? yield* readHostedKiln(state, installationId)
       : null
+    const earlier = yield* readRestoreOutcome(state)
     const replaced: Array<string | null> = []
     const restore = (source: string, withoutUndo: boolean) => {
       const restoring: PlatformRestoreInput = {
@@ -277,14 +284,17 @@ export const restoreForHearth = Effect.fn("Relay.platform.restoreForHearth")(
             phase: "ready",
           }))
         }
+      }
+      yield* startHearth
+      if (failure) {
         yield* saveRestoreOutcome(state, {
           at: new Date().toISOString(),
           backupCreatedAt,
           error: failure.message,
-          undo: null,
+          // What's there is what it was, so what undoes that still does.
+          undo: earlier?.undo ?? null,
         })
       }
-      yield* startHearth
     })
     // Held whole where something else runs Hearth, so a restore on the host
     // doesn't start between its steps.
