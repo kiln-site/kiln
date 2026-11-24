@@ -66,6 +66,7 @@ import {
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { platformBackupKey } from "./platform-backup-key.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
+import { withPlatformLock } from "./platform-state.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
@@ -1959,18 +1960,23 @@ export class BackupManager {
         ]).pipe(
           Effect.mapError(platformFailure),
           Effect.flatMap(([key, recovery]) =>
-            Effect.tryPromise({
-              try: () =>
-                createEncryptedPlatformBackup(
-                  { ...this.#config, platformBackupKey: key },
-                  input,
-                  destination,
-                  progress,
-                  createSignal,
-                  recovery
-                ),
-              catch: platformFailure,
-            })
+            // So a restore on the host, by another process, isn't dumped
+            // partway and kept as a whole backup.
+            withPlatformLock(
+              this.#config.dataDirectory,
+              Effect.tryPromise({
+                try: () =>
+                  createEncryptedPlatformBackup(
+                    { ...this.#config, platformBackupKey: key },
+                    input,
+                    destination,
+                    progress,
+                    createSignal,
+                    recovery
+                  ),
+                catch: (cause) => cause,
+              })
+            ).pipe(Effect.mapError(platformFailure))
           ),
           Effect.withSpan("Backups.platform.dump"),
           Effect.flatMap((created) =>
