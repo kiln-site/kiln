@@ -51,6 +51,7 @@ import {
   isDockerNotFound,
 } from "./docker-engine.js"
 import type { RelayClientRecord, RelayStateStore } from "./effect/state.js"
+import { type HostedKiln, saveHostedKiln } from "./hosted-kiln.js"
 import { adoptProvenHearth } from "./installation.js"
 import {
   ensurePlatformBackupKey,
@@ -331,9 +332,8 @@ export function platformRecoveryKit(state: PlatformState) {
 
 /**
  * Kiln's recovery code, for Hearth to show its platform administrators: the
- * platform backup key of the Kiln this Relay installed, whose backups carry
- * the rest, or else of the one it runs beside, whose operator's own
- * environment file holds the rest.
+ * platform backup key of the Kiln this Relay installed, or else of the one
+ * it runs beside. Its backups carry the rest.
  */
 export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
   function* (
@@ -348,7 +348,6 @@ export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
       return {
         code: encodeRecoveryCode(state.secrets.platformBackupKey),
         installationId: state.installationId,
-        scope: "installation",
       } satisfies RelayRecoveryCode
     }
     const key = yield* platformBackupKey(config, store)
@@ -356,7 +355,6 @@ export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
       return {
         code: encodeRecoveryCode(key),
         installationId: config.installationId,
-        scope: "environment",
       } satisfies RelayRecoveryCode
     }
     return yield* new PlatformError({
@@ -365,13 +363,12 @@ export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
   }
 )
 
-function platformRecoveryScope(
+// A Hearth that proved itself with its database beside it has a key.
+function hasRecoveryCode(
   config: Pick<RelayConfig, "installationId" | "provenHearth">,
   state: PlatformState | null
-): RelayPlatformStatus["recovery"] {
-  if (state) return "installation"
-  // A Hearth that proved itself with its database beside it has a key.
-  return provenHearth(config)?.database ? "environment" : null
+): boolean {
+  return state !== null || Boolean(provenHearth(config)?.database)
 }
 
 interface ServiceSpec {
@@ -447,6 +444,9 @@ function serviceSpecs(
       DB_NAME: state.database.name,
       DB_USERNAME: state.database.user,
       DB_PASSWORD: state.secrets.databasePassword,
+      ...(state.database.tablePrefix && {
+        DB_TABLE_PREFIX: state.database.tablePrefix,
+      }),
       ...(state.cache && { CACHE_HOST: names.cache, CACHE_PORT: "6379" }),
       BETTER_AUTH_SECRETS: state.secrets.authSecrets,
       KILN_RELAY_BOOTSTRAP_TOKEN: state.secrets.bootstrapToken,
@@ -1167,7 +1167,7 @@ export const platformStatus = Effect.fn("Relay.platform.status")(function* (
       actions: canManage && proxy.managedBy === "kiln" ? ["restart"] : [],
       managedBy: proxy.managedBy,
     },
-    recovery: platformRecoveryScope(config, state),
+    recovery: hasRecoveryCode(config, state),
     restored: state?.restored ?? null,
     services,
   } satisfies RelayPlatformStatus
@@ -1332,10 +1332,31 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
       containerId: container.Id,
       database: provenContainer(beside.get("database")),
       databaseName: environmentValue(container, "DB_NAME")?.trim() || null,
+      hosted: hostedKilnIn(container, beside.get("database"), secret),
       secretDigests: hearthSecretDigests(secret),
-    } satisfies Omit<ProvenHearth, "clientId" | "installationId">
+    }
   }
 )
+
+// What a new machine would run this Hearth from, read from its container and
+// its database's; null without a database of its own beside it.
+function hostedKilnIn(
+  hearth: DockerContainerInspect,
+  database: DockerContainerInspect | undefined,
+  authSecrets: string
+): Omit<HostedKiln, "clientId"> | null {
+  const databaseName = environmentValue(hearth, "DB_NAME")?.trim()
+  const databaseImage = database?.Config.Image
+  const url = environmentValue(hearth, "KILN_URL")?.trim()
+  if (!databaseName || !databaseImage || !url) return null
+  return {
+    authSecrets,
+    databaseImage,
+    databaseName,
+    tablePrefix: environmentValue(hearth, "DB_TABLE_PREFIX")?.trim() || null,
+    url,
+  }
+}
 
 // Hearths' claims are checked one at a time, in the order they arrived, and
 // one a newer claim arrived behind is dropped, so a slow check of a Hearth
@@ -1345,7 +1366,8 @@ let latestClaim = 0
 
 /**
  * Checks the container a full-access Hearth says it runs in and, once
- * proven, saves what's beside it, and that Kiln's backup key if it has none.
+ * proven, saves what's beside it, and what Kiln's backups carry of it: the
+ * key they're encrypted with, and what a new machine would run it from.
  * Returns whether it saved it.
  */
 export function identifyHearth(
@@ -1370,15 +1392,22 @@ export function identifyHearth(
       if (claimed !== latestClaim) return false
       const proven = yield* provenHearthContainer(engine, claim)
       if (!proven || claimed !== latestClaim) return false
+      const { hosted, ...hearth } = proven
       yield* adoptProvenHearth(config, state, {
-        ...proven,
+        ...hearth,
         clientId: claim.clientId,
         installationId: claim.installationId,
       })
       if (config.provenHearth?.containerId !== proven.containerId) return false
       // Kiln's backups are made here. Only now: a key made without a proven
       // Hearth would have a recovery code nobody could see.
-      if (proven.database) yield* ensurePlatformBackupKey(config, state)
+      if (hosted) {
+        yield* saveHostedKiln(state, claim.installationId, {
+          ...hosted,
+          clientId: claim.clientId,
+        })
+        yield* ensurePlatformBackupKey(config, state)
+      }
       return true
     })
   )

@@ -22,11 +22,13 @@ import { Effect, Predicate } from "effect"
 import type { RelayConfig } from "./config.js"
 import type { DockerEngine } from "./docker-engine.js"
 import {
+  fingerprint,
   readRelayIdentityMaterial,
   writeRelayIdentityMaterial,
 } from "./effect/identity.js"
 import type { RelayStateStore } from "./effect/state.js"
-import { writeRelayCertificateAuthority } from "./effect/tls.js"
+import { loadRelayTls, writeRelayCertificateAuthority } from "./effect/tls.js"
+import { readHostedKiln } from "./hosted-kiln.js"
 import { savedInstallationId } from "./installation.js"
 import {
   DEFAULT_BIND_ADDRESS,
@@ -44,9 +46,11 @@ import {
 import {
   clearPlatformStaging,
   createEncryptedPlatformBackup,
+  hearthTable,
   platformBackupOpensWith,
   readPlatformBackupRecovery,
   restoreEncryptedPlatformBackup,
+  runsOnNewMachine,
 } from "./platform-backups.js"
 import {
   collectPlatformRecovery,
@@ -130,12 +134,17 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
         : null
       if (undo) print(`Saved what was here to ${undo}`)
       print("Restoring Kiln's database")
+      const afterwards = yield* ownRelayAddress(restoreConfig, installed)
       yield* Effect.tryPromise({
         try: () =>
           restoreEncryptedPlatformBackup(
             restoreConfig,
             source,
-            installed.installationId
+            installed.installationId,
+            {
+              afterwards,
+              tablePrefix: installed.database.tablePrefix ?? null,
+            }
           ),
         catch: (cause) =>
           new PlatformError({
@@ -204,6 +213,7 @@ export const restorePlatformDatabase = Effect.fn(
   }
   if (!opens) print("This backup was made with another recovery code")
   const key = opens ? own : yield* keyFromCode(input.recoveryCode)
+  const hosted = yield* readHostedKiln(state, input.installationId)
   if (!opens && !(yield* opensWith(key))) {
     return yield* new PlatformError({
       reason:
@@ -216,7 +226,8 @@ export const restorePlatformDatabase = Effect.fn(
       restoreEncryptedPlatformBackup(
         { ...config, platformBackupKey: key },
         source,
-        input.installationId
+        input.installationId,
+        { tablePrefix: hosted?.tablePrefix ?? null }
       )
     )
   )
@@ -272,6 +283,11 @@ const putBack = Effect.fnUntraced(function* (
   }
   const inputs = platformInputs(environment)
   const { installation } = recovery
+  if (!runsOnNewMachine(installation)) {
+    return yield* new PlatformError({
+      reason: `That Kiln's database ran on ${installation.database.image}. A new machine runs MySQL, so restore it where Kiln has that database.`,
+    })
+  }
   // That address isn't this machine's, and every address would open up a
   // Hearth that wasn't.
   if (
@@ -300,6 +316,7 @@ const putBack = Effect.fnUntraced(function* (
     },
     names: platformNames(config),
     phase: "maintenance",
+    relay: { host: config.advertisedHost, port: config.port },
   }
   yield* writeRelayIdentityMaterial(config, recovery.relay.identity)
   if (recovery.relay.tlsAuthority) {
@@ -311,6 +328,33 @@ const putBack = Effect.fnUntraced(function* (
     writePlatformState(config.dataDirectory, restored)
   )
   return restored
+})
+
+/**
+ * Where Hearth finds this Relay, for its restored database, which has where
+ * the Relay was: on another machine, perhaps behind a proxy there, or
+ * connecting to Hearth itself. Here Hearth connects to it on Kiln's network.
+ */
+const ownRelayAddress = Effect.fnUntraced(function* (
+  config: RelayConfig,
+  installation: PlatformState
+) {
+  const identity = yield* readRelayIdentityMaterial(config)
+  // Made here when the backup's Relay had none, behind a proxy.
+  const tls = yield* loadRelayTls(config)
+  const origin = new URL(config.browserOrigin)
+  const text = (value: string) =>
+    `CONVERT(0x${Buffer.from(value, "utf8").toString("hex")} USING utf8mb4)`
+  return `
+UPDATE ${hearthTable(installation.database.tablePrefix ?? null, "relay")}
+   SET hostname = ${text(origin.hostname)},
+       port = ${Number(origin.port || 443)},
+       use_tls = ${origin.protocol === "https:" ? 1 : 0},
+       browser_origin = ${text(origin.origin)},
+       relay_ca_certificate = ${tls?.caCertificatePem ? text(tls.caCertificatePem) : "NULL"},
+       control_dial = 'hearth'
+ WHERE fingerprint = ${text(fingerprint(identity.publicKeyPem))};
+`
 })
 
 /**

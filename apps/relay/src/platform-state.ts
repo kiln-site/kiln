@@ -76,6 +76,8 @@ export const PlatformStateSchema = Schema.Struct({
   database: Schema.Struct({
     image: Schema.String,
     name: Schema.String,
+    /** Hearth's DB_TABLE_PREFIX, when it isn't the default. */
+    tablePrefix: Schema.optionalKey(Schema.String),
     user: Schema.String,
   }),
   cache: Schema.NullOr(Schema.Struct({ image: Schema.String })),

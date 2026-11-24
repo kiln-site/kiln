@@ -63,7 +63,7 @@ vi.mock("@/server/platform-access.server", () => ({
       error: null,
       relayId: "relay-a",
       relayName: "Relay A",
-      status: { installationId: "kiln-test", recovery: "environment" },
+      status: { installationId: "kiln-test", recovery: true },
     },
   ],
   platformRelay: async (relayId: string) => ({ id: relayId }),
@@ -77,7 +77,6 @@ vi.mock("@/lib/relay-connection", () => ({
     return {
       code: "kiln-rk-platform-backup-key",
       installationId: "kiln-test",
-      scope: "environment",
     }
   },
 }))
@@ -137,7 +136,7 @@ describeMysql("recovery code", () => {
           (yield* reveal(null)).shown?.code,
           "kiln-rk-platform-backup-key"
         )
-        assert.strictEqual((yield* reveal(null)).shown?.scope, "environment")
+        assert.isNotNull((yield* reveal(null)).shown)
         yield* Effect.promise(() => acknowledgeRecoveryCode())
         assert.include((yield* reveal(null)).refused, "two-factor")
       })
@@ -168,15 +167,9 @@ describeMysql("recovery code", () => {
         assert.isNull((yield* reveal(null)).shown)
         assert.isNull((yield* reveal("654321")).shown)
         assert.strictEqual(relay.reads, 0)
-        assert.strictEqual(
-          (yield* reveal("123456")).shown?.scope,
-          "environment"
-        )
+        assert.isNotNull((yield* reveal("123456")).shown)
 
-        assert.strictEqual(
-          (yield* reveal("abcde-fghij")).shown?.scope,
-          "environment"
-        )
+        assert.isNotNull((yield* reveal("abcde-fghij")).shown)
         assert.isNull((yield* reveal("abcde-fghij")).shown)
       })
     )

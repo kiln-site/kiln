@@ -244,8 +244,8 @@ export async function recoveryCodeStatus(): Promise<RecoveryCodeStatus> {
       record.savedBy ? userName(record.savedBy) : null,
       record.savedAt === null
         ? recoverPromise(
-            async () => (await recoveryHost()).host?.status?.recovery ?? "none",
-            () => "none" as const
+            async () => (await recoveryHost()).host?.status?.recovery ?? false,
+            () => false
           )
         : null,
       runAppEffect("recoveryCode.recoverableBackup", newestRecoverableBackup()),

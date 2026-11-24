@@ -21,20 +21,10 @@ export function decodeRecoveryCode(text: string): string | null {
     : null
 }
 
-/**
- * What a Relay holds to restore Kiln: the code for a Kiln it installed,
- * whose backups carry the rest, or for one whose other secrets live in the
- * operator's own environment file, which they must keep too.
- */
-export const relayRecoveryScopeSchema = z.enum(["installation", "environment"])
-
-export type RelayRecoveryScope = z.infer<typeof relayRecoveryScopeSchema>
-
 /** The Relay hosting Kiln's answer to `relay.platform.recovery.read`. */
 export const relayRecoveryCodeSchema = z.object({
   code: z.string().min(recoveryCodePrefix.length + 1),
   installationId: z.string().min(1).max(120),
-  scope: relayRecoveryScopeSchema,
 })
 
 export type RelayRecoveryCode = z.infer<typeof relayRecoveryCodeSchema>

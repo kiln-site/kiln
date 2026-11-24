@@ -33,7 +33,7 @@ export function RecoveryCodePanel({
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const { needsTwoFactor } = status
-  const unavailable = status.available === "none"
+  const unavailable = status.available === false
 
   const show = React.useCallback(
     async (entered: string | null) => {

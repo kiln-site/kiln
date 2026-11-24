@@ -406,10 +406,10 @@ docker run --rm -it --entrypoint kiln-relay \
 ## Recovery
 
 Kiln's **recovery code** (`kiln-rk-…`) is its platform backup key, the one
-thing to keep apart from Kiln. A [platform backup](backups.md) made by a Relay
-in platform mode (format 2) carries everything else a new machine needs, so
-that backup and the code restore Kiln. Without the code, Kiln's backups can't
-be read. Save it after installing, and keep it apart from the backups.
+thing to keep apart from Kiln. A [platform backup](backups.md) carries
+everything else a new machine needs, however Kiln was installed, so that backup
+and the code restore Kiln. Without the code, Kiln's backups can't be read. Save
+it after installing, and keep it apart from the backups.
 
 Anyone with the code and a backup can read everything that backup holds.
 
@@ -439,14 +439,9 @@ Five wrong codes in 15 minutes pause the checks. Each showing, and each
 "I've saved it", is recorded in the audit log, never the code itself.
 
 The Security card also says whether a backup the code restores exists away
-from this machine: a format 2 platform backup with a copy on a backup
+from this machine: a platform backup of a Kiln on MySQL with a copy on a backup
 destination. Kiln's daily schedule keeps its backups on this machine's disk,
 which doesn't survive losing it; add a destination to keep one elsewhere.
-
-A Kiln whose secrets come from its own environment (Coolify, or Hearth run by
-hand) writes format 1 backups, which hold only Hearth's database. The Relay
-beside it generates and keeps its key, and Hearth offers the code the same way.
-The operator's own environment file must be kept too: restoring needs both.
 
 ### Restoring on a new machine
 
@@ -482,6 +477,10 @@ it before anything is written. Once Kiln's Relay is running, the backup is back
 and what's left is [an ordinary install](#install): run the installer without
 `--restore` to see how it's doing, and `docker logs kiln-relay` for why Hearth
 isn't up.
+
+A Kiln that Coolify or something else ran comes back as one the installer runs,
+on the database image it had, which must be MySQL. So this is also how to move
+one under the installer: back it up, stop it, and restore it.
 
 It's the same Kiln on the same Relay: the same installation ID, secrets and
 recovery code, so other Relays reconnect and its backups stay listed. Keep the

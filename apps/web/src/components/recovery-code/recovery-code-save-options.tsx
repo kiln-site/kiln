@@ -97,11 +97,6 @@ export const RecoveryCodeSaveOptions = React.memo(
           </Button>
           <OnePasswordSaveButton request={request} />
         </div>
-        {reveal.scope === "environment" ? (
-          <p className="type-meta text-muted-foreground">
-            Keep your environment file too: Kiln needs both to restore.
-          </p>
-        ) : null}
       </div>
     )
   }
@@ -125,14 +120,9 @@ function onePasswordRequest(
       { autocomplete: "current-password", value: reveal.code },
       { autocomplete: "url", value: origin },
     ],
-    notes: [
-      recoveryCodePurpose,
-      ...(reveal.scope === "environment"
-        ? ["Keep Kiln's environment file too: restoring needs both."]
-        : []),
-      "",
-      `Restoring: ${recoveryDocsUrl}`,
-    ].join("\n"),
+    notes: [recoveryCodePurpose, "", `Restoring: ${recoveryDocsUrl}`].join(
+      "\n"
+    ),
     title: `Kiln recovery code (${host})`,
   }
 }

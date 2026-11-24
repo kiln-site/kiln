@@ -32,7 +32,7 @@ export const RecoveryCodeToast = React.memo(function RecoveryCodeToast() {
     isPlatformAdmin === true &&
     status !== undefined &&
     !status.saved &&
-    status.available !== "none"
+    status.available !== false
 
   React.useEffect(() => {
     if (!unsaved) {

@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto"
 import { readdir, writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join } from "node:path"
@@ -15,10 +16,12 @@ import {
 import {
   addOwnerInvitation,
   followHearthAddress,
+  identifyHearth,
   platformRecoveryCode,
   reconcilePlatform,
   startPlatform,
 } from "./platform.js"
+import { platformBackupKey } from "./platform-backup-key.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
 import { restorePlatform } from "./platform-restore.js"
@@ -138,6 +141,68 @@ async function runningKiln(environment: NodeJS.ProcessEnv = {}) {
   return { backup, code, identity, kiln, record: (await kiln.record())! }
 }
 
+// A Kiln that Coolify runs, its backup, and what opens it.
+async function coolifyKiln(databaseImage: string) {
+  fakeDocker.reset()
+  const { config, state } = await relayHarness({
+    KILN_INSTALLATION_ID: "coolify-kiln",
+  })
+  fakeDocker.addNetwork({ name: "coolify" })
+  const hearth = fakeDocker.addContainer({
+    env: {
+      BETTER_AUTH_SECRETS: "1:hearth-secret",
+      DB_HOST: "coolify-mysql",
+      DB_NAME: "default",
+      KILN_URL: url,
+    },
+    name: "hearth-1",
+    networks: ["coolify"],
+    running: true,
+  })
+  fakeDocker.addContainer({
+    env: { MYSQL_DATABASE: "default" },
+    image: databaseImage,
+    mounts: [
+      { destination: "/var/lib/mysql", source: "mysql-data", type: "volume" },
+    ],
+    name: "coolify-mysql",
+    networks: ["coolify"],
+    running: true,
+  }).sqlDump = "CREATE TABLE kept (id int);"
+  await run(loadOrCreateRelayIdentity(config))
+  await run(state.restoreClients([hearthClient]))
+  await run(
+    identifyHearth(new DockerEngine(config.dockerSocket), config, state, {
+      clientId: hearthClient.id,
+      containerId: hearth.id,
+      installationId: "coolify-kiln",
+      proof: createHmac("sha256", "1:hearth-secret")
+        .update("t")
+        .digest("base64url"),
+      transcript: "t",
+    })
+  )
+  const backup = join(config.dataDirectory, "coolify.kiln")
+  const key = await run(platformBackupKey(config, state))
+  await createEncryptedPlatformBackup(
+    { ...config, platformBackupKey: key },
+    {
+      backupId: "d".repeat(40),
+      maxBytes: null,
+      target: { id: "coolify-kiln", kind: "platform" },
+    } as unknown as BackupCreateTaskInput,
+    backup,
+    { completed: 0, total: 0 },
+    new AbortController().signal,
+    await run(collectPlatformRecovery(config, state))
+  )
+  return {
+    backup,
+    code: (await run(platformRecoveryCode(config, state))).code,
+    identity: await run(readRelayIdentityMaterial(config)),
+  }
+}
+
 describe("restoring Kiln", () => {
   it("brings it back on a new machine as the same Kiln on the same Relay", async () => {
     const lost = await runningKiln()
@@ -163,6 +228,41 @@ describe("restoring Kiln", () => {
     await fresh.start()
     await fresh.pass()
     expect(fresh.hearthRuns()).toBe(true)
+  })
+
+  it("brings back a Kiln something else ran, from its backup and code alone", async () => {
+    const lost = await coolifyKiln("mysql:8")
+    const fresh = await machine()
+
+    await fresh.restore(lost.backup, lost.code)
+
+    expect(fresh.imported()).toContain("CREATE TABLE kept (id int);")
+    expect(await fresh.record()).toMatchObject({
+      database: { image: "mysql:8", name: "default" },
+      installationId: "coolify-kiln",
+      ownerInvitationIds: [hearthClient.invitationId],
+      phase: "ready",
+      secrets: { authSecrets: "1:hearth-secret" },
+    })
+    expect(await run(readRelayIdentityMaterial(fresh.config))).toMatchObject(
+      lost.identity
+    )
+    await fresh.start()
+    await fresh.pass()
+    expect(fresh.hearthRuns()).toBe(true)
+    // The same code opens what it backs up from now on.
+    expect(
+      (await run(platformRecoveryCode(fresh.config, fresh.state))).code
+    ).toBe(lost.code)
+  })
+
+  it("won't run a database on a new machine that isn't MySQL", async () => {
+    const lost = await coolifyKiln("mariadb:11.8")
+    const fresh = await machine()
+    await expect(fresh.restore(lost.backup, lost.code)).rejects.toThrow(
+      "mariadb:11.8"
+    )
+    expect(await fresh.record()).toBeNull()
   })
 
   it("lets its Hearth's pages reach the Relay at a new address, and no other's", async () => {
