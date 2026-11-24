@@ -336,7 +336,13 @@ const inTestTime = <A, E, R>(test: Effect.Effect<A, E, R>) =>
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
   ).pipe(
     Effect.andThen(test),
-    Effect.ensuring(Effect.sync(() => vi.useRealTimers()))
+    // A pass still to come goes now: the real clock would drop its timer, and
+    // Hearth, still counting on it, would start none in the next test.
+    Effect.ensuring(
+      Effect.promise(() => vi.runOnlyPendingTimersAsync()).pipe(
+        Effect.ensuring(Effect.sync(() => vi.useRealTimers()))
+      )
+    )
   )
 
 const backups = () =>
