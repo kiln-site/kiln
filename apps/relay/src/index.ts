@@ -12,7 +12,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir, rm } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join, relative } from "node:path"
-import { Cause, Effect, Predicate, Schema } from "effect"
+import { Cause, Effect, Fiber, Predicate, Schema } from "effect"
 import { logException } from "@workspace/telemetry"
 
 import {
@@ -1988,6 +1988,9 @@ const certificateFiber = forkRelayEffect(
   certificateLoop()
 )
 
+// The last restore Hearth asked for, which may still run.
+let kilnRestoreFiber: ReturnType<typeof forkRelayEffect> | null = null
+
 let shutdownStarted = false
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
@@ -2245,6 +2248,8 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
           "Relay shutdown deadline reached; closed active connections"
         )
       }
+      // It left Hearth stopped, perhaps with part of its database replaced.
+      if (kilnRestoreFiber) yield* Fiber.await(kilnRestoreFiber)
       // Disposing the runtime also flushes pending telemetry.
       yield* cleanupOperation("Effect runtime", disposeRelayRuntime)
       yield* Effect.sync(() => process.exit(0))
@@ -4363,7 +4368,7 @@ async function startKilnRestore(
     }).pipe(Effect.tapError(() => discard))
   )
   const { createdAt } = manifest
-  forkRelayEffect(
+  kilnRestoreFiber = forkRelayEffect(
     "relay.platform.restoreKiln",
     Effect.sleep("1 second").pipe(
       Effect.andThen(

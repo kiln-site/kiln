@@ -27,9 +27,16 @@ export const readRestoreOutcome = Effect.fnUntraced(function* (
   return saved ? Option.getOrNull(decode(saved)) : null
 })
 
+/** Never fails what it's about: a whole database isn't given up over this. */
 export function saveRestoreOutcome(
   state: Pick<RelayStateStore["Service"], "setMetadata">,
   outcome: RestoreOutcome
 ) {
-  return state.setMetadata(METADATA_KEY, JSON.stringify(outcome))
+  return state
+    .setMetadata(METADATA_KEY, JSON.stringify(outcome))
+    .pipe(
+      Effect.catch((error) =>
+        Effect.logError("How Kiln was restored can't be saved", error)
+      )
+    )
 }
