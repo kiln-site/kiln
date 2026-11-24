@@ -75,7 +75,6 @@ const semaphores: Record<string, string> = {
   "docker.ts:#diskUsageSemaphore": "Bounds disk scans",
   "installation.ts:adoption": "Orders adopting an installation's metadata",
   "platform.ts:identifying": "Orders identifying Kiln's services",
-  "platform-backup-key.ts:ensuring": "Orders saving Kiln's backup key",
   "runtime-recovery.ts:created": "Orders crash recovery's saved state",
   "schedules.ts:#semaphore": "Orders saving schedules",
   "schedules.ts:progressPermit": "Orders saving a run's progress",

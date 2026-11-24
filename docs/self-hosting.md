@@ -200,7 +200,9 @@ keeps it. Another Hearth pairing the same Relay, as when two Kiln
 installations share one machine, is asked whether to replace the Relay's ID
 with its own or keep it. The ID decides whose Kiln services and backups the
 Relay finds; it doesn't separate anything else, since every Hearth paired
-with full access can manage the Relay. `KILN_INSTALLATION_ID`, or a Relay
+with full access can manage the Relay. Each Kiln's recovery code stays its own:
+the Relay shows it only to that Kiln's Hearth, on the same machine, and keeps it
+when its ID is replaced. `KILN_INSTALLATION_ID`, or a Relay
 that installed Kiln itself, fixes the ID.
 
 Several Hearths can manage the same Relay, but this isn't recommended: each

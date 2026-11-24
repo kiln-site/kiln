@@ -37,7 +37,10 @@ import {
   reconcilePlatform,
   withPlatformRestoreHold,
 } from "./platform.js"
-import { savePlatformBackupKey } from "./platform-backup-key.js"
+import {
+  platformBackupKey,
+  savePlatformBackupKey,
+} from "./platform-backup-key.js"
 import {
   clearPlatformStaging,
   createEncryptedPlatformBackup,
@@ -191,7 +194,7 @@ export const restorePlatformDatabase = Effect.fn(
     })
   const opensWith = (key: string) =>
     attempt(() => platformBackupOpensWith(key, source))
-  const own = config.platformBackupKey
+  const own = yield* platformBackupKey(config, state)
   const opens = own !== null && (yield* opensWith(own))
   // A Kiln this Relay installed keeps its record's key.
   if (!opens && (yield* readPlatformState(config.dataDirectory))) {
@@ -217,7 +220,7 @@ export const restorePlatformDatabase = Effect.fn(
       )
     )
   )
-  if (!opens) yield* savePlatformBackupKey(state, key)
+  if (!opens) yield* savePlatformBackupKey(state, input.installationId, key)
   return restored
 })
 

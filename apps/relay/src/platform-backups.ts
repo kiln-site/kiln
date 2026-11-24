@@ -611,7 +611,9 @@ function requiredInstallationId(config: RelayConfig, targetId: string): string {
 
 function requiredRecoveryKey(config: RelayConfig): string {
   if (!config.platformBackupKey) {
-    throw new Error("This Relay has no key for Kiln's backups")
+    throw new Error(
+      "Kiln has no backup key yet. The Relay makes one once Hearth connects to it from the same machine."
+    )
   }
   return config.platformBackupKey
 }

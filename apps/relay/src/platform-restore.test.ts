@@ -134,7 +134,7 @@ async function runningKiln(environment: NodeJS.ProcessEnv = {}) {
   await run(kiln.state.restoreClients([hearthClient]))
   fakeDocker.container(names.database)!.sqlDump = "CREATE TABLE kept (id int);"
   const backup = await kiln.backup("kiln.kiln")
-  const { code } = await run(platformRecoveryCode(kiln.config))
+  const { code } = await run(platformRecoveryCode(kiln.config, kiln.state))
   return { backup, code, identity, kiln, record: (await kiln.record())! }
 }
 

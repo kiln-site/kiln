@@ -52,7 +52,10 @@ import {
 } from "./docker-engine.js"
 import type { RelayClientRecord, RelayStateStore } from "./effect/state.js"
 import { adoptProvenHearth } from "./installation.js"
-import { ensurePlatformBackupKey } from "./platform-backup-key.js"
+import {
+  ensurePlatformBackupKey,
+  platformBackupKey,
+} from "./platform-backup-key.js"
 import { relayOwnerLabels, relayResourceNames } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
@@ -334,10 +337,8 @@ export function platformRecoveryKit(state: PlatformState) {
  */
 export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
   function* (
-    config: Pick<
-      RelayConfig,
-      "dataDirectory" | "installationId" | "mode" | "platformBackupKey"
-    >
+    config: Pick<RelayConfig, "dataDirectory" | "installationId" | "mode">,
+    store: RelayStateStore["Service"]
   ) {
     const state =
       config.mode === "platform"
@@ -350,28 +351,27 @@ export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
         scope: "installation",
       } satisfies RelayRecoveryCode
     }
-    if (config.installationId && config.platformBackupKey) {
+    const key = yield* platformBackupKey(config, store)
+    if (config.installationId && key) {
       return {
-        code: encodeRecoveryCode(config.platformBackupKey),
+        code: encodeRecoveryCode(key),
         installationId: config.installationId,
         scope: "environment",
       } satisfies RelayRecoveryCode
     }
     return yield* new PlatformError({
-      reason:
-        "This Relay has no recovery code: Kiln's database isn't beside it",
+      reason: "This Relay has no recovery code: Kiln doesn't run beside it",
     })
   }
 )
 
 function platformRecoveryScope(
-  config: Pick<RelayConfig, "installationId" | "platformBackupKey">,
+  config: Pick<RelayConfig, "installationId" | "provenHearth">,
   state: PlatformState | null
 ): RelayPlatformStatus["recovery"] {
   if (state) return "installation"
-  return config.installationId && config.platformBackupKey
-    ? "environment"
-    : null
+  // A Hearth that proved itself with its database beside it has a key.
+  return provenHearth(config)?.database ? "environment" : null
 }
 
 interface ServiceSpec {
@@ -1076,6 +1076,23 @@ export function isPlatformOwner(
 }
 
 /**
+ * Whether the Hearth client may read Kiln's recovery code: the Hearth this
+ * Relay installed, or else the one that proved it runs beside the Relay.
+ * Full access alone isn't enough, since several Hearths may have it.
+ */
+export function mayReadRecoveryCode(
+  config: Pick<RelayConfig, "installationId" | "provenHearth">,
+  state: PlatformState | null,
+  client: Pick<RelayClientRecord, "id" | "invitationId" | "role"> | null
+): boolean {
+  if (state) return isPlatformOwner(state, client)
+  return (
+    client?.role === "full_access" &&
+    provenHearth(config)?.clientId === client.id
+  )
+}
+
+/**
  * Keeps the Hearth this Relay installed able to open terminals and files from
  * a browser once its address changes, as a restore or `KILN_URL` can do: the
  * Relay accepts only the address it was paired at.
@@ -1316,7 +1333,7 @@ export const provenHearthContainer = Effect.fn("Relay.platform.proveHearth")(
       database: provenContainer(beside.get("database")),
       databaseName: environmentValue(container, "DB_NAME")?.trim() || null,
       secretDigests: hearthSecretDigests(secret),
-    } satisfies Omit<ProvenHearth, "installationId">
+    } satisfies Omit<ProvenHearth, "clientId" | "installationId">
   }
 )
 
@@ -1339,6 +1356,7 @@ export function identifyHearth(
   >,
   state: RelayStateStore["Service"],
   claim: {
+    readonly clientId: string
     readonly containerId: string
     readonly installationId: string
     readonly proof: string
@@ -1354,11 +1372,12 @@ export function identifyHearth(
       if (!proven || claimed !== latestClaim) return false
       yield* adoptProvenHearth(config, state, {
         ...proven,
+        clientId: claim.clientId,
         installationId: claim.installationId,
       })
       if (config.provenHearth?.containerId !== proven.containerId) return false
-      // Kiln's backups are made here, so its recovery code can be saved
-      // before the first one.
+      // Kiln's backups are made here. Only now: a key made without a proven
+      // Hearth would have a recovery code nobody could see.
       if (proven.database) yield* ensurePlatformBackupKey(config, state)
       return true
     })
@@ -2094,6 +2113,16 @@ function applyPlatformConfig(config: RelayConfig, state: PlatformState) {
   config.installationIdConfigured = true
   // Hearth is given the record's token, so the Relay must expect it.
   config.bootstrapToken = state.secrets.bootstrapToken
+  // The record's key, which recovery kits carry: backups made with another
+  // key couldn't be restored from a kit.
+  if (
+    config.platformBackupKey &&
+    config.platformBackupKey !== state.secrets.platformBackupKey
+  ) {
+    console.warn(
+      "KILN_PLATFORM_BACKUP_KEY differs from the installed Kiln's backup key; using the installed key, which its recovery kit holds"
+    )
+  }
   config.platformBackupKey = state.secrets.platformBackupKey
   config.platformEdge = platformEdge(config, state)
   // Players reach game servers at Hearth's host unless told otherwise.

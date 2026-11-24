@@ -93,6 +93,7 @@ const MAX_CONTROL_SESSIONS = 128
 const MAX_CONTROL_SESSIONS_PER_CLIENT = 4
 
 export interface HearthContainerClaim {
+  readonly clientId: string
   readonly containerId: string
   readonly installationId: string
   readonly proof: string
@@ -1250,6 +1251,7 @@ function authenticateSocket(
         client.role === "full_access"
       ) {
         options.identifyHearth({
+          clientId: client.id,
           containerId: hearthContainer.id,
           installationId,
           proof: hearthContainer.proof,

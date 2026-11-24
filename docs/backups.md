@@ -419,7 +419,9 @@ manifest describing the installation. Relay gzip-compresses the dump and
 encrypts it with AES-256-GCM using a key derived from Kiln's platform backup
 key, which its [recovery code](self-hosting.md#recovery) holds; using only a
 live Hearth secret would make disaster recovery circular. However Kiln was
-installed, the Relay beside it generates that key and saves it.
+installed, the Relay beside it generates that key, once Hearth proves it runs
+on the same machine, and saves it under Kiln's installation ID. A Relay moved to
+another Kiln gets that Kiln's own key, and still has the first one's.
 `KILN_PLATFORM_BACKUP_KEY` only sets the first one: once a key is saved, that
 variable does nothing, so every backup stays readable with the same code. It backs up the colocated Compose MySQL database identified
 by installation-scoped Docker labels; a Hearth database outside the Relay's

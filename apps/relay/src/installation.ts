@@ -20,6 +20,7 @@ const decodeProvenHearth = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
       cache: Schema.NullOr(ProvenContainerSchema),
+      clientId: Schema.optionalKey(Schema.String),
       containerId: Schema.String,
       database: Schema.NullOr(ProvenContainerSchema),
       databaseName: Schema.NullOr(Schema.String),
@@ -98,6 +99,7 @@ function provenHearthRecord(hearth: ProvenHearth): string {
     }
   return JSON.stringify({
     cache: container(hearth.cache),
+    clientId: hearth.clientId,
     containerId: hearth.containerId,
     database: container(hearth.database),
     databaseName: hearth.databaseName,

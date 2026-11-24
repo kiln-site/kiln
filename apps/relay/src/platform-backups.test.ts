@@ -23,7 +23,10 @@ import {
 } from "./effect/identity.js"
 import { RelayStateStore } from "./effect/state.js"
 import { controlRequestLocks } from "./operation-plans.js"
-import { ensurePlatformBackupKey } from "./platform-backup-key.js"
+import {
+  ensurePlatformBackupKey,
+  platformBackupKey,
+} from "./platform-backup-key.js"
 import {
   createEncryptedPlatformBackup,
   inspectEncryptedPlatformBackup,
@@ -219,6 +222,9 @@ describe("Kiln platform backups deployed by Coolify", () => {
     const kiln = await coolifyKiln()
     kiln.database.sqlDump = "CREATE TABLE kept (id int);"
     const { harness } = kiln
+    await Effect.runPromise(
+      ensurePlatformBackupKey(harness.config, harness.state)
+    )
     const manager = await Effect.runPromise(
       BackupManager.make({
         apps: {
@@ -284,8 +290,16 @@ describe("Kiln platform backups deployed by Coolify", () => {
   it("restores a backup of a machine since lost with its recovery code, and keeps that code", async () => {
     const kiln = await coolifyKiln({ backupKey: "" })
     const { config, state } = kiln.harness
-    await Effect.runPromise(ensurePlatformBackupKey(config, state))
-    const own = config.platformBackupKey
+    const key = (installationId = "kiln-test") =>
+      Effect.runPromise(platformBackupKey({ ...config, installationId }, state))
+    const ensure = (installationId: string) =>
+      Effect.runPromise(
+        ensurePlatformBackupKey({ ...config, installationId }, state)
+      )
+    await ensure("kiln-test")
+    await ensure("another-kiln")
+    const own = await key()
+    const another = await key("another-kiln")
     const source = join(testDirectory, `lost-${randomUUID()}.kiln`)
     await writeFile(
       source,
@@ -306,18 +320,16 @@ describe("Kiln platform backups deployed by Coolify", () => {
 
     await expect(
       restore(encodeRecoveryCode("wrong".repeat(8)))
-    ).rejects.toThrow()
+    ).rejects.toThrow("recovery code")
     expect(kiln.database.executedSql).toEqual([])
-    await Effect.runPromise(ensurePlatformBackupKey(config, state))
-    expect(config.platformBackupKey).toBe(own)
+    expect(await key()).toBe(own)
 
     await restore(encodeRecoveryCode(recoveryKey))
     expect(kiln.database.executedSql.join("\n")).toContain(
       "CREATE TABLE lost (id int);"
     )
-    // The running Relay takes it up without a restart.
-    await Effect.runPromise(ensurePlatformBackupKey(config, state))
-    expect(config.platformBackupKey).toBe(recoveryKey)
+    expect(await key()).toBe(recoveryKey)
+    expect(await key("another-kiln")).toBe(another)
   })
 
   it("won't take another key for the Kiln a Relay installed, which keeps its own", async () => {
@@ -328,12 +340,14 @@ describe("Kiln platform backups deployed by Coolify", () => {
         config.dataDirectory,
         newPlatformState(
           config,
-          platformInputs({ KILN_URL: "https://kiln.example.test" }),
+          platformInputs({
+            KILN_INSTALLATION_ID: "kiln-test",
+            KILN_URL: "https://kiln.example.test",
+          }),
           "ghcr.io/kiln-site/hearth:latest"
         )
       )
     )
-    await Effect.runPromise(ensurePlatformBackupKey(config, state))
     const source = join(testDirectory, `other-${randomUUID()}.kiln`)
     await writeFile(
       source,

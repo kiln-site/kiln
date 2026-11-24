@@ -391,7 +391,8 @@ export async function pairPersistedRelay(
   ) {
     return { installationWarning: null, relay }
   }
-  const { relayRpc } = await import("@/lib/relay-connection")
+  const { reconnectRelayConnection, relayRpc } =
+    await import("@/lib/relay-connection")
   return Effect.runPromise(
     Effect.tryPromise(() =>
       relayRpc(
@@ -405,6 +406,8 @@ export async function pairPersistedRelay(
         actor.userId
       )
     ).pipe(
+      // The Relay takes what Hearth proves about itself only as it connects.
+      Effect.tap(() => Effect.sync(() => reconnectRelayConnection(relay.id))),
       Effect.as({ installationWarning: null, relay }),
       Effect.catch((cause) =>
         Effect.succeed({
