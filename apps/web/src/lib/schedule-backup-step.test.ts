@@ -100,12 +100,29 @@ describe("a schedule's backup step", () => {
     expect(saved(incremental, "incremental")).toBeUndefined()
   })
 
-  it("keeps an App it names while its volumes are gone", () => {
+  it("keeps covering an App while it uses no volume", () => {
     const named = step([bare, server], {
       targetKeys: [`${relayId}:app:bare`],
     })
     expect(saved(named)).toEqual(["bare"])
     expect(named.counts).toMatchObject({ apps: 0, volumes: 0 })
+    const every = step([bare, server, site])
+    expect(saved(every)).toBeUndefined()
+    expect(
+      saved(
+        every,
+        "full",
+        every.chosen.filter((key) => !key.endsWith("site"))
+      )
+    ).toEqual(["bare", "server"])
+  })
+
+  it("leaves a database this person can't back up out of an incremental step", () => {
+    const named = step([server, others], {
+      mode: "incremental",
+      targetKeys: [`${relayId}:instance:server`, `${relayId}:database:others`],
+    })
+    expect(names(named.chosen)).toEqual(["server"])
   })
 
   it("keeps one it names that this person can't back up removable", () => {
@@ -122,7 +139,7 @@ describe("a schedule's backup step", () => {
     expect(named.counts).toMatchObject({ databases: 0, instances: 0 })
   })
 
-  it("counts each volume once, and leaves out an App without any", () => {
+  it("counts each volume once, and no App without any", () => {
     const both = step([site, uploads, bare])
     expect(both.counts).toMatchObject({ apps: 1, volumes: 2 })
     expect(both.empty).toEqual([bare])

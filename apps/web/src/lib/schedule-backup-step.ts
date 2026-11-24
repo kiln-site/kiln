@@ -67,9 +67,8 @@ export function appVolumes(
 /** What a schedule's backup step can back up, and which of it it does. */
 export interface BackupStep<Option extends BackupStepOption> {
   /**
-   * What it's chosen from, whatever its mode, so the list holds still as
-   * that changes: every target with something to back up that this person
-   * may, and any other it names, which can only be taken off.
+   * What it's chosen from, whatever its mode: every target this person may
+   * back up, and any other it names and reaches, which can only be taken off.
    */
   readonly listed: ReadonlyArray<{
     readonly key: string
@@ -78,7 +77,7 @@ export interface BackupStep<Option extends BackupStepOption> {
   }>
   /** The keys of those it backs up. */
   readonly chosen: ReadonlyArray<string>
-  /** Apps that use no volume: listed only while it names them. */
+  /** Apps that use no volume now, listed for when they do. */
   readonly empty: ReadonlyArray<Option>
   /**
    * What it backs up by kind, an App's volumes among the volumes; those are
@@ -110,7 +109,9 @@ export function backupStep<Option extends BackupStepOption>(
     const key = scheduleTargetKey(option)
     if (!option[permission] || !option.permittedActions.includes("backup")) {
       restricted.push(option)
-      if (!named?.has(key)) continue
+      if (!named?.has(key) || !scheduleActionSupportsTarget(action, option)) {
+        continue
+      }
       listed.push({ key, option, removeOnly: true })
       chosen.push(key)
       continue
@@ -118,8 +119,6 @@ export function backupStep<Option extends BackupStepOption>(
     const used = option.kind === "app" ? volumes.of(option) : null
     const bare = used?.length === 0
     if (bare) empty.push(option)
-    // Named, it stays so: its volumes may be back by the next run.
-    if (bare && !named?.has(key)) continue
     listed.push({ key, option, removeOnly: false })
     // Naming none, it runs on each target its mode supports.
     if (
