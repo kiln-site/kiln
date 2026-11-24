@@ -38,11 +38,10 @@ import { collectPlatformRecovery } from "./platform-recovery.js"
 import { restorePlatformDatabase } from "./platform-restore.js"
 import { writePlatformState, type PlatformState } from "./platform-state.js"
 import { DockerEngine } from "./docker-engine.js"
-import { adoptProvenHearth } from "./installation.js"
 import {
+  identifyHearth,
   newPlatformState,
   platformInputs,
-  provenHearthContainer,
 } from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
@@ -128,6 +127,7 @@ async function coolifyKiln(
       BETTER_AUTH_SECRETS: "1:hearth-secret",
       DB_HOST: "coolify-mysql",
       DB_NAME: "hearth",
+      KILN_URL: "https://kiln.example.test",
     },
     labels: { "coolify.managed": "true" },
     networks: ["coolify"],
@@ -142,6 +142,7 @@ async function coolifyKiln(
   const proving = fakeDocker.addContainer({ ...hearth, name: "hearth-1" })
   const database = fakeDocker.addContainer({
     env: { MYSQL_DATABASE: "hearth", ...options.databaseEnvironment },
+    image: "mysql:8",
     labels: { "coolify.managed": "true" },
     mounts: [dataVolume],
     name: "coolify-mysql",
@@ -149,22 +150,19 @@ async function coolifyKiln(
     running: true,
   })
   const engine = new DockerEngine(harness.config.dockerSocket)
-  const proven = await Effect.runPromise(
-    provenHearthContainer(engine, {
+  await Effect.runPromise(loadOrCreateRelayIdentity(harness.config))
+  const identified = await Effect.runPromise(
+    identifyHearth(engine, harness.config, harness.state, {
+      clientId: "hearth-client",
       containerId: proving.id,
+      installationId: "kiln-test",
       proof: createHmac("sha256", "1:hearth-secret")
         .update("t")
         .digest("base64url"),
       transcript: "t",
     })
   )
-  assert.isNotNull(proven)
-  await Effect.runPromise(
-    adoptProvenHearth(harness.config, harness.state, {
-      ...proven!,
-      installationId: "kiln-test",
-    })
-  )
+  assert.isTrue(identified)
   return {
     dataVolume,
     database,
@@ -200,7 +198,9 @@ describe("Kiln platform backups deployed by Coolify", () => {
       backup,
       { completed: 0, total: 0 },
       new AbortController().signal,
-      null
+      await Effect.runPromise(
+        collectPlatformRecovery(kiln.harness.config, kiln.harness.state)
+      )
     )
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, backup)
@@ -218,13 +218,61 @@ describe("Kiln platform backups deployed by Coolify", () => {
     )
   })
 
+  it("carries what runs Kiln on a new machine, also while Coolify has Hearth stopped", async () => {
+    const kiln = await coolifyKiln()
+    const { config, state } = kiln.harness
+    await Effect.runPromise(
+      state.restoreClients([
+        {
+          actions: [],
+          createdAt: 1,
+          id: "hearth-client",
+          invitationId: "hearth-invitation",
+          name: "Hearth",
+          origins: ["https://kiln.example.test"],
+          publicKey: "hearth-public-key",
+          role: "full_access",
+          sourceCidrs: [],
+        },
+      ])
+    )
+    fakeDocker.removeContainer("hearth-1")
+
+    expect(
+      await Effect.runPromise(collectPlatformRecovery(config, state))
+    ).toMatchObject({
+      installation: {
+        database: { image: "mysql:8", name: "hearth" },
+        hearth: { url: "https://kiln.example.test" },
+        installationId: "kiln-test",
+        ownerInvitationIds: ["hearth-invitation"],
+        secrets: {
+          authSecrets: "1:hearth-secret",
+          platformBackupKey: recoveryKey,
+        },
+      },
+      relay: {
+        clients: [{ id: "hearth-client" }],
+        identity: await Effect.runPromise(readRelayIdentityMaterial(config)),
+      },
+    })
+  })
+
+  it("makes no backup of a Kiln whose Hearth never proved itself", async () => {
+    const { config, state } = await relayHarness({
+      KILN_INSTALLATION_ID: "kiln-test",
+      KILN_PLATFORM_BACKUP_KEY: recoveryKey,
+    })
+    await Effect.runPromise(loadOrCreateRelayIdentity(config))
+    await expect(
+      Effect.runPromise(collectPlatformRecovery(config, state))
+    ).rejects.toThrow("can't be backed up yet")
+  })
+
   it("waits for a restart of Kiln's services before dumping Hearth's database", async () => {
     const kiln = await coolifyKiln()
     kiln.database.sqlDump = "CREATE TABLE kept (id int);"
     const { harness } = kiln
-    await Effect.runPromise(
-      ensurePlatformBackupKey(harness.config, harness.state)
-    )
     const manager = await Effect.runPromise(
       BackupManager.make({
         apps: {
@@ -296,7 +344,6 @@ describe("Kiln platform backups deployed by Coolify", () => {
       Effect.runPromise(
         ensurePlatformBackupKey({ ...config, installationId }, state)
       )
-    await ensure("kiln-test")
     await ensure("another-kiln")
     const own = await key()
     const another = await key("another-kiln")
@@ -402,7 +449,10 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
     env: {
       BETTER_AUTH_SECRETS: "1:secret-of-every-worktree",
       DB_HOST: "kiln-dev-mysql",
+      DB_NAME: database,
+      KILN_URL: "https://kiln.example.test",
     },
+    networks: ["kiln-dev"],
     labels: {
       "io.kiln.installation": installation,
       "io.kiln.resource": "hearth",
@@ -419,30 +469,35 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
       KILN_RELAY_PLATFORM_DATABASE_NAME: database,
     })
     onTestFinished(() => fakeDocker.reset())
+    fakeDocker.addNetwork({ name: "kiln-dev" })
     const mysql = fakeDocker.addContainer({
+      image: "mysql:8.4",
       name: "kiln-dev-mysql",
+      networks: ["kiln-dev"],
       running: true,
     })
     // Worktrees share one .env, so this Hearth's proof also matches its
     // sibling's secrets.
     const own = fakeDocker.addContainer(hearth("kiln-test", true))
     fakeDocker.addContainer(hearth("kiln-sibling", true))
-    const proven = await Effect.runPromise(
-      provenHearthContainer(new DockerEngine(harness.config.dockerSocket), {
-        containerId: own.id,
-        proof: createHmac("sha256", "1:secret-of-every-worktree")
-          .update("t")
-          .digest("base64url"),
-        transcript: "t",
-      })
+    await Effect.runPromise(loadOrCreateRelayIdentity(harness.config))
+    const identified = await Effect.runPromise(
+      identifyHearth(
+        new DockerEngine(harness.config.dockerSocket),
+        harness.config,
+        harness.state,
+        {
+          clientId: "hearth-client",
+          containerId: own.id,
+          installationId: "kiln-test",
+          proof: createHmac("sha256", "1:secret-of-every-worktree")
+            .update("t")
+            .digest("base64url"),
+          transcript: "t",
+        }
+      )
     )
-    assert.isNotNull(proven)
-    await Effect.runPromise(
-      adoptProvenHearth(harness.config, harness.state, {
-        ...proven!,
-        installationId: "kiln-test",
-      })
-    )
+    assert.isTrue(identified)
     // Stopped, as a restore needs.
     own.state.running = false
     const restore = async (manifest: Partial<PlatformBackupManifest>) => {
@@ -470,7 +525,9 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
       backup,
       { completed: 0, total: 0 },
       new AbortController().signal,
-      null
+      await Effect.runPromise(
+        collectPlatformRecovery(kiln.harness.config, kiln.harness.state)
+      )
     )
     await expect(
       inspectEncryptedPlatformBackup(recoveryKey, backup)

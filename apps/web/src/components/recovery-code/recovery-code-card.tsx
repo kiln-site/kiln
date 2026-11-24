@@ -69,7 +69,7 @@ export const RecoveryCodeCard = React.memo(function RecoveryCodeCard({
               to="/backups/destinations"
               className="underline underline-offset-2 hover:text-foreground"
             >
-              No backup off this machine yet
+              No complete backup off this machine yet
             </Link>
           )}
         </p>

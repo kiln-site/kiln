@@ -1,12 +1,10 @@
-import type { RelayRecoveryScope } from "@workspace/contracts"
-
 /** Where Kiln stands on its recovery code, for its platform administrators. */
 export interface RecoveryCodeStatus {
   /**
-   * What the Relay hosting Kiln holds the code for, or none. Null once
-   * saved, since nothing then asks the Relay.
+   * Whether the Relay hosting Kiln has it. Null once saved, since nothing
+   * then asks the Relay.
    */
-  readonly available: RelayRecoveryScope | "none" | null
+  readonly available: boolean | null
   /**
    * Whether showing it asks the person asking for a two-factor code: every
    * time but the first, and a short while after for whoever saw it first.
@@ -27,7 +25,6 @@ export interface RecoveryCodeReveal {
   /** The code, `kiln-rk-…`. */
   readonly code: string
   readonly installationId: string
-  readonly scope: RelayRecoveryScope
 }
 
 /** What the code is for, wherever Kiln asks for it to be saved. */
@@ -56,9 +53,6 @@ export function recoveryCodeFile(
       "",
       recoveryCodePurpose,
       "Keep it somewhere safe, apart from your backups.",
-      ...(reveal.scope === "environment"
-        ? ["Keep Kiln's environment file too: restoring needs both."]
-        : []),
       "",
       `Restoring: ${recoveryDocsUrl}`,
       "",

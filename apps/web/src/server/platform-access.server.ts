@@ -50,14 +50,19 @@ export async function kilnPlatformHosts(): Promise<Array<KilnPlatformHost>> {
   return Promise.all(
     relays.map((relay) =>
       recoverPromise(
-        async (): Promise<KilnPlatformHost> => ({
-          error: null,
-          relayId: relay.id,
-          relayName: relay.name,
-          status: relayPlatformStatusSchema.parse(
+        async (): Promise<KilnPlatformHost> => {
+          const status = relayPlatformStatusSchema.safeParse(
             await relayRpc(relay, "relay.platform.read", {}, 15_000)
-          ),
-        }),
+          )
+          return {
+            error: status.success
+              ? null
+              : "This Relay runs another version of Kiln. Update it to match.",
+            relayId: relay.id,
+            relayName: relay.name,
+            status: status.data ?? null,
+          }
+        },
         (cause): KilnPlatformHost => ({
           error:
             cause instanceof Error ? cause.message : "The Relay didn't answer",

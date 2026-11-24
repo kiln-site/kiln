@@ -1,7 +1,7 @@
 /**
  * What a platform backup carries besides Hearth's database, so the backup
  * and its recovery code alone restore Kiln on a new machine: the
- * installation's record with its secrets, and the platform Relay's identity
+ * installation's record with its secrets, and its Relay's identity
  * and the Hearths it trusts, so the restored Hearth finds the same Relay and
  * reconnects to it without pairing again.
  *
@@ -14,7 +14,15 @@ import type { RelayConfig } from "./config.js"
 import { readRelayIdentityMaterial } from "./effect/identity.js"
 import type { RelayStateStore } from "./effect/state.js"
 import { readRelayCertificateAuthority } from "./effect/tls.js"
-import { PlatformStateSchema, readPlatformState } from "./platform-state.js"
+import { type HostedKiln, readHostedKiln } from "./hosted-kiln.js"
+import { defaultHearthImage, newPlatformState } from "./platform.js"
+import { platformBackupKey } from "./platform-backup-key.js"
+import {
+  PlatformError,
+  type PlatformState,
+  PlatformStateSchema,
+  readPlatformState,
+} from "./platform-state.js"
 
 const PlatformRecoveryClientSchema = Schema.Struct({
   actions: Schema.Array(Schema.String),
@@ -56,17 +64,11 @@ export const decodePlatformRecovery = Schema.decodeUnknownEffect(
 )
 
 /**
- * This Relay's recovery section, or null when it doesn't host Kiln itself:
- * a Hearth run by hand keeps its keyring in the operator's environment, so
- * its backups stay format 1.
+ * This Relay's recovery section: of the Kiln it installed, or else of the
+ * one something else runs beside it, once its Hearth has proved itself.
  */
 export const collectPlatformRecovery = Effect.fn("Relay.platform.recovery")(
-  function* (
-    config: RelayConfig,
-    state: Pick<RelayStateStore["Service"], "listClients">
-  ) {
-    const installation = yield* readPlatformState(config.dataDirectory)
-    if (!installation) return null
+  function* (config: RelayConfig, state: RelayStateStore["Service"]) {
     const [identity, tlsAuthority, clients] = yield* Effect.all(
       [
         readRelayIdentityMaterial(config),
@@ -75,6 +77,35 @@ export const collectPlatformRecovery = Effect.fn("Relay.platform.recovery")(
       ],
       { concurrency: "unbounded" }
     )
+    const { installationId } = config
+    const [installed, key, hosted] = installationId
+      ? yield* Effect.all([
+          readPlatformState(config.dataDirectory),
+          platformBackupKey(config, state),
+          readHostedKiln(state, installationId),
+        ])
+      : [null, null, null]
+    const installation =
+      installed?.installationId === installationId
+        ? installed
+        : installationId && key && hosted
+          ? hostedPlatformState(
+              config,
+              installationId,
+              hosted,
+              key,
+              // Its Hearth manages it where the Relay runs it.
+              clients.flatMap(({ id, invitationId }) =>
+                id === hosted.clientId ? [invitationId] : []
+              )
+            )
+          : null
+    if (!installation) {
+      return yield* new PlatformError({
+        reason:
+          "Kiln can't be backed up yet. The Relay learns what a backup needs once Hearth connects to it from the same machine.",
+      })
+    }
     return {
       installation,
       relay: {
@@ -95,3 +126,47 @@ export const collectPlatformRecovery = Effect.fn("Relay.platform.recovery")(
     } satisfies PlatformRecovery
   }
 )
+
+/**
+ * The record a Relay would have had it installed this Kiln, for a new machine
+ * to run it from: its ID, auth secrets, address and database, and passwords
+ * of its own for the database it's restored into.
+ */
+function hostedPlatformState(
+  config: Pick<RelayConfig, "advertisedHost" | "gitRepository" | "port">,
+  installationId: string,
+  kiln: HostedKiln,
+  backupKey: string,
+  ownerInvitationIds: ReadonlyArray<string>
+): PlatformState {
+  const state = newPlatformState(
+    {
+      advertisedHost: config.advertisedHost,
+      platformBackupKey: backupKey,
+      port: config.port,
+      resourceNamespace: null,
+    },
+    {
+      authSecrets: kiln.authSecrets,
+      bindAddress: null,
+      cacheImage: undefined,
+      databaseImage: kiln.databaseImage,
+      environment: {},
+      hearthImage: null,
+      installationId,
+      port: null,
+      url: kiln.url,
+    },
+    defaultHearthImage(null, config.gitRepository)
+  )
+  return {
+    ...state,
+    database: {
+      ...state.database,
+      name: kiln.databaseName,
+      ...(kiln.tablePrefix && { tablePrefix: kiln.tablePrefix }),
+    },
+    ownerInvitationIds: [...ownerInvitationIds],
+    phase: "ready",
+  }
+}

@@ -428,13 +428,15 @@ by installation-scoped Docker labels; a Hearth database outside the Relay's
 Docker isn't backed up, so no connection credentials pass through the Relay's
 task journal.
 
-A Relay in platform mode writes format 2, which also carries, inside the same
-encryption, what restoring on a new machine needs beyond the dump: Kiln's
-installation record with its ID and every secret, and the platform Relay's
-identity, its TLS authority, and the Hearths it trusts, so the restored Hearth
-reconnects to the same Relay. Format 1, which a Hearth run by hand still writes,
-holds only the dump: restoring it on a new machine also needs that Hearth's
-environment, or a recovery kit. Every Kiln restores the dump of both.
+Every bundle also carries, inside the same encryption, what restoring on a new
+machine needs beyond the dump (format 2): Kiln's installation record with its ID
+and every secret, and its Relay's identity, its TLS authority, and the Hearths it
+trusts, so the restored Hearth reconnects to the same Relay. For a Kiln the Relay
+didn't install, such as Coolify's, the Relay makes that record from Hearth's
+container and its database's each time Hearth proves it runs there, and keeps
+it in its own data, since Coolify removes the container when it stops Hearth
+and backups run meanwhile. Until then it makes no bundle. Format 1, from before,
+holds only the dump, and restores into the Kiln it came from.
 
 Neither format restores the settings passed to the Relay's own container, such
 as email or signup settings: they come from where Kiln is installed. A Relay in

@@ -73,7 +73,7 @@ export async function createEncryptedPlatformBackup(
   destination: string,
   progress: { completed: number; total: number },
   signal: AbortSignal,
-  recovery: PlatformRecovery | null
+  recovery: PlatformRecovery
 ): Promise<BackupArchiveCreateTaskResult> {
   signal.throwIfAborted()
   const installationId = requiredInstallationId(config, input.target.id)
@@ -88,11 +88,11 @@ export async function createEncryptedPlatformBackup(
     databaseEngine: "mysql",
     databaseName,
     encryption: "aes-256-gcm+scrypt",
-    formatVersion: recovery ? 2 : 1,
+    formatVersion: 2,
     installationId,
     payload: "hearth.dmp",
   }
-  const recoverySection = recovery ? encodeRecoverySection(recovery) : null
+  const recoverySection = encodeRecoverySection(recovery)
   const manifestBytes = Buffer.from(JSON.stringify(manifest), "utf8")
   const salt = randomBytes(16)
   const initializationVector = randomBytes(12)
@@ -171,7 +171,10 @@ export async function createEncryptedPlatformBackup(
     bytes: metadata.size,
     checksumSha256: digest.digest("hex"),
     filename: backupArtifactFilename(input.backupId, "platform_bundle"),
-    ...(recovery && { recoverable: true as const }),
+    // Whether a new machine can run it. Its own can always restore it.
+    ...(runsOnNewMachine(recovery.installation) && {
+      recoverable: true as const,
+    }),
     warnings: [],
   }
 }
@@ -334,7 +337,12 @@ export async function clearPlatformStaging(
 export async function restoreEncryptedPlatformBackup(
   config: RelayConfig,
   source: string,
-  confirmedInstallationId: string
+  confirmedInstallationId: string,
+  options: {
+    /** Run in the database once it's imported. */
+    readonly afterwards?: string
+    readonly tablePrefix?: string | null
+  } = {}
 ): Promise<PlatformBackupManifest> {
   const installationId = requiredInstallationId(config, confirmedInstallationId)
   const recoveryKey = requiredRecoveryKey(config)
@@ -429,7 +437,10 @@ export async function restoreEncryptedPlatformBackup(
                     createReadStream(stagedDump, { start: dumpOffset }),
                     createGunzip(),
                     byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
-                    endingWith(PLATFORM_SIGN_OUT),
+                    endingWith(
+                      platformSignOut(options.tablePrefix ?? null) +
+                        (options.afterwards ?? "")
+                    ),
                     child.stdin
                   ),
                 () => requireSuccessfulProcess(child, stderr)
@@ -639,18 +650,41 @@ const PLATFORM_DUMP =
 const PLATFORM_IMPORT =
   'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --user=root -e "CREATE DATABASE IF NOT EXISTS \\`$MYSQL_DATABASE\\`"; exec mysql --user=root "$MYSQL_DATABASE"'
 
+const DEFAULT_TABLE_PREFIX = "kiln_"
+
+/** A Hearth table's name, with its DB_TABLE_PREFIX, which Hearth checks too. */
+export function hearthTable(tablePrefix: string | null, name: string): string {
+  const prefix = tablePrefix ?? DEFAULT_TABLE_PREFIX
+  if (!/^[a-z][a-z0-9_]{0,30}_$/u.test(prefix)) {
+    throw new Error(`Kiln's table prefix isn't valid: ${prefix}`)
+  }
+  return `${prefix}${name}`
+}
+
 // Everyone signs in again: the dump has the sessions of its time, and one
 // revoked since, as for a lost laptop, would be back. The dump left its
-// database selected. A Hearth run by hand may name the table otherwise.
-const PLATFORM_SIGN_OUT = `
+// database selected.
+function platformSignOut(tablePrefix: string | null): string {
+  const table = hearthTable(tablePrefix, "session")
+  return `
 SET @kiln_sign_out = IF(
   (SELECT COUNT(*) FROM information_schema.tables
-   WHERE table_schema = DATABASE() AND table_name = 'kiln_session') = 1,
-  'DELETE FROM kiln_session', 'DO 0');
+   WHERE table_schema = DATABASE() AND table_name = '${table}') = 1,
+  'DELETE FROM ${table}', 'DO 0');
 PREPARE kiln_sign_out FROM @kiln_sign_out;
 EXECUTE kiln_sign_out;
 DEALLOCATE PREPARE kiln_sign_out;
 `
+}
+
+/** Whether a new machine can run a Kiln: its installer runs MySQL. */
+export function runsOnNewMachine(
+  installation: PlatformRecovery["installation"]
+): boolean {
+  return /^(?:docker\.io\/)?(?:library\/)?mysql(?:[:@]|$)/u.test(
+    installation.database.image
+  )
+}
 
 function startPlatformClient(
   config: RelayConfig,

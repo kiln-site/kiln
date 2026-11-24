@@ -16,7 +16,6 @@ import {
   brickSourceSchema,
 } from "./brick-recipe.js"
 import { instanceIdSchema } from "./instance-id.js"
-import { relayRecoveryScopeSchema } from "./recovery-code.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import {
   NO_RESOURCE_LIMITS,
@@ -2582,12 +2581,15 @@ export const relayPlatformStatusSchema = z.object({
   proxy: relayPlatformProxySchema.nullable(),
   /**
    * Whether this Relay holds Kiln's recovery code
-   * (`relay.platform.recovery.read`), and for what; null when it doesn't.
+   * (`relay.platform.recovery.read`).
    */
-  recovery: relayRecoveryScopeSchema.nullable(),
+  recovery: z.boolean(),
   /** When Kiln was last restored from a platform backup, and how old it was. */
   restored: z
-    .object({ at: z.string().datetime(), backupCreatedAt: z.string().datetime() })
+    .object({
+      at: z.string().datetime(),
+      backupCreatedAt: z.string().datetime(),
+    })
     .nullable(),
   services: z.array(relayPlatformServiceSchema).max(8),
 })
