@@ -589,6 +589,11 @@ export function reconnectRelayConnections(): void {
   for (const connection of connections.values()) connection.reconnect()
 }
 
+/** Reconnects to one Relay, as once it takes this Kiln's installation ID. */
+export function reconnectRelayConnection(relayId: string): void {
+  connections.get(relayId)?.reconnect()
+}
+
 export function closeRelayConnection(relayId: string): void {
   const connection = connections.get(relayId)
   connections.delete(relayId)

@@ -8,7 +8,10 @@ import { afterAll, assert, describe, expect, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber } from "effect"
 import { onTestFinished, vi } from "vite-plus/test"
 
-import type { BackupCreateTaskInput } from "@workspace/contracts"
+import {
+  type BackupCreateTaskInput,
+  encodeRecoveryCode,
+} from "@workspace/contracts"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
@@ -21,6 +24,10 @@ import {
 import { RelayStateStore } from "./effect/state.js"
 import { controlRequestLocks } from "./operation-plans.js"
 import {
+  ensurePlatformBackupKey,
+  platformBackupKey,
+} from "./platform-backup-key.js"
+import {
   createEncryptedPlatformBackup,
   inspectEncryptedPlatformBackup,
   type PlatformBackupManifest,
@@ -28,6 +35,7 @@ import {
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
+import { restorePlatformDatabase } from "./platform-restore.js"
 import { writePlatformState, type PlatformState } from "./platform-state.js"
 import { DockerEngine } from "./docker-engine.js"
 import { adoptProvenHearth } from "./installation.js"
@@ -105,11 +113,14 @@ describe("Kiln platform backups", () => {
 // Hearth and its MySQL as Coolify deploys them, without Kiln's labels, once
 // Hearth has proven its container to the Relay.
 async function coolifyKiln(
-  options: { databaseEnvironment?: Record<string, string> } = {}
+  options: {
+    backupKey?: string
+    databaseEnvironment?: Record<string, string>
+  } = {}
 ) {
   const harness = await relayHarness({
     KILN_INSTALLATION_ID: "kiln-test",
-    KILN_PLATFORM_BACKUP_KEY: recoveryKey,
+    KILN_PLATFORM_BACKUP_KEY: options.backupKey ?? recoveryKey,
   })
   onTestFinished(() => fakeDocker.reset())
   const hearth = {
@@ -211,6 +222,9 @@ describe("Kiln platform backups deployed by Coolify", () => {
     const kiln = await coolifyKiln()
     kiln.database.sqlDump = "CREATE TABLE kept (id int);"
     const { harness } = kiln
+    await Effect.runPromise(
+      ensurePlatformBackupKey(harness.config, harness.state)
+    )
     const manager = await Effect.runPromise(
       BackupManager.make({
         apps: {
@@ -271,6 +285,89 @@ describe("Kiln platform backups deployed by Coolify", () => {
     await Effect.runPromise(Fiber.join(restart))
 
     expect(await backup).toMatchObject({ status: "succeeded" })
+  })
+
+  it("restores a backup of a machine since lost with its recovery code, and keeps that code", async () => {
+    const kiln = await coolifyKiln({ backupKey: "" })
+    const { config, state } = kiln.harness
+    const key = (installationId = "kiln-test") =>
+      Effect.runPromise(platformBackupKey({ ...config, installationId }, state))
+    const ensure = (installationId: string) =>
+      Effect.runPromise(
+        ensurePlatformBackupKey({ ...config, installationId }, state)
+      )
+    await ensure("kiln-test")
+    await ensure("another-kiln")
+    const own = await key()
+    const another = await key("another-kiln")
+    const source = join(testDirectory, `lost-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE lost (id int);", { databaseName: "hearth" })
+    )
+    fakeDocker.removeContainer("hearth-1")
+    const restore = (code: string) =>
+      Effect.runPromise(
+        restorePlatformDatabase({
+          config,
+          installationId: "kiln-test",
+          print: () => {},
+          recoveryCode: async () => code,
+          source,
+          state,
+        })
+      )
+
+    await expect(
+      restore(encodeRecoveryCode("wrong".repeat(8)))
+    ).rejects.toThrow("recovery code")
+    expect(kiln.database.executedSql).toEqual([])
+    expect(await key()).toBe(own)
+
+    await restore(encodeRecoveryCode(recoveryKey))
+    expect(kiln.database.executedSql.join("\n")).toContain(
+      "CREATE TABLE lost (id int);"
+    )
+    expect(await key()).toBe(recoveryKey)
+    expect(await key("another-kiln")).toBe(another)
+  })
+
+  it("won't take another key for the Kiln a Relay installed, which keeps its own", async () => {
+    const kiln = await coolifyKiln({ backupKey: "" })
+    const { config, state } = kiln.harness
+    await Effect.runPromise(
+      writePlatformState(
+        config.dataDirectory,
+        newPlatformState(
+          config,
+          platformInputs({
+            KILN_INSTALLATION_ID: "kiln-test",
+            KILN_URL: "https://kiln.example.test",
+          }),
+          "ghcr.io/kiln-site/hearth:latest"
+        )
+      )
+    )
+    const source = join(testDirectory, `other-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE other (id int);", { databaseName: "hearth" })
+    )
+    fakeDocker.removeContainer("hearth-1")
+
+    await expect(
+      Effect.runPromise(
+        restorePlatformDatabase({
+          config,
+          installationId: "kiln-test",
+          print: () => {},
+          recoveryCode: async () => encodeRecoveryCode(recoveryKey),
+          source,
+          state,
+        })
+      )
+    ).rejects.toThrow("this Kiln's key")
+    expect(kiln.database.executedSql).toEqual([])
   })
 
   it("won't restore into a container under the database's name that keeps other data where Hearth's was", async () => {

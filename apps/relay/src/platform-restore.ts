@@ -38,8 +38,13 @@ import {
   withPlatformRestoreHold,
 } from "./platform.js"
 import {
+  platformBackupKey,
+  savePlatformBackupKey,
+} from "./platform-backup-key.js"
+import {
   clearPlatformStaging,
   createEncryptedPlatformBackup,
+  platformBackupOpensWith,
   readPlatformBackupRecovery,
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
@@ -160,6 +165,62 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
   if (saved && existing?.phase === "ready") {
     print(`To undo: kiln-relay platform restore ${saved}`)
   }
+  return restored
+})
+
+/**
+ * `kiln-relay platform-backup restore`: replaces Hearth's database alone,
+ * where something else runs Hearth. A backup made with another key, as on a
+ * machine since lost, asks for its recovery code, and that key is Kiln's from
+ * then on: the restored Hearth's code is the one people saved.
+ */
+export const restorePlatformDatabase = Effect.fn(
+  "Relay.platform.restoreDatabase"
+)(function* (
+  input: Omit<PlatformRestoreInput, "engine" | "environment"> & {
+    readonly installationId: string
+  }
+) {
+  const { config, print, source, state } = input
+  // What went wrong as its own message, which `tryPromise` alone hides.
+  const attempt = <T>(run: () => Promise<T>) =>
+    Effect.tryPromise({
+      try: run,
+      catch: (cause) =>
+        new PlatformError({
+          reason: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    })
+  const opensWith = (key: string) =>
+    attempt(() => platformBackupOpensWith(key, source))
+  const own = yield* platformBackupKey(config, state)
+  const opens = own !== null && (yield* opensWith(own))
+  // A Kiln this Relay installed keeps its record's key.
+  if (!opens && (yield* readPlatformState(config.dataDirectory))) {
+    return yield* new PlatformError({
+      reason: "That backup doesn't open with this Kiln's key, or it's damaged",
+    })
+  }
+  if (!opens) print("This backup was made with another recovery code")
+  const key = opens ? own : yield* keyFromCode(input.recoveryCode)
+  if (!opens && !(yield* opensWith(key))) {
+    return yield* new PlatformError({
+      reason:
+        "That backup doesn't open with this recovery code, or it's damaged",
+    })
+  }
+  const restored = yield* withPlatformRestoreHold(
+    config,
+    attempt(() =>
+      restoreEncryptedPlatformBackup(
+        { ...config, platformBackupKey: key },
+        source,
+        input.installationId
+      )
+    )
+  )
+  if (!opens) yield* savePlatformBackupKey(state, input.installationId, key)
   return restored
 })
 

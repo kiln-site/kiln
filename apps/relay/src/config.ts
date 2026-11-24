@@ -14,6 +14,7 @@ import type {
   ResourceLimits,
 } from "@workspace/contracts"
 import {
+  decodeRecoveryCode,
   decodeRelayJoinLink,
   isKilnInstallationId,
   kilnGitRepositoryRawUrl,
@@ -78,8 +79,8 @@ export interface RelayPlatformEdge {
 export type RelayGameHostSource = "configured" | "public_ip" | "relay"
 
 /**
- * A Hearth that proved the container it runs in, and what it found beside
- * it then: the database and cache its DB_HOST and CACHE_HOST reached, the
+ * A Hearth that proved the container it runs in, the client it connected
+ * as (older records don't say), and what it found beside it then: the database and cache its DB_HOST and CACHE_HOST reached, the
  * database it uses (DB_NAME), and a digest of each secret in its
  * BETTER_AUTH_SECRETS. Coolify removes Hearth's container when it stops
  * Hearth and recreates it under a new ID, so these find Kiln's services,
@@ -87,6 +88,7 @@ export type RelayGameHostSource = "configured" | "public_ip" | "relay"
  */
 export interface ProvenHearth {
   readonly cache: ProvenContainer | null
+  readonly clientId?: string
   readonly containerId: string
   readonly database: ProvenContainer | null
   readonly databaseName: string | null
@@ -194,6 +196,8 @@ export interface RelayConfig {
   nodeId: string
   nodeName: string
   port: number
+  // KILN_PLATFORM_BACKUP_KEY, which only starts a Kiln's key, or the key of
+  // the Kiln this Relay installed. See `platform-backup-key.ts`.
   platformBackupKey: string | null
   /**
    * The database platform backups use when Hearth's sits on a MySQL it
@@ -526,11 +530,13 @@ function relayBrowserLimits(environment: NodeJS.ProcessEnv) {
   }
 }
 
+// The key alone, or the recovery code people save it as.
 function optionalPlatformBackupKey(
   environment: NodeJS.ProcessEnv
 ): string | null {
-  const key = environment.KILN_PLATFORM_BACKUP_KEY?.trim()
-  if (!key) return null
+  const value = environment.KILN_PLATFORM_BACKUP_KEY?.trim()
+  if (!value) return null
+  const key = decodeRecoveryCode(value) ?? value
   if (Buffer.byteLength(key, "utf8") < 32) {
     throw new Error("KILN_PLATFORM_BACKUP_KEY must be at least 32 bytes")
   }

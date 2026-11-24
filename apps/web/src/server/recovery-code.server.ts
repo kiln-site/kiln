@@ -148,7 +148,7 @@ async function readRecoveryCode(
   ])
   if (!host?.status?.recovery) {
     throw new Error(
-      "No connected Relay has Kiln's recovery code. It's on the Relay that installed Kiln, or one with KILN_PLATFORM_BACKUP_KEY."
+      "Kiln's recovery code is on the Relay beside Hearth, which isn't connected."
     )
   }
   const answer = relayRecoveryCodeSchema.parse(

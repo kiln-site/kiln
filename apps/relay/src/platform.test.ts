@@ -5,11 +5,14 @@ import { Effect } from "effect"
 import { describe, expect, it } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
+import { loadInstallationId } from "./installation.js"
 import {
   addOwnerInvitation,
   isPlatformOwner,
   platformTargetContainer,
   identifyHearth,
+  mayReadRecoveryCode,
+  platformRecoveryCode,
   platformStatus,
   reconcilePlatform,
   runPlatformCli,
@@ -201,12 +204,14 @@ describe("Kiln deployed without Kiln's labels", () => {
       hearth,
       // What a Relay checks when a Hearth connects, then saves.
       identify: (claim: {
+        clientId?: string
         containerId: string
         installationId?: string
         key: string
       }) =>
         run(
           identifyHearth(engine, harness.config, harness.state, {
+            clientId: claim.clientId ?? "hearth-client",
             containerId: claim.containerId,
             installationId: claim.installationId ?? "coolify",
             proof: createHmac("sha256", claim.key)
@@ -215,6 +220,7 @@ describe("Kiln deployed without Kiln's labels", () => {
             transcript: "transcript",
           })
         ),
+      state: harness.state,
       status: () => run(platformStatus(context, null)),
     }
   }
@@ -247,5 +253,51 @@ describe("Kiln deployed without Kiln's labels", () => {
     await expect(
       kiln.identify({ containerId: kiln.hearth.id, key: secret })
     ).resolves.toBe(true)
+  })
+
+  it("gives its recovery code only to the Hearth that proved it runs here, while the Relay is its Kiln's", async () => {
+    const kiln = await coolify()
+    const { config } = kiln.context
+    const may = (id: string, role: "full_access" | "read_only") =>
+      mayReadRecoveryCode(config, null, { id, invitationId: "any", role })
+    expect(may("hearth-client", "full_access")).toBe(false)
+
+    await kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    expect(may("hearth-client", "full_access")).toBe(true)
+    expect(may("friend-client", "full_access")).toBe(false)
+    expect(may("hearth-client", "read_only")).toBe(false)
+
+    // Nor one that only says it runs there.
+    await kiln.identify({
+      clientId: "friend-client",
+      containerId: kiln.hearth.id,
+      key: "1:guessed",
+    })
+    expect(may("friend-client", "full_access")).toBe(false)
+    expect(may("hearth-client", "full_access")).toBe(true)
+
+    // Moved to another Kiln, whose code isn't the first Hearth's to read.
+    const moved = { ...config, installationId: "another-kiln" }
+    expect(
+      mayReadRecoveryCode(moved, null, {
+        id: "hearth-client",
+        invitationId: "any",
+        role: "full_access",
+      })
+    ).toBe(false)
+    await expect(run(platformRecoveryCode(moved, kiln.state))).rejects.toThrow(
+      "no recovery code"
+    )
+
+    // And read after a restart, before any Hearth connects again.
+    const restarted = { ...config, provenHearth: null }
+    await run(loadInstallationId(restarted, kiln.state))
+    expect(
+      mayReadRecoveryCode(restarted, null, {
+        id: "hearth-client",
+        invitationId: "any",
+        role: "full_access",
+      })
+    ).toBe(true)
   })
 })

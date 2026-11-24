@@ -1632,6 +1632,13 @@ const finishJoin = Effect.fnUntraced(function* (
       }
     })
   )
+  if (sendInstallationId && relayId) {
+    // Connected before it sent its ID, with which it proves where it runs.
+    const { reconnectRelayConnection } = yield* promiseEffect(
+      () => import("@/lib/relay-connection")
+    )
+    reconnectRelayConnection(relayId)
+  }
   if (state === "paired" && relayId) {
     const { checkAddedRelayPublicRoute } = yield* promiseEffect(
       () => import("@/server/relay-public-route.server")

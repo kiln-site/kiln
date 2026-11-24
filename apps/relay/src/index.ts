@@ -220,11 +220,9 @@ import {
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { composeVolumeId, RelayVolumes } from "./volumes.js"
-import {
-  inspectEncryptedPlatformBackup,
-  restoreEncryptedPlatformBackup,
-} from "./platform-backups.js"
-import { restorePlatform } from "./platform-restore.js"
+import { platformBackupKey } from "./platform-backup-key.js"
+import { inspectEncryptedPlatformBackup } from "./platform-backups.js"
+import { restorePlatform, restorePlatformDatabase } from "./platform-restore.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
 import { HostPackages } from "./host-packages.js"
@@ -329,13 +327,13 @@ import {
   platformStatus,
   platformUpdateRefusal,
   platformManagedContainer,
+  mayReadRecoveryCode,
   platformRecoveryCode,
   platformTargetContainer,
   reconcilePlatform,
   restartPlatformService,
   runPlatformCli,
   startPlatform,
-  withPlatformRestoreHold,
   type PlatformContext,
   type PlatformPassResult,
 } from "./platform.js"
@@ -1547,15 +1545,13 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
   }
   if (resource === "platform-backup" && command === "inspect") {
     const source = requiredCliArgument(arguments_[2], "backup path")
-    if (!config.platformBackupKey) {
-      throw new Error("KILN_PLATFORM_BACKUP_KEY is not configured")
-    }
+    const key = await runRelayEffect(
+      "relay.cli.platformBackup.inspect",
+      platformBackupKey(config, startup.state)
+    )
+    if (!key) throw new Error("This Relay has no key for Kiln's backups")
     console.log(
-      JSON.stringify(
-        await inspectEncryptedPlatformBackup(config.platformBackupKey, source),
-        null,
-        2
-      )
+      JSON.stringify(await inspectEncryptedPlatformBackup(key, source), null, 2)
     )
     return
   }
@@ -1569,16 +1565,14 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
     // On a Relay that installed Kiln, only while Hearth is held stopped.
     const restored = await runRelayEffect(
       "relay.cli.platformBackup.restore",
-      withPlatformRestoreHold(
+      restorePlatformDatabase({
         config,
-        Effect.tryPromise(() =>
-          restoreEncryptedPlatformBackup(
-            config,
-            source,
-            confirmedInstallationId
-          )
-        )
-      )
+        installationId: confirmedInstallationId,
+        print: (text) => console.log(text),
+        recoveryCode: readRecoveryCode,
+        source,
+        state: startup.state,
+      })
     )
     console.log(
       `Restored Kiln platform backup for ${restored.installationId}. Start Hearth and verify the installation before resuming operations.`
@@ -4207,15 +4201,24 @@ async function executeControlRequest(
         )
       )
     }
-    // What opens every backup of Kiln: only the Hearth this Relay
-    // installed, or, where it only reports Kiln, a full-access Hearth. Not
+    // What opens every backup of Kiln, so only its own Hearth's to read. Not
     // a change, so neither the Relay's journal nor Hearth's audit keeps the
     // answer.
     case "relay.platform.recovery.read":
-      await requirePlatformReader(client.id, "read Kiln's recovery code")
+      if (
+        !mayReadRecoveryCode(
+          config,
+          platformPass.state ?? platformStartup.state,
+          await clientRecord(client.id)
+        )
+      ) {
+        throw new Error(
+          "Only the Hearth that runs beside this Relay can read Kiln's recovery code"
+        )
+      }
       return runRelayEffect(
         "relay.platform.recovery.read",
-        platformRecoveryCode(config)
+        platformRecoveryCode(config, startup.state)
       )
     case "relay.platform.database.write": {
       const input = relayPlatformDatabaseWriteSchema.parse(request.payload)

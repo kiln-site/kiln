@@ -200,7 +200,9 @@ keeps it. Another Hearth pairing the same Relay, as when two Kiln
 installations share one machine, is asked whether to replace the Relay's ID
 with its own or keep it. The ID decides whose Kiln services and backups the
 Relay finds; it doesn't separate anything else, since every Hearth paired
-with full access can manage the Relay. `KILN_INSTALLATION_ID`, or a Relay
+with full access can manage the Relay. Each Kiln's recovery code stays its own:
+the Relay shows it only to that Kiln's Hearth, on the same machine, and keeps it
+when its ID is replaced. `KILN_INSTALLATION_ID`, or a Relay
 that installed Kiln itself, fixes the ID.
 
 Several Hearths can manage the same Relay, but this isn't recommended: each
@@ -442,9 +444,9 @@ destination. Kiln's daily schedule keeps its backups on this machine's disk,
 which doesn't survive losing it; add a destination to keep one elsewhere.
 
 A Kiln whose secrets come from its own environment (Coolify, or Hearth run by
-hand) writes format 1 backups, which hold only Hearth's database. Hearth still
-offers its code, if the Relay beside it has `KILN_PLATFORM_BACKUP_KEY`, and the
-operator's own environment file must be kept too: restoring needs both.
+hand) writes format 1 backups, which hold only Hearth's database. The Relay
+beside it generates and keeps its key, and Hearth offers the code the same way.
+The operator's own environment file must be kept too: restoring needs both.
 
 ### Restoring on a new machine
 
@@ -616,9 +618,9 @@ the ports the old one holds. Remove the container it made with
 ### Moving under a platform Relay
 
 1. Create a platform backup of it, and note its `KILN_INSTALLATION_ID`,
-   `BETTER_AUTH_SECRETS`, and `KILN_PLATFORM_BACKUP_KEY`. Hearth encrypts
-   saved credentials with `BETTER_AUTH_SECRETS`, so the new Hearth needs the
-   same value to read them.
+   `BETTER_AUTH_SECRETS`, and recovery code, which is what
+   `KILN_PLATFORM_BACKUP_KEY` takes. Hearth encrypts saved credentials with
+   `BETTER_AUTH_SECRETS`, so the new Hearth needs the same value to read them.
 2. Start a platform Relay on a fresh data volume with those three variables
    set, along with `KILN_URL`. On its first start it uses them instead of
    generating its own. With Compose, put all four in `.env` and start

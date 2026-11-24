@@ -1182,9 +1182,6 @@ function setupEnvironment() {
   if (!usableSecret(values.get("KILN_RELAY_BOOTSTRAP_TOKEN"))) {
     replacements.set("KILN_RELAY_BOOTSTRAP_TOKEN", secret(48))
   }
-  if (!usableSecret(values.get("KILN_PLATFORM_BACKUP_KEY"))) {
-    replacements.set("KILN_PLATFORM_BACKUP_KEY", secret(48))
-  }
   chmodSync(environmentFile, 0o600)
   if (replacements.size === 0) return
 
@@ -1210,9 +1207,6 @@ function requireEnvironment() {
   }
   if (!usableSecret(values.get("KILN_RELAY_BOOTSTRAP_TOKEN"))) {
     missing.push("KILN_RELAY_BOOTSTRAP_TOKEN")
-  }
-  if (!usableSecret(values.get("KILN_PLATFORM_BACKUP_KEY"))) {
-    missing.push("KILN_PLATFORM_BACKUP_KEY")
   }
   if (missing.length > 0) {
     fail(

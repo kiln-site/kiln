@@ -79,8 +79,8 @@ export function RecoveryCodePanel({
   if (unavailable) {
     return (
       <p className="type-meta rounded-lg border border-border/80 px-3 py-2.5 text-muted-foreground">
-        No connected Relay has Kiln's recovery code. It's on the Relay that
-        installed Kiln, or one with KILN_PLATFORM_BACKUP_KEY.
+        Kiln's recovery code is on the Relay beside Hearth, which isn't
+        connected.
       </p>
     )
   }
