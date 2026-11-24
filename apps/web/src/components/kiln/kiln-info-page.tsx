@@ -369,7 +369,6 @@ const commands = [
   { args: "status", label: "Status" },
   { args: "repair", label: "Repair" },
   { args: "setup-url", label: "Setup link" },
-  { args: "export-kit > kiln-recovery.json", label: "Recovery kit" },
 ] as const
 
 function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
@@ -446,7 +445,10 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
           <InfoFact label="Restored">
             <span>
               <RelativeTime timestamp={Date.parse(status.restored.at)} />
-              <span className="text-muted-foreground"> from a backup made </span>
+              <span className="text-muted-foreground">
+                {" "}
+                from a backup made{" "}
+              </span>
               <RelativeTime
                 timestamp={Date.parse(status.restored.backupCreatedAt)}
               />

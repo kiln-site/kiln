@@ -6,7 +6,7 @@
  * picks up with the same secrets and volumes, and it outlives the Relay's
  * container in the Relay's data volume.
  *
- * The format is read by other Relay versions and by recovery kits; change it
+ * The format is read by other Relay versions and backups carry it; change it
  * only by adding a new `formatVersion`.
  */
 import { randomBytes } from "node:crypto"
@@ -96,21 +96,6 @@ const decodeState = Schema.decodeUnknownEffect(
   Schema.fromJsonString(PlatformStateSchema)
 )
 
-/**
- * The installation record as `kiln-relay platform export-kit` prints it, to
- * keep offline. With a platform backup it restores Kiln on a new host.
- */
-export const PlatformRecoveryKitSchema = Schema.Struct({
-  exportedAt: Schema.String,
-  formatVersion: Schema.Literal(1),
-  kind: Schema.Literal("kiln-platform-recovery-kit"),
-  state: PlatformStateSchema,
-})
-
-export const decodePlatformRecoveryKit = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(PlatformRecoveryKitSchema)
-)
-
 export class PlatformError extends Schema.TaggedError<PlatformError>()(
   "PlatformError",
   {
@@ -158,7 +143,7 @@ export const readPlatformState = Effect.fn("Relay.platform.state.read")(
       Effect.mapError((cause) =>
         PlatformError.make({
           reason:
-            "Kiln's installation record is damaged or from a newer Relay; restore it from a recovery kit",
+            "Kiln's installation record is damaged or from a newer Relay; restore Kiln from a backup on a new data volume",
           cause,
         })
       )

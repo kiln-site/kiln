@@ -341,6 +341,8 @@ export async function restoreEncryptedPlatformBackup(
   options: {
     /** Run in the database once it's imported. */
     readonly afterwards?: string
+    /** Runs once nothing is left to check, just before the database changes. */
+    readonly beforeImport?: () => Promise<void>
     readonly tablePrefix?: string | null
   } = {}
 ): Promise<PlatformBackupManifest> {
@@ -429,8 +431,9 @@ export async function restoreEncryptedPlatformBackup(
           // going.
           child.stdout.resume()
           return Effect.tryPromise({
-            try: () =>
-              streamIntoProcess(
+            try: async () => {
+              await options.beforeImport?.()
+              await streamIntoProcess(
                 child,
                 () =>
                   pipeline(
@@ -444,7 +447,8 @@ export async function restoreEncryptedPlatformBackup(
                     child.stdin
                   ),
                 () => requireSuccessfulProcess(child, stderr)
-              ),
+              )
+            },
             catch: (cause) => cause,
           })
         },

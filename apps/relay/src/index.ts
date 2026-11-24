@@ -220,9 +220,7 @@ import {
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { composeVolumeId, RelayVolumes } from "./volumes.js"
-import { platformBackupKey } from "./platform-backup-key.js"
-import { inspectEncryptedPlatformBackup } from "./platform-backups.js"
-import { restorePlatform, restorePlatformDatabase } from "./platform-restore.js"
+import { restorePlatform } from "./platform-restore.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
 import { HostPackages } from "./host-packages.js"
@@ -382,7 +380,7 @@ initializeRelayRuntime(config)
 // runs before they're loaded or made.
 if (process.argv[2] === "platform" && process.argv[3] === "restore") {
   await recoverPromise(
-    () => runPlatformRestore(process.argv[4]),
+    () => runPlatformRestore(process.argv.slice(4)),
     reportCliFailure
   )
   await disposeRelayRuntime()
@@ -924,8 +922,7 @@ const startup = { ...startupCore, tls: activeTls }
 if (
   cliArguments[0] === "pair" ||
   cliArguments[0] === "hearth" ||
-  cliArguments[0] === "platform" ||
-  cliArguments[0] === "platform-backup"
+  cliArguments[0] === "platform"
 ) {
   await recoverPromise(() => runRelayCli(cliArguments), reportCliFailure)
   await disposeRelayRuntime()
@@ -1369,26 +1366,37 @@ function reportCliFailure(cause: unknown): void {
   process.exitCode = 1
 }
 
-async function runPlatformRestore(source: string | undefined): Promise<void> {
+async function runPlatformRestore(
+  arguments_: ReadonlyArray<string>
+): Promise<void> {
+  const source = arguments_.find((argument) => !argument.startsWith("--"))
   if (!source) {
     throw new Error(
-      "Usage: kiln-relay platform restore <backup>; on a machine without Kiln, the recovery code is read from standard input"
+      "Usage: kiln-relay platform restore <backup> [--without-undo]; a recovery code it needs is read from standard input"
     )
   }
-  await runRelayEffect(
+  const restored = await runRelayEffect(
     "relay.cli.platform.restore",
     Effect.gen(function* () {
+      const state = yield* RelayStateStore
+      // Which Kiln runs beside it, where this Relay didn't install it.
+      yield* loadInstallationId(config, state)
       return yield* restorePlatform({
         config,
         engine: new DockerEngine(config.dockerSocket),
         print: (text) => console.log(text),
         recoveryCode: readRecoveryCode,
         source,
-        state: yield* RelayStateStore,
+        state,
+        withoutUndo: arguments_.includes("--without-undo"),
       })
     })
   )
-  console.log("Hearth starts as the Relay next checks Kiln's services")
+  console.log(
+    restored
+      ? "Hearth starts as the Relay next checks Kiln's services"
+      : "Start Hearth again where it's deployed"
+  )
 }
 
 async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
@@ -1543,44 +1551,8 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
     console.log(revoked ? `Revoked ${clientId}` : "Hearth client not found")
     return
   }
-  if (resource === "platform-backup" && command === "inspect") {
-    const source = requiredCliArgument(arguments_[2], "backup path")
-    const key = await runRelayEffect(
-      "relay.cli.platformBackup.inspect",
-      platformBackupKey(config, startup.state)
-    )
-    if (!key) throw new Error("This Relay has no key for Kiln's backups")
-    console.log(
-      JSON.stringify(await inspectEncryptedPlatformBackup(key, source), null, 2)
-    )
-    return
-  }
-  if (resource === "platform-backup" && command === "restore") {
-    const source = requiredCliArgument(arguments_[2], "backup path")
-    const confirmIndex = arguments_.indexOf("--confirm")
-    const confirmedInstallationId = requiredCliArgument(
-      confirmIndex === -1 ? undefined : arguments_[confirmIndex + 1],
-      "--confirm installation ID"
-    )
-    // On a Relay that installed Kiln, only while Hearth is held stopped.
-    const restored = await runRelayEffect(
-      "relay.cli.platformBackup.restore",
-      restorePlatformDatabase({
-        config,
-        installationId: confirmedInstallationId,
-        print: (text) => console.log(text),
-        recoveryCode: readRecoveryCode,
-        source,
-        state: startup.state,
-      })
-    )
-    console.log(
-      `Restored Kiln platform backup for ${restored.installationId}. Start Hearth and verify the installation before resuming operations.`
-    )
-    return
-  }
   throw new Error(
-    "Usage: kiln-relay pair create|list|revoke; kiln-relay pair join <link>; kiln-relay hearth list|revoke; or kiln-relay platform-backup inspect|restore <path> [--confirm <installation-id>]"
+    "Usage: kiln-relay pair create|list|revoke; kiln-relay pair join <link>; or kiln-relay hearth list|revoke"
   )
 }
 

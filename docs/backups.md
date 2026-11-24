@@ -439,9 +439,7 @@ and backups run meanwhile. Until then it makes no bundle. Format 1, from before,
 holds only the dump, and restores into the Kiln it came from.
 
 Neither format restores the settings passed to the Relay's own container, such
-as email or signup settings: they come from where Kiln is installed. A Relay in
-platform mode also exports its record by itself as a recovery kit
-(`kiln-relay platform export-kit`); see
+as email or signup settings: they come from where Kiln is installed. See
 [Self-hosting](self-hosting.md#recovery).
 
 Game-server archives, tar archives, and platform bundles each carry a
@@ -733,34 +731,24 @@ default recommendation.
 
 Kiln platform restore is deliberately offline because importing Hearth's own
 catalog while Hearth is serving requests cannot be made transactionally safe.
-A Relay in platform mode does it in one command, on the machine that has Kiln
-or on a new one (see [Self-hosting](self-hosting.md#recovery)):
+One command does it, on the machine that has Kiln or on a new one, however Kiln
+was installed (see [Self-hosting](self-hosting.md#recovery)):
 
 ```text
 kiln-relay platform restore /data/backups/<backup-id>.zip
 ```
 
-It authenticates the whole bundle before changing anything, holds Hearth
-stopped, saves the database that's there as another platform backup, which
-restoring undoes it, and replaces it. It records no progress: one that fails or
-is stopped is run again from the start, and Hearth stays stopped until one
-finishes. Where the Relay didn't install Kiln, stop Hearth, keep its MySQL and
-Relay containers running, and use:
-
-```text
-kiln-relay platform-backup inspect /data/backups/<backup-id>.zip
-kiln-relay platform-backup restore /data/backups/<backup-id>.zip \
-  --confirm <installation-id>
-```
-
-`inspect` prints the installation ID the bundle belongs to. Either refuses a
-backup of another installation, and the second refuses to run while a labeled
-Hearth application container is running. A backup made with another key, as on
-a machine since lost, asks `restore` for its recovery code (run it with
-`docker exec -it`), and the Relay keeps that key from then on. Start Hearth
-afterward; normal Relay
-reconciliation repairs the restored catalog's queued snapshot of the backup
-task, and sends a Relay that lost its schedules them again.
+It authenticates the whole bundle before changing anything, saves the database
+that's there as another platform backup, which restoring undoes it, and replaces
+it. Where the Relay runs Kiln it holds Hearth stopped meanwhile; where something
+else does, it refuses while Hearth runs, and Hearth is stopped and started there.
+It records no progress: one that fails or is stopped is run again from the
+start, and what was there first stays what undoes it. It refuses a backup of
+another installation. A backup made with another key, as on a machine since
+lost, asks for its recovery code (`docker exec -it`), and the Relay keeps that
+key from then on. Normal Relay reconciliation repairs the restored catalog's
+queued snapshot of the backup task, and sends a Relay that lost its schedules
+them again.
 
 Deleting a game server, database, App, or Kiln volume is the durable
 operation `resource.delete` (`apps/web/src/lib/resource-deletion.server.ts`),

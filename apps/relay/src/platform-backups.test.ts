@@ -1,6 +1,6 @@
 import { createCipheriv, createHmac, randomUUID, scryptSync } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { gzipSync } from "node:zlib"
@@ -35,14 +35,14 @@ import {
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
-import { restorePlatformDatabase } from "./platform-restore.js"
-import { writePlatformState, type PlatformState } from "./platform-state.js"
-import { DockerEngine } from "./docker-engine.js"
+import { restorePlatform } from "./platform-restore.js"
 import {
-  identifyHearth,
-  newPlatformState,
-  platformInputs,
-} from "./platform.js"
+  type PlatformState,
+  withPlatformLock,
+  writePlatformState,
+} from "./platform-state.js"
+import { DockerEngine } from "./docker-engine.js"
+import { identifyHearth, newPlatformState, platformInputs } from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
@@ -183,6 +183,47 @@ async function coolifyKiln(
   }
 }
 
+// As a schedule or the panel has the Relay back Kiln up.
+async function backupManager(kiln: Awaited<ReturnType<typeof coolifyKiln>>) {
+  const { harness } = kiln
+  const manager = await Effect.runPromise(
+    BackupManager.make({
+      apps: {
+        isRunning: async () => false,
+        start: async () => {},
+        stop: async () => {},
+        volumes: async () => [],
+      },
+      config: harness.config,
+      fences: await TarRestoreFences.load(harness.config),
+      findInstance: async () => null,
+      isInstanceStopped: async () => true,
+      lanes: harness.lanes,
+      volumes: harness.volumes,
+    }).pipe(Effect.provideService(RelayStateStore, harness.state))
+  )
+  const backUp = (taskId: string = randomUUID()) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* manager.enqueue({
+          artifactKind: "platform_bundle",
+          backupId: randomUUID(),
+          destination: { kind: "local" },
+          exclude: [],
+          kind: "create",
+          maxBytes: null,
+          mode: "full",
+          reason: "manual",
+          target: { id: "kiln-test", kind: "platform" },
+          taskId,
+        })
+        yield* manager.runPending()
+        return (yield* manager.get(taskId))!
+      })
+    )
+  return { backUp, manager }
+}
+
 describe("Kiln platform backups deployed by Coolify", () => {
   it("backs up Hearth's database, and restores it once Coolify removes Hearth's container", async () => {
     const kiln = await coolifyKiln()
@@ -273,22 +314,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
     const kiln = await coolifyKiln()
     kiln.database.sqlDump = "CREATE TABLE kept (id int);"
     const { harness } = kiln
-    const manager = await Effect.runPromise(
-      BackupManager.make({
-        apps: {
-          isRunning: async () => false,
-          start: async () => {},
-          stop: async () => {},
-          volumes: async () => [],
-        },
-        config: harness.config,
-        fences: await TarRestoreFences.load(harness.config),
-        findInstance: async () => null,
-        isInstanceStopped: async () => true,
-        lanes: harness.lanes,
-        volumes: harness.volumes,
-      }).pipe(Effect.provideService(RelayStateStore, harness.state))
-    )
+    const { backUp, manager } = await backupManager(kiln)
     const restarted = Deferred.makeUnsafe<void>()
     const restart = Effect.runFork(
       harness.lanes.run(
@@ -305,24 +331,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
       )
     )
     const taskId = randomUUID()
-    const backup = Effect.runPromise(
-      Effect.gen(function* () {
-        yield* manager.enqueue({
-          artifactKind: "platform_bundle",
-          backupId: randomUUID(),
-          destination: { kind: "local" },
-          exclude: [],
-          kind: "create",
-          maxBytes: null,
-          mode: "full",
-          reason: "manual",
-          target: { id: "kiln-test", kind: "platform" },
-          taskId,
-        })
-        yield* manager.runPending()
-        return (yield* manager.get(taskId))!
-      })
-    )
+    const backup = backUp(taskId)
 
     // It waits its turn rather than dump a database being restarted.
     await vi.waitFor(() => expect(harness.lanes.pending.waiting).toBe(1))
@@ -335,36 +344,52 @@ describe("Kiln platform backups deployed by Coolify", () => {
     expect(await backup).toMatchObject({ status: "succeeded" })
   })
 
+  // As `kiln-relay platform restore` does, with this recovery code typed.
+  async function restoring(
+    kiln: Awaited<ReturnType<typeof coolifyKiln>>,
+    dump = "CREATE TABLE lost (id int);"
+  ) {
+    const { config, state } = kiln.harness
+    const source = join(testDirectory, `lost-${randomUUID()}.kiln`)
+    await writeFile(source, platformBundle(dump, { databaseName: "hearth" }))
+    const printed: Array<string> = []
+    return {
+      printed,
+      restore: (code: string, from = source, withoutUndo = false) =>
+        Effect.runPromise(
+          restorePlatform({
+            config,
+            engine: kiln.engine,
+            print: (text) => printed.push(text),
+            recoveryCode: async () => code,
+            source: from,
+            state,
+            withoutUndo,
+          })
+        ),
+    }
+  }
+
   it("restores a backup of a machine since lost with its recovery code, and keeps that code", async () => {
     const kiln = await coolifyKiln({ backupKey: "" })
     const { config, state } = kiln.harness
     const key = (installationId = "kiln-test") =>
       Effect.runPromise(platformBackupKey({ ...config, installationId }, state))
-    const ensure = (installationId: string) =>
-      Effect.runPromise(
-        ensurePlatformBackupKey({ ...config, installationId }, state)
+    await Effect.runPromise(
+      ensurePlatformBackupKey(
+        { ...config, installationId: "another-kiln" },
+        state
       )
-    await ensure("another-kiln")
+    )
     const own = await key()
     const another = await key("another-kiln")
-    const source = join(testDirectory, `lost-${randomUUID()}.kiln`)
-    await writeFile(
-      source,
-      platformBundle("CREATE TABLE lost (id int);", { databaseName: "hearth" })
+    const { printed, restore } = await restoring(kiln)
+
+    // Coolify still runs Hearth.
+    await expect(restore(encodeRecoveryCode(recoveryKey))).rejects.toThrow(
+      "Hearth is running"
     )
     fakeDocker.removeContainer("hearth-1")
-    const restore = (code: string) =>
-      Effect.runPromise(
-        restorePlatformDatabase({
-          config,
-          installationId: "kiln-test",
-          print: () => {},
-          recoveryCode: async () => code,
-          source,
-          state,
-        })
-      )
-
     await expect(
       restore(encodeRecoveryCode("wrong".repeat(8)))
     ).rejects.toThrow("recovery code")
@@ -377,43 +402,101 @@ describe("Kiln platform backups deployed by Coolify", () => {
     )
     expect(await key()).toBe(recoveryKey)
     expect(await key("another-kiln")).toBe(another)
+    // So does a new machine restored from what undoes it.
+    const undo = printed.at(-1)?.split(" ").at(-1) ?? ""
+    const { recovery } = await readPlatformBackupRecovery(recoveryKey, undo)
+    expect(recovery?.installation.secrets.platformBackupKey).toBe(recoveryKey)
   })
 
-  it("won't take another key for the Kiln a Relay installed, which keeps its own", async () => {
-    const kiln = await coolifyKiln({ backupKey: "" })
-    const { config, state } = kiln.harness
-    await Effect.runPromise(
-      writePlatformState(
-        config.dataDirectory,
-        newPlatformState(
-          config,
-          platformInputs({
-            KILN_INSTALLATION_ID: "kiln-test",
-            KILN_URL: "https://kiln.example.test",
-          }),
-          "ghcr.io/kiln-site/hearth:latest"
-        )
-      )
+  it("saves what's there first, which undoes the restore, however often it failed before", async () => {
+    const kiln = await coolifyKiln()
+    kiln.database.sqlDump = "CREATE TABLE before (id int);"
+    fakeDocker.removeContainer("hearth-1")
+    const { printed, restore } = await restoring(kiln)
+
+    fakeDocker.programFailures.set("mysql", "Lost connection")
+    await expect(restore("")).rejects.toThrow()
+    fakeDocker.programFailures.delete("mysql")
+    kiln.database.sqlDump = "CREATE TABLE half (id int);"
+    await restore("")
+
+    const undo = printed.at(-1)?.split(" ").at(-1) ?? ""
+    expect(undo).toContain("before-restore")
+    await restore("", undo)
+    expect(kiln.database.executedSql.at(-1)).toContain(
+      "CREATE TABLE before (id int);"
     )
-    const source = join(testDirectory, `other-${randomUUID()}.kiln`)
-    await writeFile(
-      source,
-      platformBundle("CREATE TABLE other (id int);", { databaseName: "hearth" })
+  })
+
+  it("isn't backed up with part of a failed restore in its database", async () => {
+    const kiln = await coolifyKiln()
+    fakeDocker.removeContainer("hearth-1")
+    const { restore } = await restoring(kiln)
+    const { backUp } = await backupManager(kiln)
+
+    fakeDocker.programFailures.set("mysql", "Lost connection")
+    await expect(restore("")).rejects.toThrow()
+    fakeDocker.programFailures.delete("mysql")
+    expect(await backUp()).toMatchObject({ status: "failed" })
+
+    await restore("")
+    expect(await backUp()).toMatchObject({ status: "succeeded" })
+  })
+
+  it("saves again what's there after a try that changed nothing", async () => {
+    const kiln = await coolifyKiln()
+    const { config } = kiln.harness
+    kiln.database.sqlDump = "CREATE TABLE before (id int);"
+    fakeDocker.removeContainer("hearth-1")
+    const { printed, restore } = await restoring(kiln)
+
+    // There's nowhere to decrypt it.
+    const staging = join(config.dataDirectory, "restores")
+    await rm(staging, { force: true, recursive: true })
+    await writeFile(staging, "")
+    await expect(restore("")).rejects.toThrow()
+    expect(kiln.database.executedSql).toEqual([])
+    await rm(staging)
+    // Hearth ran meanwhile.
+    kiln.database.sqlDump = "CREATE TABLE meanwhile (id int);"
+    await restore("")
+
+    const undo = printed.at(-1)?.split(" ").at(-1) ?? ""
+    await restore("", undo)
+    expect(kiln.database.executedSql.at(-1)).toContain(
+      "CREATE TABLE meanwhile (id int);"
+    )
+  })
+
+  it("restores without undo a Kiln whose Hearth hasn't connected since the Relay saved what backups carry", async () => {
+    const kiln = await coolifyKiln()
+    await Effect.runPromise(
+      kiln.harness.state.setMetadata("hosted_kiln:kiln-test", "")
     )
     fakeDocker.removeContainer("hearth-1")
+    const { restore } = await restoring(kiln)
 
-    await expect(
-      Effect.runPromise(
-        restorePlatformDatabase({
-          config,
-          installationId: "kiln-test",
-          print: () => {},
-          recoveryCode: async () => encodeRecoveryCode(recoveryKey),
-          source,
-          state,
+    await expect(restore("")).rejects.toThrow("--without-undo")
+    expect(kiln.database.executedSql).toEqual([])
+    await restore("", undefined, true)
+    expect(kiln.database.executedSql.join("\n")).toContain(
+      "CREATE TABLE lost (id int);"
+    )
+  })
+
+  it("won't restore while another process of the Relay does", async () => {
+    const kiln = await coolifyKiln()
+    fakeDocker.removeContainer("hearth-1")
+    const { restore } = await restoring(kiln)
+
+    await Effect.runPromise(
+      withPlatformLock(
+        kiln.harness.config.dataDirectory,
+        Effect.promise(async () => {
+          await expect(restore("")).rejects.toThrow("Another Relay process")
         })
       )
-    ).rejects.toThrow("this Kiln's key")
+    )
     expect(kiln.database.executedSql).toEqual([])
   })
 

@@ -296,7 +296,7 @@ describe("restoring Kiln", () => {
     const fresh = await machine()
     fakeDocker.programFailures.set("mysql", "Lost connection to MySQL server")
     await expect(fresh.restore(lost.backup, lost.code)).rejects.toThrow(
-      "run this again"
+      "Lost connection"
     )
     await fresh.start()
     await fresh.pass()
@@ -393,7 +393,7 @@ describe("restoring Kiln", () => {
   it("offers to undo to what was running, never to what a failed try left", async () => {
     const { backup, code, kiln } = await runningKiln()
     fakeDocker.programFailures.set("mysql", "Lost connection to MySQL server")
-    await expect(kiln.restore(backup, code)).rejects.toThrow("run this again")
+    await expect(kiln.restore(backup, code)).rejects.toThrow("Lost connection")
     fakeDocker.programFailures.delete("mysql")
 
     await kiln.restore(backup, code)

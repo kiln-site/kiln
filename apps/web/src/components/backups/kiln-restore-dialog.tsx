@@ -57,10 +57,7 @@ export function KilnRestoreDialog({
   )
   const path = local ? `/data/backups/${backup.id}.zip` : "/data/restore.zip"
   const cli = relayCli(managed)
-  const command =
-    managed === "relay"
-      ? `${cli} platform restore ${path}`
-      : `${cli} platform-backup restore ${path} --confirm ${backup.targetId}`
+  const command = `${cli} platform restore ${path}`
   const steps = [
     ...(local
       ? []
@@ -80,7 +77,8 @@ export function KilnRestoreDialog({
     ) : (
       <>
         {deployer} runs Hearth: stop it there, run this on the host with the
-        Relay&apos;s container name, then start Hearth again.
+        Relay&apos;s container name, then start Hearth again. It saves
+        what&apos;s here first, so you can undo it.
       </>
     ),
   ]
