@@ -52,6 +52,7 @@ import {
 } from "./docker-engine.js"
 import type { RelayClientRecord, RelayStateStore } from "./effect/state.js"
 import { adoptProvenHearth } from "./installation.js"
+import { ensurePlatformBackupKey } from "./platform-backup-key.js"
 import { relayOwnerLabels, relayResourceNames } from "./relay-resources.js"
 import {
   decodePlatformRecoveryKit,
@@ -328,8 +329,8 @@ export function platformRecoveryKit(state: PlatformState) {
 /**
  * Kiln's recovery code, for Hearth to show its platform administrators: the
  * platform backup key of the Kiln this Relay installed, whose backups carry
- * the rest, or else the key it was given, beside the operator's own
- * environment file.
+ * the rest, or else of the one it runs beside, whose operator's own
+ * environment file holds the rest.
  */
 export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
   function* (
@@ -358,7 +359,7 @@ export const platformRecoveryCode = Effect.fn("Relay.platform.recovery.read")(
     }
     return yield* new PlatformError({
       reason:
-        "This Relay has no recovery code: it didn't install Kiln, and has no KILN_PLATFORM_BACKUP_KEY",
+        "This Relay has no recovery code: Kiln's database isn't beside it",
     })
   }
 )
@@ -1327,11 +1328,15 @@ let latestClaim = 0
 
 /**
  * Checks the container a full-access Hearth says it runs in and, once
- * proven, saves what's beside it. Returns whether it saved it.
+ * proven, saves what's beside it, and that Kiln's backup key if it has none.
+ * Returns whether it saved it.
  */
 export function identifyHearth(
   engine: DockerEngine,
-  config: Pick<RelayConfig, "installationId" | "provenHearth">,
+  config: Pick<
+    RelayConfig,
+    "dataDirectory" | "installationId" | "platformBackupKey" | "provenHearth"
+  >,
   state: RelayStateStore["Service"],
   claim: {
     readonly containerId: string
@@ -1351,7 +1356,11 @@ export function identifyHearth(
         ...proven,
         installationId: claim.installationId,
       })
-      return config.provenHearth?.containerId === proven.containerId
+      if (config.provenHearth?.containerId !== proven.containerId) return false
+      // Kiln's backups are made here, so its recovery code can be saved
+      // before the first one.
+      if (proven.database) yield* ensurePlatformBackupKey(config, state)
+      return true
     })
   )
 }
@@ -2085,16 +2094,6 @@ function applyPlatformConfig(config: RelayConfig, state: PlatformState) {
   config.installationIdConfigured = true
   // Hearth is given the record's token, so the Relay must expect it.
   config.bootstrapToken = state.secrets.bootstrapToken
-  // The record's key, which recovery kits carry: backups made with another
-  // key couldn't be restored from a kit.
-  if (
-    config.platformBackupKey &&
-    config.platformBackupKey !== state.secrets.platformBackupKey
-  ) {
-    console.warn(
-      "KILN_PLATFORM_BACKUP_KEY differs from the installed Kiln's backup key; using the installed key, which its recovery kit holds"
-    )
-  }
   config.platformBackupKey = state.secrets.platformBackupKey
   config.platformEdge = platformEdge(config, state)
   // Players reach game servers at Hearth's host unless told otherwise.

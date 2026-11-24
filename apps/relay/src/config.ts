@@ -14,6 +14,7 @@ import type {
   ResourceLimits,
 } from "@workspace/contracts"
 import {
+  decodeRecoveryCode,
   decodeRelayJoinLink,
   isKilnInstallationId,
   kilnGitRepositoryRawUrl,
@@ -194,6 +195,7 @@ export interface RelayConfig {
   nodeId: string
   nodeName: string
   port: number
+  // The saved key, or until there's one, KILN_PLATFORM_BACKUP_KEY.
   platformBackupKey: string | null
   /**
    * The database platform backups use when Hearth's sits on a MySQL it
@@ -526,11 +528,13 @@ function relayBrowserLimits(environment: NodeJS.ProcessEnv) {
   }
 }
 
+// The key alone, or the recovery code people save it as.
 function optionalPlatformBackupKey(
   environment: NodeJS.ProcessEnv
 ): string | null {
-  const key = environment.KILN_PLATFORM_BACKUP_KEY?.trim()
-  if (!key) return null
+  const value = environment.KILN_PLATFORM_BACKUP_KEY?.trim()
+  if (!value) return null
+  const key = decodeRecoveryCode(value) ?? value
   if (Buffer.byteLength(key, "utf8") < 32) {
     throw new Error("KILN_PLATFORM_BACKUP_KEY must be at least 32 bytes")
   }

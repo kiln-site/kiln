@@ -220,11 +220,9 @@ import {
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { composeVolumeId, RelayVolumes } from "./volumes.js"
-import {
-  inspectEncryptedPlatformBackup,
-  restoreEncryptedPlatformBackup,
-} from "./platform-backups.js"
-import { restorePlatform } from "./platform-restore.js"
+import { loadPlatformBackupKey } from "./platform-backup-key.js"
+import { inspectEncryptedPlatformBackup } from "./platform-backups.js"
+import { restorePlatform, restorePlatformDatabase } from "./platform-restore.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
 import { HostPackages } from "./host-packages.js"
@@ -335,7 +333,6 @@ import {
   restartPlatformService,
   runPlatformCli,
   startPlatform,
-  withPlatformRestoreHold,
   type PlatformContext,
   type PlatformPassResult,
 } from "./platform.js"
@@ -396,6 +393,7 @@ const startupCore = await runRelayEffect(
     const state = yield* RelayStateStore
     const identity = yield* loadOrCreateRelayIdentity(config)
     yield* loadInstallationId(config, state)
+    yield* loadPlatformBackupKey(config, state)
     const journalId = yield* state.operationJournalId()
     return { identity, journalId, state }
   })
@@ -1548,7 +1546,7 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
   if (resource === "platform-backup" && command === "inspect") {
     const source = requiredCliArgument(arguments_[2], "backup path")
     if (!config.platformBackupKey) {
-      throw new Error("KILN_PLATFORM_BACKUP_KEY is not configured")
+      throw new Error("This Relay has no key for Kiln's backups")
     }
     console.log(
       JSON.stringify(
@@ -1569,16 +1567,14 @@ async function runRelayCli(arguments_: ReadonlyArray<string>): Promise<void> {
     // On a Relay that installed Kiln, only while Hearth is held stopped.
     const restored = await runRelayEffect(
       "relay.cli.platformBackup.restore",
-      withPlatformRestoreHold(
+      restorePlatformDatabase({
         config,
-        Effect.tryPromise(() =>
-          restoreEncryptedPlatformBackup(
-            config,
-            source,
-            confirmedInstallationId
-          )
-        )
-      )
+        installationId: confirmedInstallationId,
+        print: (text) => console.log(text),
+        recoveryCode: readRecoveryCode,
+        source,
+        state: startup.state,
+      })
     )
     console.log(
       `Restored Kiln platform backup for ${restored.installationId}. Start Hearth and verify the installation before resuming operations.`

@@ -64,6 +64,7 @@ import {
   restoreCompressedDatabaseBackup,
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
+import { ensurePlatformBackupKey } from "./platform-backup-key.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
@@ -1952,10 +1953,11 @@ export class BackupManager {
             reason: backupErrorMessage(cause),
             cause,
           })
-        const result = yield* collectPlatformRecovery(
+        const result = yield* ensurePlatformBackupKey(
           this.#config,
           this.#state
         ).pipe(
+          Effect.andThen(collectPlatformRecovery(this.#config, this.#state)),
           Effect.mapError(platformFailure),
           Effect.flatMap((recovery) =>
             Effect.tryPromise({

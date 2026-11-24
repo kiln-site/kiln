@@ -416,9 +416,12 @@ doesn't use it any more, and it goes when the App is deleted.
 
 A platform bundle contains a logical Hearth database dump plus a versioned
 manifest describing the installation. Relay gzip-compresses the dump and
-encrypts it with AES-256-GCM using a key derived from the separately recoverable
-`KILN_PLATFORM_BACKUP_KEY`; using only a live Hearth secret would make disaster
-recovery circular. It backs up the colocated Compose MySQL database identified
+encrypts it with AES-256-GCM using a key derived from Kiln's platform backup
+key, which its [recovery code](self-hosting.md#recovery) holds; using only a
+live Hearth secret would make disaster recovery circular. However Kiln was
+installed, the Relay beside it generates that key and saves it.
+`KILN_PLATFORM_BACKUP_KEY` only sets the first one: once a key is saved, that
+variable does nothing, so every backup stays readable with the same code. It backs up the colocated Compose MySQL database identified
 by installation-scoped Docker labels; a Hearth database outside the Relay's
 Docker isn't backed up, so no connection credentials pass through the Relay's
 task journal.
@@ -748,7 +751,10 @@ kiln-relay platform-backup restore /data/backups/<backup-id>.zip \
 
 `inspect` prints the installation ID the bundle belongs to. Either refuses a
 backup of another installation, and the second refuses to run while a labeled
-Hearth application container is running. Start Hearth afterward; normal Relay
+Hearth application container is running. A backup made with another key, as on
+a machine since lost, asks `restore` for its recovery code (run it with
+`docker exec -it`), and the Relay keeps that key from then on. Start Hearth
+afterward; normal Relay
 reconciliation repairs the restored catalog's queued snapshot of the backup
 task, and sends a Relay that lost its schedules them again.
 
@@ -986,8 +992,7 @@ has one restic repository per destination:
 Hearth generates a repository password on first use and encrypts it with the
 installation keyring. A task or schedule carries that password and, for a
 repository in a bucket, the repository's ID: no key, and nothing of where in
-which bucket it is. Relay persists a task's input in its SQLite journal (mode
-0600) before acknowledging; task reports leave the password out, terminal
+which bucket it is. Relay persists a task's input in its SQLite journal (mode 0600) before acknowledging; task reports leave the password out, terminal
 journal rows scrub it even when the stored JSON is corrupt, and restic stderr
 is redacted before it becomes a Relay error.
 

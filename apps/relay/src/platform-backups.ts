@@ -7,14 +7,7 @@ import {
   scrypt,
 } from "node:crypto"
 import { createReadStream, createWriteStream } from "node:fs"
-import {
-  mkdir,
-  open,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises"
+import { mkdir, open, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { Transform, Writable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -29,6 +22,7 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
+import { recoverPromise } from "./effect/promise.js"
 import {
   decodePlatformRecovery,
   type PlatformRecovery,
@@ -213,6 +207,18 @@ function derivePlatformKey(recoveryKey: string, salt: Buffer): Promise<Buffer> {
       else resolveKey(key)
     })
   })
+}
+
+/** Whether `recoveryKey` opens a platform backup; fails if it isn't one. */
+export async function platformBackupOpensWith(
+  recoveryKey: string,
+  source: string
+): Promise<boolean> {
+  await openPlatformBackup(source)
+  return recoverPromise(
+    () => inspectEncryptedPlatformBackup(recoveryKey, source).then(() => true),
+    () => false
+  )
 }
 
 export async function inspectEncryptedPlatformBackup(
@@ -605,9 +611,7 @@ function requiredInstallationId(config: RelayConfig, targetId: string): string {
 
 function requiredRecoveryKey(config: RelayConfig): string {
   if (!config.platformBackupKey) {
-    throw new Error(
-      "Configure KILN_PLATFORM_BACKUP_KEY before creating a platform backup"
-    )
+    throw new Error("This Relay has no key for Kiln's backups")
   }
   return config.platformBackupKey
 }
