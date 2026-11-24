@@ -87,9 +87,16 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
   const { config, engine, print, source } = input
   const existing = yield* readPlatformState(config.dataDirectory)
   if (!existing && config.installationId) {
-    const beside = yield* readHostedKiln(input.state, config.installationId)
-    if (beside) {
-      return yield* restoreBeside(input, config.installationId, beside)
+    const hosted = yield* readHostedKiln(input.state, config.installationId)
+    // Kiln's panel may be what doesn't start since the update that made the
+    // Relay save what `hosted` holds, so a restore doesn't need it.
+    if (hosted || config.mode !== "platform") {
+      // As a restore by another process of this Relay also does.
+      return yield* withPlatformLock(
+        config.dataDirectory,
+        restoreBeside(input, config.installationId, hosted),
+        { waitMs: 0 }
+      )
     }
   }
   if (!existing && config.mode !== "platform") {
@@ -224,7 +231,7 @@ const restoreBeside = Effect.fnUntraced(function* (
     withoutUndo,
   }: PlatformRestoreInput,
   installationId: string,
-  hosted: HostedKiln
+  hosted: HostedKiln | null
 ) {
   // What went wrong as its own message, which `tryPromise` alone hides.
   const attempt = <T>(run: () => Promise<T>) =>
@@ -266,14 +273,18 @@ const restoreBeside = Effect.fnUntraced(function* (
         installationId,
         "Start Hearth again where it's deployed"
       ))
-  if (undo && !earlier) {
-    yield* state.setMetadata(UNDO_METADATA_KEY, undo)
-    print(`Saved what was here to ${undo}`)
-  }
+  if (undo && !earlier) print(`Saved what was here to ${undo}`)
   print("Restoring Kiln's database")
   const manifest = yield* attempt(() =>
     restoreEncryptedPlatformBackup(restoreConfig, source, installationId, {
-      tablePrefix: hosted.tablePrefix,
+      // A try that stopped before this left the database as it was, so Hearth
+      // may have run since, and the next saves what's there itself.
+      beforeImport: async () => {
+        if (undo) {
+          await Effect.runPromise(state.setMetadata(UNDO_METADATA_KEY, undo))
+        }
+      },
+      tablePrefix: hosted?.tablePrefix ?? null,
     })
   )
   if (!opens) yield* savePlatformBackupKey(state, installationId, key)
@@ -421,9 +432,11 @@ const saveDatabase = Effect.fnUntraced(function* (
     platformDirectory(config.dataDirectory),
     `before-restore-${new Date().toISOString().replaceAll(/[:.]/gu, "-")}.kiln`
   )
-  const recovery = yield* collectPlatformRecovery(config, state)
   return yield* Effect.tryPromise({
     try: async () => {
+      const recovery = await Effect.runPromise(
+        collectPlatformRecovery(config, state)
+      )
       await mkdir(platformDirectory(config.dataDirectory), {
         mode: 0o700,
         recursive: true,
@@ -439,7 +452,7 @@ const saveDatabase = Effect.fnUntraced(function* (
         path,
         { completed: 0, total: 0 },
         new AbortController().signal,
-        recovery
+        withBackupKey(recovery, config.platformBackupKey)
       )
       return path
     },
@@ -458,3 +471,20 @@ const saveDatabase = Effect.fnUntraced(function* (
     })
   )
 })
+
+// A restore from another recovery code's backup makes its key Kiln's, and
+// that's what this is encrypted with, so it's also the one to come back with.
+function withBackupKey(
+  recovery: PlatformRecovery,
+  platformBackupKey: string | null
+): PlatformRecovery {
+  if (!platformBackupKey) return recovery
+  const { installation } = recovery
+  return {
+    ...recovery,
+    installation: {
+      ...installation,
+      secrets: { ...installation.secrets, platformBackupKey },
+    },
+  }
+}

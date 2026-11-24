@@ -1,6 +1,6 @@
 import { createCipheriv, createHmac, randomUUID, scryptSync } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { gzipSync } from "node:zlib"
@@ -36,7 +36,11 @@ import {
 } from "./platform-backups.js"
 import { collectPlatformRecovery } from "./platform-recovery.js"
 import { restorePlatform } from "./platform-restore.js"
-import { writePlatformState, type PlatformState } from "./platform-state.js"
+import {
+  type PlatformState,
+  withPlatformLock,
+  writePlatformState,
+} from "./platform-state.js"
 import { DockerEngine } from "./docker-engine.js"
 import { identifyHearth, newPlatformState, platformInputs } from "./platform.js"
 import { fakeDocker } from "./test/docker.js"
@@ -342,7 +346,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
     const printed: Array<string> = []
     return {
       printed,
-      restore: (code: string, from = source) =>
+      restore: (code: string, from = source, withoutUndo = false) =>
         Effect.runPromise(
           restorePlatform({
             config,
@@ -351,6 +355,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
             recoveryCode: async () => code,
             source: from,
             state,
+            withoutUndo,
           })
         ),
     }
@@ -369,7 +374,7 @@ describe("Kiln platform backups deployed by Coolify", () => {
     )
     const own = await key()
     const another = await key("another-kiln")
-    const { restore } = await restoring(kiln)
+    const { printed, restore } = await restoring(kiln)
 
     // Coolify still runs Hearth.
     await expect(restore(encodeRecoveryCode(recoveryKey))).rejects.toThrow(
@@ -388,6 +393,10 @@ describe("Kiln platform backups deployed by Coolify", () => {
     )
     expect(await key()).toBe(recoveryKey)
     expect(await key("another-kiln")).toBe(another)
+    // So does a new machine restored from what undoes it.
+    const undo = printed.at(-1)?.split(" ").at(-1) ?? ""
+    const { recovery } = await readPlatformBackupRecovery(recoveryKey, undo)
+    expect(recovery?.installation.secrets.platformBackupKey).toBe(recoveryKey)
   })
 
   it("saves what's there first, which undoes the restore, however often it failed before", async () => {
@@ -408,6 +417,63 @@ describe("Kiln platform backups deployed by Coolify", () => {
     expect(kiln.database.executedSql.at(-1)).toContain(
       "CREATE TABLE before (id int);"
     )
+  })
+
+  it("saves again what's there after a try that changed nothing", async () => {
+    const kiln = await coolifyKiln()
+    const { config } = kiln.harness
+    kiln.database.sqlDump = "CREATE TABLE before (id int);"
+    fakeDocker.removeContainer("hearth-1")
+    const { printed, restore } = await restoring(kiln)
+
+    // There's nowhere to decrypt it.
+    const staging = join(config.dataDirectory, "restores")
+    await rm(staging, { force: true, recursive: true })
+    await writeFile(staging, "")
+    await expect(restore("")).rejects.toThrow()
+    expect(kiln.database.executedSql).toEqual([])
+    await rm(staging)
+    // Hearth ran meanwhile.
+    kiln.database.sqlDump = "CREATE TABLE meanwhile (id int);"
+    await restore("")
+
+    const undo = printed.at(-1)?.split(" ").at(-1) ?? ""
+    await restore("", undo)
+    expect(kiln.database.executedSql.at(-1)).toContain(
+      "CREATE TABLE meanwhile (id int);"
+    )
+  })
+
+  it("restores without undo a Kiln whose Hearth hasn't connected since the Relay saved what backups carry", async () => {
+    const kiln = await coolifyKiln()
+    await Effect.runPromise(
+      kiln.harness.state.setMetadata("hosted_kiln:kiln-test", "")
+    )
+    fakeDocker.removeContainer("hearth-1")
+    const { restore } = await restoring(kiln)
+
+    await expect(restore("")).rejects.toThrow("--without-undo")
+    expect(kiln.database.executedSql).toEqual([])
+    await restore("", undefined, true)
+    expect(kiln.database.executedSql.join("\n")).toContain(
+      "CREATE TABLE lost (id int);"
+    )
+  })
+
+  it("won't restore while another process of the Relay does", async () => {
+    const kiln = await coolifyKiln()
+    fakeDocker.removeContainer("hearth-1")
+    const { restore } = await restoring(kiln)
+
+    await Effect.runPromise(
+      withPlatformLock(
+        kiln.harness.config.dataDirectory,
+        Effect.promise(async () => {
+          await expect(restore("")).rejects.toThrow("Another Relay process")
+        })
+      )
+    )
+    expect(kiln.database.executedSql).toEqual([])
   })
 
   it("won't restore into a container under the database's name that keeps other data where Hearth's was", async () => {
