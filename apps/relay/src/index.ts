@@ -9,7 +9,7 @@ import { Desktop } from "./desktop.js"
 import { createServer as createHttpServer } from "node:http"
 import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
-import { mkdir } from "node:fs/promises"
+import { mkdir, rm } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join, relative } from "node:path"
 import { Cause, Effect, Predicate, Schema } from "effect"
@@ -138,6 +138,7 @@ import {
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
   relayPlatformActionInputSchema,
+  type RelayPlatformActionInput,
   RelayTunnelOpenSchema,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
@@ -220,7 +221,11 @@ import {
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { composeVolumeId, RelayVolumes } from "./volumes.js"
-import { restorePlatform } from "./platform-restore.js"
+import { materializeBackupArtifact } from "./backup-restore.js"
+import { platformBackupKey } from "./platform-backup-key.js"
+import { inspectEncryptedPlatformBackup } from "./platform-backups.js"
+import { restoreForHearth, restorePlatform } from "./platform-restore.js"
+import { readRestoreOutcome } from "./restore-outcome.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
 import { HostPackages } from "./host-packages.js"
@@ -4155,10 +4160,7 @@ async function executeControlRequest(
       )
     }
     case "relay.platform.read":
-      return runRelayEffect(
-        "relay.platform.read",
-        platformStatus(platformReadContext(), await clientRecord(client.id))
-      )
+      return kilnStatus(await clientRecord(client.id))
     case "relay.platform.database.read": {
       const input = relayPlatformDatabaseReadSchema.parse(request.payload)
       await requirePlatformReader(client.id, "browse Kiln's database")
@@ -4209,6 +4211,25 @@ async function executeControlRequest(
     case "relay.platform.action": {
       const input = relayPlatformActionInputSchema.parse(request.payload)
       const record = await clientRecord(client.id)
+      if (input.action === "restore") {
+        // It replaces what this Hearth is, so only the Hearth itself may ask.
+        if (
+          !mayReadRecoveryCode(
+            config,
+            platformPass.state ?? platformStartup.state,
+            record
+          )
+        ) {
+          throw new Error(
+            "Only the Hearth that runs beside this Relay can restore Kiln"
+          )
+        }
+        await startKilnRestore(input.source, signal)
+        await appendRelayAudit("platform.action", client.id, request.id, {
+          action: input.action,
+        })
+        return kilnStatus(record)
+      }
       if (
         !platformStartup.state ||
         !isPlatformOwner(platformPass.state ?? platformStartup.state, record)
@@ -4256,10 +4277,7 @@ async function executeControlRequest(
         action: input.action,
         ...(input.action === "restart" ? { role: input.role } : {}),
       })
-      return runRelayEffect(
-        "relay.platform.read",
-        platformStatus(platformReadContext(), record)
-      )
+      return kilnStatus(record)
     }
     case "relay.rename": {
       await renameRelay(requiredString(payload, "name"))
@@ -4272,6 +4290,115 @@ async function executeControlRequest(
     case "sftp.authorization.resolve":
       throw new Error(`${request.operation} is not available yet`)
   }
+}
+
+function kilnStatus(record: Awaited<ReturnType<typeof clientRecord>>) {
+  return runRelayEffect(
+    "relay.platform.read",
+    readRestoreOutcome(startup.state).pipe(
+      Effect.flatMap((restored) =>
+        platformStatus(platformReadContext(), record, restored)
+      )
+    )
+  )
+}
+
+// Checks the backup before anything is stopped, then restores it once Hearth
+// has its answer, taking its turn in the lanes.
+async function startKilnRestore(
+  source: Extract<RelayPlatformActionInput, { action: "restore" }>["source"],
+  signal: AbortSignal
+): Promise<void> {
+  const key = await runRelayEffect(
+    "relay.platform.restore.key",
+    platformBackupKey(config, startup.state)
+  )
+  if (!key) throw new Error("This Relay has no key for Kiln's backups")
+  const downloaded =
+    source.kind === "backup" && source.archive.kind === "remote"
+      ? join(config.dataDirectory, "restores", `kiln-${randomUUID()}.kiln`)
+      : null
+  const discard = downloaded
+    ? Effect.promise(() => rm(downloaded, { force: true }))
+    : Effect.void
+  const { manifest, path } = await Effect.runPromise(
+    Effect.tryPromise({
+      try: async () => {
+        const path =
+          source.kind === "undo"
+            ? (
+                await runRelayEffect(
+                  "relay.platform.restore.undo",
+                  readRestoreOutcome(startup.state)
+                )
+              )?.undo
+            : await materializeBackupArtifact(
+                config,
+                {
+                  archive: undefined,
+                  backupId: source.backupId,
+                  source: source.archive,
+                },
+                downloaded ?? ""
+              )
+        if (!path) throw new Error("There's nothing to undo")
+        const manifest = await recoverPromise(
+          () => inspectEncryptedPlatformBackup(key, path),
+          () => null
+        )
+        if (manifest?.installationId !== config.installationId) {
+          throw new Error(
+            manifest
+              ? "That backup belongs to another Kiln"
+              : "That backup was made with another recovery code, or it's damaged. Restore it on the Relay's host, where it can ask for the code."
+          )
+        }
+        // Whoever asked has been told it failed.
+        if (signal.aborted) throw new Error("Relay request was cancelled")
+        return { manifest, path }
+      },
+      catch: (cause) => cause,
+    }).pipe(Effect.tapError(() => discard))
+  )
+  const { createdAt } = manifest
+  forkRelayEffect(
+    "relay.platform.restoreKiln",
+    Effect.sleep("1 second").pipe(
+      Effect.andThen(
+        lanes.run(
+          {
+            label: "platform.restore",
+            locks: [exclusive(laneKeys.platform)],
+          },
+          restoreForHearth(
+            {
+              config,
+              engine: relayEngine,
+              source: path,
+              state: startup.state,
+            },
+            createdAt
+          ).pipe(
+            Effect.andThen(
+              platformStartup.state
+                ? reconcilePlatform(platformContext).pipe(
+                    Effect.tap((result) =>
+                      Effect.sync(() => notePlatformPass(result))
+                    )
+                  )
+                : Effect.void
+            )
+          )
+        )
+      ),
+      Effect.ensuring(discard),
+      Effect.catch((cause) =>
+        Effect.sync(() => {
+          reportRelayError(cause, { operation: "relay.platform.restoreKiln" })
+        })
+      )
+    )
+  )
 }
 
 function platformReadContext() {

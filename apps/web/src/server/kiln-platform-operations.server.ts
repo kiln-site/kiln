@@ -1,6 +1,8 @@
 import type { RelayPlatformActionInput } from "@workspace/contracts"
 import { Effect } from "effect"
 
+import { prepareFullBackupRestoreSource } from "@/backups/destinations"
+import { getBackupCatalogRecordEffect } from "@/effect/backups"
 import { promiseEffect } from "@/effect/promise"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -172,6 +174,90 @@ const kilnPlatformAction = operation<
     relayId: input.relayId,
   }),
 })
+
+type KilnRestore = {
+  /** A platform backup of this Kiln, or null to undo the last restore. */
+  readonly backupId: string | null
+  readonly relayId: string
+}
+
+// Replaces Hearth's database, with Hearth stopped, so it holds Hearth whole.
+// It ends once the Relay has checked the backup: the Relay does the rest, and
+// Hearth starts again on what was restored.
+const kilnRestore = operation<KilnRestore>()({
+  name: "kilnPlatform.restore",
+  doing: "Restoring Kiln",
+  authorize: ({ user }) => platformAdministrator(user),
+  locks: () => [exclusive(hearthKey)],
+  run: ({ context: user, input }) =>
+    Effect.gen(function* () {
+      const source: Extract<
+        RelayPlatformActionInput,
+        { action: "restore" }
+      >["source"] =
+        input.backupId === null
+          ? { kind: "undo" }
+          : yield* kilnBackupSource(input.backupId, input.relayId)
+      return yield* promiseEffect(async () => {
+        const [relay, { relayRpc }] = await Promise.all([
+          platformRelay(input.relayId),
+          import("@/lib/relay-connection"),
+        ])
+        return relayRpc(
+          relay,
+          "relay.platform.action",
+          { action: "restore", source },
+          240_000,
+          user.id
+        )
+      })
+    }),
+  audit: ({ input }) => ({
+    id: "platform",
+    kind: "platform",
+    relayId: input.relayId,
+  }),
+})
+
+// Where the Relay reads a Kiln backup from: its own copy, or a bucket's by a
+// signed link.
+const kilnBackupSource = Effect.fnUntraced(function* (
+  backupId: string,
+  relayId: string
+) {
+  const backup = yield* getBackupCatalogRecordEffect(backupId)
+  if (
+    backup?.status !== "available" ||
+    backup.targetKind !== "platform" ||
+    backup.relayId !== relayId
+  ) {
+    return yield* Effect.fail(new Error("That Kiln backup isn't available"))
+  }
+  const copies = backup.artifacts.filter(({ status }) => status === "available")
+  const copy =
+    copies.find(({ storageId }) => storageId === null) ?? copies.at(0)
+  const bytes = copy?.bytes ?? backup.bytes
+  const checksumSha256 = copy?.checksumSha256 ?? backup.checksumSha256
+  if (!copy || bytes === null || !checksumSha256) {
+    return yield* Effect.fail(new Error("That Kiln backup isn't available"))
+  }
+  return {
+    archive: yield* prepareFullBackupRestoreSource({
+      artifactId: copy.id,
+      bytes,
+      checksumSha256,
+      objectKey: copy.objectKey,
+      storageId: copy.storageId,
+    }),
+    backupId,
+    kind: "backup" as const,
+  }
+})
+
+/** Puts a Kiln backup back, or what the last restore replaced. */
+export async function restoreKilnBackup(input: KilnRestore): Promise<unknown> {
+  return runOperationPromise(kilnRestore, input, await signedInPerson())
+}
 
 /** Restarts one of Kiln's services, or repairs them, on their Relay. */
 export async function runKilnServiceAction(

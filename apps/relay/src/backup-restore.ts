@@ -393,7 +393,7 @@ async function readManifest(zip: ZipFile, entry: Entry) {
 
 export async function materializeBackupArtifact(
   config: RelayConfig,
-  input: BackupRestoreTaskInput,
+  input: Pick<BackupRestoreTaskInput, "archive" | "backupId" | "source">,
   destination: string
 ): Promise<string> {
   await mkdir(restoreDirectoryPath(config), { mode: 0o700, recursive: true })
@@ -418,7 +418,7 @@ export async function materializeBackupArtifact(
 
 async function downloadRestoreArtifact(
   destination: string,
-  input: BackupRestoreTaskInput
+  input: Pick<BackupRestoreTaskInput, "source">
 ): Promise<string> {
   const source = input.source
   if (source.kind !== "remote") return destination

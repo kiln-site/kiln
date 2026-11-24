@@ -39,6 +39,7 @@ import {
   platformNames,
   provenHearthRunning,
   reconcilePlatform,
+  stopProvenHearth,
   withPlatformRestoreHold,
 } from "./platform.js"
 import {
@@ -67,11 +68,14 @@ import {
   writePlatformState,
   type PlatformState,
 } from "./platform-state.js"
+import { saveRestoreOutcome } from "./restore-outcome.js"
 
 export interface PlatformRestoreInput {
   readonly config: RelayConfig
   readonly engine: DockerEngine
   readonly environment?: NodeJS.ProcessEnv
+  /** Told as the database starts to change, with where it was saved. */
+  readonly onReplace?: (undo: string | null) => void
   readonly print: (text: string) => void
   /** Asked for only when this machine doesn't have the Kiln already. */
   readonly recoveryCode: () => Promise<string>
@@ -176,6 +180,7 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
             installed.installationId,
             {
               afterwards,
+              beforeImport: async () => input.onReplace?.(undo),
               tablePrefix: installed.database.tablePrefix ?? null,
             }
           ),
@@ -198,23 +203,96 @@ export const restorePlatform = Effect.fn("Relay.platform.restore")(function* (
   yield* input.state.schedules.forget()
   const restored = yield* updatePlatformState(
     config.dataDirectory,
-    (current) => ({
-      ...current,
-      phase: "ready",
-      restored: {
-        at: new Date().toISOString(),
-        backupCreatedAt: manifest.createdAt,
-      },
-    })
+    (current) => ({ ...current, phase: "ready" })
   )
-  print(`Restored Kiln from its backup of ${manifest.createdAt}`)
   // One that started with Hearth held stopped may follow a run that replaced
   // part of the database, so what it saved may not be what to go back to.
-  if (saved && existing?.phase === "ready") {
-    print(`To undo: kiln-relay platform restore ${saved}`)
-  }
+  const undo = existing?.phase === "ready" ? saved : null
+  yield* saveRestoreOutcome(input.state, {
+    at: new Date().toISOString(),
+    backupCreatedAt: manifest.createdAt,
+    error: null,
+    undo,
+  })
+  print(`Restored Kiln from its backup of ${manifest.createdAt}`)
+  if (undo) print(`To undo: kiln-relay platform restore ${undo}`)
   return restored
 })
+
+/**
+ * A restore Hearth asked for, which can't watch it: stops Hearth where
+ * something else runs it, restores, and starts Hearth again. One that fails
+ * with part of the database replaced puts back what was there first. Should
+ * that fail too, Hearth is left stopped rather than started on half of one.
+ */
+export const restoreForHearth = Effect.fn("Relay.platform.restoreForHearth")(
+  function* (
+    input: Pick<PlatformRestoreInput, "config" | "engine" | "source" | "state">,
+    backupCreatedAt: string
+  ) {
+    const { config, engine, state } = input
+    const { installationId } = config
+    const installed = yield* readPlatformState(config.dataDirectory)
+    const hosted = installationId
+      ? yield* readHostedKiln(state, installationId)
+      : null
+    const replaced: Array<string | null> = []
+    const restore = (source: string, withoutUndo: boolean) => {
+      const restoring: PlatformRestoreInput = {
+        ...input,
+        onReplace: (undo) => {
+          replaced.push(undo)
+        },
+        print: () => {},
+        recoveryCode: async () => "",
+        source,
+        withoutUndo,
+      }
+      return installed || !installationId
+        ? restorePlatform(restoring)
+        : restoreBeside(restoring, installationId, hosted)
+    }
+    const restoreOrPutBack = Effect.gen(function* () {
+      const startHearth = installed
+        ? Effect.void
+        : yield* stopProvenHearth(engine, config)
+      const failure = yield* restore(input.source, false).pipe(
+        Effect.as(null),
+        Effect.catch((cause) =>
+          Effect.succeed(
+            cause instanceof Error ? cause : new Error(String(cause))
+          )
+        )
+      )
+      if (failure) {
+        const [undo] = replaced
+        yield* Effect.logError(`Kiln's restore failed: ${failure.message}`)
+        if (undo) {
+          yield* restore(undo, true)
+        } else if (replaced.length > 0) {
+          return yield* Effect.fail(failure)
+        } else if (installed) {
+          yield* updatePlatformState(config.dataDirectory, (current) => ({
+            ...current,
+            phase: "ready",
+          }))
+        }
+        yield* saveRestoreOutcome(state, {
+          at: new Date().toISOString(),
+          backupCreatedAt,
+          error: failure.message,
+          undo: null,
+        })
+      }
+      yield* startHearth
+    })
+    // Held whole where something else runs Hearth, so a restore on the host
+    // doesn't start between its steps.
+    yield* installed
+      ? restoreOrPutBack
+      : withPlatformLock(config.dataDirectory, restoreOrPutBack)
+  }
+)
 
 // Where the undo copy of a restore that hasn't finished is, so one run again
 // keeps what was there first rather than what the failed one left.
@@ -241,6 +319,7 @@ const restoreBeside = Effect.fnUntraced(function* (
   {
     config,
     engine,
+    onReplace,
     print,
     recoveryCode,
     source,
@@ -300,6 +379,7 @@ const restoreBeside = Effect.fnUntraced(function* (
         if (undo) {
           await Effect.runPromise(state.setMetadata(UNDO_METADATA_KEY, undo))
         }
+        onReplace?.(undo)
       },
       tablePrefix: hosted?.tablePrefix ?? null,
     })
@@ -308,6 +388,12 @@ const restoreBeside = Effect.fnUntraced(function* (
   // Hearth sends those in the database that's there now.
   yield* state.schedules.forget()
   yield* state.setMetadata(UNDO_METADATA_KEY, "")
+  yield* saveRestoreOutcome(state, {
+    at: new Date().toISOString(),
+    backupCreatedAt: manifest.createdAt,
+    error: null,
+    undo,
+  })
   print(`Restored Kiln from its backup of ${manifest.createdAt}`)
   if (undo) print(`To undo: kiln-relay platform restore ${undo}`)
 })

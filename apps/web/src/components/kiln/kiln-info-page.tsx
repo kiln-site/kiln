@@ -4,12 +4,23 @@ import { Link } from "@tanstack/react-router"
 import {
   ArrowRight,
   CircleAlert,
+  LoaderCircle,
   ScrollText,
   ShieldCheck,
   TerminalSquare,
   Zap,
 } from "lucide-react"
 import type { RelayPlatformStatus } from "@workspace/contracts"
+
+import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
 
 import { HearthMark } from "@/components/hearth-mark"
 import {
@@ -38,6 +49,7 @@ import {
   useKilnHost,
   type KilnContainer,
 } from "@/components/kiln/kiln-presentation"
+import { useRestoreKiln } from "@/components/kiln/use-restore-kiln"
 import { OwnerCard } from "@/components/owner-card"
 import {
   RelayNodeCard,
@@ -442,22 +454,89 @@ function KilnInfoRail({ host }: { host: KilnPlatformHost }) {
           )}
         </InfoFact>
         {status?.restored ? (
-          <InfoFact label="Restored">
-            <span>
-              <RelativeTime timestamp={Date.parse(status.restored.at)} />
-              <span className="text-muted-foreground">
-                {" "}
-                from a backup made{" "}
-              </span>
-              <RelativeTime
-                timestamp={Date.parse(status.restored.backupCreatedAt)}
-              />
-            </span>
-          </InfoFact>
+          <KilnRestored relayId={host.relayId} restored={status.restored} />
         ) : null}
       </InfoRailCard>
       {relay ? <KilnNodeCard relay={relay.entry} /> : null}
     </>
+  )
+}
+
+// How Kiln was last restored, and a way back.
+function KilnRestored({
+  relayId,
+  restored,
+}: {
+  relayId: string
+  restored: NonNullable<RelayPlatformStatus["restored"]>
+}) {
+  const [confirming, setConfirming] = React.useState(false)
+  const { error, restore, restoring } = useRestoreKiln()
+  return (
+    <InfoFact label={restored.error ? "Restore failed" : "Restored"}>
+      <span>
+        <RelativeTime timestamp={Date.parse(restored.at)} />
+        <span className="text-muted-foreground"> from a backup made </span>
+        <RelativeTime timestamp={Date.parse(restored.backupCreatedAt)} />
+        {restored.error ? (
+          <span className="block text-destructive">
+            {restored.error}. What was here was put back.
+          </span>
+        ) : null}
+        {restored.undo ? (
+          <button
+            type="button"
+            className="ml-1.5 underline underline-offset-2 hover:text-foreground"
+            onClick={() => setConfirming(true)}
+          >
+            Undo
+          </button>
+        ) : null}
+      </span>
+      {confirming ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !restoring) setConfirming(false)
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Undo the restore</DialogTitle>
+              <DialogDescription>
+                Kiln goes back to how it was before it was restored. It&apos;s
+                down for about a minute, then everyone signs in again.
+              </DialogDescription>
+            </DialogHeader>
+            {restoring ? (
+              <p className="type-meta text-muted-foreground">
+                Restoring. This page opens Kiln again once it&apos;s back.
+              </p>
+            ) : null}
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+            <DialogFooter>
+              <Button
+                disabled={restoring}
+                type="button"
+                variant="ghost"
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={restoring}
+                type="button"
+                variant="destructive"
+                onClick={() => restore({ backupId: null, relayId })}
+              >
+                {restoring ? <LoaderCircle className="animate-spin" /> : null}
+                Undo
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </InfoFact>
   )
 }
 

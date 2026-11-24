@@ -96,6 +96,7 @@ describe("platform mode", () => {
     const status = await run(
       platformStatus(
         { ...relay.context, blocked: result.blocked, issue: result.issue },
+        null,
         null
       )
     )
@@ -221,7 +222,7 @@ describe("Kiln deployed without Kiln's labels", () => {
           })
         ),
       state: harness.state,
-      status: () => run(platformStatus(context, null)),
+      status: () => run(platformStatus(context, null, null)),
     }
   }
 

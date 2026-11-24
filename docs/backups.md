@@ -465,9 +465,9 @@ deleting or editing either sticks. The same sweep resends any schedule a Relay h
 a first deploy that failed is retried.
 Existing installations keep the schedules they chose.
 
-Restoring Kiln stays offline (see below). Its Restore shows the command for the
-Relay's host and, where the Relay installed Kiln, opens that Relay's terminal
-with it typed for the operator to send.
+Restoring Kiln stops Hearth (see below). Its Restore has the Relay beside it do
+that, so a platform administrator can restore Kiln from its backups, and undo it
+from Kiln's Info page.
 
 ## Scheduled backups
 
@@ -731,6 +731,10 @@ default recommendation.
 
 Kiln platform restore is deliberately offline because importing Hearth's own
 catalog while Hearth is serving requests cannot be made transactionally safe.
+From the panel (`relay.platform.action`'s `restore`), only the Hearth that runs
+beside the Relay may ask. The Relay checks the backup before it answers, then
+stops Hearth, restores, and starts it again; a restore that fails puts back what
+was there first, and Kiln's Info page says why.
 One command does it, on the machine that has Kiln or on a new one, however Kiln
 was installed (see [Self-hosting](self-hosting.md#recovery)):
 

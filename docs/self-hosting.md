@@ -493,8 +493,11 @@ installed.
 
 ### Restoring on the same machine
 
-This puts a backup back into the Kiln already here, also when its database
-volume was lost:
+While Hearth works, restore one of Kiln's backups from **Backups**, and undo it
+from Kiln's Info page.
+
+Otherwise, this puts a backup back into the Kiln already here, also when its
+database volume was lost:
 
 ```sh
 docker cp backup-<id>.kiln kiln-relay:/data/restore.kiln
