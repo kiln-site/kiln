@@ -356,7 +356,7 @@ function BackupModeChoices({
   onModeChange: (mode: "full" | "incremental") => void
 }) {
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium">Mode</legend>
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
@@ -394,7 +394,7 @@ function BackupConsistencyChoices({
   stoppedUnavailable: string | null
 }) {
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium">While it backs up</legend>
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
@@ -443,7 +443,7 @@ function BackupDestinationChoices({
   targetKind?: BackupConfigurationTarget["kind"]
 }) {
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium">Destinations</legend>
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
@@ -522,12 +522,12 @@ function BackupDestinationChoice({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-semibold">{label}</span>
-        <span className="type-meta block truncate text-muted-foreground">
+        <span className="type-meta block text-pretty text-muted-foreground">
           {description}
         </span>
       </span>
       <span
-        className={`grid size-4 place-items-center rounded-sm border ${
+        className={`grid size-4 shrink-0 place-items-center rounded-sm border ${
           checked
             ? "border-primary bg-primary text-primary-foreground"
             : "border-input"
