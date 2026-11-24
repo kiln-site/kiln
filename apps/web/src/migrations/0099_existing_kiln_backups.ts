@@ -19,8 +19,10 @@ export const existingKilnBackups: Migration = {
     const sql = yield* SqlClient.SqlClient
     const [scheduled] = yield* sql<{ count: number }>`
       SELECT COUNT(*) AS count
-        FROM ${sql(databaseTableName("schedule_target"))}
-       WHERE target_kind = 'relay'
+        FROM ${sql(databaseTableName("schedule_target"))} target
+        JOIN ${sql(databaseTableName("schedule"))} schedule
+          ON schedule.id = target.schedule_id
+       WHERE target.target_kind = 'relay' AND schedule.deleted_at IS NULL
     `
     if (Number(scheduled?.count ?? 0) > 0) return
     const now = yield* Clock.currentTimeMillis
