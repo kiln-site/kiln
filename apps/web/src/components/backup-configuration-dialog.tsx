@@ -22,7 +22,6 @@ import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  TargetChecklist,
   TargetPicker,
   type PickerGroup,
   type PickerTarget,
@@ -90,13 +89,14 @@ interface BackupConfigurationFormProps {
   storage: ReadonlyArray<BackupStorageOption>
   submitLabel?: string
   targets: ReadonlyArray<BackupConfigurationTarget>
+  /** Off leaves the targets to whoever opened it. */
+  showTargets?: boolean
   /**
-   * How `targets` are chosen: from a field, or from a list in place, for a
-   * step of a schedule, which picks which of the schedule's targets it backs
-   * up and may back up none of them. `none` leaves it to whoever opened it.
+   * A step of a schedule, which backs up any of the schedule's targets,
+   * however many, or none.
    */
-  targetsField?: "list" | "none" | "picker"
-  /** Beneath that list, for the keys chosen in it. */
+  step?: boolean
+  /** Beneath the targets, for the keys chosen. */
   targetsNote?: (chosen: ReadonlyArray<string>) => React.ReactNode
   title: string
 }
@@ -116,8 +116,8 @@ export function BackupConfigurationDialog({
           "sm:max-w-xl",
           // What is chosen adds and removes options below it. Its top stays
           // where it would be at its tallest, so it grows downward and the
-          // list of targets never moves.
-          form.targetsField !== "none" &&
+          // list of targets, open beneath its field, never moves.
+          form.showTargets !== false &&
             "top-[max(1rem,calc(50dvh-18.25rem))] max-h-[calc(100dvh-1rem-max(1rem,calc(50dvh-18.25rem)))] translate-y-0"
         )}
       >
@@ -144,11 +144,12 @@ function BackupConfigurationForm({
   onCancel,
   onSubmit,
   pending = false,
+  showTargets = true,
   singleDestination = false,
+  step = false,
   storage,
   submitLabel,
   targets,
-  targetsField = "picker",
   targetsNote,
   title,
 }: BackupConfigurationFormProps & { onCancel: () => void }) {
@@ -225,9 +226,9 @@ function BackupConfigurationForm({
     () => new Set(destinationKeysInUse),
     [destinationKeysInUse]
   )
-  // A schedule's step takes as many as the schedule, and may take none.
-  const tooMany = targetsField === "picker" && chosen.length > MAX_TARGETS
-  const noneChosen = targetsField === "picker" && chosen.length === 0
+  const limited = showTargets && !step
+  const tooMany = limited && chosen.length > MAX_TARGETS
+  const noneChosen = limited && chosen.length === 0
 
   const toggleDestination = (destination: string, checked: boolean) => {
     setDestinationKeys((current) => {
@@ -259,28 +260,18 @@ function BackupConfigurationForm({
             onChange={(event) => setName(event.currentTarget.value)}
           />
         </label>
-        {targetsField === "none" ? null : (
+        {showTargets ? (
           <div>
             <span className="mb-2 block text-xs font-medium">Targets</span>
-            {targetsField === "list" ? (
-              <TargetChecklist
-                ariaLabel="Backup targets"
-                emptyMessage="Nothing here to back up"
-                selectedKeys={selectedKeySet}
-                targets={targets}
-                onToggle={toggleTargets}
-              />
-            ) : (
-              <TargetPicker
-                ariaLabel="Backup targets"
-                emptyMessage="No targets available"
-                groups={groups}
-                placeholder="Choose what to back up"
-                selectedKeys={selectedKeySet}
-                targets={targets}
-                onToggle={toggleTargets}
-              />
-            )}
+            <TargetPicker
+              ariaLabel="Backup targets"
+              emptyMessage="No targets available"
+              groups={groups}
+              placeholder="Choose what to back up"
+              selectedKeys={selectedKeySet}
+              targets={targets}
+              onToggle={toggleTargets}
+            />
             {targetsNote ? (
               <p className="type-meta mt-1.5 text-muted-foreground">
                 {targetsNote(selectedKeys)}
@@ -292,7 +283,7 @@ function BackupConfigurationForm({
               </p>
             ) : null}
           </div>
-        )}
+        ) : null}
         {consistencyChoice ? (
           <BackupConsistencyChoices
             consistency={effectiveConsistency}

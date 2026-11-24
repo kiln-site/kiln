@@ -10,10 +10,7 @@ import {
 } from "@/components/drawer-popover"
 import { GroupPickerCard } from "@/components/group-picker-card"
 import { InstanceCard } from "@/components/instance-card"
-import {
-  InstancePickerChecklist,
-  InstancePickerContent,
-} from "@/components/instance-picker"
+import { InstancePickerContent } from "@/components/instance-picker"
 import { VolumePickerCard } from "@/components/volumes/volume-field"
 import type { AnyInstancePickerItem } from "@/lib/instance-picker-filters"
 
@@ -192,50 +189,6 @@ export const TargetPicker = React.memo(function TargetPicker({
         />
       </DrawerPopoverContent>
     </DrawerPopover>
-  )
-})
-
-/**
- * Targets to tick in place, for a form that's already about a few of them,
- * as a schedule's backup step is about the schedule's.
- */
-export const TargetChecklist = React.memo(function TargetChecklist({
-  ariaLabel,
-  emptyMessage,
-  onToggle,
-  selectedKeys,
-  targets,
-}: {
-  ariaLabel: string
-  emptyMessage: string
-  onToggle: (keys: ReadonlyArray<string>, selected: boolean) => void
-  selectedKeys: ReadonlySet<string>
-  targets: ReadonlyArray<PickerTarget>
-}) {
-  // One that's gone stays removable while chosen.
-  const items = React.useMemo(
-    () =>
-      targets.map((target) => {
-        const item = targetPickerItem(target)
-        return target.unavailable && selectedKeys.has(target.key)
-          ? { ...item, disabled: false }
-          : item
-      }),
-    [selectedKeys, targets]
-  )
-  const toggle = React.useCallback(
-    (item: AnyInstancePickerItem) =>
-      onToggle([item.key], !selectedKeys.has(item.key)),
-    [onToggle, selectedKeys]
-  )
-  return (
-    <InstancePickerChecklist
-      ariaLabel={ariaLabel}
-      emptyMessage={emptyMessage}
-      items={items}
-      selectedKeys={selectedKeys}
-      onToggle={toggle}
-    />
   )
 })
 

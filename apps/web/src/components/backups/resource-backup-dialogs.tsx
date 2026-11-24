@@ -102,10 +102,10 @@ export function ResourceBackupDialog({
       onSubmit={(configuration) => create.mutate(configuration)}
       open={open}
       pending={create.isPending}
+      showTargets={false}
       storage={storage.data ?? []}
       submitLabel={create.isPending ? "Starting backup…" : "Back up"}
       targets={[]}
-      targetsField="none"
       title={title}
     />
   )

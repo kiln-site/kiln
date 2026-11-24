@@ -129,17 +129,17 @@ export const ScheduleBackupStep = React.memo(function ScheduleBackupStep({
         onSubmit={save}
         open={configuring}
         singleDestination
+        step
         storage={storage}
         submitLabel="Save backup"
         targets={listed}
-        targetsField="list"
         targetsNote={(chosen) => (
           <>
             {step.empty.length > 0
               ? `${scheduleTargetNames(step.empty)} ${step.empty.length === 1 ? "has" : "have"} no volumes to back up. `
               : null}
             {backupStepTargetKeys(step, chosen)
-              ? "Only what's ticked is backed up."
+              ? "Only what's chosen is backed up."
               : "Targets added to the schedule later are backed up too."}
           </>
         )}

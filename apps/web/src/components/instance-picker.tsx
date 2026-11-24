@@ -551,61 +551,6 @@ export const InstancePickerContent = React.memo(
   InstancePickerContentView
 ) as typeof InstancePickerContentView
 
-/**
- * The same rows as a plain list to tick, always showing every one: no
- * search, and no filters saved elsewhere to leave any out.
- */
-export const InstancePickerChecklist = React.memo(
-  function InstancePickerChecklist({
-    ariaLabel,
-    emptyMessage,
-    items,
-    onToggle,
-    selectedKeys,
-  }: {
-    ariaLabel: string
-    emptyMessage: string
-    items: ReadonlyArray<AnyInstancePickerItem>
-    onToggle: (item: AnyInstancePickerItem) => void
-    selectedKeys: ReadonlySet<string>
-  }) {
-    const id = React.useId()
-    return (
-      <div
-        role="group"
-        aria-label={ariaLabel}
-        className="max-h-60 divide-y divide-border/50 overflow-y-auto overscroll-contain rounded-md border p-1.5"
-      >
-        {items.length === 0 ? (
-          <p className="type-meta px-2 py-1.5 text-muted-foreground">
-            {emptyMessage}
-          </p>
-        ) : (
-          items.map((item) => (
-            <div
-              key={item.key}
-              className="py-0.5 [contain-intrinsic-size:auto_3rem] [content-visibility:auto]"
-            >
-              <InstancePickerRowButton
-                active={false}
-                checked={rowChecked(item, selectedKeys)}
-                id={instancePickerOptionId(id, item.key)}
-                item={item}
-                locked={false}
-                multiple
-                pending={false}
-                role="checkbox"
-                showKind
-                onSelect={onToggle}
-              />
-            </div>
-          ))
-        )}
-      </div>
-    )
-  }
-)
-
 function useInstancePickerFilterIds() {
   const { data: userId } = useQuery({
     ...accessCapabilitiesQueryOptions(),
@@ -1043,7 +988,6 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   onSelect,
   pending,
   checked,
-  role = "option",
   showKind,
 }: {
   active: boolean
@@ -1055,8 +999,6 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   multiple: boolean
   onSelect: (item: AnyInstancePickerItem) => void
   pending: boolean
-  /** One of a listbox its search field moves through, or on its own. */
-  role?: "checkbox" | "option"
   showKind: boolean
 }) {
   const { identity } = item
@@ -1069,11 +1011,10 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
     <button
       type="button"
       id={id}
-      role={role}
+      role="option"
       aria-busy={pending || undefined}
-      {...(role === "option"
-        ? { "aria-selected": selected, tabIndex: -1 }
-        : { "aria-checked": checked === "some" ? "mixed" : selected })}
+      aria-selected={selected}
+      tabIndex={-1}
       disabled={item.disabled || locked}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-[color,background-color,box-shadow] duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50",
