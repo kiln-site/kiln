@@ -463,7 +463,12 @@ installation exist, Hearth creates the **Kiln backups** schedule, owned by
 the first administrator, with Kiln's retention, and clears the mark, so
 deleting or editing either sticks. The same sweep resends any schedule a Relay hasn't acknowledged, so
 a first deploy that failed is retried.
-Existing installations keep the schedules they chose.
+An installation from before that gets the same
+schedule once (migration 99), unless something already backs Kiln up.
+
+Platform administrators are notified once Kiln goes three days without a backup
+off its machine that restores it, whatever the reason, and no longer once there's
+one (`warnOfOverdueKilnBackups`, in the maintenance sweep).
 
 Restoring Kiln stops Hearth (see below). Its Restore has the Relay beside it do
 that, so a platform administrator can restore Kiln from its backups, and undo it

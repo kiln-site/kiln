@@ -8,6 +8,7 @@ import {
   scheduledBackupRelayIdsEffect,
 } from "@/effect/backup-retention"
 import { reserveBackupDeleteEffect } from "@/effect/backups"
+import { warnOfOverdueKilnBackups } from "@/effect/kiln-backups"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
 import { backupKey } from "@/lib/backup-lanes"
@@ -143,6 +144,11 @@ export function startBackupMaintenance(): void {
     logFailure("backupMaintenance.seedDefault"),
     Effect.andThen(
       catalogScheduledBackups().pipe(logFailure("backupMaintenance.catalog"))
+    ),
+    Effect.andThen(
+      warnOfOverdueKilnBackups().pipe(
+        logFailure("backupMaintenance.warnOverdue")
+      )
     ),
     // Bucket copies still waiting to be seen, as after a restart or a
     // bucket that couldn't be asked: the sweep wakes the look, and doesn't

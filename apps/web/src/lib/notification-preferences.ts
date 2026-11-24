@@ -165,6 +165,12 @@ export const notificationPreferenceGroups = [
         kind: "kiln.updated",
         label: "Kiln updated",
       },
+      {
+        adminOnly: true,
+        description: "Kiln has no recent backup off its machine.",
+        kind: "kiln.backup-overdue",
+        label: "Kiln backup overdue",
+      },
     ],
     label: "Kiln",
   },
@@ -203,6 +209,7 @@ const kindsWithRequiredInbox: ReadonlySet<NotificationKind> = new Set(
 const allKinds: ReadonlyArray<NotificationKind> = [
   "kiln.release",
   "kiln.updated",
+  "kiln.backup-overdue",
   "access.invited",
   "access.removed",
   "resource.disk-limit",

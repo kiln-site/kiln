@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect, Option, Schema } from "effect"
 
 import { Database } from "@/effect/database"
+import { newestCompleteKilnBackup } from "@/effect/kiln-backups"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin } from "@/lib/access-control"
@@ -248,7 +249,10 @@ export async function recoveryCodeStatus(): Promise<RecoveryCodeStatus> {
             () => false
           )
         : null,
-      runAppEffect("recoveryCode.recoverableBackup", newestRecoverableBackup()),
+      runAppEffect(
+        "recoveryCode.recoverableBackup",
+        newestCompleteKilnBackup()
+      ),
       runAppEffect("recoveryCode.setup", showsWithoutCode(record, user.id)),
     ])
   return {
@@ -259,35 +263,6 @@ export async function recoveryCodeStatus(): Promise<RecoveryCodeStatus> {
     twoFactorEnabled: user.twoFactorEnabled && !user.isDevelopmentBypass,
   }
 }
-
-/**
- * The newest platform backup the code alone restores Kiln from (format 2)
- * that has a copy on a backup destination, rather than only on this
- * machine's disk.
- */
-const newestRecoverableBackup = Effect.fnUntraced(function* () {
-  const database = yield* Database
-  const [row] = yield* database.queryRows<
-    // Kiln's connection reads timestamps as epoch milliseconds.
-    RowDataPacket & { completedAt: number | string | null }
-  >(
-    "recoveryCode.recoverableBackup",
-    `SELECT backup.completed_at AS completedAt
-       FROM ${databaseTable("backup")} backup
-      WHERE backup.target_kind = 'platform'
-        AND backup.status = 'available'
-        AND backup.recoverable = 1
-        AND EXISTS (
-          SELECT 1 FROM ${databaseTable("backup_artifact")} artifact
-           WHERE artifact.backup_id = backup.id
-             AND artifact.status = 'available'
-             AND artifact.storage_id IS NOT NULL
-        )
-      ORDER BY backup.completed_at DESC
-      LIMIT 1`
-  )
-  return row?.completedAt == null ? null : { at: Number(row.completedAt) }
-})
 
 function userName(id: string): Promise<string | null> {
   return runAppEffect(

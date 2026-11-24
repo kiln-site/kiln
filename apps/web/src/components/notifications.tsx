@@ -180,6 +180,7 @@ const notificationToastDurationMs = 8_000
 
 function notificationToastType(content: NotificationContent): AppToastType {
   switch (content.kind) {
+    case "kiln.backup-overdue":
     case "resource.disk-limit":
     case "security.report":
       return "warning"

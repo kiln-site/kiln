@@ -8,6 +8,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { RelativeTime } from "@/components/relative-time"
 import { recoveryCodeStatusQueryOptions } from "@/lib/query-options"
+import { kilnBackupOverdueMs } from "@/lib/recovery-code"
 
 const RecoveryCodeDialog = React.lazy(async () => ({
   default: (await import("@/components/recovery-code/recovery-code-dialog"))
@@ -30,7 +31,10 @@ export const RecoveryCodeCard = React.memo(function RecoveryCodeCard({
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange])
   if (!status) return null
   const { recoverableBackup, saved } = status
-  const ready = saved !== null && recoverableBackup !== null
+  const overdue =
+    recoverableBackup === null ||
+    Date.now() - recoverableBackup.at > kilnBackupOverdueMs
+  const ready = saved !== null && !overdue
   return (
     <section
       id="recovery-code"

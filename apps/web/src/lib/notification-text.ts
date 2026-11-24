@@ -55,6 +55,8 @@ export function notificationTitle(content: NotificationContent): string {
       return "Your Kiln has an update available"
     case "kiln.updated":
       return "Kiln has been updated"
+    case "kiln.backup-overdue":
+      return "Kiln isn't backed up off its machine"
     case "access.invited": {
       const type = resourceTypeLabels[content.resource.type]
       switch (content.outcome) {
@@ -119,6 +121,10 @@ export function notificationDetail(
       return releaseName(content.name, content.version)
     case "kiln.updated":
       return `${releaseName(content.previousName, content.previousVersion)} to ${releaseName(content.name, content.version)} · ${updatedParts(content)}`
+    case "kiln.backup-overdue":
+      return content.lastAt === null
+        ? "No backup could restore it on a new machine"
+        : "Its last one is more than 3 days old"
     case "access.invited":
       return `${content.resource.name} - ${
         content.outcome === undefined ? "by" : "from"
