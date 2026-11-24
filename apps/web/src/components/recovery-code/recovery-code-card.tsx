@@ -29,7 +29,7 @@ export const RecoveryCodeCard = React.memo(function RecoveryCodeCard({
   const { data: status } = useQuery(recoveryCodeStatusQueryOptions())
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange])
   if (!status) return null
-  const { available, recoverableBackup, saved } = status
+  const { recoverableBackup, saved } = status
   const ready = saved !== null && recoverableBackup !== null
   return (
     <section
@@ -55,8 +55,6 @@ export const RecoveryCodeCard = React.memo(function RecoveryCodeCard({
               Saved <RelativeTime timestamp={saved.at} />
               {saved.by ? ` by ${saved.by}` : ""}
             </>
-          ) : available === "none" ? (
-            "Kiln's Relay isn't connected"
           ) : (
             "Not saved yet"
           )}
@@ -79,7 +77,6 @@ export const RecoveryCodeCard = React.memo(function RecoveryCodeCard({
       <Button
         type="button"
         size="sm"
-        disabled={available === "none"}
         variant={saved ? "outline" : "default"}
         onClick={() => onOpenChange(true)}
       >

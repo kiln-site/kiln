@@ -193,6 +193,12 @@ export const restorePlatformDatabase = Effect.fn(
     attempt(() => platformBackupOpensWith(key, source))
   const own = config.platformBackupKey
   const opens = own !== null && (yield* opensWith(own))
+  // A Kiln this Relay installed keeps its record's key.
+  if (!opens && (yield* readPlatformState(config.dataDirectory))) {
+    return yield* new PlatformError({
+      reason: "That backup doesn't open with this Kiln's key, or it's damaged",
+    })
+  }
   if (!opens) print("This backup was made with another recovery code")
   const key = opens ? own : yield* keyFromCode(input.recoveryCode)
   if (!opens && !(yield* opensWith(key))) {

@@ -320,6 +320,42 @@ describe("Kiln platform backups deployed by Coolify", () => {
     expect(config.platformBackupKey).toBe(recoveryKey)
   })
 
+  it("won't take another key for the Kiln a Relay installed, which keeps its own", async () => {
+    const kiln = await coolifyKiln({ backupKey: "" })
+    const { config, state } = kiln.harness
+    await Effect.runPromise(
+      writePlatformState(
+        config.dataDirectory,
+        newPlatformState(
+          config,
+          platformInputs({ KILN_URL: "https://kiln.example.test" }),
+          "ghcr.io/kiln-site/hearth:latest"
+        )
+      )
+    )
+    await Effect.runPromise(ensurePlatformBackupKey(config, state))
+    const source = join(testDirectory, `other-${randomUUID()}.kiln`)
+    await writeFile(
+      source,
+      platformBundle("CREATE TABLE other (id int);", { databaseName: "hearth" })
+    )
+    fakeDocker.removeContainer("hearth-1")
+
+    await expect(
+      Effect.runPromise(
+        restorePlatformDatabase({
+          config,
+          installationId: "kiln-test",
+          print: () => {},
+          recoveryCode: async () => encodeRecoveryCode(recoveryKey),
+          source,
+          state,
+        })
+      )
+    ).rejects.toThrow("this Kiln's key")
+    expect(kiln.database.executedSql).toEqual([])
+  })
+
   it("won't restore into a container under the database's name that keeps other data where Hearth's was", async () => {
     const kiln = await coolifyKiln()
     // Stopped, not removed: its DB_HOST would name the impostor too.
