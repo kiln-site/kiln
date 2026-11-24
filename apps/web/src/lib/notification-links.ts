@@ -67,6 +67,8 @@ export function notificationHref(
       return "/infra/updates"
     case "kiln.updated":
       return "/infra/updates/changelog"
+    case "kiln.backup-overdue":
+      return "/kiln/security"
     case "access.invited":
       return content.outcome === "accepted"
         ? notificationResourceHref(content.resource)

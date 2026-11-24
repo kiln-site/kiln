@@ -27,6 +27,9 @@ export interface RecoveryCodeReveal {
   readonly installationId: string
 }
 
+/** How long Kiln may go without a backup off its machine before it says so. */
+export const kilnBackupOverdueMs = 3 * 24 * 60 * 60 * 1000
+
 /** What the code is for, wherever Kiln asks for it to be saved. */
 export const recoveryCodePurpose =
   "Kiln encrypts its backups with this code. Without it, you can't restore Kiln on a new machine."

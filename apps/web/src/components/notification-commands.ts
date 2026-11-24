@@ -60,6 +60,8 @@ export function notificationCommands(
   switch (content.kind) {
     case "kiln.updated":
       return [link("changelog", "Changelog", "/infra/updates/changelog")]
+    case "kiln.backup-overdue":
+      return open(notificationHref(content, platformAdmin))
     case "kiln.release":
       return [
         link("changelog", "Changelog", "/infra/updates/changelog"),

@@ -52,6 +52,12 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     url: releaseUrlSchema.nullable(),
     version: z.string(),
   }),
+  // Kiln hasn't been backed up off its machine for a while, or ever. It goes
+  // away once it has.
+  z.object({
+    kind: z.literal("kiln.backup-overdue"),
+    lastAt: z.number().nullable(),
+  }),
   z.object({
     actorName: z.string(),
     invitationId: z.string(),
