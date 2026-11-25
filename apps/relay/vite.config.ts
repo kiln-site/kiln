@@ -57,6 +57,7 @@ export default defineConfig({
     entry: {
       "src/index": "src/index.ts",
       "src/updater": "src/updater.ts",
+      "src/backup-password": "src/backup-password.ts",
       "src/replace-relay": "src/replace-relay.ts",
       "src/host-files-helper": "src/host-files-helper.ts",
       "src/security-inventory-helper": "src/security-inventory-helper.ts",

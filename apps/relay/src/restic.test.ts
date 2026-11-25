@@ -145,7 +145,7 @@ describe("restic S3 driver", () => {
         excludes: [],
         location: s3Location,
         password: "repo-secret",
-        path: "instance",
+        paths: ["instance"],
         signal: new AbortController().signal,
         tags: ["task:1"],
       })

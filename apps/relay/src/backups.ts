@@ -23,6 +23,7 @@ import {
   basename,
   dirname,
   isAbsolute,
+  join,
   relative,
   resolve,
   sep,
@@ -2148,6 +2149,7 @@ export class BackupManager {
           this.#config,
           this.#restic,
           this.#findInstance,
+          yield* this.#state.listInstanceRoutes(input.target.id),
           input,
           (progress) =>
             this.#state.updateBackupTaskProgress(
@@ -2531,12 +2533,12 @@ function backupWebRoute(route: RelayInstanceWebRoute) {
   }
 }
 
-async function instanceBackupManifest(
+/** What a game server is set up as, kept with its files in each backup. */
+async function instanceBackupSetup(
   config: RelayConfig,
-  input: BackupCreateTaskInput,
   instance: RelayInstanceConfig,
   webRoutes: ReadonlyArray<RelayInstanceWebRoute>
-): Promise<BackupArchiveManifest> {
+): Promise<Extract<BackupArchiveManifest, { formatVersion: 3 }>["server"]> {
   // As it is on disk, so a restore keeps the checksum that names it.
   const recipe = instance.brickSnapshotSha256
     ? await readRecordedBrickSnapshot(
@@ -2545,46 +2547,55 @@ async function instanceBackupManifest(
       )
     : null
   return {
+    brick: {
+      consoleStopCommands: [...(instance.brickConsoleStopCommands ?? [])],
+      format: instance.brickFormat ?? null,
+      id: instance.brickId ?? null,
+      networkMode: instance.brickNetworkMode ?? null,
+      primaryPort: instance.brickPrimaryPort ?? null,
+      primaryPortProtocol: instance.brickPrimaryPortProtocol ?? null,
+      readiness: instance.brickReadiness ?? null,
+      recipe,
+      snapshotSha256: instance.brickSnapshotSha256 ?? null,
+      source: instance.brickSource ?? null,
+      supportsSrv: instance.brickSupportsSrv ?? false,
+    },
+    game: instance.game,
+    implementation: instance.implementation,
+    javaVersion: instance.javaVersion,
+    name: instance.name,
+    network: {
+      connectAddress: instance.connectAddress,
+      ports: instance.ports,
+      publicHost: instance.publicHost ?? null,
+      publicPort: instance.publicPort ?? null,
+      webRoutes: webRoutes.map(backupWebRoute),
+    },
+    startup: {
+      // Backups keep the format older Relays restore, where 0 is no limit.
+      limits: {
+        diskBytes: instance.limits.diskBytes ?? 0,
+        memoryBytes: instance.limits.memoryBytes ?? 0,
+      },
+      variables: instance.variables ?? {},
+    },
+    version: instance.version,
+  }
+}
+
+async function instanceBackupManifest(
+  config: RelayConfig,
+  input: BackupCreateTaskInput,
+  instance: RelayInstanceConfig,
+  webRoutes: ReadonlyArray<RelayInstanceWebRoute>
+): Promise<BackupArchiveManifest> {
+  return {
     artifactKind: "archive",
     backupId: input.backupId,
     createdAt: new Date().toISOString(),
     formatVersion: 3,
     mode: "full",
-    server: {
-      brick: {
-        consoleStopCommands: [...(instance.brickConsoleStopCommands ?? [])],
-        format: instance.brickFormat ?? null,
-        id: instance.brickId ?? null,
-        networkMode: instance.brickNetworkMode ?? null,
-        primaryPort: instance.brickPrimaryPort ?? null,
-        primaryPortProtocol: instance.brickPrimaryPortProtocol ?? null,
-        readiness: instance.brickReadiness ?? null,
-        recipe,
-        snapshotSha256: instance.brickSnapshotSha256 ?? null,
-        source: instance.brickSource ?? null,
-        supportsSrv: instance.brickSupportsSrv ?? false,
-      },
-      game: instance.game,
-      implementation: instance.implementation,
-      javaVersion: instance.javaVersion,
-      name: instance.name,
-      network: {
-        connectAddress: instance.connectAddress,
-        ports: instance.ports,
-        publicHost: instance.publicHost ?? null,
-        publicPort: instance.publicPort ?? null,
-        webRoutes: webRoutes.map(backupWebRoute),
-      },
-      startup: {
-        // Backups keep the format older Relays restore, where 0 is no limit.
-        limits: {
-          diskBytes: instance.limits.diskBytes ?? 0,
-          memoryBytes: instance.limits.memoryBytes ?? 0,
-        },
-        variables: instance.variables ?? {},
-      },
-      version: instance.version,
-    },
+    server: await instanceBackupSetup(config, instance, webRoutes),
     target: input.target,
   }
 }
@@ -2890,6 +2901,7 @@ function runResticCreate(
   config: RelayConfig,
   restic: ResticDriver,
   findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
+  webRoutes: ReadonlyArray<RelayInstanceWebRoute>,
   input: BackupCreateTaskInput & { kind?: "create" },
   updateProgress: (
     progress: BackupProgress
@@ -2943,6 +2955,7 @@ function runResticCreate(
           restic,
           input,
           instance,
+          webRoutes,
           password,
           progress,
           signal,
@@ -3011,6 +3024,38 @@ function runResticCreate(
   })
 }
 
+// A snapshot's servers' setups are beside their folders, out of them, so a
+// restore or download of a server's files takes them alone.
+const SETUP_DIRECTORY = ".kiln-setup"
+
+/** Writes a game server's setup for a snapshot to take with its files. */
+async function writeInstanceSetup(
+  config: RelayConfig,
+  instance: RelayInstanceConfig,
+  webRoutes: ReadonlyArray<RelayInstanceWebRoute>
+): Promise<string> {
+  const directory = join(SETUP_DIRECTORY, instance.id)
+  await mkdir(resolve(config.rootDirectory, directory), {
+    recursive: true,
+    mode: 0o700,
+  })
+  await writeFile(
+    resolve(config.rootDirectory, directory, "setup.json"),
+    JSON.stringify(
+      {
+        createdAt: new Date().toISOString(),
+        formatVersion: 1,
+        id: instance.id,
+        server: await instanceBackupSetup(config, instance, webRoutes),
+      },
+      null,
+      2
+    ),
+    { mode: 0o600 }
+  )
+  return directory
+}
+
 // What opens the repository without Kiln. The snapshot is taken by now, so
 // one that can't be added is left for the next backup.
 const addRecoveryPasswords = Effect.fn("Backups.addRecoveryPasswords")(
@@ -3055,6 +3100,7 @@ async function createResticSnapshot(
   restic: ResticDriver,
   input: BackupCreateTaskInput,
   instance: RelayInstanceConfig,
+  webRoutes: ReadonlyArray<RelayInstanceWebRoute>,
   password: string,
   progress: BackupProgress,
   signal: AbortSignal,
@@ -3132,13 +3178,19 @@ async function createResticSnapshot(
       input.maxBytes
     )
   }
+  const setup = await writeInstanceSetup(config, instance, webRoutes)
   const summary = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
         try: () =>
           restic.backup({
             cwd: config.rootDirectory,
-            excludes: translated.excludes,
+            // The server's own patterns, which can't leave out its setup.
+            excludes: [
+              ...translated.excludes,
+              `!${SETUP_DIRECTORY}`,
+              `!${SETUP_DIRECTORY}/**`,
+            ],
             location,
             onProgress: (update) => {
               progress.completed = update.bytesCompleted
@@ -3148,7 +3200,7 @@ async function createResticSnapshot(
               }
             },
             password,
-            path: instance.directory,
+            paths: [instance.directory, setup],
             signal,
             tags: [`task:${input.taskId}`, `backup:${input.backupId}`],
           }),
@@ -3156,6 +3208,10 @@ async function createResticSnapshot(
       })
     )
   )
+  await rm(resolve(config.rootDirectory, setup), {
+    force: true,
+    recursive: true,
+  })
   if (Result.isFailure(summary)) {
     await Effect.runPromise(
       Effect.tryPromise({
@@ -3300,7 +3356,10 @@ async function resticSnapshotSource(
   if (input.directory) {
     return resticSnapshotSelector(input.snapshotId, input.directory)
   }
-  const [path] = await restic.snapshotPaths(input)
+  // The server's own, beside its setup's.
+  const path = (await restic.snapshotPaths(input)).find(
+    (candidate) => !candidate.split("/").includes(SETUP_DIRECTORY)
+  )
   // Taken from the Relay's server root with the server's own directory, so
   // the snapshot holds that directory under its path from the root.
   const directory = path ? relative(config.rootDirectory, path) : ""

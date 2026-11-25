@@ -106,7 +106,8 @@ export type ResticDriver = {
     location: ResticDriverLocation
     onProgress?: (progress: ResticProgress) => void
     password: string
-    path: string
+    /** Below `cwd`. */
+    paths: ReadonlyArray<string>
     signal: AbortSignal
     tags: ReadonlyArray<string>
   }) => Promise<ResticSnapshotSummary>
@@ -461,9 +462,13 @@ export function createResticDriver(options?: {
         [
           "backup",
           "--json",
+          // A repository is one target's, so whatever it holds is a copy to
+          // compare with, whichever container's name or paths it has.
+          "--group-by",
+          "",
           ...input.tags.flatMap((tag) => ["--tag", tag]),
           ...input.excludes.flatMap((pattern) => ["--exclude", pattern]),
-          input.path,
+          ...input.paths,
         ],
         {
           cwd: input.cwd,
