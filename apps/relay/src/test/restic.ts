@@ -27,6 +27,8 @@ export class FakeRestic {
   readonly path: string
   readonly #state: string
   #next = 1
+  /** What the last snapshot of a volume was told to leave out. */
+  excludes: Array<string> = []
   /** Told as each snapshot of a volume is taken, which it may fail. */
   onBackup: (tags: ReadonlyArray<string>) => void = () => undefined
 
@@ -91,6 +93,9 @@ else if (args[0] === "key") console.log("[]")
       }
       return { exitCode: 0 }
     }
+    this.excludes = args.flatMap((arg, index) =>
+      args[index - 1] === "--exclude" ? [arg] : []
+    )
     const tags = args.flatMap((arg, index) =>
       args[index - 1] === "--tag" ? [arg] : []
     )

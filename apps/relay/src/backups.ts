@@ -1241,10 +1241,7 @@ export class BackupManager {
         stopped
       )
       const { excludes, warnings } = translateExcludePatterns(
-        // From the volume's root, which is a folder of the helper's.
-        input.exclude.map((pattern) =>
-          pattern.startsWith("/") ? `${VOLUME_MOUNT}${pattern}` : pattern
-        )
+        input.exclude.map(volumeExcludePattern)
       )
       const files = {
         cwd: "/",
@@ -3355,6 +3352,18 @@ function instanceSnapshotSource(
   }
 }
 
+// A pattern of what a volume holds, as a full backup reads it: one without a
+// slash anywhere in it, any other from its root. Left bare, one could name the
+// folder restic reads the volume as, and leave out all of it.
+function volumeExcludePattern(pattern: string): string {
+  const trimmed = pattern.trim()
+  return !trimmed || trimmed.startsWith("#") || trimmed.startsWith("!")
+    ? trimmed
+    : trimmed.includes("/")
+      ? `${VOLUME_MOUNT}/${trimmed.replace(/^\/+/u, "")}`
+      : `${VOLUME_MOUNT}/**/${trimmed}`
+}
+
 // A database's snapshots hold its dump under this name.
 const DATABASE_DUMP_FILE = "database.sql"
 
@@ -3522,6 +3531,17 @@ async function createResticSnapshot(
   })
   const reuse = source.reusable ? existing[0] : undefined
   if (reuse) {
+    if (input.consistency === "stopped") {
+      await recoverPromise(
+        () =>
+          forgetTaskSnapshots(restic, {
+            location,
+            password,
+            tags: [beforeTag],
+          }),
+        () => undefined
+      )
+    }
     const stats = await restic.stats({
       location,
       password,

@@ -494,6 +494,32 @@ it("backs up a volume incrementally and restores it as it was", async () => {
   expect(helpersLeft()).toEqual([])
 })
 
+// The helper has the volume at a folder of its own. A pattern naming that
+// folder would leave out the whole volume, and the backup still succeed.
+it("leaves out only what is in a volume", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  const restic = new FakeRestic(harness.config.dataDirectory)
+  harness.config.resticPath = restic.path
+  const manager = await backups(harness, volumes)
+
+  await runTask(
+    manager,
+    snapshotInput(volumeId, { exclude: ["volume", "/cache", "*.log"] })
+  )
+
+  expect(restic.excludes).toEqual(
+    expect.arrayContaining([
+      "/volume/**/volume",
+      "/volume/cache",
+      "/volume/**/*.log",
+    ])
+  )
+  for (const pattern of restic.excludes) {
+    expect(pattern.startsWith("/volume/")).toBe(true)
+  }
+})
+
 // An App, running, whose power and whose volumes' snapshots a test follows.
 async function stoppedSnapshots() {
   const { harness, volumes } = await relay()
