@@ -5,6 +5,7 @@ import { afterAll, afterEach, vi } from "vite-plus/test"
 
 import { setPrimaryAddressEffect } from "@/effect/primary-addresses"
 import { keepTunnelNamesOfEffect } from "@/effect/tunnel-names"
+import { retryAddressesNowEffect } from "@/effect/addresses"
 import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
 import type { WebHostnameResource } from "@/effect/addresses"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -79,6 +80,8 @@ const relays = vi.hoisted(() => {
   const state = {
     connected: new Set<string>(),
     instances: {} as Record<string, Array<unknown>>,
+    // Whether none answers what its proxy is.
+    away: false,
     // The names each was told point at it now.
     released: new Set<string>(),
     // Relays with no web proxy, which serve no websites.
@@ -118,6 +121,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       return {}
     }
     if (operation === "relay.proxy.read") {
+      if (relays.away) throw new Error("The Relay is away")
       const mode = relays.withoutProxy.has(relay.id) ? "hearth" : "traefik"
       return {
         diagnostics: {
@@ -310,6 +314,7 @@ const seed = Effect.gen(function* () {
   yield* resetDatabase
   relays.instances = {}
   relays.connected.clear()
+  relays.away = false
   relays.released.clear()
   relays.withoutProxy.clear()
   yield* insertRelay(relayOne)
@@ -916,7 +921,18 @@ describeMysql("a game server's names when it or its Relay goes", () => {
             /^error: Still points at .*no web proxy/u
           )
 
+          // Away, it isn't known to serve them either.
           relays.withoutProxy.clear()
+          relays.away = true
+          yield* dnsWorkerPass
+          assert.strictEqual(
+            mapRecord(),
+            `CNAME map.kiln.test ${webHost(relayOne)}`
+          )
+          assert.strictEqual(relays.released.size, 0)
+
+          relays.away = false
+          yield* retryAddressesNowEffect()
           yield* dnsWorkerPass
           assert.strictEqual(
             mapRecord(),
@@ -925,6 +941,8 @@ describeMysql("a game server's names when it or its Relay goes", () => {
           assert.deepEqual(yield* routeStatuses(taking), {
             "map.kiln.test": "active",
           })
+          // Let's Encrypt is asked only now that it points there.
+          assert.deepEqual([...relays.released], [`${relayTwo}/map.kiln.test`])
         })
     )
 

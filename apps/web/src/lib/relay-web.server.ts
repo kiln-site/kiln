@@ -6,6 +6,8 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 
 /** What a Relay says of serving websites itself. */
 export interface RelayWebCapability {
+  /** Whether it could be asked; nothing is certain of one that couldn't. */
+  readonly answered: boolean
   /** Why it can't, when it's certain not to; null when it may. */
   readonly cant: string | null
   /** Whether another proxy than Kiln's serves them, which it can't check. */
@@ -28,17 +30,21 @@ export async function relayWebCapability(
         .diagnostics,
     () => null
   )
-  if (diagnostics === null) return { cant: null, elsewhere: false }
+  if (diagnostics === null) {
+    return { answered: false, cant: null, elsewhere: false }
+  }
   const { name } = relay
   switch (diagnostics.mode) {
     case "hearth":
       return {
+        answered: true,
         cant: `${name} has no web proxy, so it can't serve websites`,
         elsewhere: false,
       }
     case "traefik": {
       const taken = diagnostics.ports.find((port) => !port.available)
       return {
+        answered: true,
         cant: taken
           ? `Port ${taken.port} on ${name} is used by ${taken.owner ?? "something else"}, so it can't serve websites`
           : diagnostics.containerRunning
@@ -49,12 +55,13 @@ export async function relayWebCapability(
     }
     case "coolify":
       return {
+        answered: true,
         cant: diagnostics.containerRunning
           ? null
           : `${name} couldn't find Coolify's proxy, so it can't serve websites`,
         elsewhere: true,
       }
     case "none":
-      return { cant: null, elsewhere: true }
+      return { answered: true, cant: null, elsewhere: true }
   }
 }

@@ -42,7 +42,9 @@ nothing is refused:
 - **It can't serve websites**, as the Relay is set up: it has no web proxy, or
   its Traefik isn't running or can't have its ports. Domains are moved and set
   up there, and their DNS stays where it is until it can, which the DNS worker
-  looks for (`reconcileAddressEffect`); each says why on its Network page. A
+  looks for (`reconcileAddressEffect`); each says why on its Network page. So
+  does one whose Relay can't be asked by then. It looks after 30 seconds, then
+  ever less often, up to hourly; Sync looks at once. A
   move doesn't wait for the copy to be served there.
 - **Nothing answers there from outside**, on ports 80 and 443 of its public
   address, or that's a private one. Asked from Hearth and from the old Relay
