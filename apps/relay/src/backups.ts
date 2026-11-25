@@ -1316,8 +1316,9 @@ export class BackupManager {
           consumers: [...restore.lockedApps],
           engine: this.#engine,
           fences: this.#fences,
-          restore: (folder) =>
+          restore: (folder, excludes) =>
             this.#restic.restore({
+              excludes,
               location: resticDriverLocation(
                 this.#config,
                 targetId,

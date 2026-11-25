@@ -75,6 +75,8 @@ else if (args[0] === "key") console.log("[]")
       const target = args[args.indexOf("--target") + 1]?.slice(
         "/volume/".length
       )
+      // Over the volume itself, its root alone.
+      if (taken && args.includes("--exclude")) return { exitCode: 0 }
       if (!taken || !target) return { exitCode: 1, stderr: "no snapshot" }
       const under = (path: string) =>
         path ? `${target}/volume/${path}` : `${target}/volume`

@@ -156,16 +156,21 @@ export async function restoreTarBackup(
 /**
  * Restores a volume from a snapshot of one, as restoring an archive does.
  * `restore` puts what the snapshot holds in a folder the volume's helper has,
- * where restic keeps the volume's root under its own name, with its owner,
- * mode and extended attributes.
+ * where restic keeps the volume's root under its own name. Docker says the
+ * owner and mode it has there, which the swap gives the volume, but not its
+ * extended attributes, so restic sets the root's own once it's swapped in:
+ * `restore` over where the helper has the volume, of nothing but the folder.
  */
 export async function restoreVolumeSnapshot(
   options: {
-    readonly restore: (folder: string) => Promise<void>
+    readonly restore: (
+      folder: string,
+      excludes?: ReadonlyArray<string>
+    ) => Promise<void>
   } & StagedRestore
 ): Promise<{ warnings: Array<string> }> {
   const { config, engine, source } = options
-  return swapStaged(options, async (staging) => {
+  const swapped = await swapStaged(options, async (staging) => {
     await options.restore(`${VOLUME_MOUNT}/${staging}`)
     const root = await withHelper(
       config,
@@ -178,6 +183,20 @@ export async function restoreVolumeSnapshot(
     await runStep(config, engine, source, "unwrap", staging, null)
     return root
   })
+  const rooted = await settle(() =>
+    options.restore("/", ["/*", `!${VOLUME_MOUNT}`, `${VOLUME_MOUNT}/*`])
+  )
+  return Result.isSuccess(rooted)
+    ? swapped
+    : {
+        warnings: [
+          ...swapped.warnings,
+          `The extended attributes of the volume's own folder couldn't be restored: ${errorMessage(rooted.failure)}`.slice(
+            0,
+            1_024
+          ),
+        ],
+      }
 }
 
 /** A restore into what `source` holds, staged in it and then swapped in. */
@@ -715,8 +734,8 @@ async function stage(
   return root
 }
 
-// The owner, mode and extended attributes of a staged root, as Docker
-// archives it, and nothing of what it holds.
+// The owner and mode of a staged root, as Docker archives it, and nothing of
+// what it holds.
 async function stagedRoot(
   engine: DockerEngine,
   helper: string,
@@ -742,12 +761,10 @@ async function stagedRoot(
       "The snapshot wasn't taken of a volume"
     )
   }
-  const xattrs = rootXattrs(header.pax)
   return {
     gid: header.gid ?? 0,
     mode: header.mode ?? 0o755,
     uid: header.uid ?? 0,
-    ...(xattrs && { xattrs }),
   }
 }
 

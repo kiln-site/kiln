@@ -1219,8 +1219,9 @@ taken of, which the task's `archive` names. A database's dump is written out
 gzipped, then imported as a full backup's is, or downloaded as `.sql.gz`. A
 volume's is restored by restic into the staging folder a full backup's restore
 makes inside the volume, in a helper, and swapped in the same way. restic keeps
-the volume's root as a folder, `volume`, so its owner, mode and attributes are
-read from there and its contents moved up before anything is cleared. It
+the volume's root as a folder, `volume`, so its owner and mode are read from
+there and its contents moved up before anything is cleared. Docker doesn't say
+its extended attributes, so restic sets those once it's swapped in. It
 downloads as `.tar.gz`.
 
 Destination deletion is two-phase: the row is marked `deleting` so new backups

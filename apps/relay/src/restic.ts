@@ -151,6 +151,8 @@ export type ResticDriver = {
     signal: AbortSignal
   }) => Promise<void>
   restore: (input: {
+    /** What of the snapshot isn't restored. */
+    excludes?: ReadonlyArray<string>
     location: ResticDriverLocation
     onProgress?: (progress: ResticProgress) => void
     password: string
@@ -627,7 +629,17 @@ export function createResticDriver(options?: {
         await mkdir(input.target, { recursive: true, mode: 0o700 })
       }
       await run(
-        ["restore", "--json", input.selector, "--target", input.target],
+        [
+          "restore",
+          "--json",
+          input.selector,
+          "--target",
+          input.target,
+          ...(input.excludes ?? []).flatMap((pattern) => [
+            "--exclude",
+            pattern,
+          ]),
+        ],
         {
           location: input.location,
           password: input.password,
