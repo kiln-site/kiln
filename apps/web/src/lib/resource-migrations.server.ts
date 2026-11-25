@@ -584,34 +584,32 @@ const deployCopy = (
 // never worked stops no move. One whose Relay can't say, as where another
 // proxy serves it, isn't waited for, nor one that only ever answers as
 // Traefik does with no route: an App may answer just the same. A Relay that
-// can't be reached just now is asked again.
+// can't be reached just now is asked again, and what it last said holds.
 const copyServed = (
   input: ResourceMigrationInput,
   noun: string,
   deploy: NonNullable<MigratedKind["deploy"]>
 ) => {
   let until: number | null = null
+  let last: Effect.Success<ReturnType<typeof deploy.served>> | null = null
   return watch(input, "deploy/served", null, "it to be served", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       until ??= now + Duration.toMillis(SERVE_WITHIN)
-      const served = yield* deploy
-        .served(input)
-        .pipe(
-          Effect.timeout(Duration.millis(Math.max(until - now, 1_000))),
-          Effect.result
-        )
-      const waits = (yield* Clock.currentTimeMillis) < until
-      if (Result.isSuccess(served)) {
-        const { success: state } = served
-        if (state === "served" || state === "unknown") return true
-        if (waits) return false
-        if (state !== "down") return true
-      } else if (waits) {
-        return false
+      if (now < until || last === null) {
+        const answer = yield* deploy
+          .served(input)
+          .pipe(
+            Effect.timeout(Duration.millis(Math.max(until - now, 1_000))),
+            Effect.result
+          )
+        if (Result.isSuccess(answer)) last = answer.success
       }
+      if (last === "served" || last === "unknown") return true
+      if ((yield* Clock.currentTimeMillis) < until) return false
+      if (last === "partly" || last === "unrouted") return true
       return yield* fail(
-        Result.isSuccess(served)
+        last === "down"
           ? `The copied ${noun} runs, but its new Relay's proxy can't reach it`
           : `The copied ${noun} runs, but its new Relay couldn't be asked whether it serves it`
       )

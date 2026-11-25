@@ -130,7 +130,9 @@ const relay = {
   // What the new Relay pulled, by transfer.
   // What the new Relay's proxy answers for a copy's routes; null when it
   // can't be asked.
-  proxy: null as "served" | "down" | null,
+  proxy: null as "served" | "unrouted" | "down" | null,
+  // How many times it answers before it can't be reached.
+  proxyAnswers: Infinity,
   pulls: new Map<string, "pulling" | "cancelled">(),
   // What each Relay routes, by the instance it's for.
   routes: new Map<string, Array<Record<string, unknown>>>(),
@@ -148,6 +150,7 @@ function resetRelay() {
   relay.journal.clear()
   relay.provisioningHeld.clear()
   relay.proxy = null
+  relay.proxyAnswers = Infinity
   relay.pulls.clear()
   relay.routes.clear()
   relay.servers.clear()
@@ -351,6 +354,8 @@ function answer(
       // Followed by Hearth's own records here.
       throw new Error("The Relay's backup queue is busy")
     case "instance.network.routes.check":
+      relay.proxyAnswers -= 1
+      if (relay.proxyAnswers < 0) throw new Error("The Relay is away")
       return {
         answers:
           relay.proxy &&
@@ -1202,6 +1207,29 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(cancelled.state, "cancelled")
           assert.strictEqual(appOn(newRelay, cancelled.destination_id), "gone")
           asItWas(cancelled.destination_id)
+        }),
+      180_000
+    )
+
+    it.effect(
+      "goes by what the new Relay last said of a moved App's routes",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          yield* seedApp
+          const hearth = yield* startHearth
+          relay.deployment = { error: null, state: "succeeded" }
+          relay.proxy = "unrouted"
+          relay.proxyAnswers = 1
+          const id = yield* moveApp(service)
+          const row = yield* migrationUntil(id, ended)
+          yield* operationsEnded
+          yield* stopHearth(hearth)
+          assert.strictEqual(row.error, null)
+          assert.strictEqual(row.state, "completed")
+          assert.deepStrictEqual(hostnamesOn(newRelay, row.destination_id), [
+            "example.test",
+          ])
         }),
       180_000
     )
