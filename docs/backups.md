@@ -1111,7 +1111,8 @@ taken of, which the task's `archive` names.
 
 Destination deletion is two-phase: the row is marked `deleting` so new backups
 cannot select it, S3 repository prefixes are purged, then foreign keys on
-deleted catalog rows are cleared and the destination is removed. A purge failure leaves the destination
+deleted catalog rows are cleared and the destination is removed. A removed
+Relay's prefixes aren't purged: forgetting its backups says their files stay. A purge failure leaves the destination
 listed as `deleting` with `last_error` so the operator can retry instead of
 silently orphaning data.
 

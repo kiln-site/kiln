@@ -55,7 +55,7 @@ const relayIdSchema = z.object({
 })
 const relayEnabledSchema = relayIdSchema.extend({ enabled: z.boolean() })
 const removeRelaySchema = relayIdSchema.extend({
-  forgetBackups: z.boolean().default(true),
+  forgetBackups: z.boolean().default(false),
   removeVanityDomains: z.boolean().default(true),
 })
 const relayProxyInputSchema = relayProxySettingsSchema.extend({
