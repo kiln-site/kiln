@@ -13,7 +13,7 @@ import {
   type ScheduleDefinition,
 } from "@workspace/contracts/schedules"
 import { Effect } from "effect"
-import { afterAll, vi } from "vite-plus/test"
+import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
@@ -158,7 +158,14 @@ vi.mock("@/lib/realtime-source.server", () => ({
 // A destination's keys are kept encrypted.
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
+// One clock for every test: the real one, put back after each, would drop the
+// timer of a pass still to come, and Hearth, still counting on it, would
+// start none in the tests after.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+})
 afterAll(async () => {
+  vi.useRealTimers()
   await stopScheduleDeliveries()
   await disposeAppRuntime()
 })
@@ -331,15 +338,7 @@ const passesRun = Effect.gen(function* () {
   return yield* Effect.die("Hearth never finished with the Relay's backups")
 })
 const inTestTime = <A, E, R>(test: Effect.Effect<A, E, R>) =>
-  Effect.sync(() =>
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
-  ).pipe(
-    Effect.andThen(test),
-    // The real clock would drop the timer of a pass still to come, and
-    // Hearth, still counting on it, would start none in the next test.
-    Effect.tap(() => passesRun),
-    Effect.ensuring(Effect.sync(() => vi.useRealTimers()))
-  )
+  test.pipe(Effect.tap(() => passesRun))
 
 const backups = () =>
   selectRows<{
