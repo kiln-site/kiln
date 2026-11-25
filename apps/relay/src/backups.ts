@@ -3001,16 +3001,17 @@ function runResticCreate(
         })
       )
     )
-    if (input.destination.kind === "restic") {
-      yield* addRecoveryPasswords(
-        config,
-        restic,
-        input.target.id,
-        input.destination,
-        password,
-        signal
-      )
-    }
+    const unopened: ReadonlyArray<string> =
+      input.destination.kind === "restic"
+        ? yield* addRecoveryPasswords(
+            config,
+            restic,
+            input.target.id,
+            input.destination,
+            password,
+            signal
+          )
+        : []
     const taken = summary as ResticSnapshotSummary | null
     yield* Effect.annotateCurrentSpan({
       "restic.snapshot.id": result.snapshotId,
@@ -3036,7 +3037,7 @@ function runResticCreate(
             : "local",
       })
     }
-    return result
+    return { ...result, warnings: [...result.warnings, ...unopened] }
   })
 }
 
@@ -3139,7 +3140,7 @@ const addRecoveryPasswords = Effect.fn("Backups.addRecoveryPasswords")(
     signal: AbortSignal
   ) {
     const passwords = destination.recoveryPasswords ?? []
-    if (passwords.length === 0) return
+    if (passwords.length === 0) return []
     yield* Effect.tryPromise({
       try: () =>
         restic.addPasswords({
@@ -3154,11 +3155,16 @@ const addRecoveryPasswords = Effect.fn("Backups.addRecoveryPasswords")(
         }),
       catch: (cause) => cause,
     })
+    return []
   },
   Effect.catch((cause) =>
     Effect.logWarning(
       "A backup repository's recovery passwords couldn't be added yet",
       cause
+    ).pipe(
+      Effect.as([
+        "Only Kiln can open this backup until the next one adds its destination's password and Kiln's",
+      ])
     )
   )
 )
