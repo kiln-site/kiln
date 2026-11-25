@@ -11,7 +11,10 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { resolve } from "node:path"
 import { Effect, Option, Scope } from "effect"
 
-import { backupDownloadCapabilityPayloadSchema } from "@workspace/contracts"
+import {
+  backupDownloadCapabilityPayloadSchema,
+  backupDownloadFormatSchema,
+} from "@workspace/contracts"
 
 import type { RelayConfig } from "../config.js"
 import type { RelayIdentity } from "../effect/identity.js"
@@ -119,7 +122,8 @@ export function backupLinks(options: BackupLinkOptions): BackupLinks {
 
       const archive = yield* findArchive(
         options.config.dataDirectory,
-        capability.backupId
+        capability.backupId,
+        capability.filename
       )
       const range = yield* Effect.try({
         try: () => parseByteRange(request.headers.range, archive.size),
@@ -213,10 +217,19 @@ export function backupLinks(options: BackupLinkOptions): BackupLinks {
 /** A backup kept on this Relay, or one exported here from elsewhere. */
 const findArchive = Effect.fnUntraced(function* (
   dataDirectory: string,
-  backupId: string
+  backupId: string,
+  filename: string
 ) {
-  for (const folder of ["backups", "exports"]) {
-    const path = resolve(dataDirectory, folder, `${backupId}.zip`)
+  // A backup kept here has this name whatever it holds; an export, the
+  // format it's downloaded as.
+  const format =
+    backupDownloadFormatSchema.options.find((candidate) =>
+      filename.endsWith(`.${candidate}`)
+    ) ?? "zip"
+  for (const path of [
+    resolve(dataDirectory, "backups", `${backupId}.zip`),
+    resolve(dataDirectory, "exports", `${backupId}.${format}`),
+  ]) {
     const metadata = yield* Effect.tryPromise(() => lstat(path)).pipe(
       Effect.option
     )

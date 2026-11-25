@@ -72,6 +72,7 @@ export const scheduleBackupActionSchema = z
         .strict(),
     ]),
     id: scheduleActionIdSchema,
+    /** Kiln's own backup is full in either. */
     mode: backupModeSchema.default("full"),
     name: z
       .string()
@@ -671,7 +672,6 @@ export function resolveScheduleBackupName(
 export function scheduleActionSupportsTarget(
   action: {
     action?: "kill" | "restart" | "start" | "stop"
-    mode?: "full" | "incremental"
     type: ScheduleActionType
   },
   target: Pick<ScheduleTarget, "kind">
@@ -683,8 +683,6 @@ export function scheduleActionSupportsTarget(
   if (action.type === "console_command" || action.type === "power") {
     return target.kind !== "relay" && target.kind !== "volume"
   }
-  // An App's volumes are archives, never restic snapshots.
-  if (action.mode === "incremental") return target.kind === "instance"
   return true
 }
 
@@ -722,7 +720,6 @@ export function scheduleActionAppliesToTarget(
     authorizedTargets?: 2
     targetKeys?: ReadonlyArray<string>
     action?: "kill" | "restart" | "start" | "stop"
-    mode?: "full" | "incremental"
     type: ScheduleActionType
   },
   target: ScheduleTarget

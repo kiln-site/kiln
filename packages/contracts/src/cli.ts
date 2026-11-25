@@ -3,6 +3,7 @@ import { z } from "zod"
 import {
   backupArtifactKindSchema,
   backupFilenameSchema,
+  backupDownloadFormatSchema,
   backupIdSchema,
   backupModeSchema,
   backupStatusSchema,
@@ -424,7 +425,12 @@ export const cliDeleteBackupResponseSchema = z
   .strict()
 
 export const cliBackupDownloadRequestSchema = z
-  .object({ backupId: backupIdSchema, poll: z.boolean().default(false) })
+  .object({
+    backupId: backupIdSchema,
+    /** For an incremental backup; left out, its target's usual one. */
+    format: backupDownloadFormatSchema.optional(),
+    poll: z.boolean().default(false),
+  })
   .strict()
 
 export const cliBackupDownloadResponseSchema = z.discriminatedUnion("status", [

@@ -5,6 +5,7 @@ import { z } from "zod"
 import {
   appIdSchema,
   backupConsistencySchema,
+  backupDownloadFormatSchema,
   backupTargetSchema,
   relayIdSchema,
   instanceIdSchema,
@@ -107,6 +108,8 @@ const backupDownloadInputSchema = z.strictObject({
   afterExport: z.boolean().default(false),
   artifactId: z.uuid().optional(),
   backupId: z.uuid(),
+  // An incremental backup's; left out, its target's usual one.
+  format: backupDownloadFormatSchema.optional(),
   expiresInSeconds: z
     .number()
     .int()
@@ -160,6 +163,13 @@ const backupPolicyInputSchema = z.strictObject({
   target: backupTargetSchema,
 })
 
+const backupExportStateInputSchema = backupIdInputSchema.extend({
+  format: backupDownloadFormatSchema,
+})
+
+export type BackupExportStateInput = z.infer<
+  typeof backupExportStateInputSchema
+>
 export type BackupIdInput = z.infer<typeof backupIdInputSchema>
 export type BackupRunForQueryInput = z.infer<typeof backupRunForQuerySchema>
 export type BackupRemovalInput = z.infer<typeof backupRemovalInputSchema>
@@ -291,7 +301,7 @@ export const getBackupDownloadUrl = createServerFn({ method: "POST" })
 // How a snapshot's export for download is coming along, polled while it's
 // prepared; downloading it once ready is getBackupDownloadUrl again.
 export const getBackupExportState = createServerFn({ method: "GET" })
-  .validator(backupIdInputSchema)
+  .validator(backupExportStateInputSchema)
   .handler(async ({ data }) =>
     getBackupExportStateHandler(await requireEligibleResourceUser(), data)
   )

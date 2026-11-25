@@ -1,3 +1,7 @@
+import {
+  backupDownloadFormatSchema,
+  type BackupDownloadFormat,
+} from "@workspace/contracts"
 import { z } from "zod"
 
 import { commandError } from "./errors.js"
@@ -9,6 +13,7 @@ export interface CliArguments {
   cpu?: string
   disk?: string
   follow: boolean
+  format?: BackupDownloadFormat
   gameVersion?: string
   help: boolean
   javaVersion?: string
@@ -36,6 +41,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
   let cpu: string | undefined
   let disk: string | undefined
   let follow = false
+  let format: BackupDownloadFormat | undefined
   let gameVersion: string | undefined
   let help = false
   let limit = 2_000
@@ -77,7 +83,17 @@ export function parseArguments(argv: Array<string>): CliArguments {
     else if (flag === "--cpu") cpu = value()
     else if (flag === "--disk") disk = value()
     else if (flag === "--follow" || flag === "-f") follow = true
-    else if (flag === "--game-version") gameVersion = value()
+    else if (flag === "--format") {
+      const parsed = backupDownloadFormatSchema.safeParse(value())
+      if (!parsed.success) {
+        throw commandError({
+          code: "invalid_arguments",
+          exitCode: 2,
+          message: `--format must be one of ${backupDownloadFormatSchema.options.join(", ")}.`,
+        })
+      }
+      format = parsed.data
+    } else if (flag === "--game-version") gameVersion = value()
     else if (flag === "--help" || flag === "-h") help = true
     else if (flag === "--java-version") javaVersion = value()
     else if (flag === "--memory") memory = value()
@@ -134,6 +150,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
     ...(cpu ? { cpu } : {}),
     ...(disk ? { disk } : {}),
     follow,
+    ...(format ? { format } : {}),
     ...(gameVersion ? { gameVersion } : {}),
     help,
     ...(javaVersion ? { javaVersion } : {}),

@@ -262,18 +262,18 @@ restore them yet.
 
 The `DEST` column consolidates the logical backup's destinations, such as
 `local+s3`; it does not repeat a backup once per destination. The `MODE`
-column is `incremental` (restic snapshots, the server default) or `full`
+column is `incremental` (restic snapshots, the default) or `full`
 (portable zip archives, or gzipped tar archives for Apps and volumes). Below the table, each backup whose latest finished task reports an error
 gets a line with the reason. When the cause is known, such as a storage
 provider's cap being reached, the line says what happened and where to fix it,
 followed by the Relay's own message.
 
 Create a manual backup with a reference from `backups targets`: a game
-server's or database's ID, or for the platform, its Relay's ID. Server backups
-default to incremental restic snapshots stored on the Relay or an S3
-destination. Pass `--mode full` for a portable zip, which can also use local or
-S3 storage; `--mode` applies only to server backups. Incremental mode accepts
-exactly one destination. `--storage` is required, and takes `local` for the
+server's or database's ID, or for the platform, its Relay's ID. Server and
+database backups default to incremental restic snapshots stored on the Relay or
+an S3 destination. Pass `--mode full` for a portable zip, or a database's gzipped
+dump, which can also use local or S3 storage. The platform's backups are always
+full. `--storage` is required, and takes `local` for the
 Relay or a destination's 12-character ID; pass one `--storage` value at most. A backup
 without `--name` is named `CLI backup`.
 
@@ -303,11 +303,15 @@ permission to download the backup and to restore the destination, and the
 safety backup is of the destination.
 
 Download through a temporary signed URL without printing the URL itself. The
-backup filename is used when the local path is omitted. Incremental snapshots
-are exported to a zip first; the command waits until that export is ready:
+backup filename is used when the local path is omitted. An incremental backup is
+put together into one file first; the command waits until it is ready.
+`--format` picks which: `zip` (a server's default), `tar.gz` or `tar.zst`, or for
+a database `sql.gz` (its default), `sql.zst` or `zip`; a volume's default is
+`tar.gz`:
 
 ```sh
 kiln backup download <backup-id>
+kiln backup download <backup-id> --format tar.zst
 kiln backup download <backup-id> ./before-update.zip
 ```
 
