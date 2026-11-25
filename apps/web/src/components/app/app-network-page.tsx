@@ -49,7 +49,6 @@ import {
 } from "@/components/app/app-presentation"
 import { useAppRunsCompose } from "@/components/app/app-compose"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
-import { databaseAddress } from "@/components/database/database-presentation"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import {
   formatHostPort,
@@ -805,7 +804,7 @@ function ConnectedDatabases({
                   )}
                   <span className="type-meta block font-mono text-muted-foreground">
                     {database
-                      ? databaseAddress(database.hostname, database)
+                      ? `${database.hostname}:${database.internalPort}`
                       : "Not visible to you"}
                     {app.containers.length > 0 && !attached
                       ? " · applies on next deploy"
