@@ -1728,10 +1728,7 @@ function CreateBackupDialog({
       return createBackupRun({
         data: {
           consistency: configuration.consistency,
-          // A game server's choice; anything else is a full archive.
-          ...(chosen.every((target) => target.kind === "instance")
-            ? { mode: configuration.mode }
-            : {}),
+          mode: configuration.mode,
           name: configuration.name,
           storageIds: configuration.destinationKeys.map((destination) =>
             destination === "local" ? null : destination
