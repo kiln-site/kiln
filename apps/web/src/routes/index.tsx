@@ -130,7 +130,15 @@ export const Route = createFileRoute("/")({
       params: { serverId: rememberedInstance.id },
     })
   },
-  head: ({ match }) => ({
+  loader: async ({ parentMatchPromise }) => ({
+    homeUrl: (await parentMatchPromise).loaderData?.homeUrl,
+  }),
+  head: ({ loaderData, match }) => ({
+    // Sign-up links and signed-out redirects add queries to this one page.
+    // Search engines should list it once, without them.
+    links: loaderData?.homeUrl
+      ? [{ rel: "canonical", href: loaderData.homeUrl }]
+      : [],
     meta: [
       {
         title: pageTitle(
