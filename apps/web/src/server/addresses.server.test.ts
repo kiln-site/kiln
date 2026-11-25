@@ -82,6 +82,8 @@ const relays = vi.hoisted(() => {
     instances: {} as Record<string, Array<unknown>>,
     // Whether none answers what its proxy is.
     away: false,
+    // Whether none can be told of a name.
+    deaf: false,
     // The names each was told point at it now.
     released: new Set<string>(),
     // Relays with no web proxy, which serve no websites.
@@ -115,6 +117,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ) => {
     if (operation === "relay.snapshot") return relays.snapshot(relay.id)
     if (operation === "relay.certificates.release") {
+      if (relays.deaf) throw new Error("The Relay is away")
       for (const hostname of payload.hostnames ?? []) {
         relays.released.add(`${relay.id}/${hostname}`)
       }
@@ -315,6 +318,7 @@ const seed = Effect.gen(function* () {
   relays.instances = {}
   relays.connected.clear()
   relays.away = false
+  relays.deaf = false
   relays.released.clear()
   relays.withoutProxy.clear()
   yield* insertRelay(relayOne)
@@ -931,7 +935,21 @@ describeMysql("a game server's names when it or its Relay goes", () => {
           )
           assert.strictEqual(relays.released.size, 0)
 
+          // Pointed there, but not yet told to ask Let's Encrypt.
           relays.away = false
+          relays.deaf = true
+          yield* retryAddressesNowEffect()
+          yield* dnsWorkerPass
+          assert.strictEqual(
+            mapRecord(),
+            `CNAME map.kiln.test ${webHost(relayTwo)}`
+          )
+          assert.match(
+            (yield* routeStatuses(taking))["map.kiln.test"] ?? "",
+            /^error: .*couldn't be told/u
+          )
+
+          relays.deaf = false
           yield* retryAddressesNowEffect()
           yield* dnsWorkerPass
           assert.strictEqual(

@@ -216,7 +216,7 @@ export async function previewResourceMigrationHandler(
       backups: authorization.allows("backup.read"),
       network: allowed.network,
     }),
-    manualHostnames(reference),
+    allowed.network ? manualHostnames(reference) : [],
     authorization.allows("schedule.read") ? schedulesNaming(reference) : [],
   ])
   return {
