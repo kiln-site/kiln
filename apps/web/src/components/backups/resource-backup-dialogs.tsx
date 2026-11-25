@@ -95,14 +95,14 @@ export function ResourceBackupDialog({
   })
   return (
     <BackupConfigurationDialog
-      consistencyChoice={{ stoppedUnavailable }}
+      consistencyChoiceFor={() => ({ stoppedUnavailable })}
       description={description}
       error={create.error?.message}
       onOpenChange={onOpenChange}
       onSubmit={(configuration) => create.mutate(configuration)}
       open={open}
       pending={create.isPending}
-      showTarget={false}
+      showTargets={false}
       storage={storage.data ?? []}
       submitLabel={create.isPending ? "Starting backup…" : "Back up"}
       targets={[]}

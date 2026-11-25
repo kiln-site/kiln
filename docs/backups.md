@@ -943,7 +943,7 @@ Hearth admitted: one skipped or refused is left out and backed up by no
 other target's run, so a database is dumped while the Apps that are backed
 up are stopped. Every App of the batch stays stopped for as long as all of
 it takes; separate steps keep Apps that needn't wait on each other apart. The editor offers Stopped for a
-step of Apps and volumes, with or without databases beside them. What refuses one of
+step with an App or a volume; game servers and Kiln are taken as they run. What refuses one of
 them refuses each, and a batch is at most 64 backups. The volumes are those Hearth last
 sent. It sends the schedule again as soon as a deployment of the App ends,
 and if that send fails, at its next sweep, every ten minutes, or when

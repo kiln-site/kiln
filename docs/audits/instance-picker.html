@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Picker Audit</title>
+<style>
+/* Standalone colors: open this file in any browser. */
+:root {
+  color-scheme: dark light;
+  --background: #141210; --foreground: #ece8e3; --muted-foreground: #a39b92;
+  --border: #34302b; --card: #1c1916; --code-background: #26221e;
+  --destructive: #e0644f; --warning: #d79a2b; --success: #4caf6a; --chart-1: #4aa3c9;
+  --radius: 8px;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --background: #faf8f5; --foreground: #1f1b17; --muted-foreground: #6f665d;
+    --border: #e2dcd4; --card: #ffffff; --code-background: #f0ebe4;
+    --destructive: #c4442f; --warning: #a86d0a; --success: #2f8a4a; --chart-1: #2b7fa6;
+  }
+}
+html { background: var(--background); color: var(--foreground); font-family: var(--font-sans); }
+body { max-width: 980px; margin: 0 auto !important; padding: 28px 16px 48px; }
+</style>
+<style>
+:root {
+  --ink: var(--foreground); --muted2: var(--muted-foreground); --line: var(--border); --panel: var(--card);
+  --hi: var(--destructive, #d0533f); --md: var(--warning, #c98a1a); --lo: var(--muted-foreground); --ok: var(--success, #3f9a58);
+  --hi-soft: color-mix(in srgb, var(--hi) 15%, transparent);
+  --md-soft: color-mix(in srgb, var(--md) 16%, transparent);
+  --lo-soft: color-mix(in srgb, var(--lo) 12%, transparent);
+  --ok-soft: color-mix(in srgb, var(--ok) 16%, transparent);
+  --acc: var(--chart-1, #3796bd); --acc-soft: color-mix(in srgb, var(--acc) 14%, transparent);
+}
+body { margin: 0; font-size: 14px; line-height: 1.5; }
+h2 { font-size: 16px; margin: 28px 0 6px; }
+h2:first-child { margin-top: 0; }
+p.note { color: var(--muted2); margin: 0 0 12px; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 620px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+.tile { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; background: var(--panel); }
+.tile b { display: block; font-size: 24px; letter-spacing: -0.02em; line-height: 1.2; }
+.tile span { color: var(--muted2); font-size: 12.5px; }
+code { font: 11.5px var(--font-mono); background: var(--code-background); padding: 1px 4px; border-radius: 4px; }
+
+/* architecture */
+.arch { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 600px) { .arch { grid-template-columns: 1fr; } }
+.col { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 12px; }
+.col h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted2); }
+.callers { display: flex; flex-wrap: wrap; gap: 5px; }
+.callers span { font-size: 11.5px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+.callers span.out { border-color: var(--hi); color: var(--hi); }
+.arrow { text-align: center; color: var(--muted2); font-size: 12px; margin: 6px 0; }
+.adapters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.adapters i { font-style: normal; font-size: 10.5px; text-align: center; padding: 4px 2px; border-radius: 5px; background: var(--md-soft); color: var(--md); }
+.core { border: 1.5px solid var(--ok); background: var(--ok-soft); color: var(--ink); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+.core b { color: var(--ok); }
+.layer { border: 1px solid var(--line); border-left: 3px solid var(--acc); border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; background: var(--acc-soft); }
+.layer b { font-size: 12.5px; display: block; }
+.layer small { color: var(--muted2); font-size: 11.5px; }
+
+/* findings */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.filters button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--background); border-color: var(--ink); }
+.findings { display: grid; gap: 6px; }
+.f { display: grid; grid-template-columns: 62px 1fr auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 12px; background: var(--panel); }
+.f .sev { font-size: 11px; font-weight: 700; text-align: center; padding: 2px 0; border-radius: 999px; }
+.f.high .sev { background: var(--hi-soft); color: var(--hi); }
+.f.medium .sev { background: var(--md-soft); color: var(--md); }
+.f.low .sev { background: var(--lo-soft); color: var(--muted2); }
+.f h5 { margin: 0 0 2px; font-size: 13.5px; }
+.f p { margin: 0; color: var(--muted2); font-size: 12px; line-height: 1.45; }
+.f { padding: 7px 11px; }
+.f .meta { text-align: right; font-size: 11px; color: var(--muted2); white-space: nowrap; }
+.f .meta .cat { display: inline-block; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); margin-bottom: 3px; }
+.ids { font: 10.5px var(--font-mono); color: var(--muted2); }
+.prog { font-size: 10.5px; font-weight: 700; color: var(--acc); }
+
+/* create mock */
+.mocks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 600px) { .mocks { grid-template-columns: 1fr; } }
+.mock { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; font-size: 12.5px; }
+.mock .cap { padding: 6px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted2); border-bottom: 1px solid var(--line); }
+.mock .search { margin: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: var(--muted2); }
+.mock .search.typed { color: var(--ink); }
+.mock .row { padding: 6px 12px; display: flex; gap: 8px; align-items: center; }
+.mock .row .ic { width: 18px; height: 18px; border-radius: 5px; background: var(--lo-soft); flex: none; }
+.mock .row.create { color: var(--acc); font-weight: 600; border-top: 1px solid var(--line); }
+.mock .row.create .ic { background: var(--acc-soft); display: grid; place-items: center; font-size: 13px; line-height: 1; }
+.mock .row.ghost { color: var(--muted2); font-style: italic; }
+.mock.bad { outline: 1.5px dashed var(--hi); outline-offset: -1.5px; }
+.mock.good { outline: 1.5px solid var(--ok); outline-offset: -1.5px; }
+table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; border: 1px solid var(--line); background: var(--panel); }
+table.t th, table.t td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.t th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted2); }
+.yes { color: var(--ok); font-weight: 600; } .no { color: var(--hi); font-weight: 600; } .part { color: var(--md); font-weight: 600; }
+.wrapx { overflow-x: auto; }
+
+/* plan */
+.steps { display: grid; gap: 6px; }
+.step { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 12px; background: var(--panel); }
+.step .n { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--lo-soft); color: var(--muted2); }
+.step.now .n { background: var(--acc-soft); color: var(--acc); }
+.step h5 { margin: 1px 0 2px; font-size: 13.5px; }
+.step p { margin: 0; color: var(--muted2); font-size: 12.5px; }
+.chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: var(--lo-soft); color: var(--muted2); }
+.step.now .chip { background: var(--acc-soft); color: var(--acc); }
+</style></head><body>
+
+<h2>Instance / scope picker audit</h2>
+<p class="note">Audited on 2026-11-16 at main <code>226835cc9</code>. Since then, #975 made volumes schedule targets and gave New Backup and the schedule editor one target picker (finding A-1).</p>
+<p class="note">Three Codex Sol audits (structure, behavior, performance) of main at <code>226835cc9</code>. The list itself is already shared: <code>InstancePickerContent</code> does search, filters, favorites, keyboard and virtualization for almost every picker. The split brain is in the <b>adapters around it</b>: every caller builds its own options, keys, kinds, scope meaning, group expansion and trigger.</p>
+
+<div class="tiles">
+  <div class="tile"><b>~30</b><span>picker call sites mapped</span></div>
+  <div class="tile"><b>1</b><span>shared list renderer (good)</span></div>
+  <div class="tile"><b>29</b><span>findings, <b style="display:inline;font-size:inherit">20</b> after merging overlaps</span></div>
+  <div class="tile"><b>6</b><span>correctness bugs, most small</span></div>
+</div>
+
+<h2>Where the split brain is</h2>
+<p class="note">Left: today. Each call site re-implements the orange pieces before handing rows to the shared list. Right: the shared layers the audits converge on. The list stays; the adapters collapse.</p>
+<div class="arch">
+  <div class="col">
+    <h4>Today</h4>
+    <div class="callers">
+      <span>Sidebar switcher</span><span>Automations scope</span><span>Schedule targets</span><span>Schedule action targets</span><span>Schedule history</span><span>Manual backup targets</span><span>Backups scope</span><span>Activity</span><span>Security</span><span>Domains</span><span>Deployments</span><span>App database field</span><span>Volume field</span><span>Volume file roots</span><span>Volume used-by</span><span>Brick Relay</span><span>Migration Relay</span><span>GitHub sync target</span><span>Database members</span><span>Tunnel connect</span>
+      <span class="out">Access ResourcePicker (own Command list)</span><span class="out">App ↔ database Select</span><span class="out">Tunnel ConnectMenu dropdown</span><span class="out">Restore destination Select</span>
+    </div>
+    <div class="arrow">↓ each builds its own ↓</div>
+    <div class="adapters"><i>option list</i><i>keys</i><i>kind labels</i><i>scope meaning</i><i>groups</i><i>eligibility</i><i>trigger</i><i>empty/loading</i></div>
+    <div class="arrow">↓</div>
+    <div class="core"><b>InstancePickerContent</b> — search, filters, favorites, keyboard, virtualized rows. Shared already. Red callers above bypass even this.</div>
+  </div>
+  <div class="col">
+    <h4>Target</h4>
+    <div class="layer"><b>1 · Resource refs + presentation registry</b><small>One kind vocabulary, one key format, labels/icons/routes, Kiln as platform identity. Fixes A-4, A-5, A-9.</small></div>
+    <div class="layer"><b>2 · Scope model + URL codecs</b><small><code>all | kind | resource | relayContents | platform</code>. A Relay row stops meaning four things. Fixes A-2, A-3, B-3.</small></div>
+    <div class="layer"><b>3 · Purpose catalogs over existing caches</b><small><code>usePickerOptions({ purpose, kinds, relayId })</code> with named eligibility (backupTarget, scheduleTarget, connectDatabase…). Fixes A-1, C-1.</small></div>
+    <div class="layer"><b>4 · Selection + group utilities</b><small>One expansion/completeness rule; purpose passes the member resolver. Fixes A-6.</small></div>
+    <div class="layer"><b>5 · Field + action layer</b><small>Shared trigger/summary, loading/error/disabled-reason states, persistent create actions, remote paged source for Access. Fixes A-7, A-8, A-10, B-1, B-4, B-7.</small></div>
+    <div class="core"><b>InstancePickerContent</b> stays, with key-based keyboard state and fixed ARIA (C-3, C-4, C-9).</div>
+  </div>
+</div>
+
+<h2>Findings</h2>
+<p class="note">Merged across the three audits (original IDs shown). Filter by category.</p>
+<div class="filters" id="filters">
+  <button aria-pressed="true" data-f="all">All</button>
+  <button aria-pressed="false" data-f="correctness">Correctness</button>
+  <button aria-pressed="false" data-f="split-brain">Split brain</button>
+  <button aria-pressed="false" data-f="ux">UX</button>
+  <button aria-pressed="false" data-f="a11y">A11y</button>
+  <button aria-pressed="false" data-f="perf">Perf</button>
+</div>
+<div class="findings" id="findings">
+
+  <div class="f high" data-c="split-brain"><div class="sev">HIGH</div><div><h5>Manual and scheduled backups pick from different target models <span class="prog">· done in #975</span></h5><p>Manual backups offer volumes and Apps-as-volume-bundles; schedules only know game servers, Apps, databases and Kiln, through a separate picker and a separate server query. Being fixed now: volumes become schedule targets and both use one target picker.</p><div class="ids">A-1 · B-9 · C-1</div></div><div class="meta"><span class="cat">split brain</span><br>L</div></div>
+
+  <div class="f high" data-c="correctness"><div class="sev">HIGH</div><div><h5>A missing Automations target silently becomes “All instances”</h5><p>An old URL for a deleted target resolves to null, which the page reads as “all schedules”. Activity, Security and Domains do the same while still filtering, so the summary says All while the list is narrow.</p><div class="ids">B-3</div></div><div class="meta"><span class="cat">correctness</span><br>M</div></div>
+
+  <div class="f high" data-c="split-brain"><div class="sev">HIGH</div><div><h5>A Relay-shaped choice means four different things</h5><p>Kiln in schedules, everything on that Relay in sync history and Security, host files in GitHub sync, Kiln volumes in backup settings. Same row, different breadth; the value type can't say which.</p><div class="ids">A-3</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="correctness"><div class="sev">MED</div><div><h5>Automations drops an App scope when switching tabs</h5><p>App scopes were added, but the navigation helpers still clear the App kind, so moving between Schedules and History falls back to All.</p><div class="ids">A-2</div></div><div class="meta"><span class="cat">correctness</span><br>S</div></div>
+
+  <div class="f medium" data-c="correctness"><div class="sev">MED</div><div><h5>Automations shows Kiln as a plain Relay</h5><p>The scope options lose <code>platform: true</code>, so Kiln's mark and badge differ between the scope picker and the target picker (and favorites can split).</p><div class="ids">A-4</div></div><div class="meta"><span class="cat">correctness</span><br>S</div></div>
+
+  <div class="f medium" data-c="correctness"><div class="sev">MED</div><div><h5>Pasting a volume definition skips the create-permission check</h5><p>Typing <code>uploads:/data</code> without create permission shows a disabled row; pasting the same text stages it, and it fails only on save.</p><div class="ids">B-2</div></div><div class="meta"><span class="cat">correctness</span><br>S</div></div>
+
+  <div class="f medium" data-c="correctness"><div class="sev">MED</div><div><h5>Live updates can move the keyboard highlight to another resource</h5><p>The active row is stored as an index. A rename that re-sorts, or an insert above it, makes Enter pick a different instance.</p><div class="ids">C-3</div></div><div class="meta"><span class="cat">correctness</span><br>S</div></div>
+
+  <div class="f medium" data-c="correctness"><div class="sev">MED</div><div><h5>Loading and failed queries look like empty results</h5><p>Sidebar, App database field and tunnel connect default to empty arrays: a failed directory reads as “No managed instances” or “every game server is already connected”.</p><div class="ids">B-4</div></div><div class="meta"><span class="cat">correctness</span><br>M</div></div>
+
+  <div class="f medium" data-c="ux"><div class="sev">MED</div><div><h5>Create is invisible until you type</h5><p>The picker skips its create hook on an empty query, so “Create volume” only appears after typing. Database creation already has a visible footer; the tunnel menu offers “Add a tunnel” only when no tunnel exists. Three create patterns, none shared.</p><div class="ids">A-7 · B-1 · C-5</div></div><div class="meta"><span class="cat">ux</span><br>M</div></div>
+
+  <div class="f medium" data-c="split-brain"><div class="sev">MED</div><div><h5>Access grants run a second picker stack</h5><p>Own Command list, no selected check, no drawer on mobile, no virtualization (Load more grows the DOM), search on every keystroke without debounce, two cache shapes for the same endpoint.</p><div class="ids">A-8 · B-6 · C-2 · C-6</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="split-brain"><div class="sev">MED</div><div><h5>Kind support lives in many separate allowlists</h5><p>The core picker knows tunnels; the scope picker hardcodes four kinds; Access SQL has three; Deployments two. Adding a kind means finding them all. (Some omissions are deliberate — needs a per-purpose policy, not "every kind everywhere".)</p><div class="ids">A-5</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="split-brain"><div class="sev">MED</div><div><h5>Group expansion is written twice</h5><p>Backups and schedules each implement hidden/partial-member checks, messages and "stands for" ticking.</p><div class="ids">A-6</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="split-brain"><div class="sev">MED</div><div><h5>Keys and identities are conventions, not one model</h5><p><code>kind:relay:id</code>, <code>relay:type:id</code>, <code>relay:kind:id</code>, <code>"kiln"</code>; volumes keyed by Docker name in one place and Kiln ID in another. Constant server↔instance, relay↔platform conversions.</p><div class="ids">A-9</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="split-brain"><div class="sev">MED</div><div><h5>Triggers and eligibility rebuilt per caller</h5><p>Backup, schedule, migration and GitHub pickers each draw their own trigger and summary; database pickers apply different permission rules without naming them.</p><div class="ids">A-10</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="split-brain"><div class="sev">MED</div><div><h5>Search text differs per caller</h5><p>"game server" finds schedule rows but not sidebar rows; Access search can't match a Relay by name.</p><div class="ids">B-5</div></div><div class="meta"><span class="cat">split brain</span><br>M</div></div>
+
+  <div class="f medium" data-c="ux"><div class="sev">MED</div><div><h5>Disabled schedule targets don't say why</h5><p>Grey rows with only Relay name and ID: no hint whether it's access, availability or the action.</p><div class="ids">B-7</div></div><div class="meta"><span class="cat">ux</span><br>S</div></div>
+
+  <div class="f medium" data-c="a11y"><div class="sev">MED</div><div><h5>Virtualization can orphan <code>aria-activedescendant</code></h5><p>Scroll away from the active row and it unmounts while still referenced; empty results remove the listbox that <code>aria-controls</code> points at.</p><div class="ids">C-4</div></div><div class="meta"><span class="cat">a11y</span><br>M</div></div>
+
+  <div class="f low" data-c="ux"><div class="sev">LOW</div><div><h5>Small UX/copy: database create offered before permission is known; “View all servers”</h5><p>Create shows while <code>canCreate</code> is still loading; the shared footer says “servers” beside Relays.</p><div class="ids">B-8 · B-10</div></div><div class="meta"><span class="cat">ux</span><br>S</div></div>
+
+  <div class="f low" data-c="a11y"><div class="sev">LOW</div><div><h5>Partial group selection isn't announced</h5><p>Sighted users see a partial tick; screen readers hear “not selected”.</p><div class="ids">C-9</div></div><div class="meta"><span class="cat">a11y</span><br>S</div></div>
+
+  <div class="f low" data-c="perf"><div class="sev">LOW</div><div><h5>Picker code loads with the app frame; search re-lowercases every row per keystroke</h5><p>Not measured as a problem yet — split trigger from content and cache search text once a large-fleet measurement says so.</p><div class="ids">C-7 · C-8</div></div><div class="meta"><span class="cat">perf</span><br>M</div></div>
+</div>
+
+<h2>The create option</h2>
+<p class="note">What you asked for: create visible the moment the picker opens. The audits agree on one shared <b>persistent create action</b> — rendered outside the filtered, virtualized rows, so search, filters and empty results never hide it — that opens the create form prefilled with whatever you've typed.</p>
+<div class="mocks">
+  <div class="mock bad"><div class="cap">Today · on open</div><div class="search">Search volumes…</div>
+    <div class="row"><span class="ic"></span>minecraft-world</div><div class="row"><span class="ic"></span>paper-uploads</div><div class="row"><span class="ic"></span>postgres-data</div>
+    <div class="row ghost">no create option until you type</div></div>
+  <div class="mock good"><div class="cap">Proposed · on open</div><div class="search">Search volumes…</div>
+    <div class="row"><span class="ic"></span>minecraft-world</div><div class="row"><span class="ic"></span>paper-uploads</div><div class="row"><span class="ic"></span>postgres-data</div>
+    <div class="row create"><span class="ic">+</span>Create volume…</div></div>
+  <div class="mock good"><div class="cap">Proposed · typing</div><div class="search typed">uploads</div>
+    <div class="row"><span class="ic"></span>paper-uploads</div>
+    <div class="row create"><span class="ic">+</span>Create volume “uploads”…</div></div>
+</div>
+<div class="wrapx" style="margin-top:10px">
+<table class="t">
+  <tr><th>Where create is offered</th><th>Today</th><th>Visible on open?</th><th>Under the shared action</th></tr>
+  <tr><td>Volume picker (App volumes, volume dialog)</td><td>Typed-query row via <code>searchItem</code></td><td class="no">No</td><td>“Create volume…” opens naming, then mount config; typed text prefills</td></tr>
+  <tr><td>App database field</td><td>Persistent footer → dialog</td><td class="yes">Yes</td><td>Same contract; query prefills the name; hidden until permission is confirmed</td></tr>
+  <tr><td>Tunnel ConnectMenu</td><td>“Add a tunnel” only when none exist</td><td class="part">Only sometimes</td><td>Always shown when allowed, next to existing tunnels</td></tr>
+  <tr><td>Groups, other kinds</td><td>None today</td><td>—</td><td>Can adopt the same contract later</td></tr>
+</table></div>
+<p class="note" style="margin-top:8px">Contract: <code>{ label, eligibility, reason, onActivate({ query }) }</code>. Tab-reachable, Enter on result rows stays predictable, never a fake resource identity.</p>
+
+<h2>Suggested order</h2>
+<div class="steps">
+  <div class="step now"><div class="n">0</div><div><h5>Volumes as schedule targets + one backup target picker</h5><p>Schedules gain a volume target kind end to end; manual backup and schedule editor render one target picker.</p></div><span class="chip">done · #975</span></div>
+  <div class="step"><div class="n">1</div><div><h5>Quick correctness fixes</h5><p>Stale scope → unavailable not All (B-3), App scope kept across tabs (A-2), Kiln identity (A-4), paste permission (B-2), key-based keyboard state + ARIA (C-3, C-4).</p></div><span class="chip">S · 1 PR</span></div>
+  <div class="step"><div class="n">2</div><div><h5>Persistent create action</h5><p>Shared contract in the picker; volumes, database footer and tunnel menu move onto it. Create shows on open.</p></div><span class="chip">M</span></div>
+  <div class="step"><div class="n">3</div><div><h5>Resource keys, presentation registry, scope model</h5><p>One key format and kind registry; discriminated scopes with URL codecs. Automations first, then Activity, Security, Backups, Deployments.</p></div><span class="chip">M · 2 PRs</span></div>
+  <div class="step"><div class="n">4</div><div><h5>Shared field, summaries and states</h5><p>One trigger/summary, loading/error/partial states, disabled reasons (A-10, B-4, B-7, B-8).</p></div><span class="chip">M</span></div>
+  <div class="step"><div class="n">5</div><div><h5>Access onto the shared shell</h5><p>Remote paged source with debounce and cancellation, virtualized, selected check (A-8, B-6, C-2, C-6).</p></div><span class="chip">M</span></div>
+  <div class="step"><div class="n">6</div><div><h5>Kind coverage policy, then measure</h5><p>Per-purpose kind policies (tunnels/databases where the backend supports them); measure large fleets and bundle before lazy loading (C-7, C-8).</p></div><span class="chip">L</span></div>
+</div>
+
+<script>
+const buttons = document.querySelectorAll('#filters button');
+buttons.forEach(b => b.addEventListener('click', () => {
+  buttons.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  const f = b.dataset.f;
+  document.querySelectorAll('#findings .f').forEach(el => { el.style.display = (f === 'all' || el.dataset.c === f) ? '' : 'none'; });
+}));
+</script>
+</body></html>

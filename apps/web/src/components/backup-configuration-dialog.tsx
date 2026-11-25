@@ -30,10 +30,15 @@ import { timestampedBackupName } from "@/lib/backup-name"
 import { notALoginField } from "@/lib/not-a-login-field"
 
 export interface BackupConfigurationTarget extends PickerTarget {
-  consistencyChoice?: {
-    stoppedDescription?: string | undefined
-    stoppedUnavailable: string | null
-  }
+  consistencyChoice?: ConsistencyChoice
+}
+
+/** Whether a backup offers being taken live or stopped. */
+interface ConsistencyChoice {
+  /** What stopping it does, when it's more than one target's. */
+  stoppedDescription?: string | undefined
+  /** Why it can't be stopped, as without permission to stop its Apps. */
+  stoppedUnavailable: string | null
 }
 
 export interface BackupConfiguration {
@@ -43,7 +48,7 @@ export interface BackupConfiguration {
   mode: "full" | "incremental"
   name: string
   /** What was chosen to back up, where the dialog offers targets. */
-  targetKeys?: ReadonlyArray<string>
+  targetKeys: ReadonlyArray<string>
 }
 
 /** As many targets as one run takes. */
@@ -57,39 +62,14 @@ interface BackupStorageOption {
   ownerUserId: string | null
 }
 
-export function BackupConfigurationDialog({
-  allowIncremental,
-  consistencyChoice: fixedConsistencyChoice,
-  description = "Relay runs this job in its single durable queue. Servers remain online while their data is archived.",
-  error,
-  groups = noGroups,
-  initialConsistency = "live",
-  initialDestinationKeys,
-  initialMode = "incremental",
-  initialName,
-  initialTargetKeys,
-  onOpenChange,
-  onSubmit,
-  open,
-  pending = false,
-  showTarget = true,
-  singleDestination = false,
-  storage,
-  submitLabel,
-  targets,
-  title,
-}: {
-  allowIncremental?: boolean
+interface BackupConfigurationFormProps {
   /**
-   * An App's or a volume's backup, always a full archive, offers taking it
-   * live or with what uses it stopped, in place of the mode.
+   * Whether what is chosen is offered live or stopped, in place of the mode:
+   * by default, as the volumes among it are.
    */
-  consistencyChoice?: {
-    /** What stopping it does, when it's more than one target's. */
-    stoppedDescription?: string
-    /** Why it can't be stopped, as without permission to stop its Apps. */
-    stoppedUnavailable: string | null
-  }
+  consistencyChoiceFor?: (
+    chosen: ReadonlyArray<BackupConfigurationTarget>
+  ) => ConsistencyChoice | undefined
   description?: React.ReactNode
   error?: string
   /** Rows that stand for several of `targets`: Apps and groups. */
@@ -103,23 +83,86 @@ export function BackupConfigurationDialog({
    * unsaid, the only target there is, if there is only one.
    */
   initialTargetKeys?: ReadonlyArray<string> | undefined
-  onOpenChange: (open: boolean) => void
   onSubmit: (configuration: BackupConfiguration) => void
-  open: boolean
   pending?: boolean
-  showTarget?: boolean
   singleDestination?: boolean
   storage: ReadonlyArray<BackupStorageOption>
   submitLabel?: string
   targets: ReadonlyArray<BackupConfigurationTarget>
+  /** Off leaves the targets to whoever opened it. */
+  showTargets?: boolean
+  /**
+   * A step of a schedule, which backs up any of the schedule's targets,
+   * however many, or none.
+   */
+  step?: boolean
+  /** Beneath the targets, for the keys chosen and how they're backed up. */
+  targetsNote?: (
+    chosen: ReadonlyArray<string>,
+    mode: BackupConfiguration["mode"]
+  ) => React.ReactNode
   title: string
+}
+
+export function BackupConfigurationDialog({
+  onOpenChange,
+  open,
+  ...form
+}: BackupConfigurationFormProps & {
+  onOpenChange: (open: boolean) => void
+  open: boolean
 }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className={cn(
+          "sm:max-w-xl",
+          // What is chosen adds and removes options below it. Its top stays
+          // where it would be at its tallest, so it grows downward and the
+          // list of targets, open beneath its field, never moves.
+          form.showTargets !== false &&
+            "top-[max(1rem,calc(50dvh-18.25rem))] max-h-[calc(100dvh-1rem-max(1rem,calc(50dvh-18.25rem)))] translate-y-0"
+        )}
+      >
+        <BackupConfigurationForm
+          {...form}
+          onCancel={() => onOpenChange(false)}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Mounted only while the dialog is open, so each opening starts afresh.
+function BackupConfigurationForm({
+  consistencyChoiceFor = chosenConsistencyChoice,
+  description = "Relay runs this job in its single durable queue. Servers remain online while their data is archived.",
+  error,
+  groups = noGroups,
+  initialConsistency = "live",
+  initialDestinationKeys,
+  initialMode = "incremental",
+  initialName,
+  initialTargetKeys,
+  onCancel,
+  onSubmit,
+  pending = false,
+  showTargets = true,
+  singleDestination = false,
+  step = false,
+  storage,
+  submitLabel,
+  targets,
+  targetsNote,
+  title,
+}: BackupConfigurationFormProps & { onCancel: () => void }) {
   const [name, setName] = React.useState(
     () => initialName ?? timestampedBackupName("manual")
   )
-  const openingKeys = (): ReadonlyArray<string> =>
-    initialTargetKeys ?? (targets.length === 1 ? [targets[0]!.key] : [])
-  const [selectedKeys, setSelectedKeys] = React.useState(openingKeys)
+  const [selectedKeys, setSelectedKeys] = React.useState(
+    (): ReadonlyArray<string> =>
+      initialTargetKeys ?? (targets.length === 1 ? [targets[0]!.key] : [])
+  )
   const [destinationKeys, setDestinationKeys] = React.useState<Array<string>>(
     () => [...(initialDestinationKeys ?? ["local"])]
   )
@@ -133,11 +176,8 @@ export function BackupConfigurationDialog({
   )
   // What is chosen, in the order it is listed.
   const chosen = React.useMemo(
-    () =>
-      showTarget
-        ? targets.filter((candidate) => selectedKeySet.has(candidate.key))
-        : noTargets,
-    [selectedKeySet, showTarget, targets]
+    () => targets.filter((candidate) => selectedKeySet.has(candidate.key)),
+    [selectedKeySet, targets]
   )
   const toggleTargets = React.useCallback(
     (keys: ReadonlyArray<string>, selected: boolean) =>
@@ -151,22 +191,20 @@ export function BackupConfigurationDialog({
       }),
     []
   )
-  const consistencyChoice = showTarget
-    ? chosenConsistencyChoice(chosen)
-    : fixedConsistencyChoice
+  const consistencyChoice = consistencyChoiceFor(chosen)
   const effectiveConsistency =
     consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
   // A game server's choice. Chosen with anything else, each is a full
   // archive, as the rest of them are.
   const onlyInstances =
     chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
-  const incrementalAllowed = showTarget
-    ? onlyInstances
-    : (allowIncremental ?? false)
   // Kiln's own backup goes only where the platform keeps its own.
   const platformChosen = chosen.some(({ kind }) => kind === "platform")
+  // A step left with none keeps its mode for those added later.
   const effectiveMode =
-    mode === "incremental" && incrementalAllowed ? "incremental" : "full"
+    mode === "incremental" && (onlyInstances || (step && chosen.length === 0))
+      ? "incremental"
+      : "full"
   const availableStorage = React.useMemo(
     () =>
       storage.filter(
@@ -194,21 +232,9 @@ export function BackupConfigurationDialog({
     () => new Set(destinationKeysInUse),
     [destinationKeysInUse]
   )
-  const showMode = !consistencyChoice && (showTarget ? onlyInstances : true)
-  const tooMany = chosen.length > MAX_TARGETS
-
-  const resetConfiguration = () => {
-    setName(initialName ?? timestampedBackupName("manual"))
-    setSelectedKeys(openingKeys())
-    setDestinationKeys([...(initialDestinationKeys ?? ["local"])])
-    setMode(initialMode)
-    setConsistency("live")
-  }
-
-  const changeOpen = (nextOpen: boolean) => {
-    if (!nextOpen) resetConfiguration()
-    onOpenChange(nextOpen)
-  }
+  const limited = showTargets && !step
+  const tooMany = limited && chosen.length > MAX_TARGETS
+  const noneChosen = limited && chosen.length === 0
 
   const toggleDestination = (destination: string, checked: boolean) => {
     setDestinationKeys((current) => {
@@ -223,147 +249,127 @@ export function BackupConfigurationDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogContent
-        className={cn(
-          "sm:max-w-xl",
-          // What is chosen adds and removes options below it. Its top stays
-          // where it would be at its tallest, so it grows downward and the
-          // list of targets, open beneath its field, never moves.
-          showTarget &&
-            "top-[max(1rem,calc(50dvh-18.25rem))] max-h-[calc(100dvh-1rem-max(1rem,calc(50dvh-18.25rem)))] translate-y-0"
-        )}
-      >
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <div className="min-w-0 space-y-4">
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Name</span>
-            <Input
-              autoFocus
-              aria-label="Backup name"
-              {...notALoginField}
-              maxLength={120}
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-          </label>
-          {showTarget ? (
-            <div>
-              <span className="mb-2 block text-xs font-medium">Targets</span>
-              <TargetPicker
-                ariaLabel="Backup targets"
-                emptyMessage="No targets available"
-                groups={groups}
-                placeholder="Choose what to back up"
-                selectedKeys={selectedKeySet}
-                targets={targets}
-                onToggle={toggleTargets}
-              />
-              {tooMany ? (
-                <p role="alert" className="mt-1.5 text-xs text-destructive">
-                  One backup takes up to {MAX_TARGETS} targets.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          {consistencyChoice ? (
-            <BackupConsistencyChoices
-              consistency={effectiveConsistency}
-              stoppedDescription={
-                consistencyChoice.stoppedDescription ??
-                (chosen.length > 1
-                  ? "Stops the Apps that use the volumes, then starts them again"
-                  : undefined)
-              }
-              stoppedUnavailable={consistencyChoice.stoppedUnavailable}
-              onConsistencyChange={setConsistency}
-            />
-          ) : null}
-          {showMode ? (
-            <BackupModeChoices
-              effectiveMode={effectiveMode}
-              incrementalAllowed={incrementalAllowed}
-              onModeChange={setMode}
-            />
-          ) : null}
-          <BackupDestinationChoices
-            availableStorage={availableStorage}
-            effectiveMode={effectiveMode}
-            selectedDestinations={selectedDestinations}
-            singleDestination={singleDestination}
-            targetKind={platformChosen ? "platform" : undefined}
-            onToggleDestination={toggleDestination}
+    <>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{description}</DialogDescription>
+      </DialogHeader>
+      <div className="min-w-0 space-y-4">
+        <label className="block">
+          <span className="mb-2 block text-xs font-medium">Name</span>
+          <Input
+            autoFocus
+            aria-label="Backup name"
+            {...notALoginField}
+            maxLength={120}
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
           />
-          {error ? (
-            <p role="alert" className="text-xs text-destructive">
-              {error}
-            </p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => changeOpen(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={
-              pending ||
-              !name.trim() ||
-              (showTarget && (chosen.length === 0 || tooMany))
+        </label>
+        {showTargets ? (
+          <div>
+            <span className="mb-2 block text-xs font-medium">Targets</span>
+            <TargetPicker
+              ariaLabel="Backup targets"
+              emptyMessage="No targets available"
+              groups={groups}
+              placeholder="Choose what to back up"
+              selectedKeys={selectedKeySet}
+              targets={targets}
+              onToggle={toggleTargets}
+            />
+            {targetsNote ? (
+              <p className="type-meta mt-1.5 text-muted-foreground">
+                {targetsNote(
+                  chosen.map(({ key }) => key),
+                  effectiveMode
+                )}
+              </p>
+            ) : null}
+            {tooMany ? (
+              <p role="alert" className="mt-1.5 text-xs text-destructive">
+                One backup takes up to {MAX_TARGETS} targets.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {consistencyChoice ? (
+          <BackupConsistencyChoices
+            consistency={effectiveConsistency}
+            stoppedDescription={
+              consistencyChoice.stoppedDescription ??
+              (chosen.length > 1
+                ? "Stops the Apps that use the volumes, then starts them again"
+                : undefined)
             }
-            type="button"
-            onClick={() =>
-              onSubmit({
-                consistency: effectiveConsistency,
-                destinationKeys: destinationKeysInUse,
-                mode: effectiveMode,
-                name: name.trim(),
-                ...(showTarget
-                  ? { targetKeys: chosen.map(({ key }) => key) }
-                  : {}),
-              })
-            }
-          >
-            {pending ? <LoaderCircle className="animate-spin" /> : <Archive />}
-            {submitLabel ?? "Create backup"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            stoppedUnavailable={consistencyChoice.stoppedUnavailable}
+            onConsistencyChange={setConsistency}
+          />
+        ) : null}
+        {!consistencyChoice && onlyInstances ? (
+          <BackupModeChoices mode={effectiveMode} onModeChange={setMode} />
+        ) : null}
+        <BackupDestinationChoices
+          availableStorage={availableStorage}
+          effectiveMode={effectiveMode}
+          selectedDestinations={selectedDestinations}
+          singleDestination={singleDestination}
+          targetKind={platformChosen ? "platform" : undefined}
+          onToggleDestination={toggleDestination}
+        />
+        {error ? (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        ) : null}
+      </div>
+      <DialogFooter>
+        <Button variant="ghost" type="button" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          disabled={pending || !name.trim() || noneChosen || tooMany}
+          type="button"
+          onClick={() =>
+            onSubmit({
+              consistency: effectiveConsistency,
+              destinationKeys: destinationKeysInUse,
+              mode: effectiveMode,
+              name: name.trim(),
+              targetKeys: chosen.map(({ key }) => key),
+            })
+          }
+        >
+          {pending ? <LoaderCircle className="animate-spin" /> : <Archive />}
+          {submitLabel ?? "Create backup"}
+        </Button>
+      </DialogFooter>
+    </>
   )
 }
 
 function BackupModeChoices({
-  effectiveMode,
-  incrementalAllowed,
+  mode,
   onModeChange,
 }: {
-  effectiveMode: "full" | "incremental"
-  incrementalAllowed: boolean
+  mode: "full" | "incremental"
   onModeChange: (mode: "full" | "incremental") => void
 }) {
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium">Mode</legend>
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
-          checked={effectiveMode === "incremental"}
+          checked={mode === "incremental"}
           description="Deduplicated snapshots on this Relay or S3"
-          disabled={!incrementalAllowed}
           icon={Archive}
           label="Incremental"
           onCheckedChange={(checked) => {
-            if (checked && incrementalAllowed) onModeChange("incremental")
+            if (checked) onModeChange("incremental")
           }}
         />
         <BackupDestinationChoice
-          checked={effectiveMode === "full"}
+          checked={mode === "full"}
           description="Portable zip archive"
           icon={HardDrive}
           label="Full archive"
@@ -388,7 +394,7 @@ function BackupConsistencyChoices({
   stoppedUnavailable: string | null
 }) {
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium">While it backs up</legend>
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
@@ -437,7 +443,7 @@ function BackupDestinationChoices({
   targetKind?: BackupConfigurationTarget["kind"]
 }) {
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium">Destinations</legend>
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
@@ -516,12 +522,12 @@ function BackupDestinationChoice({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-semibold">{label}</span>
-        <span className="type-meta block truncate text-muted-foreground">
+        <span className="type-meta block text-pretty text-muted-foreground">
           {description}
         </span>
       </span>
       <span
-        className={`grid size-4 place-items-center rounded-sm border ${
+        className={`grid size-4 shrink-0 place-items-center rounded-sm border ${
           checked
             ? "border-primary bg-primary text-primary-foreground"
             : "border-input"
@@ -533,19 +539,13 @@ function BackupDestinationChoice({
   )
 }
 
-const noTargets: ReadonlyArray<BackupConfigurationTarget> = []
 const noGroups: ReadonlyArray<PickerGroup> = []
 
 // Whether what is chosen can be taken stopped: the volumes among it, which
 // stop the Apps that use them, and why not when one of them can't be.
 function chosenConsistencyChoice(
   chosen: ReadonlyArray<BackupConfigurationTarget>
-):
-  | {
-      stoppedDescription?: string | undefined
-      stoppedUnavailable: string | null
-    }
-  | undefined {
+): ConsistencyChoice | undefined {
   const choices = chosen.flatMap(({ consistencyChoice }) =>
     consistencyChoice ? [consistencyChoice] : []
   )
