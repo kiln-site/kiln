@@ -93,6 +93,18 @@ stops and starts every App using what it backs up, so saving one
 takes `instance.power.stop` on each; the Relay must be online to say which Apps
 those are, unless the schedule already had that step.
 
+## When what it targets moves
+
+A move ([Moving and duplicating](resource-migrations.md)) points each schedule
+that names the old game server, database or App at its copy, in its targets
+and in every step that named it. It's an edit, so it takes what saving it by
+hand does, of whoever moved it: `schedule.update` and every step's permission
+on all its targets and on the copy, and its backup destinations. One they
+can't save that way stays on the old one, and the dialog says so; nothing is
+asked of its other targets, which it runs on as before. Its owner, times and
+steps don't change. Both Relays are sent it in the background, once the copy
+is ready. A volume's schedules stay with it, since what uses it does.
+
 ## Where it runs
 
 Saving, deleting and running a schedule are operations on its

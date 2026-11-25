@@ -501,6 +501,9 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
         : Effect.void
     }
     const moved = input.mode === "migrate"
+    // While the copy still belongs to whoever moved it: pointing a schedule
+    // at it takes what they hold on it.
+    yield* handOver("schedules", moved)
     yield* handOver("owner", moved)
     yield* handOver("access", options.copyAccess)
     yield* handOver("backups", options.linkBackups)

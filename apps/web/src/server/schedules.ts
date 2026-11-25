@@ -65,6 +65,7 @@ import {
   insertScheduleParts,
   jsonValue,
   loadSchedules,
+  oweSchedule,
   publishScheduleCollectionChange,
   scheduleReconciliationConcurrency,
   removeRelayProjections,
@@ -730,23 +731,7 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(
               // Owed to every Relay it was on, so a Hearth that stops before
               // sending leaves the sweep something to resend.
               for (const change of changes) {
-                for (const relayId of change.relayIds) {
-                  yield* transaction.execute(
-                    `INSERT INTO ${databaseTable("schedule_deployment")}
-                     (schedule_id, relay_id, desired_revision, status,
-                      created_at, updated_at)
-                   VALUES (?, ?, ?, 'pending', ?, ?)
-                   ON DUPLICATE KEY UPDATE
-                     status = IF(VALUES(desired_revision) >= desired_revision,
-                       'pending', status),
-                     last_error = IF(VALUES(desired_revision) >= desired_revision,
-                       NULL, last_error),
-                     desired_revision = GREATEST(desired_revision,
-                       VALUES(desired_revision)),
-                     updated_at = VALUES(updated_at)`,
-                    [change.scheduleId, relayId, change.revision, now, now]
-                  )
-                }
+                yield* oweSchedule(transaction, { ...change, now })
               }
               return changes
             })

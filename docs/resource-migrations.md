@@ -30,8 +30,13 @@ anything is made or stopped.
 
 Under that it says what to know before copying this one, which each kind words
 for itself. What bites stands out (a copy that starts empty, what stops
-reaching it, schedules that go on naming the old one); the rest is only worth
+reaching it, schedules that stay on the old one); the rest is only worth
 knowing.
+
+A move takes the schedules that name the old one to the copy, whatever else
+is chosen: those the person may edit so
+([Schedules](schedules.md#when-what-it-targets-moves)). The dialog counts them,
+and names any that stay.
 
 ### Where domains would work
 
@@ -277,8 +282,8 @@ Its steps:
    a part, both archives are deleted. The toast says which part it's on.
 6. **deploy**: for a moved App that ran, deploys the copy and waits until
    it's ready.
-7. **finish**: hands over ownership, access, domains, routes, and backups
-   as chosen, each its own step, starts a duplicated original again, and
+7. **finish**: hands over schedules, ownership, access, domains, routes, and
+   backups as chosen, each its own step, starts a duplicated original again, and
    last asks for a moved one's final backup and deletion if chosen, queued
    to run once the move ends.
 
