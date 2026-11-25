@@ -129,8 +129,9 @@ describe("bundled Traefik certificates", () => {
   })
 
   // A name being moved here resolves to where it's moved from, and Let's
-  // Encrypt would check that: Traefik asks once, and not again when it fails.
-  it("asks for a held hostname's certificate only once it's released", async () => {
+  // Encrypt would check that. Traefik asks once, and not again when it fails,
+  // as it does while the changed record is still on its way round.
+  it("asks for a moved hostname's certificate once it points here, and again while it's missing", async () => {
     answers.set("shop.example.com", "found")
     certificates.hold(["shop.example.com"])
     await certificates.track([route])
@@ -139,7 +140,19 @@ describe("bundled Traefik certificates", () => {
 
     certificates.release(["shop.example.com"])
     await certificates.check()
+    expect(routerTls()).toEqual({})
+    vi.setSystemTime(Date.now() + 15_000)
+    await certificates.check()
     expect(routerTls()).toEqual({ certResolver: "kiln" })
+
+    // Never issued, it's asked for a few more times, then left to someone.
+    const configurations = new Set([traefik()])
+    for (let passed = 0; passed < 30; passed += 1) {
+      vi.setSystemTime(Date.now() + minute)
+      await certificates.check()
+      configurations.add(traefik())
+    }
+    expect(configurations.size).toBe(4)
   })
 
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {

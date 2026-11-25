@@ -168,7 +168,9 @@ Copying one takes what backing it up and restoring it do, on the Relay:
 A copy's Relay has its routes before its names point there, and the old one's
 are taken from it before they do. Until then bundled Traefik asks for no
 certificate for them (`holdCertificates`): the names resolve, to the old Relay,
-so Let's Encrypt would check there and fail, and Traefik doesn't ask again.
+so Let's Encrypt would check there and fail, and Traefik doesn't ask again. Once
+they point at the copy's Relay, it asks
+([Certificates](domains.md#certificates)).
 
 A kind with web routes hands them over whole: each keeps its hostname, path,
 options and, for an App, the service it reaches, and is given an ID of its
