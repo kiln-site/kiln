@@ -2565,7 +2565,7 @@ function DeleteBackupStorageDialog({
           <DialogDescription>
             {retry
               ? `“${destination.name}” is still marked deleting. Retry purges remaining S3 prefixes, then removes the destination.`
-              : `“${destination.name}” can only be deleted when no retained backups reference it. Incremental restic prefixes in this destination are purged; full-archive objects already in the bucket stay.`}
+              : `“${destination.name}” can only be deleted when no retained backups reference it. Incremental restic prefixes in this destination are purged; full archives and the backups of removed Relays stay in the bucket. Its backup password goes with it, so save that first.`}
           </DialogDescription>
         </DialogHeader>
         {destination.lastError ? (

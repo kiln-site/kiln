@@ -138,39 +138,45 @@ export const backupStoragePassword = Effect.fn("backupPasswords.destination")(
   }
 )
 
-/**
- * What a Relay adds to a repository as it backs up into it. A backup is worth
- * more than what opens it later, so one that can't be read is left out.
- */
+// A backup is worth more than what opens it later, so a password Hearth can't
+// decrypt is left out. A database that fails isn't: a schedule keeps what it's
+// given, so it would go without until it's next sent.
+const unlessUnreadable = <A, E, R>(
+  password: Effect.Effect<A, E | CredentialError, R>
+) =>
+  password.pipe(
+    Effect.catchIf(
+      (cause): cause is CredentialError => cause instanceof CredentialError,
+      (cause) =>
+        Effect.logWarning(
+          "A backup repository's recovery password is unreadable",
+          cause
+        ).pipe(Effect.as(null))
+    )
+  )
+
+/** What a Relay adds to a repository as it backs up into it. */
 export const repositoryRecoveryPasswords = Effect.fn(
   "backupPasswords.repository"
-)(
-  function* (repository: { id: string; storageId: string | null }) {
-    const root = yield* loadRoot()
-    const destination = repository.storageId
-      ? yield* backupStoragePassword(repository.storageId)
-      : null
-    const passwords: BackupRecoveryPasswords = [
-      ...(root
-        ? [
-            {
-              holder: "kiln" as const,
-              password: yield* promiseEffect(() =>
-                backupRepositoryPassword(root, repository.id)
-              ),
-            },
-          ]
-        : []),
-      ...(destination
-        ? [{ holder: "destination" as const, password: destination }]
-        : []),
-    ]
-    return passwords
-  },
-  Effect.catch((cause) =>
-    Effect.logWarning(
-      "A backup repository's recovery passwords are unreadable",
-      cause
-    ).pipe(Effect.as<BackupRecoveryPasswords>([]))
-  )
-)
+)(function* (repository: { id: string; storageId: string | null }) {
+  const root = yield* unlessUnreadable(loadRoot())
+  const destination = repository.storageId
+    ? yield* unlessUnreadable(backupStoragePassword(repository.storageId))
+    : null
+  const passwords: BackupRecoveryPasswords = [
+    ...(root
+      ? [
+          {
+            holder: "kiln" as const,
+            password: yield* promiseEffect(() =>
+              backupRepositoryPassword(root, repository.id)
+            ),
+          },
+        ]
+      : []),
+    ...(destination
+      ? [{ holder: "destination" as const, password: destination }]
+      : []),
+  ]
+  return passwords
+})

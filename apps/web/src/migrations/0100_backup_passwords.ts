@@ -20,10 +20,11 @@ export const backupPasswords: Migration = {
       WHERE table_schema = DATABASE() AND table_name = ${table}
         AND column_name = 'password_ciphertext'
     `
-    if (found.length > 0) return
-    yield* sql.unsafe(
-      `ALTER TABLE \`${table}\` ADD COLUMN \`password_ciphertext\` text NULL`
-    )
+    if (found.length === 0) {
+      yield* sql.unsafe(
+        `ALTER TABLE \`${table}\` ADD COLUMN \`password_ciphertext\` text NULL`
+      )
+    }
     yield* sql`
       UPDATE ${sql(databaseTableName("schedule_deployment"))} deployment
          SET deployment.status = 'pending',
