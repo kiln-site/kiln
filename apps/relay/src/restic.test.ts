@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 
+import type { BackupRecoveryPasswords } from "@workspace/contracts"
 import { afterAll, afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
@@ -73,6 +74,48 @@ describe("restic S3 driver", () => {
     expect(call.args.join(" ")).not.toContain("repo-secret")
   })
 
+  it("adds each recovery password once, under a name of its own", async () => {
+    const keys: Array<{ password: string; userName: string }> = [
+      { password: "repo-secret", userName: "root" },
+    ]
+    const { processes, spawn } = fakeRestic((restic) => {
+      if (restic.args.includes("add")) {
+        const option = (name: string) =>
+          restic.args[restic.args.indexOf(name) + 1] ?? ""
+        keys.push({
+          password: readFileSync(option("--new-password-file"), "utf8"),
+          userName: option("--user"),
+        })
+      }
+      restic.respond({
+        stdout: JSON.stringify(keys.map(({ userName }) => ({ userName }))),
+      })
+    })
+    const add = (passwords: BackupRecoveryPasswords) =>
+      // A driver of its own, as after the Relay restarts.
+      createResticDriver({ spawn }).addPasswords({
+        location: s3Location,
+        password: "repo-secret",
+        passwords,
+        signal: new AbortController().signal,
+      })
+    const kiln = { holder: "kiln", password: "from-recovery-code" } as const
+    const owner = { holder: "destination", password: "owners" } as const
+    await add([kiln, owner])
+    await add([kiln, owner])
+    expect(keys.map(({ password }) => password)).toEqual([
+      "repo-secret",
+      "from-recovery-code",
+      "owners",
+    ])
+    // Another recovery code opens it too.
+    await add([{ ...kiln, password: "another-code" }, owner])
+    expect(keys.map(({ password }) => password)).toContain("another-code")
+    expect(keys).toHaveLength(4)
+    const argv = processes.flatMap(({ args }) => args).join(" ")
+    expect(argv).not.toContain("from-recovery-code")
+  })
+
   // As a prune leaves one when it can't reach the bucket to remove it.
   it("opens a repository a dead lock was left in", async () => {
     let locked = true
@@ -134,9 +177,13 @@ class FakeResticProcess {
     }) as unknown as ReturnType<ResticSpawn>
   }
 
-  respond(output: { exitCode?: number; stderr?: string }): void {
+  respond(output: {
+    exitCode?: number
+    stderr?: string
+    stdout?: string
+  }): void {
     queueMicrotask(() => {
-      this.stdout.end("")
+      this.stdout.end(output.stdout ?? "")
       this.stderr.end(output.stderr ?? "")
       this.child.emit("close", output.exitCode ?? 0)
     })

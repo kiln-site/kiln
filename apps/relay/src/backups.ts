@@ -2972,6 +2972,16 @@ function runResticCreate(
         })
       )
     )
+    if (input.destination.kind === "restic") {
+      yield* addRecoveryPasswords(
+        config,
+        restic,
+        input.target.id,
+        input.destination,
+        password,
+        signal
+      )
+    }
     const taken = summary as ResticSnapshotSummary | null
     yield* Effect.annotateCurrentSpan({
       "restic.snapshot.id": result.snapshotId,
@@ -3000,6 +3010,45 @@ function runResticCreate(
     return result
   })
 }
+
+// What opens the repository without Kiln. The snapshot is taken by now, so
+// one that can't be added is left for the next backup.
+const addRecoveryPasswords = Effect.fn("Backups.addRecoveryPasswords")(
+  function* (
+    config: RelayConfig,
+    restic: ResticDriver,
+    targetId: string,
+    destination: Extract<
+      BackupCreateTaskInput["destination"],
+      { kind: "restic" }
+    >,
+    password: string,
+    signal: AbortSignal
+  ) {
+    const passwords = destination.recoveryPasswords ?? []
+    if (passwords.length === 0) return
+    yield* Effect.tryPromise({
+      try: () =>
+        restic.addPasswords({
+          location: resticDriverLocation(
+            config,
+            targetId,
+            destination.repository
+          ),
+          password,
+          passwords,
+          signal,
+        }),
+      catch: (cause) => cause,
+    })
+  },
+  Effect.catch((cause) =>
+    Effect.logWarning(
+      "A backup repository's recovery passwords couldn't be added yet",
+      cause
+    )
+  )
+)
 
 async function createResticSnapshot(
   config: RelayConfig,

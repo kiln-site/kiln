@@ -6,9 +6,10 @@ import { databaseTable } from "@/lib/database-config"
 
 /**
  * What a change can make Hearth send again: the schedules backing up one
- * target, or every schedule backing up to one destination.
+ * target, every schedule backing up to one destination, or all that back up.
  */
 export type ScheduleInvalidationScope =
+  | { everyBackup: true }
   | { storageId: string }
   | {
       backupOnly?: boolean
@@ -30,6 +31,21 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
   scope: ScheduleInvalidationScope
 ) {
   const now = yield* Clock.currentTimeMillis
+  if ("everyBackup" in scope) {
+    yield* transaction.execute(
+      `UPDATE ${databaseTable("schedule_deployment")} deployment
+          SET deployment.status = 'pending',
+              deployment.desired_generation = deployment.desired_generation + 1,
+              deployment.updated_at = ?
+        WHERE EXISTS (
+          SELECT 1 FROM ${databaseTable("schedule_action")} action
+           WHERE action.schedule_id = deployment.schedule_id
+             AND action.action_type = 'backup'
+        )`,
+      [now]
+    )
+    return
+  }
   if ("storageId" in scope) {
     yield* transaction.execute(
       `UPDATE ${databaseTable("schedule_deployment")} deployment

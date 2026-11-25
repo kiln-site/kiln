@@ -4,19 +4,37 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { recoverPromise } from "@/effect/promise"
 
-/**
- * A 1Password save request; see `@1password/save-button`. 1Password reads
- * only its title, notes and fields, each field an HTML autofill name it
- * places in the item's own fields: it takes no labels of ours, and no
- * websites.
- */
-export interface OnePasswordSaveRequest {
-  readonly fields: ReadonlyArray<{
-    readonly autocomplete: "current-password" | "url" | "username"
-    readonly value: string
-  }>
+/** What names a secret saved in 1Password. */
+export interface OnePasswordItem {
+  /** The item's key name: what the secret belongs to. */
+  readonly name: string
   readonly notes: string
   readonly title: string
+  /** The item's hostname. */
+  readonly url: string
+}
+
+/**
+ * A 1Password save request; see `@1password/save-button`. It makes an API
+ * Credential item, which 1Password never offers to fill a sign-in, so it stays
+ * apart from the person's own login, with the secret as its masked
+ * credential. 1Password reads only its title, notes and fields, each field an
+ * HTML autofill name it places in the item's own fields: it takes no labels of
+ * ours, and no websites.
+ */
+function saveRequest(
+  { name, notes, title, url }: OnePasswordItem,
+  secret: string
+) {
+  return {
+    fields: [
+      { autocomplete: "username", value: name },
+      { autocomplete: "current-password", value: secret },
+      { autocomplete: "url", value: url },
+    ],
+    notes,
+    title,
+  }
 }
 
 /**
@@ -29,13 +47,15 @@ export interface OnePasswordSaveRequest {
  * so it's made here with its final request, and made again for a new one.
  */
 export const OnePasswordSaveButton = React.memo(function OnePasswordSaveButton({
-  request,
+  item,
+  secret,
 }: {
-  request: OnePasswordSaveRequest
+  item: OnePasswordItem
+  secret: string
 }) {
   const container = React.useRef<HTMLDivElement>(null)
   const [enabled, setEnabled] = React.useState(false)
-  const requestJson = JSON.stringify(request)
+  const requestJson = JSON.stringify(saveRequest(item, secret))
 
   React.useEffect(() => {
     let cancelled = false

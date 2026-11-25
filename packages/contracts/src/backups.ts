@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import { backupRecoveryPasswordsSchema } from "./backup-passwords.js"
 import { instanceIdSchema } from "./instance-id.js"
 
 import { relayTailscaleSubdomainSchema } from "./tailscale.js"
@@ -429,6 +430,7 @@ export const backupResticDestinationSchema = z
     repository: resticRepositoryLocationSchema.default(
       defaultLocalResticRepository
     ),
+    recoveryPasswords: backupRecoveryPasswordsSchema.optional(),
     repositoryPassword: backupRepositoryPasswordSchema.optional(),
   })
   .strict()
@@ -1301,6 +1303,7 @@ export function isBackupOperationTaskResult(
 
 const BACKUP_SECRET_KEYS = new Set([
   "accessKeyId",
+  "recoveryPasswords",
   "repositoryPassword",
   "secretAccessKey",
 ])

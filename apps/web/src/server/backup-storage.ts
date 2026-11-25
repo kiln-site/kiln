@@ -17,6 +17,7 @@ import {
   saveBackupStorageEffect,
   type BackupStorageRecord,
 } from "@/backups/destinations/s3"
+import { backupStoragePassword } from "@/effect/backup-passwords"
 import { ensuringPromise, promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { hasPlatformPermission } from "@/lib/access-control"
@@ -180,6 +181,58 @@ export const saveBackupStorage = createServerFn({ method: "POST" })
     })
   )
 
+/**
+ * A destination's backup password, for whoever owns its bucket: the person
+ * who added it, or for Kiln's own, those who manage them.
+ */
+const revealPassword = operation<{ id: string }>()({
+  name: "backupStorage.revealPassword",
+  doing: "Showing this destination's backup password",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(async () => {
+          const existing = await runAppEffect(
+            "backupStorage.loadForPassword",
+            loadBackupStorageEffect(input.id)
+          )
+          if (
+            !existing ||
+            !ownsBackupPassword(
+              existing,
+              person.id,
+              hasPlatformPermission(person, "platform.backups.manage-storage")
+            )
+          ) {
+            throw new Error(
+              "Only its owner can see a destination's backup password"
+            )
+          }
+        })
+      )
+    ),
+  locks: ({ input }) => [exclusive(backupStorageSettingsKey(input.id))],
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      const password = yield* backupStoragePassword(input.id)
+      if (password === null) {
+        return yield* Effect.fail(new Error("Backup destination not found"))
+      }
+      return { password }
+    }),
+  // Records who asked, never what was shown.
+  audit: ({ input }) => ({ id: input.id, kind: "backup-storage" }),
+})
+
+// POST: what it answers is kept out of caches and URLs.
+export const revealBackupPassword = createServerFn({ method: "POST" })
+  .validator(z.strictObject({ id: backupStorageIdSchema }))
+  .handler(async ({ data }) =>
+    runOperationPromise(revealPassword, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
 const deleteDestination = operation<{ id: string }>()({
   name: "backupStorage.delete",
   doing: "Changing this backup destination",
@@ -237,6 +290,17 @@ export function visibleBackupStorage(
 ): Array<BackupStorageRecord> {
   if (canManagePlatformStorage) return [...storage]
   return storage.filter((record) => canUseStorage(record, userId))
+}
+
+/** Managing a person's destination isn't owning what opens its backups. */
+export function ownsBackupPassword(
+  storage: Pick<BackupStorageRecord, "ownerUserId">,
+  userId: string,
+  canManagePlatformStorage: boolean
+): boolean {
+  return storage.ownerUserId === null
+    ? canManagePlatformStorage
+    : storage.ownerUserId === userId
 }
 
 function canUseStorage(

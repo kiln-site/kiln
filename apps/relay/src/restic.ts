@@ -1,11 +1,20 @@
 import { createHash } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
 import { createWriteStream } from "node:fs"
-import { lstat, mkdir, opendir, rm } from "node:fs/promises"
-import { dirname, relative, resolve, sep } from "node:path"
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  opendir,
+  rm,
+  writeFile,
+} from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join, relative, resolve, sep } from "node:path"
 import { Transform } from "node:stream"
 import { finished, pipeline } from "node:stream/promises"
 
+import type { BackupRecoveryPasswords } from "@workspace/contracts"
 import { Effect, Result, Schedule } from "effect"
 
 import { RelayBackupError } from "./effect/errors.js"
@@ -80,6 +89,17 @@ export { resticDriverLocation, resticRepositoryPath }
 export type { ResticDriverLocation }
 
 export type ResticDriver = {
+  /**
+   * Makes each of these open the repository too, besides `password`. Each is
+   * added once: restic's own list of a repository's passwords says which are
+   * there, by name.
+   */
+  addPasswords: (input: {
+    location: ResticDriverLocation
+    password: string
+    passwords: BackupRecoveryPasswords
+    signal: AbortSignal
+  }) => Promise<void>
   backup: (input: {
     cwd: string
     excludes: ReadonlyArray<string>
@@ -371,7 +391,69 @@ export function createResticDriver(options?: {
     })
   }
 
+  // The repositories this process has seen hold their passwords.
+  const passwordsHeld = new Map<string, string>()
+
   return {
+    addPasswords: async (input) => {
+      const named = input.passwords.map(({ holder, password }) => ({
+        name: `kiln-${holder}-${createHash("sha256").update(password).digest("hex").slice(0, 8)}`,
+        password,
+      }))
+      const repository = resticRepositoryKey(input.location)
+      const names = named.map(({ name }) => name).join(" ")
+      if (named.length === 0 || passwordsHeld.get(repository) === names) return
+      const listed = parseResticJsonLine(
+        (
+          await run(["key", "list", "--json"], {
+            location: input.location,
+            password: input.password,
+            readOnly: true,
+            retryable: true,
+            signal: input.signal,
+          })
+        ).stdoutText
+      )
+      if (!Array.isArray(listed)) {
+        throw resticError(
+          "restic_keys_missing",
+          "key list",
+          "restic did not list the repository's passwords"
+        )
+      }
+      const held = new Set(
+        listed.flatMap((key) => (isRecord(key) ? [key.userName] : []))
+      )
+      for (const { name, password } of named) {
+        if (held.has(name)) continue
+        // restic reads a new password from a file, or from a terminal.
+        const directory = await mkdtemp(join(tmpdir(), "kiln-restic-"))
+        const added = await resultOf(async () => {
+          const file = join(directory, "password")
+          await writeFile(file, password, { flag: "wx", mode: 0o600 })
+          await run(
+            [
+              "key",
+              "add",
+              "--host",
+              "kiln",
+              "--user",
+              name,
+              "--new-password-file",
+              file,
+            ],
+            {
+              location: input.location,
+              password: input.password,
+              signal: input.signal,
+            }
+          )
+        })
+        await rm(directory, { force: true, recursive: true })
+        if (Result.isFailure(added)) throw added.failure
+      }
+      passwordsHeld.set(repository, names)
+    },
     backup: async (input) => {
       // Set from a callback, which narrowing can't see.
       let summary = null as Omit<ResticSnapshotSummary, "warnings"> | null
@@ -521,6 +603,7 @@ export function createResticDriver(options?: {
           password: input.password,
           signal: input.signal,
         })
+        passwordsHeld.delete(resticRepositoryKey(input.location))
         return []
       }
       if (

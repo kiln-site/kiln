@@ -97,6 +97,7 @@ import { relayBackupTasksRead } from "@/migrations/0096_relay_backup_tasks_read"
 import { relayPhantomGameServers } from "@/migrations/0097_relay_phantom_game_servers"
 import { recoverableBackups } from "@/migrations/0098_recoverable_backups"
 import { existingKilnBackups } from "@/migrations/0099_existing_kiln_backups"
+import { backupPasswords } from "@/migrations/0100_backup_passwords"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -197,4 +198,5 @@ export const migrations: ReadonlyArray<Migration> = [
   relayPhantomGameServers,
   recoverableBackups,
   existingKilnBackups,
+  backupPasswords,
 ]

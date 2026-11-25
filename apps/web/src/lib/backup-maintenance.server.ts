@@ -146,6 +146,13 @@ export function startBackupMaintenance(): void {
       catalogScheduledBackups().pipe(logFailure("backupMaintenance.catalog"))
     ),
     Effect.andThen(
+      promiseEffect(async () => {
+        const { ensureBackupRepositoryRoot } =
+          await import("@/server/recovery-code.server")
+        await ensureBackupRepositoryRoot()
+      }).pipe(logFailure("backupMaintenance.passwords"))
+    ),
+    Effect.andThen(
       warnOfOverdueKilnBackups().pipe(
         logFailure("backupMaintenance.warnOverdue")
       )
