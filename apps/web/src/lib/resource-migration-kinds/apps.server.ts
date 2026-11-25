@@ -29,6 +29,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
+  copyWebRoutes,
   fail,
   moveWebRoutes,
   ownerHandOver,
@@ -37,6 +38,7 @@ import {
   relayRequest,
   relays,
   webRouteHostnames,
+  webRoutesServed,
   type MigratedKind,
   type Migration,
   type MigrationPart,
@@ -367,6 +369,8 @@ export const apps: MigratedKind = {
       if (deployment.status === "succeeded") return "ready" as const
       return { failed: deployment.error ?? "its deployment failed" }
     }),
+    serve: (migration, actor) => copyWebRoutes("app", migration, actor),
+    served: (migration) => webRoutesServed("app", migration),
     after: Effect.fnUntraced(function* (id, named) {
       const { afterHeldAppDeployment } = yield* deployments
       yield* afterHeldAppDeployment(id, named)

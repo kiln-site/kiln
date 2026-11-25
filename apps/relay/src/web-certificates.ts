@@ -6,7 +6,8 @@
  * and doesn't ask again. So Traefik asks for a hostname only once its name
  * resolves at its zone's own nameservers, and someone can have it ask again
  * by hand; that reaches every certificate it lacks, so it's limited per
- * Relay.
+ * Relay. A name being moved here resolves already, to where it's moved from,
+ * so it's held until it's said to point here.
  */
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
@@ -108,6 +109,8 @@ export class WebCertificates {
   readonly #storePath: string
   // Names with a certificate; null (all count) until acme.json reads.
   #issued: ReadonlySet<string> | null = null
+  // Names that resolve, but not here yet.
+  readonly #held = new Set<string>()
   // Asks by hand within the last hour.
   #asks: Array<number> = []
   #retry = 0
@@ -144,6 +147,9 @@ export class WebCertificates {
     for (const hostname of this.#pending.keys()) {
       if (!served.has(hostname)) this.#pending.delete(hostname)
     }
+    for (const hostname of this.#held) {
+      if (!served.has(hostname)) this.#held.delete(hostname)
+    }
     if (served.size === 0) return
     await this.#readStore()
     let added = false
@@ -165,6 +171,24 @@ export class WebCertificates {
       }
     }
     if (added) this.#wake?.()
+  }
+
+  /** Asks for no certificate naming these until they're released. */
+  hold(hostnames: Iterable<string>): void {
+    for (const hostname of hostnames) this.#held.add(hostname.toLowerCase())
+  }
+
+  /** Asks for those held, now that they point here. */
+  release(hostnames: Iterable<string>): void {
+    let released = false
+    for (const hostname of hostnames) {
+      const name = hostname.toLowerCase()
+      if (!this.#held.delete(name)) continue
+      released = true
+      const pending = this.#pending.get(name)
+      if (pending?.waitingFor === "dns") pending.nextCheckAt = Date.now()
+    }
+    if (released) this.#wake?.()
   }
 
   /** For writing Traefik's routes as things stand now. */
@@ -215,7 +239,9 @@ export class WebCertificates {
     for (const [name, pending] of this.#pending) {
       const wanted =
         hostname === undefined
-          ? pending.waitingFor === "dns" && pending.nextCheckAt <= now
+          ? pending.waitingFor === "dns" &&
+            pending.nextCheckAt <= now &&
+            !this.#held.has(name)
           : name === hostname
       if (wanted) answers.set(name, await this.#resolve(name))
     }

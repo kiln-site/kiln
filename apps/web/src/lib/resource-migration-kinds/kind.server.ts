@@ -1,5 +1,6 @@
 import {
   relayControlDeadlineMs,
+  relayInstanceWebRoutesCheckSchema,
   relayInstanceWebRouteStateSchema,
   type AccessPermission,
   type RelayInstanceWebRouteInput,
@@ -272,6 +273,21 @@ export interface MigratedKind {
       unknown,
       Database
     >
+    /**
+     * Gives it what it serves on its own Relay, once it's ready, and whether
+     * that Relay serves it yet, before anyone is sent there.
+     */
+    readonly serve: (
+      migration: Migration,
+      actor: AuthenticatedUser
+    ) => Effect.Effect<unknown, unknown, Database>
+    readonly served: (
+      migration: Migration
+    ) => Effect.Effect<
+      "down" | "served" | "unknown" | "unrouted",
+      unknown,
+      Database
+    >
     /** What follows one that's ready. */
     readonly after: (
       id: string,
@@ -475,6 +491,7 @@ export function relayRequest(
   relay: PersistedRelay,
   operation:
     | "instance.action"
+    | "instance.network.routes.check"
     | "instance.network.routes.read"
     | "instance.network.routes.write"
     | "relay.snapshot"
@@ -504,6 +521,7 @@ const webRoutes = (
   operation: "instance.network.routes.read" | "instance.network.routes.write",
   subject: string,
   payload: {
+    readonly holdCertificates?: boolean
     readonly id: string
     readonly kind: "app" | "instance"
     readonly routes?: ReadonlyArray<RelayInstanceWebRouteInput>
@@ -520,9 +538,74 @@ const webRoutes = (
   )
 
 /**
+ * Gives a move's copy the old one's web routes on its own Relay, while the
+ * old one keeps serving them: nothing sends anyone there until their names
+ * move too (`moveWebRoutes`), so no certificate is asked for until then.
+ * Asked again, the copy keeps those it was given.
+ */
+export const copyWebRoutes = Effect.fnUntraced(function* (
+  kind: "app" | "instance",
+  migration: Migration,
+  actor: AuthenticatedUser
+) {
+  const [source, destination] = yield* relays(migration)
+  const read = "instance.network.routes.read"
+  const old = yield* webRoutes(source, read, actor.id, {
+    id: migration.source.id,
+    kind,
+  })
+  const copy = yield* webRoutes(destination, read, actor.id, {
+    id: migration.destination.id,
+    kind,
+  })
+  if (old.length === 0 || copy.length > 0) return { copy, old }
+  return {
+    copy: yield* webRoutes(
+      destination,
+      "instance.network.routes.write",
+      actor.id,
+      {
+        holdCertificates: true,
+        id: migration.destination.id,
+        kind,
+        routes: old.map(({ id: _id, ...route }) => route),
+      }
+    ),
+    old,
+  }
+})
+
+/**
+ * Whether a copy's Relay serves its routes yet: `unknown` where another proxy
+ * does, which can't be asked, and `down` only when none of them reaches it,
+ * since one that never did needn't now.
+ */
+export const webRoutesServed = Effect.fnUntraced(function* (
+  kind: "app" | "instance",
+  migration: Migration
+) {
+  const [, destination] = yield* relays(migration)
+  const { answers } = relayInstanceWebRoutesCheckSchema.parse(
+    yield* relayRequest(
+      destination,
+      "instance.network.routes.check",
+      undefined,
+      { id: migration.destination.id, kind }
+    )
+  )
+  if (answers === null || answers.length === 0) return "unknown" as const
+  if (answers.some(({ state }) => state === "served")) return "served" as const
+  return answers.some(({ state }) => state === "down")
+    ? ("down" as const)
+    : ("unrouted" as const)
+})
+
+/**
  * A move's copy takes the old one's web routes and their hostnames, for a
  * kind whose routes its Relay keeps under its own name. The one that is the
- * old one's primary address is the copy's.
+ * old one's primary address is the copy's. The names point at the copy's
+ * Relay only once it has the routes, and their certificates are asked for
+ * only once they point there.
  */
 export function moveWebRoutes(
   kind: "app" | "instance",
@@ -531,65 +614,57 @@ export function moveWebRoutes(
 ) {
   return Effect.gen(function* () {
     const [source, destination] = yield* relays(migration)
-    const old = { id: migration.source.id, type: kind }
-    const copy = { id: migration.destination.id, type: kind }
-    const moving = yield* webRoutes(
-      source,
-      "instance.network.routes.read",
-      actor.id,
-      { id: old.id, kind }
-    )
-    const primary = yield* loadPrimaryAddressEffect(old)
-    // Run again after the routes moved, it finds none, and still hands the
-    // hostnames over.
-    if (moving.length > 0) {
-      const moved = yield* webRoutes(
-        destination,
-        "instance.network.routes.write",
-        actor.id,
-        {
-          id: copy.id,
-          kind,
-          routes: moving.map(({ id: _id, ...route }) => route),
-        }
-      )
+    const from = { id: migration.source.id, type: kind }
+    const to = { id: migration.destination.id, type: kind }
+    const primary = yield* loadPrimaryAddressEffect(from)
+    // Run again after the old one's were taken from it, it finds none there,
+    // and still hands their names over.
+    const { copy, old } = yield* copyWebRoutes(kind, migration, actor)
+    if (old.length > 0) {
       // Each route has an ID of its own on the new Relay. Named before the
       // old one's go, so a run cut short still finds which it was.
       const was =
         primary?.kind === "route"
-          ? moving.find((route) => route.id === primary.ref)
+          ? old.find((route) => route.id === primary.ref)
           : undefined
       const chosen = was
-        ? moved.find(
+        ? copy.find(
             (route) =>
               route.hostname === was.hostname && route.path === was.path
           )
         : undefined
       if (chosen) {
-        yield* setPrimaryAddressEffect(copy, { kind: "route", ref: chosen.id })
+        yield* setPrimaryAddressEffect(to, { kind: "route", ref: chosen.id })
       }
       yield* webRoutes(source, "instance.network.routes.write", actor.id, {
-        id: old.id,
+        id: from.id,
         kind,
         routes: [],
       })
     }
     // A name in a tunnel stays the old one's: it isn't handed over.
-    if (primary?.kind === "route") yield* forgetPrimaryAddressEffect(old)
+    if (primary?.kind === "route") yield* forgetPrimaryAddressEffect(from)
     // Its hostnames belong to the copy now, and their DNS records point at
     // its Relay.
     yield* moveResourceWebHostnamesEffect(
       {
-        relayId: migration.source.relayId,
-        resourceId: migration.source.id,
+        relayId: source.id,
+        resourceId: from.id,
         resourceType: kind,
       },
       {
         relayId: destination.id,
-        resourceId: migration.destination.id,
+        resourceId: to.id,
         resourceType: kind,
       }
     )
+    if (copy.length > 0) {
+      yield* webRoutes(destination, "instance.network.routes.write", actor.id, {
+        id: to.id,
+        kind,
+        routes: copy,
+      })
+    }
   })
 }
 

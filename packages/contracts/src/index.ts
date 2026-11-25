@@ -1886,6 +1886,11 @@ export function relayWebRouteInputsSchemaFor(kind: "app" | "instance") {
   })
 }
 
+// Names that point elsewhere until a later save says otherwise, as ones being
+// moved here: no certificate is asked for until then, since Let's Encrypt
+// would check the old place and fail.
+const holdCertificatesSchema = z.boolean().optional()
+
 /**
  * An instance's web routes: one request reads them and one saves them, for
  * every kind that has any, naming the kind beside its ID.
@@ -1898,6 +1903,7 @@ export const relayInstanceWebRoutesReadSchema = z.discriminatedUnion("kind", [
 export const relayInstanceWebRoutesWriteSchema = z.discriminatedUnion("kind", [
   z
     .object({
+      holdCertificates: holdCertificatesSchema,
       id: instanceIdSchema,
       kind: z.literal("instance"),
       routes: relayWebRouteInputsSchemaFor("instance"),
@@ -1905,12 +1911,34 @@ export const relayInstanceWebRoutesWriteSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      holdCertificates: holdCertificatesSchema,
       id: appIdSchema,
       kind: z.literal("app"),
       routes: relayWebRouteInputsSchemaFor("app"),
     })
     .strict(),
 ])
+
+/**
+ * What a Relay's own Traefik answers for each hostname of an instance's
+ * routes: what the instance does, nothing it has a route for yet, or that it
+ * can't reach the instance. Null for a Relay whose websites another proxy
+ * serves, which it can't ask.
+ */
+export const relayInstanceWebRoutesCheckSchema = z
+  .object({
+    answers: z
+      .array(
+        z
+          .object({
+            hostname: z.string(),
+            state: z.enum(["served", "unrouted", "down"]),
+          })
+          .strict()
+      )
+      .nullable(),
+  })
+  .strict()
 
 export const RELAY_PROXY_TRIAL_PATH = "/.well-known/kiln-route"
 

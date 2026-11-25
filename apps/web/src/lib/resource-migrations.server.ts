@@ -84,6 +84,8 @@ const WATCH_WINDOW = Duration.minutes(5)
 // finish: 30 minutes. The old server gets 10 minutes to stop.
 const PROVISION_WINDOWS = 6
 const STOP_WINDOWS = 2
+// How long the copy's Relay may take to serve it, which is near at once.
+const SERVE_WITHIN = Duration.seconds(20)
 // Progress is published to the person at most this often while files copy.
 const PROGRESS_INTERVAL_MS = 1_000
 
@@ -570,8 +572,37 @@ const deployCopy = (
           )
         )
     )
+    if (optionsOf(input).moveWebRoutes) {
+      yield* step(input, "deploy/serve", (actor) => deploy.serve(input, actor))
+      yield* copyServed(input, noun, deploy)
+    }
     return true
   })
+
+// Waits until the copy's Relay serves what it's about to be sent visitors
+// for. One whose Relay can't say, as where another proxy serves it, isn't
+// waited for, nor one that only ever answers as Traefik does with no route:
+// an App may answer just the same.
+const copyServed = (
+  input: ResourceMigrationInput,
+  noun: string,
+  deploy: NonNullable<MigratedKind["deploy"]>
+) => {
+  let until: number | null = null
+  return watch(input, "deploy/served", null, "it to be served", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      until ??= now + Duration.toMillis(SERVE_WITHIN)
+      const served = yield* deploy.served(input)
+      if (served === "served" || served === "unknown") return true
+      if (now < until) return false
+      if (served === "unrouted") return true
+      return yield* fail(
+        `The copied ${noun} runs, but its new Relay's proxy can't reach it`
+      )
+    })
+  )
+}
 
 const deployStep = (name: string) => `deploy/${name}`
 

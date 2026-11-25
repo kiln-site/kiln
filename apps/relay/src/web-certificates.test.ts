@@ -128,6 +128,20 @@ describe("bundled Traefik certificates", () => {
     expect(routerTls()).toEqual({ certResolver: "kiln" })
   })
 
+  // A name being moved here resolves to where it's moved from, and Let's
+  // Encrypt would check that: Traefik asks once, and not again when it fails.
+  it("asks for a held hostname's certificate only once it's released", async () => {
+    answers.set("shop.example.com", "found")
+    certificates.hold(["shop.example.com"])
+    await certificates.track([route])
+    await certificates.check()
+    expect(routerTls()).toEqual({})
+
+    certificates.release(["shop.example.com"])
+    await certificates.check()
+    expect(routerTls()).toEqual({ certResolver: "kiln" })
+  })
+
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {
     const other: RelayStoredWebRoute = {
       ...route,

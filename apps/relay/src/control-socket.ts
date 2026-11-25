@@ -2027,6 +2027,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // A game server's web routes are read with its network. Where an App
     // is served is read with the App itself.
     case "instance.network.routes.read":
+    case "instance.network.routes.check":
       switch (objectString(request.payload, "kind")) {
         case "instance":
           return "instance.network.read"

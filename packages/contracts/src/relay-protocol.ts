@@ -174,6 +174,7 @@ export const relayControlOperations = [
   "instance.network.ports.release",
   "instance.network.ports.write",
   "instance.network.routes.read",
+  "instance.network.routes.check",
   "instance.network.routes.write",
   "instance.network.primaries.carried",
   "instance.network.primaries.forget",
@@ -333,6 +334,7 @@ export function relayControlOperationChanges(
     case "instance.console.history":
     case "instance.deployment.read":
     case "instance.network.routes.read":
+    case "instance.network.routes.check":
     case "instance.network.primaries.carried":
     case "terminal.attach":
     case "terminal.heartbeat":

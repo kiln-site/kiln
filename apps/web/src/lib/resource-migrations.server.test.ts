@@ -128,6 +128,9 @@ const relay = {
   // New servers by name that stay provisioning until released.
   provisioningHeld: new Set<string>(),
   // What the new Relay pulled, by transfer.
+  // What the new Relay's proxy answers for a copy's routes; null when it
+  // can't be asked.
+  proxy: null as "served" | "down" | null,
   pulls: new Map<string, "pulling" | "cancelled">(),
   // What each Relay routes, by the instance it's for.
   routes: new Map<string, Array<Record<string, unknown>>>(),
@@ -144,6 +147,7 @@ function resetRelay() {
   relay.held.clear()
   relay.journal.clear()
   relay.provisioningHeld.clear()
+  relay.proxy = null
   relay.pulls.clear()
   relay.routes.clear()
   relay.servers.clear()
@@ -346,6 +350,15 @@ function answer(
     case "backup.task.enqueue":
       // Followed by Hearth's own records here.
       throw new Error("The Relay's backup queue is busy")
+    case "instance.network.routes.check":
+      return {
+        answers:
+          relay.proxy &&
+          routesOf(relayId, id).map((route) => ({
+            hostname: String(route.hostname),
+            state: relay.proxy!,
+          })),
+      }
     case "instance.network.routes.read":
     case "instance.network.routes.write":
       if (operation.endsWith("write")) {
@@ -444,6 +457,7 @@ function answer(
       break
     case "app.delete":
       relay.apps.delete(key)
+      relay.routes.delete(key)
       result = { appId: id, deleted: true }
       break
     case "instance.action": {
@@ -1135,7 +1149,7 @@ describeMysql("Server migrations", () => {
     )
 
     it.effect(
-      "leaves an App where it was when its copy doesn't start, or its move is cancelled as it does",
+      "leaves an App where it was when its copy doesn't start or can't be reached, or its move is cancelled as it starts",
       () =>
         Effect.gen(function* () {
           const { service, startHearth } = yield* hearths
@@ -1159,6 +1173,18 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(appOn(newRelay, failed.destination_id), "gone")
           asItWas(failed.destination_id)
 
+          // Running, but nothing sent to its Relay would reach it.
+          relay.deployment = { error: null, state: "succeeded" }
+          relay.proxy = "down"
+          const reaching = yield* moveApp(service)
+          const unreached = yield* migrationUntil(reaching, ended)
+          yield* deletionUntil(unreached.destination_id, ["completed"])
+          yield* operationsEnded
+          assert.strictEqual(unreached.state, "failed")
+          assert.match(unreached.error ?? "", /proxy can't reach it/u)
+          asItWas(unreached.destination_id)
+
+          relay.proxy = null
           relay.deployment = null
           const cancelling = yield* moveApp(service)
           yield* migrationUntil(

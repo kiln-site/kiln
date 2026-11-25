@@ -51,6 +51,7 @@ import {
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
   relayInstanceWebRouteStateSchema,
+  relayInstanceWebRoutesCheckSchema,
   relayInstanceWebRoutesReadSchema,
   relayCarriedPrimaryRoutesSchema,
   relayForgetCarriedPrimaryRoutesSchema,
@@ -140,6 +141,7 @@ import {
   relayPlatformActionInputSchema,
   type RelayPlatformActionInput,
   RelayTunnelOpenSchema,
+  webRouteHostnames,
   webRouteService,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
@@ -4012,6 +4014,18 @@ async function executeControlRequest(
     }
     case "instance.network.routes.read":
       return webRouteState(relayInstanceWebRoutesReadSchema.parse(payload))
+    case "instance.network.routes.check": {
+      const input = relayInstanceWebRoutesReadSchema.parse(payload)
+      const owner = await webRouteOwner(input)
+      return relayInstanceWebRoutesCheckSchema.parse({
+        answers: await lifecycle.checkWebRoutes(
+          await runRelayEffect(
+            "relay.network.routes.check",
+            startup.state.listInstanceRoutes(owner)
+          )
+        ),
+      })
+    }
     case "instance.network.primaries.carried": {
       const carried = await runRelayEffect(
         "relay.routes.primaries.carried",
@@ -4078,6 +4092,9 @@ async function executeControlRequest(
         "relay.network.routes.replace",
         startup.state.replaceInstanceRoutes(owner, routes)
       )
+      const hostnames = routes.flatMap(webRouteHostnames)
+      if (input.holdCertificates) lifecycle.certificates.hold(hostnames)
+      else lifecycle.certificates.release(hostnames)
       await Effect.runPromise(
         relayOperation(async () => {
           await lifecycle.configureWebRoutes(

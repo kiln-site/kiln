@@ -122,9 +122,12 @@ old one ran: the commit it was last built from, or the digest its image is
 run by. One whose source changed since, or that has no version of its own,
 deploys as any deployment of it would.
 
-A copy that doesn't start ends the move: it's removed, the old one is
-started again, and its domains, owner and deploying on a push never left
-it. It's the same when the move is cancelled while the copy starts.
+Once it's ready its Relay is given its routes, and asked whether its own
+Traefik serves them, before any name points there. A copy that doesn't start,
+or that Traefik can't reach, ends the move: it's removed, the old one is
+started again, and its domains, owner and deploying on a push never left it.
+It's the same when the move is cancelled while the copy starts. A Relay whose
+websites another proxy serves can't be asked, and isn't.
 
 The old one stays stopped until then, so it's away for as long as its data
 takes to copy and the copy takes to build and start. One that wasn't running
@@ -161,6 +164,11 @@ Copying one takes what backing it up and restoring it do, on the Relay:
 `relay.configure` and `backup.restore` where the copy goes.
 
 ### Web routes
+
+A copy's Relay has its routes before its names point there, and the old one's
+are taken from it before they do. Until then bundled Traefik asks for no
+certificate for them (`holdCertificates`): the names resolve, to the old Relay,
+so Let's Encrypt would check there and fail, and Traefik doesn't ask again.
 
 A kind with web routes hands them over whole: each keeps its hostname, path,
 options and, for an App, the service it reaches, and is given an ID of its

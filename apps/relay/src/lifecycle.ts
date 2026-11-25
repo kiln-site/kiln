@@ -101,6 +101,7 @@ import {
   LaneRejectedError,
   type OperationLanes,
 } from "./operation-lanes.js"
+import { checkWebRoutes } from "./web-route-check.js"
 import { operation, runOperation } from "./operations/operation.js"
 import {
   appIdFromRouteOwner,
@@ -1720,6 +1721,16 @@ export class LifecycleDriver {
       requiresRestart: false,
       status: "ready",
     }
+  }
+
+  /**
+   * What bundled Traefik answers for each of an instance's routes now, or
+   * null when another proxy serves them.
+   */
+  async checkWebRoutes(routes: ReadonlyArray<RelayInstanceWebRoute>) {
+    return (await this.proxySettings()).mode === "traefik"
+      ? checkWebRoutes(this.#resources.traefikContainer, routes)
+      : null
   }
 
   async webRouteState(

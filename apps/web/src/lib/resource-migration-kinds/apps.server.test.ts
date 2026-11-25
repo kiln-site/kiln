@@ -24,6 +24,8 @@ type Route = RelayInstanceWebRouteInput & { id: string }
 // The Relays are the only fake: each keeps the routes it is sent, as a real
 // one checks them, giving each an ID of its own.
 const fake = vi.hoisted(() => ({
+  // Whose certificates each Relay isn't to ask for yet.
+  held: new Map<string, boolean>(),
   ids: 0,
   // What the next request to each Relay to keep routes fails with.
   refuses: new Map<string, string>(),
@@ -44,7 +46,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       const refused = fake.refuses.get(relay.id)
       fake.refuses.delete(relay.id)
       if (refused) throw new Error(refused)
-      const { routes } = relayInstanceWebRoutesWriteSchema.parse(payload)
+      const { holdCertificates, routes } =
+        relayInstanceWebRoutesWriteSchema.parse(payload)
+      fake.held.set(key, holdCertificates ?? false)
       fake.routes.set(
         key,
         routes.map((route) => ({
@@ -123,6 +127,7 @@ const routesOf = (relayId: string, appId: string) =>
 // The old App serves two services, and its second domain is its primary.
 const seed = Effect.gen(function* () {
   yield* resetDatabase
+  fake.held.clear()
   fake.refuses.clear()
   fake.routes.clear()
   fake.unreadable = false
@@ -159,6 +164,8 @@ const primaryOfCopy = Effect.gen(function* () {
 const handedOver = Effect.gen(function* () {
   assert.deepEqual(routesOf(newRelay, newApp), everyRoute)
   assert.deepEqual(routesOf(oldRelay, oldApp), [])
+  // Its names point at its Relay now, so their certificates are asked for.
+  assert.isFalse(fake.held.get(`${newRelay}/${newApp}`))
   assert.strictEqual(yield* primaryOfCopy, "example.test/api")
   assert.isNull(yield* loadPrimaryAddressEffect({ id: oldApp, type: "app" }))
 })
@@ -215,6 +222,7 @@ describeMysql("handing an App's domains to the one it moved to", () => {
         fake.refuses.set(oldRelay, "Connection lost")
         assert.match(String(yield* Effect.flip(handOver)), /Connection lost/u)
         assert.deepEqual(routesOf(oldRelay, oldApp), everyRoute)
+        assert.isTrue(fake.held.get(`${newRelay}/${newApp}`))
         yield* handOver
         yield* handedOver
       })
