@@ -1,23 +1,36 @@
 import * as React from "react"
 
 import { TailscaleLogo } from "@/components/brand-logos"
+import { InfoCopyValue } from "@/components/info-page"
 import {
   useInstanceTunnelNames,
   type InstanceTunnelName,
 } from "@/components/tunnel/tunnel-data"
 
 // An instance's names in the tunnels it's connected to, as rows of its Info
-// page's Connection section, beside its web routes: Tailscale's mark, the
-// name, and where it reaches, every port on the tailnet.
+// page's Connection section: Tailscale's mark, the name, and where it
+// reaches.
 
 export function TunnelNameFacts({
+  address,
   isMember,
 }: {
+  /**
+   * Where the instance answers under a name, to copy, when it isn't a
+   * website to open.
+   */
+  address?: (hostname: string) => string
   /** Whether a tunnel member ID is this instance, or one of its services. */
   isMember: (memberId: string) => boolean
 }) {
   const names = useInstanceTunnelNames(isMember)
-  return names.map((name) => <TunnelNameFact key={name.name.id} name={name} />)
+  return names.map((name) => (
+    <TunnelNameFact
+      key={name.name.id}
+      address={address?.(name.hostname)}
+      name={name}
+    />
+  ))
 }
 
 /** Whether the instance has names in any tunnel, for an empty section. */
@@ -26,8 +39,10 @@ export function useHasTunnelNames(isMember: (memberId: string) => boolean) {
 }
 
 const TunnelNameFact = React.memo(function TunnelNameFact({
+  address,
   name,
 }: {
+  address: string | undefined
   name: InstanceTunnelName
 }) {
   return (
@@ -38,15 +53,19 @@ const TunnelNameFact = React.memo(function TunnelNameFact({
           aria-label="On a tunnel"
           role="img"
         />
-        <a
-          className="truncate font-medium transition-colors hover:text-primary-ink"
-          href={`http://${name.hostname}`}
-          rel="noreferrer"
-          target="_blank"
-          title={`${name.hostname}, on ${name.tunnelName}'s tailnet`}
-        >
-          {name.hostname}
-        </a>
+        {address === undefined ? (
+          <a
+            className="truncate font-medium transition-colors hover:text-primary-ink"
+            href={`http://${name.hostname}`}
+            rel="noreferrer"
+            target="_blank"
+            title={`${name.hostname}, on ${name.tunnelName}'s tailnet`}
+          >
+            {name.hostname}
+          </a>
+        ) : (
+          <InfoCopyValue label="tunnel address" value={address} />
+        )}
         <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:inline">
           {[
             name.name.primary ? "Primary" : null,
@@ -58,7 +77,9 @@ const TunnelNameFact = React.memo(function TunnelNameFact({
         </span>
       </dt>
       <dd className="shrink-0 text-xs text-muted-foreground">
-        Every port, on the tailnet
+        {address === undefined
+          ? "Every port, on the tailnet"
+          : "On the tailnet"}
       </dd>
     </div>
   )

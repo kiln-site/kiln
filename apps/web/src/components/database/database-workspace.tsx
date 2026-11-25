@@ -14,6 +14,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import { DeleteDatabaseDialog } from "@/components/database/database-dialogs"
 import {
+  databaseAddress,
   databaseRelayAvailable,
   engineLabel,
   engineProductLabel,
@@ -251,7 +252,7 @@ const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({
           </span>
           <WorkspaceCopyValueButton
             label="internal address"
-            value={`${database.hostname}:${database.internalPort}`}
+            value={databaseAddress(database.hostname, database)}
           />
         </WorkspaceIdentity>
       }

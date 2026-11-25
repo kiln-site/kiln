@@ -1,5 +1,8 @@
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
-import type { DatabaseEngine } from "@workspace/contracts"
+import {
+  databaseEngineRuntimes,
+  type DatabaseEngine,
+} from "@workspace/contracts"
 
 import { showToast } from "@workspace/ui/components/sonner"
 
@@ -36,6 +39,19 @@ export const engineBadgeClasses: Record<DatabaseEngine, string> = {
     "border-red-500/35 bg-red-500/10 light:bg-red-500/20 text-red-700 dark:text-red-300",
   valkey:
     "border-violet-500/35 bg-violet-500/10 light:bg-violet-500/20 text-violet-700 dark:text-violet-300",
+}
+
+/**
+ * Where a database answers under a name. The port is left out when it's the
+ * one its engine always has, which clients use by themselves.
+ */
+export function databaseAddress(
+  hostname: string,
+  { engine, internalPort }: Pick<ManagedDatabase, "engine" | "internalPort">
+) {
+  return internalPort === databaseEngineRuntimes[engine].port
+    ? hostname
+    : `${hostname}:${internalPort}`
 }
 
 export function databaseStatusPresentation(

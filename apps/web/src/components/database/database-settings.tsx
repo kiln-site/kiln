@@ -35,6 +35,7 @@ import {
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
 import {
+  databaseAddress,
   engineProductLabel,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
@@ -514,6 +515,11 @@ export function DatabaseConnectionSettings({
     (memberId: string) => databaseTailscaleMember(memberId) === database.id,
     [database.id]
   )
+  const { engine, internalPort } = database
+  const address = React.useCallback(
+    (hostname: string) => databaseAddress(hostname, { engine, internalPort }),
+    [engine, internalPort]
+  )
   return (
     <InfoSection
       icon={<Cable />}
@@ -532,7 +538,7 @@ export function DatabaseConnectionSettings({
       <InfoFact label="Internal address">
         <InfoCopyValue
           label="internal address"
-          value={`${database.hostname}:${database.internalPort}`}
+          value={databaseAddress(database.hostname, database)}
         />
       </InfoFact>
       <InfoFact label="Connections">
@@ -540,7 +546,7 @@ export function DatabaseConnectionSettings({
           {connected === 0 ? "None" : connected}
         </span>
       </InfoFact>
-      <TunnelNameFacts isMember={isMember} />
+      <TunnelNameFacts address={address} isMember={isMember} />
     </InfoSection>
   )
 }
