@@ -3185,7 +3185,12 @@ async function createResticSnapshot(
         try: () =>
           restic.backup({
             cwd: config.rootDirectory,
-            excludes: translated.excludes,
+            // The server's own patterns, which can't leave out its setup.
+            excludes: [
+              ...translated.excludes,
+              `!${SETUP_DIRECTORY}`,
+              `!${SETUP_DIRECTORY}/**`,
+            ],
             location,
             onProgress: (update) => {
               progress.completed = update.bytesCompleted
