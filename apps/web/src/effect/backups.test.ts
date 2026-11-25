@@ -5,6 +5,7 @@ import { vi } from "vite-plus/test"
 
 import { BackupStorageError } from "@/effect/errors"
 import {
+  linkBackupEffect,
   linkInstanceBackupsEffect,
   reserveBackupCopyEffect,
   reserveBackupDeleteEffect,
@@ -13,6 +14,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertBackup,
   insertBackupStorage,
+  insertRelay,
   insertRows,
   selectRows,
 } from "@/test/seed"
@@ -241,6 +243,83 @@ describeMysql("linked backups", () => {
           assert.strictEqual(
             dispatch?.artifacts[0]?.objectKey,
             "kiln/s3-archive.zip"
+          )
+        })
+    )
+
+    it.effect(
+      "links a snapshot in a bucket to a resource on another Relay, once, as only a record",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          yield* insertBackupStorage(storageId, { object_prefix: "backups" })
+          yield* insertRelay("relay-one")
+          yield* insertRows("backup_repository", {
+            id: "repository",
+            created_at: now,
+            object_prefix: "backups/x",
+            password_ciphertext: "unused",
+            relay_id: "relay-one",
+            storage_id: storageId,
+            storage_key: storageId,
+            target_id: "instance-one",
+            target_kind: "instance",
+          })
+          for (const [id, storage] of [
+            ["in-bucket", storageId],
+            ["on-relay", null],
+          ] as const) {
+            yield* insertBackup(id, {
+              artifact_kind: "restic_snapshot",
+              backup_mode: "incremental",
+              relay_id: "relay-one",
+              repository_id: "repository",
+              restic_snapshot_id: "abcdef12",
+              status: "available",
+              storage_id: storage,
+              target_id: "instance-one",
+            })
+            yield* insertArtifact(`${id}-artifact`, id, {
+              destination_key: storage ?? "local",
+              storage_id: storage,
+            })
+          }
+          const link = (backupId: string) =>
+            linkBackupEffect({
+              backupId,
+              linkedBy: "user-one",
+              to: { relayId: "relay-two", targetId: "instance-two" },
+            })
+
+          const id = yield* link("in-bucket")
+          assert.strictEqual(yield* link("in-bucket"), id)
+          assert.deepInclude((yield* backups).get(id), {
+            artifact_kind: "restic_snapshot",
+            backup_mode: "incremental",
+            relay_id: "relay-two",
+            repository_id: "repository",
+            status: "available",
+            target_id: "instance-two",
+          })
+          // What's on a Relay's disk is that Relay's alone.
+          assert.instanceOf(
+            yield* Effect.flip(link("on-relay")),
+            BackupStorageError
+          )
+
+          // The repository is another Relay's to write to, so only the link
+          // goes, and what it was linked from still restores.
+          assert.deepStrictEqual(
+            yield* reserveBackupDeleteEffect({
+              backupId: id,
+              requestedBy: "user-one",
+              taskId: "delete-link",
+            }),
+            { kind: "removed" }
+          )
+          assert.strictEqual(
+            (yield* backups).get("in-bucket")?.status,
+            "available"
           )
         })
     )

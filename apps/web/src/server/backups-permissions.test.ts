@@ -104,14 +104,15 @@ relay.snapshot = relaySnapshotSchema.parse({
 
 const grant = (
   resourceId: string,
-  permissions: ReadonlyArray<AccessPermission>
+  permissions: ReadonlyArray<AccessPermission>,
+  onRelay = relayId
 ) =>
   Effect.gen(function* () {
     const id = randomUUID()
     yield* insertGrant({
       id,
       userId: user.id,
-      relayId,
+      relayId: onRelay,
       resourceType: "instance",
       resourceId,
     })
@@ -301,6 +302,71 @@ describeMysql("backup authorization", () => {
             backups.find((backup) => backup.id === result.safetyBackupId)
               ?.target_id,
             otherId
+          )
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              relay.snapshot = relaySnapshotSchema.parse({
+                ...(relay.snapshot as object),
+                instances: [instance],
+              })
+            })
+          )
+        )
+    )
+
+    it.effect(
+      "restoring onto another Relay takes restore on the server there, and a backup in a bucket",
+      () =>
+        Effect.gen(function* () {
+          const otherRelay = "2".repeat(12)
+          const otherId = "b".repeat(12)
+          const { teamStorageId } = yield* seed
+          yield* insertRelay(otherRelay)
+          const backupId = yield* seedBackup
+          relay.snapshot = relaySnapshotSchema.parse({
+            ...(relay.snapshot as object),
+            instances: [{ ...instance, id: otherId }],
+          })
+          const restore = () =>
+            restoreInstanceBackupHandler(user, {
+              backupId,
+              relayId: otherRelay,
+              safetyBackup: false,
+              targetId: otherId,
+            })
+
+          // The same server's ID on the backup's own Relay isn't that one.
+          yield* grant(instanceId, ["backup.download"])
+          yield* grant(otherId, ["backup.restore"])
+          assert.include(yield* rejection(restore), "permission")
+          yield* grant(otherId, ["backup.restore"], otherRelay)
+          assert.include(yield* rejection(restore), "kept in a bucket")
+          assert.strictEqual(yield* count("backup"), 1)
+
+          yield* insertRows("backup_artifact", {
+            id: randomUUID(),
+            backup_id: backupId,
+            destination_key: teamStorageId,
+            object_key: "kiln/survival.zip",
+            storage_id: teamStorageId,
+            status: "available",
+            ...archive,
+            created_at: at,
+            updated_at: at,
+          })
+          const result = yield* Effect.promise(restore)
+          const tasks = yield* selectRows<{ backup_id: string; id: string }>(
+            "backup_task"
+          )
+          const queued = tasks.find(({ id }) => id === result.restoreTaskId)
+          const backups = yield* selectRows<{ id: string; relay_id: string }>(
+            "backup"
+          )
+          // That Relay's own task, of its server's link to the backup.
+          assert.strictEqual(
+            backups.find(({ id }) => id === queued?.backup_id)?.relay_id,
+            otherRelay
           )
         }).pipe(
           Effect.ensuring(

@@ -1598,7 +1598,6 @@ export class BackupManager {
         const result = yield* runResticExport(
           this.#config,
           this.#restic,
-          this.#findInstance,
           task.input,
           task.taskId,
           (progress) =>
@@ -3362,8 +3361,11 @@ async function resticSnapshotSource(
   )
   // Taken from the Relay's server root with the server's own directory, so
   // the snapshot holds that directory under its path from the root.
-  const directory = path ? relative(config.rootDirectory, path) : ""
-  if (!directory || directory.startsWith("..") || isAbsolute(directory)) {
+  const below = path ? relative(config.rootDirectory, path) : ""
+  // Another Relay's server root is elsewhere; a server's folder is in it.
+  const directory =
+    below.startsWith("..") || isAbsolute(below) ? basename(below) : below
+  if (!directory || directory === "..") {
     throw RelayBackupError.make({
       code: "restic_snapshot_path",
       operation: "restore.restic",
@@ -3719,7 +3721,6 @@ function cleanupResticCache(
 function runResticExport(
   config: RelayConfig,
   restic: ResticDriver,
-  findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
   input: Extract<BackupTaskInput, { kind: "export" }>,
   taskId: string,
   updateProgress: (
@@ -3732,18 +3733,6 @@ function runResticExport(
       input.repositoryPassword,
       "export.restic"
     )
-    // A snapshot of a server since deleted exports all the same: its path
-    // comes from the snapshot then.
-    const instance = yield* Effect.tryPromise({
-      try: () => findInstance(input.target.id),
-      catch: (cause) =>
-        RelayBackupError.make({
-          code: "instance_lookup_failed",
-          operation: "export.lookup",
-          reason: "The export target could not be loaded",
-          cause,
-        }),
-    })
     const location = resticDriverLocation(
       config,
       input.target.id,
@@ -3796,8 +3785,9 @@ function runResticExport(
         const onProgress = (bytes: number) => {
           progress.completed = bytes
         }
+        // Its server may be gone, or another Relay's that it's linked from.
         const selector = await resticSnapshotSource(config, restic, {
-          directory: instance?.directory ?? null,
+          directory: null,
           location,
           password,
           signal,

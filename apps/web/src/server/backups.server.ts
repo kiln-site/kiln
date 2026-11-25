@@ -11,6 +11,7 @@ import { createBackupDownloadShareEffect } from "@/effect/backup-download-shares
 import {
   forgetBackupEffect,
   getBackupCatalogRecordEffect,
+  linkBackupEffect,
   listBackupCatalogPageEffect,
   getBackupPolicyEffect,
   getBackupUsageEffect,
@@ -576,10 +577,14 @@ export function backupRestoreDestination(
 export async function requireRestoreAuthority(
   user: AuthenticatedUser,
   backup: BackupCatalogRecord,
-  destination: BackupTarget
+  destination: BackupTarget,
+  relayId: string
 ): Promise<void> {
   const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-  if (destination.id === backup.targetId) {
+  if (
+    destination.id === backup.targetId &&
+    relayId === backup.relayId
+  ) {
     if (!hasBackupPermission(user, grants, backup, "backup.restore")) {
       throw new Error("You do not have permission to restore this backup")
     }
@@ -592,10 +597,35 @@ export async function requireRestoreAuthority(
   }
   await requireBackupTargetPermission(
     user,
-    backup.relayId,
+    relayId,
     destination,
     "backup.restore"
   )
+}
+
+// The backup as the resource it goes into has it: itself on its own Relay, or
+// on another, a link of that resource's.
+async function restorableBackup(
+  user: AuthenticatedUser,
+  backup: BackupCatalogRecord,
+  relay: PersistedRelay,
+  destination: BackupTarget
+): Promise<BackupCatalogRecord> {
+  if (relay.id === backup.relayId) return backup
+  const id = await runAppEffect(
+    "backups.linkForRestore",
+    linkBackupEffect({
+      backupId: backup.id,
+      linkedBy: user.id,
+      to: { relayId: relay.id, targetId: destination.id },
+    })
+  )
+  const linked = await runAppEffect(
+    "backups.getLinked",
+    getBackupCatalogRecordEffect(id)
+  )
+  if (!linked) throw new Error("The backup was deleted")
+  return linked
 }
 
 export async function restoreInstanceBackupHandler(
@@ -619,8 +649,8 @@ export async function restoreInstanceBackupHandler(
     throw new Error("Backup is not available for an instance restore")
   }
   const destination = backupRestoreDestination(backup, data.targetId)
-  await requireRestoreAuthority(user, backup, destination)
-  const relay = await requireBackupRelay(backup.relayId)
+  const relay = await requireBackupRelay(data.relayId ?? backup.relayId)
+  await requireRestoreAuthority(user, backup, destination, relay.id)
   if (data.safetyBackup) {
     await requireRelayPermission({
       instanceId: destination.id,
@@ -643,6 +673,7 @@ export async function restoreInstanceBackupHandler(
     throw new Error("Stop the server before restoring a backup")
   }
 
+  const restorable = await restorableBackup(user, backup, relay, destination)
   const safety = data.safetyBackup
     ? await runAppEffect(
         "backups.reserveSafety",
@@ -659,7 +690,7 @@ export async function restoreInstanceBackupHandler(
         })
       )
     : null
-  return queueRestore(relay, user, backup, destination, safety)
+  return queueRestore(relay, user, restorable, destination, safety)
 }
 
 export async function restoreDatabaseBackupHandler(
@@ -680,8 +711,8 @@ export async function restoreDatabaseBackupHandler(
     throw new Error("Backup is not available for a database restore")
   }
   const destination = backupRestoreDestination(backup, data.targetId)
-  await requireRestoreAuthority(user, backup, destination)
-  const relay = await requireBackupRelay(backup.relayId)
+  const relay = await requireBackupRelay(data.relayId ?? backup.relayId)
+  await requireRestoreAuthority(user, backup, destination, relay.id)
   if (data.safetyBackup) {
     await requireRelayPermission({
       databaseId: destination.id,
@@ -702,6 +733,7 @@ export async function restoreDatabaseBackupHandler(
   ) {
     throw new Error("Restore target was not found on this Relay")
   }
+  const restorable = await restorableBackup(user, backup, relay, destination)
   const safety = data.safetyBackup
     ? await runAppEffect(
         "backups.reserveDatabaseSafety",
@@ -718,7 +750,7 @@ export async function restoreDatabaseBackupHandler(
         })
       )
     : null
-  return queueRestore(relay, user, backup, destination, safety)
+  return queueRestore(relay, user, restorable, destination, safety)
 }
 
 /**
@@ -743,12 +775,12 @@ export async function restoreResourceBackupHandler(
   ) {
     throw new Error("Backup is not available for a volume restore")
   }
-  const relay = await requireBackupRelay(backup.relayId)
+  const relay = await requireBackupRelay(data.relayId ?? backup.relayId)
   const destination = {
     ...backupRestoreDestination(backup, data.targetId),
     kind: backup.targetKind,
   }
-  await requireRestoreAuthority(user, backup, destination)
+  await requireRestoreAuthority(user, backup, destination, relay.id)
   // What uses the resource it goes into, as its Relay says now; the one it
   // was taken of may be gone.
   await requireBackupTargetRestore(user, relay, destination)
@@ -760,6 +792,7 @@ export async function restoreResourceBackupHandler(
       "backup.create"
     )
   }
+  const restorable = await restorableBackup(user, backup, relay, destination)
   const safety = data.safetyBackup
     ? await runAppEffect(
         "backups.reserveResourceSafety",
@@ -777,7 +810,7 @@ export async function restoreResourceBackupHandler(
         })
       )
     : null
-  return queueRestore(relay, user, backup, destination, safety)
+  return queueRestore(relay, user, restorable, destination, safety)
 }
 
 // Reserves the restore behind its safety backup, if any, and sends whichever

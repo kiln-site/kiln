@@ -41,6 +41,13 @@ export type BackupDeleteFeedbackStore = ReturnType<
 export type BackupSelectionStore = ReturnType<typeof createBackupSelectionStore>
 export type BackupNameStore = ReturnType<typeof createBackupNameStore>
 
+/** Whether a copy of it is in a bucket, which any Relay can restore from. */
+export function backupIsInBucket(backup: Pick<Backup, "artifacts">): boolean {
+  return backup.artifacts.some(
+    ({ status, storageId }) => status === "available" && storageId !== null
+  )
+}
+
 export function createBackupSearchStore(initialValue: string) {
   return createWorkspaceTableSearchStore(initialValue)
 }

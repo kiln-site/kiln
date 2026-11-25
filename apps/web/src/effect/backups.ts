@@ -3178,6 +3178,12 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
                   EXISTS (
                     SELECT 1 FROM ${databaseTable("backup_repository")} repository
                      WHERE repository.id = backup.repository_id
+                       -- Another Relay's, which writes to it itself.
+                       AND (repository.relay_id = backup.relay_id
+                         OR NOT EXISTS (
+                           SELECT 1 FROM ${databaseTable("relay")} relay
+                            WHERE relay.id = repository.relay_id
+                         ))
                   ) AS repository_present
              FROM ${databaseTable("backup")} backup
             WHERE backup.id = ?
@@ -3237,6 +3243,7 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           .find((task) => task.task_kind === "delete" && active(task))
         // Without its repository Hearth has no password to read or forget
         // the snapshot with, and never will: the record is all that's left.
+        // A link to another paired Relay's snapshot is only a record too.
         if (
           backup.backup_mode === "incremental" &&
           !backup.repository_present
@@ -5160,58 +5167,160 @@ export const linkInstanceBackupsEffect = Effect.fn("backups.link")(
             ORDER BY ${backupCopyOrderSql}`,
             [backup.id]
           )).filter((artifact) => sameRelay || artifact.storage_id !== null)
-          const primary = artifacts[0]
-          if (!primary) continue
-          const id = randomUUID()
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("backup")}
-             (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
-              backup_mode, reason, status, name, filename, object_key, bytes,
-              checksum_sha256, warnings, created_by, started_at, completed_at,
-              created_at, updated_at, linked_from_backup_id,
-              linked_from_target_id)
-           SELECT ?, ?, 'instance', ?, ?, artifact_kind, backup_mode, reason,
-                  'available', name, ?, ?, bytes, checksum_sha256, warnings,
-                  created_by, started_at, completed_at, created_at, ?, ?, ?
-             FROM ${databaseTable("backup")} WHERE id = ?`,
-            [
-              id,
-              input.to.relayId,
-              input.to.instanceId,
-              primary.storage_id,
-              primary.filename,
-              primary.object_key,
-              now,
-              backup.archive_id,
-              backup.archive_target_id,
-              backup.id,
-            ]
-          )
-          for (const artifact of artifacts) {
-            yield* transaction.execute(
-              `INSERT INTO ${databaseTable("backup_artifact")}
-               (id, backup_id, destination_key, storage_id, status, filename,
-                object_key, bytes, checksum_sha256, completed_at, created_at,
-                updated_at)
-             SELECT ?, ?, destination_key, storage_id, 'available', filename,
-                    object_key, bytes, checksum_sha256, completed_at,
-                    created_at, ?
-               FROM ${databaseTable("backup_artifact")} WHERE id = ?`,
-              [randomUUID(), id, now, artifact.id]
-            )
-          }
-          // The record lists by its latest task, so it gets the create task
-          // the original finished with.
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("backup_task")}
-             (id, backup_id, task_kind, status, bytes_completed, bytes_total,
-              requested_by, started_at, finished_at, created_at, updated_at)
-           VALUES (?, ?, 'create', 'succeeded', 0, NULL, ?, ?, ?, ?, ?)`,
-            [randomUUID(), id, input.linkedBy, now, now, now, now]
-          )
+          if (artifacts.length === 0) continue
+          yield* insertLinkedBackup(transaction, {
+            artifacts,
+            backup,
+            linkedBy: input.linkedBy,
+            now,
+            to: { relayId: input.to.relayId, targetId: input.to.instanceId },
+          })
           linked += 1
         }
         return linked
+      })
+    )
+  }
+)
+
+// A record of another resource's own, of a backup's stored copies.
+const insertLinkedBackup = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  input: {
+    readonly artifacts: ReadonlyArray<BackupArtifactRow>
+    readonly backup: LinkableBackupRow
+    readonly linkedBy: string
+    readonly now: number
+    readonly to: { readonly relayId: string; readonly targetId: string }
+  }
+) {
+  const { artifacts, backup, now, to } = input
+  const primary = artifacts[0]
+  if (!primary) return yield* Effect.die("A linked backup has no artifact")
+  const id = randomUUID()
+  yield* transaction.execute(
+    `INSERT INTO ${databaseTable("backup")}
+       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
+        backup_mode, reason, status, name, filename, object_key, bytes,
+        checksum_sha256, warnings, created_by, started_at, completed_at,
+        created_at, updated_at, linked_from_backup_id,
+        linked_from_target_id, repository_id, restic_snapshot_id)
+     SELECT ?, ?, target_kind, ?, ?, artifact_kind, backup_mode, reason,
+            'available', name, ?, ?, bytes, checksum_sha256, warnings,
+            created_by, started_at, completed_at, created_at, ?, ?, ?,
+            repository_id, restic_snapshot_id
+       FROM ${databaseTable("backup")} WHERE id = ?`,
+    [
+      id,
+      to.relayId,
+      to.targetId,
+      primary.storage_id,
+      primary.filename,
+      primary.object_key,
+      now,
+      backup.archive_id,
+      backup.archive_target_id,
+      backup.id,
+    ]
+  )
+  for (const artifact of artifacts) {
+    yield* transaction.execute(
+      `INSERT INTO ${databaseTable("backup_artifact")}
+         (id, backup_id, destination_key, storage_id, status, filename,
+          object_key, bytes, checksum_sha256, completed_at, created_at,
+          updated_at)
+       SELECT ?, ?, destination_key, storage_id, 'available', filename,
+              object_key, bytes, checksum_sha256, completed_at,
+              created_at, ?
+         FROM ${databaseTable("backup_artifact")} WHERE id = ?`,
+      [randomUUID(), id, now, artifact.id]
+    )
+  }
+  // The record lists by its latest task, so it gets the create task the
+  // original finished with.
+  yield* transaction.execute(
+    `INSERT INTO ${databaseTable("backup_task")}
+       (id, backup_id, task_kind, status, bytes_completed, bytes_total,
+        requested_by, started_at, finished_at, created_at, updated_at)
+     VALUES (?, ?, 'create', 'succeeded', 0, NULL, ?, ?, ?, ?, ?)`,
+    [randomUUID(), id, input.linkedBy, now, now, now, now]
+  )
+  return id
+})
+
+/**
+ * Links a backup kept in a bucket to a resource of its kind on another Relay,
+ * which can then restore it, its own Relay there or not, and answers the
+ * link: the one it already has, or a new one. A snapshot's is read through
+ * its repository, the first Relay's (`backup-repository-access.server.ts`).
+ */
+export const linkBackupEffect = Effect.fn("backups.linkOne")(
+  function* (input: {
+    readonly backupId: string
+    readonly linkedBy: string
+    readonly to: { readonly relayId: string; readonly targetId: string }
+  }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    return yield* database.transaction("backup_link_one", (transaction) =>
+      Effect.gen(function* () {
+        const [backup] = yield* transaction.queryRows<
+          LinkableBackupRow & { target_kind: BackupTargetKind }
+        >(
+          `SELECT id, target_kind,
+                  COALESCE(linked_from_backup_id, id) AS archive_id,
+                  COALESCE(linked_from_target_id, target_id)
+                    AS archive_target_id
+             FROM ${databaseTable("backup")}
+            WHERE id = ? AND status = 'available'
+            FOR UPDATE`,
+          [input.backupId]
+        )
+        const artifacts = backup
+          ? yield* transaction.queryRows<BackupArtifactRow>(
+              `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
+                      artifact.status, artifact.filename, artifact.object_key,
+                      artifact.bytes, artifact.checksum_sha256,
+                      artifact.error, artifact.error_code
+                 FROM ${databaseTable("backup_artifact")} artifact
+                WHERE artifact.backup_id = ?
+                  AND artifact.status = 'available'
+                  AND artifact.storage_id IS NOT NULL
+                ORDER BY ${backupCopyOrderSql}`,
+              [backup.id]
+            )
+          : []
+        if (!backup || artifacts.length === 0) {
+          return yield* BackupStorageError.make({
+            code: "backup_unavailable",
+            operation: "backup.link",
+            reason:
+              "Only a backup kept in a bucket can be restored on another Relay",
+          })
+        }
+        const [linked] = yield* transaction.queryRows<
+          RowDataPacket & { id: string }
+        >(
+          `SELECT id FROM ${databaseTable("backup")}
+            WHERE relay_id = ? AND target_kind = ? AND target_id = ?
+              AND linked_from_backup_id = ? AND status = 'available'
+            LIMIT 1`,
+          [
+            input.to.relayId,
+            backup.target_kind,
+            input.to.targetId,
+            backup.archive_id,
+          ]
+        )
+        return linked
+          ? linked.id
+          : yield* insertLinkedBackup(transaction, {
+              artifacts,
+              backup,
+              linkedBy: input.linkedBy,
+              now,
+              to: input.to,
+            })
       })
     )
   }

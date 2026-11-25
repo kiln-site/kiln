@@ -12,13 +12,20 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { showToast } from "@workspace/ui/components/sonner"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { Switch } from "@workspace/ui/components/switch"
 
 import {
   BackupConfigurationDialog,
   type BackupConfiguration,
 } from "@/components/backup-configuration-dialog"
-import type { Backup } from "@/components/backups/state"
+import { backupIsInBucket, type Backup } from "@/components/backups/state"
 import {
   RestoreDestinationSelect,
   useRestoreDestination,
@@ -119,17 +126,29 @@ export function ResourceRestoreDialog({
   backup,
   onOpenChange,
   open,
+  relays,
   targetName,
 }: {
   backup: Backup
   onOpenChange: (open: boolean) => void
   open: boolean
+  relays: ReadonlyArray<{ relayId: string; relayName: string }>
   targetName: string
 }) {
   const queryClient = useQueryClient()
   const [safetyBackup, setSafetyBackup] = React.useState(true)
+  const [chosenRelay, setChosenRelay] = React.useState<string | null>(null)
+  // Its own Relay, or for one kept in a bucket, any: another when its own is
+  // gone.
+  const inBucket = backupIsInBucket(backup)
+  const choosesRelay = inBucket && relays.length > 1
+  const ownRelay = relays.some((relay) => relay.relayId === backup.relayId)
+  const relayId =
+    chosenRelay ??
+    (inBucket && !ownRelay ? relays[0]?.relayId : undefined) ??
+    backup.relayId
   const volumes = useQuery({
-    ...relayVolumesQueryOptions(backup.relayId),
+    ...relayVolumesQueryOptions(relayId),
     enabled: open,
   })
   const apps = useQuery({ ...appDirectoryQueryOptions(), enabled: open })
@@ -138,16 +157,16 @@ export function ResourceRestoreDialog({
       apps.data?.find((app) => app.id === appId)?.name ?? appId,
     [apps.data]
   )
-  // The volumes on its Relay it can go into: its own while
+  // The volumes on that Relay it can go into: its own while
   // it exists, or another, as when its own is gone.
   const destinations = React.useMemo(
     (): Array<RestoreDestination> =>
       (volumes.data?.volumes ?? []).flatMap((candidate) =>
         candidate.id === null
           ? []
-          : [{ id: candidate.id, name: candidate.name }]
+          : [{ id: candidate.id, name: candidate.name, relayId }]
       ),
-    [volumes.data]
+    [relayId, volumes.data]
   )
   const { destination, elsewhere, ownExists, setDestination } =
     useRestoreDestination(backup.targetId, destinations)
@@ -181,7 +200,9 @@ export function ResourceRestoreDialog({
         data: {
           backupId: backup.id,
           safetyBackup,
-          ...(elsewhere && destination ? { targetId: destination.id } : {}),
+          ...(elsewhere && destination
+            ? { relayId, targetId: destination.id }
+            : {}),
         },
       }),
     onSuccess: async (result) => {
@@ -209,6 +230,30 @@ export function ResourceRestoreDialog({
             {`This replaces everything in the volume with “${backup.name}”. Every container that mounts it must be stopped, and the Apps that use it can’t start until the restore is done.`}
           </DialogDescription>
         </DialogHeader>
+        {choosesRelay ? (
+          <label className="grid gap-1.5">
+            <span className="text-xs font-semibold">Relay</span>
+            <Select
+              disabled={restore.isPending}
+              value={relayId}
+              onValueChange={setChosenRelay}
+            >
+              <SelectTrigger
+                aria-label="Relay"
+                className="h-8 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {relays.map((relay) => (
+                  <SelectItem key={relay.relayId} value={relay.relayId}>
+                    {relay.relayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+        ) : null}
         {!ownExists || destinations.length > 1 ? (
           <RestoreDestinationSelect
             destinations={destinations}
