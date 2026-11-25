@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { showToast } from "@workspace/ui/components/sonner"
+import { cn } from "@workspace/ui/lib/utils"
 
 import { invalidateRelayRuntimeQueries } from "@/components/relay/relay-actions"
 import { queryKeys } from "@/lib/query-options"
@@ -60,9 +61,17 @@ export function AddRelayDialog({
         <DialogHeader>
           <DialogTitle>Add a Relay</DialogTitle>
           <DialogDescription>
-            {method === "link"
-              ? "Paste the link `kiln-relay pair create` printed on the Relay."
-              : "Run this on the new machine, then confirm the Relay here."}
+            {method === "link" ? (
+              <>
+                Paste the link{" "}
+                <code className="font-mono text-foreground">
+                  kiln-relay pair create
+                </code>{" "}
+                printed on the Relay.
+              </>
+            ) : (
+              "Run this on the new machine, then confirm the Relay here."
+            )}
           </DialogDescription>
         </DialogHeader>
         <div
@@ -444,43 +453,48 @@ export function InstallationChoice({
     )
   }
   return (
-    <fieldset className="space-y-2" disabled={disabled}>
-      <legend className="type-label text-muted-foreground">
-        Installation ID
-      </legend>
-      {(
-        [
-          [
-            "keep",
-            <>
-              Keep{" "}
-              <span className="truncate font-mono text-xs">
-                {relayInstallationId}
-              </span>
-            </>,
-          ],
-          ["use", "Use this Kiln's"],
-        ] as const
-      ).map(([value, label]) => (
-        <label
-          key={value}
-          className="flex min-w-0 cursor-pointer items-center gap-2 text-sm"
-        >
-          <input
-            type="radio"
-            name="relay-installation"
-            className="accent-primary"
-            checked={choice === value}
-            onChange={() => onChange(value)}
-          />
-          {label}
-        </label>
-      ))}
-      <p className="type-meta text-muted-foreground">
-        It belongs to another Kiln installation. Its ID decides whose Kiln
-        services and backups it finds; every Hearth paired with full access can
-        manage it either way.
-      </p>
-    </fieldset>
+    <div className="grid gap-2">
+      <div className="min-w-0">
+        <p className="type-label" id="relay-installation">
+          This Relay belongs to another Kiln
+        </p>
+        <p className="truncate font-mono text-xs text-muted-foreground">
+          {relayInstallationId}
+        </p>
+      </div>
+      <div
+        role="radiogroup"
+        aria-labelledby="relay-installation"
+        className="grid gap-2 sm:grid-cols-2"
+      >
+        {installationChoices.map(([value, label, detail]) => (
+          <label
+            key={value}
+            className={cn(
+              "relative flex cursor-pointer flex-col gap-0.5 border px-3 py-2.5 transition-colors has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+              choice === value
+                ? "border-primary/60 bg-primary/10"
+                : "hover:bg-muted/40"
+            )}
+          >
+            <input
+              type="radio"
+              name="relay-installation"
+              className="sr-only"
+              checked={choice === value}
+              disabled={disabled}
+              onChange={() => onChange(value)}
+            />
+            <span className="text-[0.8125rem] font-medium">{label}</span>
+            <span className="text-xs text-muted-foreground">{detail}</span>
+          </label>
+        ))}
+      </div>
+    </div>
   )
 }
+
+const installationChoices = [
+  ["keep", "Leave it there", "You can manage it, as part of that Kiln"],
+  ["use", "Move it here", "It becomes part of this Kiln"],
+] as const
