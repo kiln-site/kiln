@@ -828,6 +828,46 @@ marks its row and that copy deleted. Deletes of backups sharing an archive
 lock the backup it was made as first, or, once that's been forgotten, the
 first record still linked to it, so concurrent deletes see each other.
 
+## Opening a backup without Kiln
+
+A full backup is an ordinary file: a `.zip`, `.tar.gz` or `.dmp.gz`. Download it
+from the bucket and open it. Kiln's own (`.kiln`) opens only with Kiln's
+[recovery code](self-hosting.md#recovery).
+
+An incremental backup in a bucket is an ordinary [restic](https://restic.net)
+repository. Opening one takes the bucket's keys and one password:
+
+- **The destination's** (`kiln-bp-…`), which whoever added the destination sees
+  under Backups → Destinations. It opens every repository there.
+- **Kiln's recovery code**, which gives each repository a password of its own:
+
+  ```sh
+  docker run --rm -it --entrypoint kiln-relay \
+    ghcr.io/kiln-site/relay:latest backup-password <repository>
+  ```
+
+  It asks for the code, and needs no Kiln, Relay or network.
+
+Each repository is a folder of the bucket,
+`<prefix>/kiln/<installation>/<relay>/restic/instance/<server>/<repository>`, with
+a file named `config` in it. Then, with restic installed:
+
+```sh
+export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…
+export RESTIC_REPOSITORY=s3:https://<endpoint>/<bucket>/<that folder>
+export RESTIC_PASSWORD=…
+restic snapshots
+restic restore latest --target ./restored
+```
+
+A provider that needs the bucket in the path takes
+`-o s3.bucket-lookup=path` too. `restored/` holds the server's files in a folder
+named by its ID, and its setup in `.kiln-setup/`.
+
+A repository takes these passwords with its first backup made by a release that
+has them. One kept only on a Relay's disk, under `<data>/restic/`, opens with
+Kiln's while that disk lasts.
+
 ## UI
 
 Backups is the final item in the server navigation and a global page covering
@@ -1053,6 +1093,13 @@ repository in stored schedules and tasks with its ID, so waiting tasks still
 run. The keys were out until then; rotate them once every Relay has updated. A
 bucket behind a private CA now needs it in the Relay's `NODE_EXTRA_CA_CERTS`, as
 full backups do; restic's own `RESTIC_CACERT` no longer comes into it.
+
+Each snapshot also takes the server's setup, its Brick, version, ports,
+variables and limits as a full archive's manifest has them, from
+`.kiln-setup/<server>/setup.json` beside the servers' folders, where a restore or
+download of its files doesn't reach. A Relay compares a backup with the
+repository's newest snapshot, whatever its own container is called now, so
+replacing the Relay doesn't make it read every file again.
 
 A live server can have files restic can't read, such as one locked or
 replaced mid-backup. restic still saves the snapshot and exits with code 3;

@@ -409,7 +409,9 @@ everything else a new machine needs, however Kiln was installed, so that backup
 and the code restore Kiln. Without the code, Kiln's backups can't be read. Save
 it after installing, and keep it apart from the backups.
 
-Anyone with the code and a backup can read everything that backup holds.
+Anyone with the code and a backup can read everything that backup holds. The
+code also opens incremental backups
+[without Kiln](backups.md#opening-a-backup-without-kiln).
 
 ### Saving it from Hearth
 

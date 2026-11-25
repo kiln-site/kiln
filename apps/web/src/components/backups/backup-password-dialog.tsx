@@ -25,6 +25,8 @@ type Destination = Pick<
 
 const purpose =
   "Opens this destination’s incremental backups with restic, without Kiln."
+const docsUrl =
+  "https://github.com/kiln-site/kiln/blob/main/docs/backups.md#opening-a-backup-without-kiln"
 
 /**
  * A destination's password, for its owner to keep. Mounted only while open,
@@ -94,6 +96,7 @@ function DestinationPassword({
         "",
         purpose.replace("’", "'"),
         `Bucket: ${location}`,
+        `How to: ${docsUrl}`,
         "",
       ].join("\n"),
       name: `kiln-backup-password-${id}.txt`,
@@ -103,7 +106,7 @@ function DestinationPassword({
   const onePasswordItem = React.useMemo(
     () => ({
       name,
-      notes: `${purpose}\nBucket: ${location}`,
+      notes: `${purpose}\nBucket: ${location}\nHow to: ${docsUrl}`,
       title: `Kiln backup password (${name})`,
       url: endpoint,
     }),
