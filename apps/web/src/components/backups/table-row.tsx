@@ -420,8 +420,7 @@ export const BackupRowActions = React.memo(function BackupRowActions({
       backup.targetKind === "database" ||
       (backup.targetKind === "platform" &&
         backup.artifactKind === "platform_bundle") ||
-      (backup.targetKind === "volume" &&
-        backup.artifactKind === "tar_archive"))
+      backup.targetKind === "volume")
   const restore = (
     <Button
       aria-label={`Restore ${backup.name}`}

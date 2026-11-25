@@ -210,7 +210,7 @@ async function relayMembers(
     members.push({
       artifactKind: "tar_archive",
       consistency: data.consistency,
-      mode: "full",
+      mode: mode ?? "full",
       relay,
       targetId: id,
       targetKind: "volume",

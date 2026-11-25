@@ -197,6 +197,7 @@ async function backupManager(kiln: Awaited<ReturnType<typeof coolifyKiln>>) {
         volumes: async () => [],
       },
       config: harness.config,
+      hostDataDirectory: async () => harness.config.dataDirectory,
       fences: await TarRestoreFences.load(harness.config),
       findInstance: async () => null,
       isInstanceStopped: async () => true,

@@ -196,7 +196,7 @@ export function RelayVolumesPage() {
         ) : null}
         {dialog?.kind === "back-up" && dialog.volume.id ? (
           <ResourceBackupDialog
-            description="A full archive of the volume, read through Docker with each file’s owner and mode."
+            description="Everything in the volume, with each file’s owner and mode."
             open
             relayId={relay.id}
             stoppedUnavailable={

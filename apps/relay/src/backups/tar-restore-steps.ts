@@ -20,12 +20,18 @@ import { Effect } from "effect"
  *
  * `reserve` makes the staging folder, failing if anything has its name, so
  * the other steps only ever remove or move what the restore put there.
- * Each later step is safe to run again after an interruption: `clear`
+ * `unwrap` moves what restic restored up out of the root it restored it
+ * under, before the restore is whole. Each later step is safe to run again after an interruption: `clear`
  * removes only what isn't the staging folder, and `install` moves only
  * what's still in it. Nothing follows a symlink: removing one removes the
  * link, and renames move links as they are.
  */
-export type TarRestoreStep = "clear" | "discard" | "install" | "reserve"
+export type TarRestoreStep =
+  | "clear"
+  | "discard"
+  | "install"
+  | "reserve"
+  | "unwrap"
 
 /** The owner and mode the restored root takes, from its archived entry. */
 export interface TarRestoreRoot {
@@ -63,6 +69,26 @@ export async function runTarRestoreStep(
     case "discard":
       await rm(stagingPath, { force: true, recursive: true })
       return
+    case "unwrap": {
+      // By a name nothing restored has at its root, which a restore refuses.
+      // All of it is checked before anything the volume holds is cleared.
+      const restored = join(stagingPath, "volume")
+      await requireStagingFolder(restored)
+      const names = await readdir(restored)
+      if (
+        (await readdir(stagingPath)).length !== 1 ||
+        names.some((name) => name.startsWith(TAR_RESTORE_STAGING_PREFIX))
+      ) {
+        throw new Error("The snapshot doesn't hold a volume alone")
+      }
+      const wrapped = join(stagingPath, staging)
+      await rename(restored, wrapped)
+      for (const name of names) {
+        await rename(join(wrapped, name), join(stagingPath, name))
+      }
+      await rmdir(wrapped)
+      return
+    }
     case "clear":
       // Without a whole staging folder there's nothing to restore, so the
       // old files stay.

@@ -191,6 +191,8 @@ export interface RelayConfig {
   selfContainer: string | null
   // The Syft binary the Relay inventories its host and images with, in its
   // own image, where its helpers run it too.
+  /** restic, as its helpers find it too. */
+  resticPath: string
   syftPath: string
   serverIdLabel: string
   nodeId: string
@@ -368,6 +370,7 @@ export function loadConfig(
       environment.MCLOGS_API_URL?.trim() || "https://api.mclo.gs/1/log",
     mode,
     selfContainer: environment.KILN_RELAY_CONTAINER?.trim() || null,
+    resticPath: environment.KILN_RELAY_RESTIC_PATH?.trim() || "restic",
     syftPath: environment.KILN_RELAY_SYFT_PATH?.trim() || "/usr/local/bin/syft",
     nodeId: "kiln-relay",
     nodeName: environment.KILN_RELAY_NAME?.trim() || "",

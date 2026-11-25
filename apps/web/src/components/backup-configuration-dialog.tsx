@@ -198,7 +198,9 @@ function BackupConfigurationForm({
   // For those of them that can be incremental; the rest are full.
   const modeChoice = step
     ? chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
-    : chosen.some(
+    : // A volume's own, where there are no targets to choose.
+      !showTargets ||
+      chosen.some(
         ({ kind }) => kind !== "app" && backupTargetSupportsIncremental(kind)
       )
   // Kiln's own backup goes only where the platform keeps its own.

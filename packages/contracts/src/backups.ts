@@ -96,7 +96,7 @@ export const backupModeSchema = z.enum(["full", "incremental"])
 export function backupTargetSupportsIncremental(
   kind: z.infer<typeof backupTargetKindSchema>
 ): boolean {
-  return kind === "instance" || kind === "database"
+  return kind !== "platform"
 }
 
 export const backupReasonSchema = z.enum([
@@ -507,7 +507,11 @@ function refineResticCreateInput(
   context: z.RefinementCtx
 ) {
   const resource = input.target.kind === "volume"
-  if (resource !== (input.artifactKind === "tar_archive")) {
+  if (
+    input.artifactKind === "tar_archive"
+      ? !resource
+      : resource && input.artifactKind !== "restic_snapshot"
+  ) {
     context.addIssue({
       code: "custom",
       message: "Volumes, and only they, are backed up as tar archives",
@@ -1288,7 +1292,14 @@ export function backupExportFilename(
   backupId: string,
   targetKind: BackupTargetKind
 ): string {
-  return backupFilename(backupId, targetKind === "database" ? "sql.gz" : "zip")
+  return backupFilename(
+    backupId,
+    targetKind === "database"
+      ? "sql.gz"
+      : targetKind === "volume"
+        ? "tar.gz"
+        : "zip"
+  )
 }
 
 function backupFilename(backupId: string, extension: string): string {

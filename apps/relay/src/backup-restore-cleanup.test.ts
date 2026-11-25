@@ -68,6 +68,7 @@ describe("Relay backup restore cleanup", () => {
       const create = backupInput()
       const manager = yield* BackupManager.make({
         config,
+        hostDataDirectory: async () => config.dataDirectory,
         findInstance: async () => instance,
         isInstanceStopped: async () => true,
         lanes: new OperationLanes(),
