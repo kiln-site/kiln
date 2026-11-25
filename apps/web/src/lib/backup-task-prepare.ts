@@ -9,6 +9,7 @@ import {
   prepareFullBackupRestoreSource,
   prepareResticRepositoryLocation,
 } from "@/backups/destinations"
+import { repositoryRecoveryPasswords } from "@/effect/backup-passwords"
 import {
   loadBackupRepositoryPasswordEffect,
   type BackupDispatch,
@@ -41,6 +42,7 @@ export const prepareBackupTaskEffect = Effect.fn("backups.prepareTask")(
         destination: {
           artifactId: artifact.artifactId,
           kind: "restic" as const,
+          recoveryPasswords: yield* repositoryRecoveryPasswords(repository),
           repository: repository.location,
           repositoryPassword: repository.password,
         },
@@ -161,11 +163,13 @@ const resticRepositoryForBackup = Effect.fnUntraced(function* (
 ) {
   const repository = yield* loadBackupRepositoryPasswordEffect(backupId)
   return {
+    id: repository.id,
     location: yield* prepareResticRepositoryLocation({
       repositoryId: repository.id,
       requireEnabled: options?.requireEnabled ?? false,
       storageId: repository.storageId,
     }),
     password: repository.password,
+    storageId: repository.storageId,
   }
 })

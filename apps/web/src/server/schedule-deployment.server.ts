@@ -22,6 +22,7 @@ import {
 } from "@workspace/contracts/schedules"
 
 import { prepareResticRepositoryLocation } from "@/backups/destinations"
+import { repositoryRecoveryPasswords } from "@/effect/backup-passwords"
 import {
   ensureBackupRepositoryEffect,
   scheduledBackupAdmissionEffect,
@@ -793,6 +794,10 @@ async function scheduledResticDestination(
   )
   return {
     kind: "restic" as const,
+    recoveryPasswords: await runAppEffect(
+      "schedules.recoveryPasswords",
+      repositoryRecoveryPasswords(repository)
+    ),
     repository: location,
     repositoryId: repository.id,
     repositoryPassword: repository.password,

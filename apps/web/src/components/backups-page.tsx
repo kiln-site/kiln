@@ -16,6 +16,7 @@ import {
   Copy,
   Download,
   HardDrive,
+  KeyRound,
   LoaderCircle,
   Link2,
   Pencil,
@@ -51,6 +52,7 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
 import type { BackupTarget } from "@workspace/contracts"
+import { BackupPasswordDialog } from "@/components/backups/backup-password-dialog"
 import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
 import { ResourceRestoreDialog } from "@/components/backups/resource-backup-dialogs"
 import {
@@ -2095,6 +2097,8 @@ export const BackupDestinationsPage = React.memo(
     )
     const [deleteCandidate, setDeleteCandidate] =
       React.useState<BackupStorage | null>(null)
+    const [passwordFor, setPasswordFor] = React.useState<string | null>(null)
+    const passwordDestination = storage.find(({ id }) => id === passwordFor)
 
     return (
       <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
@@ -2103,6 +2107,7 @@ export const BackupDestinationsPage = React.memo(
             <BackupStorageEditor
               existing={editor === "new" ? null : editor}
               isPlatformAdmin={isPlatformAdmin}
+              onAdded={setPasswordFor}
               onBack={() => setEditor(null)}
             />
           ) : (
@@ -2145,6 +2150,11 @@ export const BackupDestinationsPage = React.memo(
                 {storage.map((destination) => {
                   const canManage =
                     isPlatformAdmin || destination.ownerUserId === currentUserId
+                  // Its bucket's owner's, or Kiln's administrators'.
+                  const ownsPassword =
+                    destination.ownerUserId === null
+                      ? isPlatformAdmin
+                      : destination.ownerUserId === currentUserId
                   const retryDelete = destination.deleting
                   return (
                     <div
@@ -2184,6 +2194,15 @@ export const BackupDestinationsPage = React.memo(
                       </span>
                       {canManage ? (
                         <div className="flex shrink-0 items-center gap-1">
+                          {ownsPassword ? (
+                            <BackupActionButton
+                              disabled={false}
+                              icon={KeyRound}
+                              label={`Backup password for ${destination.name}`}
+                              tooltip="Backup password"
+                              onClick={() => setPasswordFor(destination.id)}
+                            />
+                          ) : null}
                           <BackupActionButton
                             disabled={false}
                             icon={Pencil}
@@ -2228,6 +2247,12 @@ export const BackupDestinationsPage = React.memo(
             }}
           />
         ) : null}
+        {passwordDestination ? (
+          <BackupPasswordDialog
+            destination={passwordDestination}
+            onClose={() => setPasswordFor(null)}
+          />
+        ) : null}
       </div>
     )
   }
@@ -2236,10 +2261,12 @@ export const BackupDestinationsPage = React.memo(
 function BackupStorageEditor({
   existing,
   isPlatformAdmin,
+  onAdded,
   onBack,
 }: {
   existing: BackupStorage | null
   isPlatformAdmin: boolean
+  onAdded: (id: string) => void
   onBack: () => void
 }) {
   const queryClient = useQueryClient()
@@ -2279,7 +2306,7 @@ function BackupStorageEditor({
           ...(secretAccessKey ? { secretAccessKey } : {}),
         },
       }),
-    onSuccess: async () => {
+    onSuccess: async ({ id }) => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.backups.storage,
       })
@@ -2288,6 +2315,7 @@ function BackupStorageEditor({
         type: "success",
       })
       onBack()
+      if (!existing) onAdded(id)
     },
   })
   const accessKeyProvided = Boolean(accessKeyId.trim())

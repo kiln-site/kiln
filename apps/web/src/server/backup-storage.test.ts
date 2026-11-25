@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 
 import type { BackupStorageRecord } from "@/backups/destinations/s3"
 
-import { visibleBackupStorage } from "./backup-storage"
+import { ownsBackupPassword, visibleBackupStorage } from "./backup-storage"
 
 const storage = [
   backupStorage({ id: "platform", ownerUserId: null }),
@@ -16,6 +16,18 @@ describe("backup storage visibility", () => {
       visibleBackupStorage(storage, "user-a", false).map(({ id }) => id),
       ["platform", "own"]
     )
+  })
+
+  it("shows a destination's backup password to its owner alone", () => {
+    const shown = (userId: string, canManagePlatformStorage: boolean) =>
+      storage
+        .filter((each) =>
+          ownsBackupPassword(each, userId, canManagePlatformStorage)
+        )
+        .map(({ id }) => id)
+    assert.deepEqual(shown("user-a", false), ["own"])
+    assert.deepEqual(shown("admin", true), ["platform"])
+    assert.deepEqual(shown("user-a", true), ["platform", "own"])
   })
 })
 

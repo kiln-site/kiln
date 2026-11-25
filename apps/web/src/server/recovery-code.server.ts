@@ -1,7 +1,12 @@
-import { relayRecoveryCodeSchema } from "@workspace/contracts"
+import {
+  backupRepositoryRoot,
+  decodeRecoveryCode,
+  relayRecoveryCodeSchema,
+} from "@workspace/contracts"
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect, Option, Schema } from "effect"
 
+import { saveBackupRepositoryRoot } from "@/effect/backup-passwords"
 import { Database } from "@/effect/database"
 import { newestCompleteKilnBackup } from "@/effect/kiln-backups"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
@@ -140,8 +145,12 @@ async function recoveryHost() {
   }
 }
 
+/**
+ * Kiln's recovery code as its Relay holds it. Nothing keeps it: a reveal
+ * shows it, and Hearth makes its backups' passwords from it.
+ */
 async function readRecoveryCode(
-  user: AuthenticatedUser
+  user: AuthenticatedUser | null
 ): Promise<RecoveryCodeReveal> {
   const [{ access, host, installationId }, connection] = await Promise.all([
     recoveryHost(),
@@ -158,7 +167,7 @@ async function readRecoveryCode(
       "relay.platform.recovery.read",
       {},
       15_000,
-      user.id
+      user?.id
     )
   )
   if (answer.installationId !== installationId) {
@@ -206,6 +215,27 @@ export async function revealRecoveryCode(
     { user: await requireEligibleResourceUser() }
   )
 }
+
+/**
+ * Makes the root of Kiln's backup passwords from its recovery code, once each
+ * time Hearth runs: a restore, which can bring another code, restarts it.
+ */
+export async function ensureBackupRepositoryRoot(): Promise<void> {
+  if (backupRootRead) return
+  const { host } = await recoveryHost()
+  // Its Relay isn't here yet, or Kiln has none of its own.
+  if (!host?.status?.recovery) return
+  const key = decodeRecoveryCode((await readRecoveryCode(null)).code)
+  if (key === null) throw new Error("Kiln's recovery code is unreadable")
+  const root = await backupRepositoryRoot(key)
+  await runAppEffect(
+    "recoveryCode.saveBackupRoot",
+    saveBackupRepositoryRoot(root)
+  )
+  backupRootRead = true
+}
+
+let backupRootRead = false
 
 const acknowledge = operation<void>()({
   name: "recoveryCode.acknowledge",

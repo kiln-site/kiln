@@ -3,8 +3,12 @@ import { Effect } from "effect"
 import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import { encryptWithKeyring, parseSecretKeyring } from "../../keyring.mjs"
-import { backupTaskInputSchema } from "@workspace/contracts"
+import {
+  backupRepositoryPassword,
+  backupTaskInputSchema,
+} from "@workspace/contracts"
 
+import { saveBackupRepositoryRoot } from "@/effect/backup-passwords"
 import type { BackupDispatch } from "@/effect/backups"
 import { prepareBackupTaskEffect } from "@/lib/backup-task-prepare"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -107,6 +111,41 @@ describeMysql("restic backup dispatch", () => {
             prepared.destination.repositoryPassword,
             "repo-password"
           )
+        })
+    )
+
+    it.effect(
+      "sends what opens the repository without Kiln, the same each time",
+      () =>
+        Effect.gen(function* () {
+          yield* seedResticBackup({ enabled: true })
+          const sent = Effect.gen(function* () {
+            const prepared = yield* prepareBackupTaskEffect(incrementalCreate)
+            return prepared.kind === "create" &&
+              prepared.destination.kind === "restic"
+              ? (prepared.destination.recoveryPasswords ?? [])
+              : []
+          })
+
+          // Until Kiln's Relay gives its recovery code, the owner's alone.
+          const [owners, ...rest] = yield* sent
+          assert.lengthOf(rest, 0)
+          assert.strictEqual(owners?.holder, "destination")
+          assert.match(owners?.password ?? "", /^kiln-bp-[\w-]{43}$/u)
+
+          yield* saveBackupRepositoryRoot("root")
+
+          const expected = [
+            {
+              holder: "kiln",
+              password: yield* Effect.promise(() =>
+                backupRepositoryPassword("root", repositoryId)
+              ),
+            },
+            owners,
+          ]
+          assert.deepStrictEqual(yield* sent, expected)
+          assert.deepStrictEqual(yield* sent, expected)
         })
     )
 

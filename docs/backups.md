@@ -997,6 +997,25 @@ which bucket it is. Relay persists a task's input in its SQLite journal (mode 06
 journal rows scrub it even when the stored JSON is corrupt, and restic stderr
 is redacted before it becomes a Relay error.
 
+That password stays inside Kiln. Two more open the same repository without it,
+each added by the Relay after a backup, under a name restic lists, so it is
+added once (`addPasswords`, `apps/relay/src/restic.ts`):
+
+- **Kiln's**, from its [recovery code](self-hosting.md#recovery), so its
+  administrators save nothing more. Hearth reads the code once each time it
+  runs and keeps only the root made from it, which doesn't give the code back,
+  since the code also opens Kiln's own backups and a Relay holds a repository's
+  passwords. Each repository's is its own, from the root and its ID
+  (`packages/contracts/src/backup-passwords.ts`).
+- **The destination's** (`kiln-bp-…`), one for every repository in it, made
+  with it and shown to its owner: whoever added it, or for a platform
+  destination, its administrators. Someone who manages destinations doesn't see
+  another person's.
+
+A Relay without a connected Hearth on its machine gives no code, so then there's
+only the destination's. Adding one never fails a backup: what couldn't be added
+is left for the next. A repository keeps every password it was given.
+
 While restic runs on such a repository, the Relay runs a bridge for it on
 `127.0.0.1`: a server of restic's REST protocol at a random port and a secret
 path, gone when restic exits (`restic-bridge.ts`). For each file restic touches
