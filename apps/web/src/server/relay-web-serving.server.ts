@@ -27,7 +27,8 @@ export interface RelayWebServing {
    * - `serves`: as far as anyone can tell from outside;
    * - `unchecked`: another proxy serves them, which Kiln can't ask;
    * - `unreachable`: nothing answers there from outside;
-   * - `cant`: the Relay is certain not to, as it's set up.
+   * - `cant`: the Relay is certain not to, as it's set up, or couldn't be
+   *   asked, which a moved name's record waits for too.
    */
   readonly state: "cant" | "serves" | "unchecked" | "unreachable"
 }
@@ -42,7 +43,7 @@ export async function relayWebServing(
   relay: PersistedRelay,
   beside: PersistedRelay
 ): Promise<RelayWebServing> {
-  const [{ cant, elsewhere }, host] = await Promise.all([
+  const [{ answered, cant, elsewhere }, host] = await Promise.all([
     relayWebCapability(relay),
     recoverPromise(
       () => runAppEffect("relays.web.host", relayPublicHostEffect(relay.id)),
@@ -50,6 +51,13 @@ export async function relayWebServing(
     ),
   ])
   if (cant) return { host, reason: cant, state: "cant" }
+  if (!answered) {
+    return {
+      host,
+      reason: `${relay.name} couldn't be asked whether it can serve websites`,
+      state: "cant",
+    }
+  }
   if (host === null) {
     return {
       host,
