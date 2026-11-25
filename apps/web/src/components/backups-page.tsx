@@ -1537,7 +1537,7 @@ function DownloadBackupDialog({
             Choose an available copy, then download it or create a temporary
             signed URL.
             {backup.artifactKind === "restic_snapshot"
-              ? " Incremental snapshots are exported to a zip first."
+              ? " An incremental backup is put together into one file first."
               : ""}
           </DialogDescription>
         </DialogHeader>
@@ -1728,10 +1728,7 @@ function CreateBackupDialog({
       return createBackupRun({
         data: {
           consistency: configuration.consistency,
-          // A game server's choice; anything else is a full archive.
-          ...(chosen.every((target) => target.kind === "instance")
-            ? { mode: configuration.mode }
-            : {}),
+          mode: configuration.mode,
           name: configuration.name,
           storageIds: configuration.destinationKeys.map((destination) =>
             destination === "local" ? null : destination

@@ -49,7 +49,7 @@ const appBackupsInputSchema = z.strictObject({
 const backupRunInputSchema = z.strictObject({
   // For the volumes among them.
   consistency: backupConsistencySchema.default("live"),
-  // For the game servers among them.
+  // For those among them that can be incremental.
   mode: z.enum(["full", "incremental"]).optional(),
   name: z.string().trim().min(1).max(120),
   storageIds: z.array(instanceIdSchema.nullable()).min(1).max(16),

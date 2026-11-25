@@ -9,6 +9,7 @@ import {
   Radio,
 } from "lucide-react"
 
+import { backupTargetSupportsIncremental } from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -194,15 +195,17 @@ function BackupConfigurationForm({
   const consistencyChoice = consistencyChoiceFor(chosen)
   const effectiveConsistency =
     consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
-  // A game server's choice. Chosen with anything else, each is a full
-  // archive, as the rest of them are.
-  const onlyInstances =
-    chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
+  // For those of them that can be incremental; the rest are full.
+  const modeChoice = step
+    ? chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
+    : chosen.some(
+        ({ kind }) => kind !== "app" && backupTargetSupportsIncremental(kind)
+      )
   // Kiln's own backup goes only where the platform keeps its own.
   const platformChosen = chosen.some(({ kind }) => kind === "platform")
   // A step left with none keeps its mode for those added later.
   const effectiveMode =
-    mode === "incremental" && (onlyInstances || (step && chosen.length === 0))
+    mode === "incremental" && (modeChoice || (step && chosen.length === 0))
       ? "incremental"
       : "full"
   const availableStorage = React.useMemo(
@@ -306,7 +309,7 @@ function BackupConfigurationForm({
             onConsistencyChange={setConsistency}
           />
         ) : null}
-        {!consistencyChoice && onlyInstances ? (
+        {modeChoice ? (
           <BackupModeChoices mode={effectiveMode} onModeChange={setMode} />
         ) : null}
         <BackupDestinationChoices
@@ -361,7 +364,7 @@ function BackupModeChoices({
       <div className="grid gap-2 sm:grid-cols-2">
         <BackupDestinationChoice
           checked={mode === "incremental"}
-          description="Deduplicated snapshots on this Relay or S3"
+          description="Stores only what changed since the last one"
           icon={Archive}
           label="Incremental"
           onCheckedChange={(checked) => {
@@ -370,9 +373,9 @@ function BackupModeChoices({
         />
         <BackupDestinationChoice
           checked={mode === "full"}
-          description="Portable zip archive"
+          description="Stores a whole copy each time"
           icon={HardDrive}
-          label="Full archive"
+          label="Full"
           onCheckedChange={(checked) => {
             if (checked) onModeChange("full")
           }}

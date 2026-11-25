@@ -15,10 +15,11 @@ import type {
   RelayBackupTaskReport,
 } from "@workspace/contracts"
 import {
-  backupArtifactFilename,
+  backupExportFilename,
   backupFailureCodeFromMessage,
   BACKUP_EXPORT_TTL_MAX_MS,
   BACKUP_EXPORT_TTL_MIN_MS,
+  backupTargetSupportsIncremental,
   isArchiveCreateTaskResult,
   isResticCreateTaskResult,
   resticS3BucketSchema,
@@ -600,9 +601,11 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
   const mode =
     input.reason === "pre_restore" ||
     input.reason === "final_delete" ||
-    input.targetKind !== "instance"
+    !backupTargetSupportsIncremental(input.targetKind)
       ? "full"
-      : (input.mode ?? "incremental")
+      : // Left unsaid, only a game server's is incremental.
+        (input.mode ??
+        (input.targetKind === "instance" ? "incremental" : "full"))
   const artifactKind =
     mode === "incremental" ? "restic_snapshot" : input.artifactKind
   const requestedStorageIds = deduplicateStorageIds(input.storageIds)
@@ -855,6 +858,7 @@ export const reserveDatabaseBackupEffect = Effect.fn("backups.reserveDatabase")(
     createdBy: string
     /** The deletion a final-delete backup is for. */
     deletionId?: string
+    mode?: BackupCreateTaskInput["mode"]
     name: string
     reason?: BackupCreateTaskInput["reason"]
     relayId: string
@@ -2674,7 +2678,6 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
               OR (backup.target_kind = 'platform' AND backup.artifact_kind = 'platform_bundle')
               OR (backup.target_kind IN ('app', 'volume') AND backup.artifact_kind = 'tar_archive')))
           OR (backup.backup_mode = 'incremental'
-            AND backup.target_kind = 'instance'
             AND backup.artifact_kind = 'restic_snapshot')
         )
         AND ((task.task_kind = 'create' AND backup.status = 'queued')
@@ -2919,7 +2922,6 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                       OR (backup.target_kind = 'database' AND backup.artifact_kind = 'database_dump')
                       OR (backup.target_kind IN ('app', 'volume') AND backup.artifact_kind = 'tar_archive')))
                   OR (backup.backup_mode = 'incremental'
-                    AND backup.target_kind = 'instance'
                     AND backup.artifact_kind = 'restic_snapshot'
                     AND backup.restic_snapshot_id IS NOT NULL)
                 )
@@ -4071,7 +4073,7 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
           targetId: backup.target_id,
           targetKind: backup.target_kind,
         })
-        const filename = backupArtifactFilename(backup.id, "restic_snapshot")
+        const filename = backupExportFilename(backup.id, backup.target_kind)
         const existing = yield* transaction.queryRows<
           {
             created_at: number

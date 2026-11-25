@@ -458,6 +458,7 @@ export const createCliBackupEffect = Effect.fn("cli.api.backups.create")(
         : input.targetKind === "database"
           ? reserveDatabaseBackupEffect({
               ...common,
+              ...(input.mode === undefined ? {} : { mode: input.mode }),
               targetId: input.targetId,
             })
           : reservePlatformBackupEffect({
@@ -503,15 +504,10 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
     if (
       backup.status !== "available" ||
       (backup.targetKind !== "instance" && backup.targetKind !== "database") ||
-      (backup.targetKind === "instance" &&
-        !(
-          (backup.artifactKind === "archive" && backup.backupMode === "full") ||
-          (backup.artifactKind === "restic_snapshot" &&
-            backup.backupMode === "incremental")
-        )) ||
-      (backup.targetKind === "database" &&
-        (backup.artifactKind !== "database_dump" ||
-          backup.backupMode !== "full"))
+      (backup.backupMode === "incremental"
+        ? backup.artifactKind !== "restic_snapshot"
+        : backup.artifactKind !==
+          (backup.targetKind === "instance" ? "archive" : "database_dump"))
     ) {
       return yield* cliConflict(
         "Only complete server or database backups can be restored."

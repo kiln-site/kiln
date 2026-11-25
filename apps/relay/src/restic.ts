@@ -4,8 +4,9 @@ import { createWriteStream } from "node:fs"
 import { lstat, mkdir, mkdtemp, opendir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
-import { Transform } from "node:stream"
+import { Transform, type Readable, type Writable } from "node:stream"
 import { finished, pipeline } from "node:stream/promises"
+import { createGzip } from "node:zlib"
 
 import type { BackupRecoveryPasswords } from "@workspace/contracts"
 import { Effect, Result, Schedule } from "effect"
@@ -59,13 +60,19 @@ export type ResticSnapshotSummary = {
   warnings: Array<string>
 }
 
-/** What restic reads for a snapshot. */
-export type ResticBackupPaths = {
-  cwd: string
-  excludes: ReadonlyArray<string>
-  /** Below `cwd`. */
-  paths: ReadonlyArray<string>
-}
+/** What restic reads for a snapshot: files, or a stream kept as one file. */
+export type ResticBackupSource =
+  | {
+      cwd: string
+      excludes: ReadonlyArray<string>
+      /** Below `cwd`. */
+      paths: ReadonlyArray<string>
+    }
+  | {
+      filename: string
+      /** Opened afresh for each attempt. */
+      open: () => Readable
+    }
 
 export type TranslatedExcludes = {
   excludes: Array<string>
@@ -78,7 +85,7 @@ export type ResticSpawn = (
   options: {
     cwd?: string
     env: NodeJS.ProcessEnv
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore" | "pipe", "pipe", "pipe"]
   }
 ) => ChildProcess
 
@@ -97,26 +104,30 @@ export type ResticDriver = {
     passwords: BackupRecoveryPasswords
     signal: AbortSignal
   }) => Promise<void>
-  backup: (
-    input: ResticBackupPaths & {
-      location: ResticDriverLocation
-      onProgress?: (progress: ResticProgress) => void
-      password: string
-      signal: AbortSignal
-      tags: ReadonlyArray<string>
-    }
-  ) => Promise<ResticSnapshotSummary>
+  backup: (input: {
+    location: ResticDriverLocation
+    onProgress?: (progress: ResticProgress) => void
+    password: string
+    signal: AbortSignal
+    source: ResticBackupSource
+    tags: ReadonlyArray<string>
+  }) => Promise<ResticSnapshotSummary>
   cacheCleanup: (input: {
     location: ResticDriverLocation
     password: string
     signal: AbortSignal
   }) => Promise<void>
-  dumpZip: (input: {
+  /**
+   * Writes a folder of a snapshot to a zip, or one of its files, gzipped.
+   */
+  dump: (input: {
     destination: string
     location: ResticDriverLocation
     onProgress?: (bytes: number) => void
     password: string
+    /** The snapshot's folder to zip, or the snapshot and the file to gzip. */
     selector: string
+    file?: string
     signal: AbortSignal
   }) => Promise<{ bytes: number; checksumSha256: string }>
   forget: (input: {
@@ -321,6 +332,8 @@ export function createResticDriver(options?: {
       retryable?: boolean
       signal: AbortSignal
       stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
+      /** What restic reads, opened afresh for each attempt. */
+      stdin?: () => Readable
       /** Exit code 3 still saved a snapshot; see `RESTIC_EXIT_INCOMPLETE`. */
       tolerateIncomplete?: boolean
     }
@@ -335,6 +348,7 @@ export function createResticDriver(options?: {
         password: input.password,
         repositoryAccess,
         signal: input.signal,
+        stdin: input.stdin,
         stdoutPipe: input.stdoutPipe,
       })
     const attempt = () =>
@@ -453,6 +467,7 @@ export function createResticDriver(options?: {
     backup: async (input) => {
       // Set from a callback, which narrowing can't see.
       let summary = null as Omit<ResticSnapshotSummary, "warnings"> | null
+      const { source } = input
       const result = await run(
         [
           "backup",
@@ -462,15 +477,20 @@ export function createResticDriver(options?: {
           "--group-by",
           "",
           ...input.tags.flatMap((tag) => ["--tag", tag]),
-          ...input.excludes.flatMap((pattern) => ["--exclude", pattern]),
-          ...input.paths,
+          ...("open" in source
+            ? ["--stdin", "--stdin-filename", source.filename]
+            : [
+                ...source.excludes.flatMap((pattern) => ["--exclude", pattern]),
+                ...source.paths,
+              ]),
         ],
         {
-          cwd: input.cwd,
+          ...("open" in source
+            ? { stdin: source.open }
+            : { cwd: source.cwd, tolerateIncomplete: true }),
           location: input.location,
           password: input.password,
           signal: input.signal,
-          tolerateIncomplete: true,
           onJson: (value) => {
             const progress = progressFromResticStatus(value)
             if (progress) input.onProgress?.(progress)
@@ -503,7 +523,7 @@ export function createResticDriver(options?: {
         signal: input.signal,
       })
     },
-    dumpZip: async (input) => {
+    dump: async (input) => {
       await mkdir(dirname(input.destination), { recursive: true, mode: 0o700 })
       // Each attempt writes a fresh file: the pipeline ends its output.
       const attempt = async (args: ReadonlyArray<string>) => {
@@ -528,7 +548,10 @@ export function createResticDriver(options?: {
             location: input.location,
             password: input.password,
             signal: input.signal,
-            stdoutPipe: (stdout) => pipeline(stdout, hasher, output),
+            stdoutPipe: (stdout) =>
+              input.file
+                ? pipeline(stdout, createGzip({ level: 6 }), hasher, output)
+                : pipeline(stdout, hasher, output),
           })
           return { bytes, checksumSha256: digest.digest("hex") }
         })
@@ -543,7 +566,9 @@ export function createResticDriver(options?: {
         return dumped.success
       }
       return readsWithoutLock(
-        ["dump", "-a", "zip", input.selector, "/"],
+        input.file
+          ? ["dump", input.selector, input.file]
+          : ["dump", "-a", "zip", input.selector, "/"],
         attempt
       )
     },
@@ -752,6 +777,7 @@ async function spawnResticCommand(
     password: string
     repositoryAccess?: ResticRepositoryAccess
     signal: AbortSignal
+    stdin?: () => Readable
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
     tolerateIncomplete?: boolean
   }
@@ -784,6 +810,7 @@ async function spawnResticOnce(
     onJson?: (value: unknown) => void
     password: string
     signal: AbortSignal
+    stdin?: () => Readable
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
     tolerateIncomplete?: boolean
   },
@@ -800,10 +827,10 @@ async function spawnResticOnce(
     {
       cwd: input.cwd,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input.stdin ? "pipe" : "ignore", "pipe", "pipe"],
     }
   )
-  if (!child.stdout || !child.stderr) {
+  if (!child.stdout || !child.stderr || (input.stdin && !child.stdin)) {
     throw resticError(
       "restic_stdio_missing",
       args[0] ?? "restic",
@@ -812,6 +839,7 @@ async function spawnResticOnce(
   }
   const stdout = child.stdout
   const stderrStream = child.stderr
+  const source = input.stdin?.()
   let stdoutText = ""
   let stderr = ""
   let stdoutBuffer = ""
@@ -864,6 +892,7 @@ async function spawnResticOnce(
   }
   const completed = await resultOf(async () => {
     const outcome = await Promise.race([
+      ...(source && child.stdin ? [feedRestic(source, child.stdin)] : []),
       Promise.all([
         waitForExit,
         input.stdoutPipe
@@ -923,9 +952,26 @@ async function spawnResticOnce(
   input.signal.removeEventListener("abort", onAbort)
   if (Result.isFailure(completed)) {
     await terminate()
+    source?.destroy()
     throw completed.failure
   }
+  source?.destroy()
   return completed.success
+}
+
+// restic keeps what it read by the time its input ends as a whole snapshot,
+// so input that fails never ends: this answers why, and restic is stopped.
+function feedRestic(
+  source: Readable,
+  stdin: Writable
+): Promise<{ readonly cause: unknown }> {
+  return new Promise((resolveFailed) => {
+    source.once("error", (cause) => resolveFailed({ cause }))
+    // restic's exit code says why it stopped reading.
+    stdin.on("error", () => source.unpipe(stdin))
+    source.once("end", () => stdin.end())
+    source.pipe(stdin, { end: false })
+  })
 }
 
 async function terminateResticChild(
@@ -970,7 +1016,7 @@ function defaultSpawn(
   options: {
     cwd?: string
     env: NodeJS.ProcessEnv
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore" | "pipe", "pipe", "pipe"]
   }
 ): ChildProcess {
   return spawn(command, [...args], {
