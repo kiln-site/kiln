@@ -26,7 +26,8 @@ export const getPublicRuntimeConfig = createServerFn({ method: "GET" }).handler(
         onSome: browserTraceSampleRatio,
       }),
       gitRepository: kilnGitRepository(),
-      homeUrl: new URL("/", kilnPublicUrl()).toString(),
+      // The origin leaves out any credentials in KILN_URL.
+      homeUrl: `${kilnPublicUrl().origin}/`,
       legalUrls: kilnLegalUrls(),
     }
   }
