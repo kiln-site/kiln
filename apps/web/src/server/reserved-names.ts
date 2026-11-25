@@ -14,9 +14,12 @@ import { badWordsPattern } from "@/lib/domain-schemas"
 let profanity: RegExpMatcher | undefined
 
 // People write the patterns, so one may backtrack for minutes. Each runs in
-// a context the event loop can interrupt, and one that ever runs past the
-// deadline reserves every name from then on, so it stalls Hearth only once.
+// a context the event loop can interrupt, and one that runs past the deadline
+// reserves every name from then on, so it stalls Hearth only once. The
+// deadline is of real time, which a busy machine or a garbage collection can
+// take from any pattern, so it's one that does each time it's tried.
 const patternDeadlineMs = 25
+const patternTries = 3
 const patternContext = vm.createContext({
   label: "",
   pattern: /(?:)/u,
@@ -67,18 +70,17 @@ function matches(pattern: string, label: string): boolean {
   if (slowPatterns.has(pattern)) return true
   patternContext.pattern = new RegExp(pattern, "iu")
   patternContext.label = label
-  return Result.getOrElse(
-    Result.try(
+  for (let attempt = 0; attempt < patternTries; attempt += 1) {
+    const matched = Result.try(
       () =>
         patternTest.runInContext(patternContext, {
           timeout: patternDeadlineMs,
         }) === true
-    ),
-    () => {
-      slowPatterns.add(pattern)
-      return true
-    }
-  )
+    )
+    if (Result.isSuccess(matched)) return matched.success
+  }
+  slowPatterns.add(pattern)
+  return true
 }
 
 function profane(label: string): boolean {
