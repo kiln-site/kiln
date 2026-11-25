@@ -2620,23 +2620,24 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
 )(function* (relayId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const failDependents = database.execute(
-    "backup_dependency_failures",
-    `UPDATE ${databaseTable("backup_task")} dependent
-       JOIN ${databaseTable("backup_task")} dependency
-         ON dependency.id = dependent.depends_on_task_id
-        SET dependent.status = 'failed',
-            dependent.error = 'The pre-restore safety backup did not complete',
-            dependent.finished_at = ?,
-            dependent.updated_at = ?
-      WHERE dependent.status = 'queued'
-        AND dependent.task_kind = 'restore'
-        AND dependency.status IN ('failed', 'cancelled')`,
-    [now, now]
-  )
   // It reads tasks others are adding, and MySQL may end it for a deadlock,
-  // which would end the Relay's whole pass: it runs once more.
-  yield* failDependents.pipe(Effect.catchIf(isDeadlock, () => failDependents))
+  // which would end the Relay's whole pass.
+  yield* database
+    .execute(
+      "backup_dependency_failures",
+      `UPDATE ${databaseTable("backup_task")} dependent
+         JOIN ${databaseTable("backup_task")} dependency
+           ON dependency.id = dependent.depends_on_task_id
+          SET dependent.status = 'failed',
+              dependent.error = 'The pre-restore safety backup did not complete',
+              dependent.finished_at = ?,
+              dependent.updated_at = ?
+        WHERE dependent.status = 'queued'
+          AND dependent.task_kind = 'restore'
+          AND dependency.status IN ('failed', 'cancelled')`,
+      [now, now]
+    )
+    .pipe(Effect.retry({ times: 1, while: isDeadlock }))
   const rows = yield* database.queryRows<DispatchableBackupRow>(
     "backup_dispatchable_list",
     `SELECT backup.id AS backup_id, backup.target_kind, backup.target_id,
