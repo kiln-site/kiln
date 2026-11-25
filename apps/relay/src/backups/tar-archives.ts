@@ -954,6 +954,14 @@ async function readOneFile(
   }
 }
 
+/**
+ * Whether the Relay runs from its source, whose helpers are of a stock image
+ * and find its code and tools in what development mounts into it.
+ */
+export function helpersInDevelopment(): boolean {
+  return extname(process.argv[1] ?? "") === ".ts"
+}
+
 // Runs one step of swapping a restore in, in a helper of its own.
 async function runStep(
   config: RelayConfig,
@@ -966,7 +974,7 @@ async function runStep(
   const relay = await relayContainer(config, engine)
   const name = helperName(config)
   const main = process.argv[1] ?? ""
-  const development = extname(main) === ".ts"
+  const development = helpersInDevelopment()
   const entry = join(dirname(main), `tar-restore-helper${extname(main)}`)
   const cmd = [
     ...(development ? ["--import", "tsx"] : []),

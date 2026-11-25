@@ -1812,10 +1812,20 @@ export class BackupManager {
             finishTarRestore(this.#config, this.#engine, journal, this.#fences)
           )
           if (finished) {
+            const task = yield* this.#state.getBackupTask(journal.taskId)
+            const how = stopApps
+              ? "Finished when asked, after its swap stopped"
+              : null
+            // restic sets those last, which finishing the swap doesn't.
+            const warning =
+              task?.input.kind === "restore" &&
+              task.input.source.kind === "restic"
+                ? `${how ?? "Finished after the Relay restarted"}. The volume's own folder keeps the extended attributes it had`
+                : how
             yield* this.#state.completeRecoveredRestore(
               journal.taskId,
               Date.now(),
-              stopApps ? "Finished when asked, after its swap stopped" : null
+              warning
             )
           }
         })

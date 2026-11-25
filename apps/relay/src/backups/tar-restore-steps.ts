@@ -71,10 +71,19 @@ export async function runTarRestoreStep(
       return
     case "unwrap": {
       // By a name nothing restored has at its root, which a restore refuses.
+      // All of it is checked before anything the volume holds is cleared.
+      const restored = join(stagingPath, "volume")
+      await requireStagingFolder(restored)
+      const names = await readdir(restored)
+      if (
+        (await readdir(stagingPath)).length !== 1 ||
+        names.some((name) => name.startsWith(TAR_RESTORE_STAGING_PREFIX))
+      ) {
+        throw new Error("The snapshot doesn't hold a volume alone")
+      }
       const wrapped = join(stagingPath, staging)
-      await rename(join(stagingPath, "volume"), wrapped)
-      await requireStagingFolder(wrapped)
-      for (const name of await readdir(wrapped)) {
+      await rename(restored, wrapped)
+      for (const name of names) {
         await rename(join(wrapped, name), join(stagingPath, name))
       }
       await rmdir(wrapped)

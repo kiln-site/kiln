@@ -12,6 +12,7 @@ import type { ResticSpawn } from "../restic.js"
 import {
   helperBody,
   helperName,
+  helpersInDevelopment,
   relayContainer,
   type TarSource,
 } from "./tar-archives.js"
@@ -45,6 +46,8 @@ export function resticHelperSpawn(options: {
       const host = yield* promiseEffect(options.hostDataDirectory)
       const repository = env.RESTIC_REPOSITORY ?? ""
       const local = repository.startsWith("/")
+      // Cancelled while Docker was still being asked.
+      if (child.killed) return 1
       const folders = [
         ...(local ? [repository] : []),
         ...(env.RESTIC_CACHE_DIR ? [env.RESTIC_CACHE_DIR] : []),
@@ -57,8 +60,7 @@ export function resticHelperSpawn(options: {
             target: path,
           })),
           cmd: args,
-          // Development's restic is in a volume of the Relay's.
-          development: command !== "restic",
+          development: helpersInDevelopment(),
           entrypoint: command,
           env,
           memoryBytes: null,
@@ -79,6 +81,7 @@ export function resticHelperSpawn(options: {
         )
         output.stdout.pipe(child.stdout)
         output.stderr.pipe(child.stderr)
+        if (child.killed) return 1
         yield* engine.startContainer(created.Id)
         yield* child.started(
           engine
@@ -116,16 +119,16 @@ class HelperProcess extends EventEmitter {
   readonly stderr = new PassThrough()
   readonly stdin = null
   readonly stdout = new PassThrough()
-  #killed = false
+  killed = false
   #stop: Effect.Effect<void> | null = null
 
   started(stop: Effect.Effect<void>): Effect.Effect<void> {
     this.#stop = stop
-    return this.#killed ? stop : Effect.void
+    return this.killed ? stop : Effect.void
   }
 
   kill(): boolean {
-    this.#killed = true
+    this.killed = true
     if (this.#stop) Effect.runFork(this.#stop)
     return true
   }

@@ -75,3 +75,47 @@ it("finishes an install cut off midway when run again, and refuses to clear what
     runTarRestoreStep(root, "discard", "../outside", null)
   ).rejects.toThrow("Invalid staging folder")
 })
+
+it("moves what restic restored out of the root it restored it under", async () => {
+  const { root } = await scratch()
+  await rm(join(root, staging), { recursive: true })
+  await mkdir(join(root, staging, "volume", "volume"), { recursive: true })
+  await writeFile(join(root, staging, "volume", "volume", "rows"), "restored")
+
+  await runTarRestoreStep(root, "unwrap", staging, null)
+  await runTarRestoreStep(root, "clear", staging, null)
+  await runTarRestoreStep(root, "install", staging, null)
+
+  expect(await readdir(root)).toEqual(["volume"])
+  expect(await readFile(join(root, "volume", "rows"), "utf8")).toBe("restored")
+})
+
+// A snapshot of a bucket may be of anything. One a swap couldn't finish must
+// be refused while the volume still holds what it held.
+it.each([
+  ["beside the volume", ["volume", "etc"]],
+  ["named for a restore", [`volume/${staging}`]],
+])("refuses a snapshot with something %s", async (_, folders) => {
+  const { root } = await scratch()
+  await rm(join(root, staging), { recursive: true })
+  for (const folder of folders) {
+    await mkdir(join(root, staging, folder), { recursive: true })
+  }
+
+  await expect(
+    runTarRestoreStep(root, "unwrap", staging, null)
+  ).rejects.toThrow("a volume alone")
+  expect(await readFile(join(root, "old.txt"), "utf8")).toBe("old")
+})
+
+it("refuses a snapshot whose volume is a link", async () => {
+  const { outside, root } = await scratch()
+  await rm(join(root, staging), { recursive: true })
+  await mkdir(join(root, staging))
+  await symlink(outside, join(root, staging, "volume"))
+
+  await expect(
+    runTarRestoreStep(root, "unwrap", staging, null)
+  ).rejects.toThrow()
+  expect(await readdir(outside)).toEqual(["keep.txt"])
+})
