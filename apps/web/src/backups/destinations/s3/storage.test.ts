@@ -152,5 +152,27 @@ describeMysql("backup storage deletion", () => {
           assert.strictEqual(purge.mock.calls.length, 0)
         })
     )
+
+    it.effect(
+      "purges a paired Relay's repositories and leaves a removed one's files",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage
+          yield* insertRelay("relay-one")
+          yield* insertRepository("repo-one")
+          yield* insertRepository("repo-gone", {
+            relay_id: "relay-gone",
+            object_prefix: "team/kiln/kiln.dev/relay-gone/restic/instance/x/y",
+          })
+
+          yield* deleteBackupStorageEffect(storageId)
+
+          assert.deepStrictEqual(
+            purge.mock.calls.map(([, prefix]) => prefix),
+            [repositoryPrefix]
+          )
+          assert.isUndefined(yield* storageRow)
+        })
+    )
   })
 })

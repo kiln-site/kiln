@@ -419,13 +419,16 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
       return yield* marked.failure
     }
     const credential = marked.success
+    // Forgetting a removed Relay's backups leaves their files, so they stay.
     const repositories = yield* database.queryRows<
       { id: string; object_prefix: string | null } & RowDataPacket
     >(
       "backup_storage_delete_repositories",
-      `SELECT id, object_prefix
-         FROM ${databaseTable("backup_repository")}
-        WHERE storage_id = ?`,
+      `SELECT repository.id, repository.object_prefix
+         FROM ${databaseTable("backup_repository")} repository
+         JOIN ${databaseTable("relay")} relay
+           ON relay.id = repository.relay_id
+        WHERE repository.storage_id = ?`,
       [storageId]
     )
     const purged = yield* Effect.result(

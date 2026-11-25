@@ -133,7 +133,9 @@ describeMysql("backup forgetting", () => {
           )
 
           assert.deepStrictEqual(yield* ids("backup"), ["backup-two"])
+          // What opens the files it left.
           assert.deepStrictEqual(yield* ids("backup_repository"), [
+            "repository-one",
             "repository-two",
           ])
           assert.deepStrictEqual(yield* policyTargets, [
@@ -221,6 +223,7 @@ describeMysql("backup forgetting", () => {
 
         assert.deepStrictEqual(yield* ids("backup"), ["backup-kept"])
         assert.deepStrictEqual(yield* ids("backup_repository"), [
+          "relay-gone-repo",
           "relay-kept-repo",
         ])
         assert.deepStrictEqual(yield* policyTargets, [

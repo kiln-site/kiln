@@ -3871,6 +3871,11 @@ export const createsOfDeletedBackupsEffect = Effect.fn(
   return rows
 })
 
+/**
+ * Removes a backup of a Relay since removed from the catalog, and leaves what
+ * it stored. Its repository's record stays too: it holds the only password
+ * that opens the files, and the Relay, added again, backs up into them.
+ */
 export const forgetBackupEffect = Effect.fn("backups.forget")(function* (
   backupId: string
 ) {
@@ -3878,13 +3883,10 @@ export const forgetBackupEffect = Effect.fn("backups.forget")(function* (
   return yield* database.transaction("backup_forget", (transaction) =>
     Effect.gen(function* () {
       const backup = (yield* transaction.queryRows<
-        Pick<
-          BackupRow,
-          "relay_id" | "repository_id" | "target_id" | "target_kind"
-        > &
+        Pick<BackupRow, "relay_id" | "target_id" | "target_kind"> &
           RowDataPacket
       >(
-        `SELECT relay_id, repository_id, target_kind, target_id
+        `SELECT relay_id, target_kind, target_id
              FROM ${databaseTable("backup")}
             WHERE id = ?
             LIMIT 1
@@ -3919,17 +3921,6 @@ export const forgetBackupEffect = Effect.fn("backups.forget")(function* (
         `DELETE FROM ${databaseTable("backup")} WHERE id = ?`,
         [backupId]
       )
-      if (backup.repository_id) {
-        yield* transaction.execute(
-          `DELETE FROM ${databaseTable("backup_repository")}
-            WHERE id = ?
-              AND NOT EXISTS (
-                SELECT 1 FROM ${databaseTable("backup")}
-                 WHERE repository_id = ?
-              )`,
-          [backup.repository_id, backup.repository_id]
-        )
-      }
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("backup_policy")}
           WHERE relay_id = ? AND target_kind = ? AND target_id = ?
@@ -3974,10 +3965,6 @@ export const forgetRelayBackupsEffect = Effect.fn("backups.forgetRelay")(
         )
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("backup_policy")} WHERE relay_id = ?`,
-          [relayId]
-        )
-        yield* transaction.execute(
-          `DELETE FROM ${databaseTable("backup_repository")} WHERE relay_id = ?`,
           [relayId]
         )
         return result.affectedRows

@@ -216,7 +216,7 @@ export function RemoveRelayDialog({
   const queryClient = useQueryClient()
   const pendingRef = React.useRef(false)
   const [pending, setPending] = React.useState(false)
-  const [forgetBackups, setForgetBackups] = React.useState(true)
+  const [forgetBackups, setForgetBackups] = React.useState(false)
   const [removeVanityDomains, setRemoveVanityDomains] = React.useState(true)
   const removeMutation = useMutation({
     mutationFn: removeRelay,
@@ -316,8 +316,8 @@ export function RemoveRelayDialog({
                 id={`forget-backups-description-${relayId}`}
                 className="mt-0.5 block text-xs leading-5 text-muted-foreground"
               >
-                Remove backup history from Hearth. Stored backup files on the
-                Relay are not deleted.
+                Remove backup history from Hearth, so Kiln can’t restore them
+                any more. Stored backup files are not deleted.
               </span>
             </span>
           </label>
