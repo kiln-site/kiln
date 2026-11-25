@@ -323,8 +323,7 @@ const passesRun = Effect.gen(function* () {
     let ended = false
     for (let read = 0; read < 25; read += 1) {
       const tasks = yield* selectRows<{ status: string }>("backup_task")
-      ended =
-        tasks.length > 0 && tasks.every(({ status }) => status === "failed")
+      ended = tasks.every(({ status }) => status === "failed")
     }
     quiet = ended && relay.listed === listed ? quiet + 1 : 0
     if (quiet === 2) return
@@ -336,13 +335,10 @@ const inTestTime = <A, E, R>(test: Effect.Effect<A, E, R>) =>
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
   ).pipe(
     Effect.andThen(test),
-    // A pass still to come goes now: the real clock would drop its timer, and
+    // The real clock would drop the timer of a pass still to come, and
     // Hearth, still counting on it, would start none in the next test.
-    Effect.ensuring(
-      Effect.promise(() => vi.runOnlyPendingTimersAsync()).pipe(
-        Effect.ensuring(Effect.sync(() => vi.useRealTimers()))
-      )
-    )
+    Effect.tap(() => passesRun),
+    Effect.ensuring(Effect.sync(() => vi.useRealTimers()))
   )
 
 const backups = () =>
@@ -610,7 +606,7 @@ describeMysql("A schedule's backups to a bucket", () => {
           // Hearth's IDs are its own: the run is taken all the same.
           assert.notStrictEqual(takenOf(taken, member).backupId, squatted)
           assert.lengthOf(yield* backups(), 2)
-        }),
+        }).pipe(inTestTime),
       60_000
     )
 
@@ -644,8 +640,9 @@ describeMysql("A schedule's backups to a bucket", () => {
             const refused = yield* ask(relayId)
 
             assert.isFalse(refused.taken)
+            yield* passesRun
           }
-        }),
+        }).pipe(inTestTime),
       60_000
     )
 
@@ -683,7 +680,6 @@ describeMysql("A schedule's backups to a bucket", () => {
           arrive()
           yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_000))
           assert.isTrue((yield* run(6)).taken)
-          yield* passesRun
         }).pipe(inTestTime),
       60_000
     )
