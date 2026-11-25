@@ -20,15 +20,36 @@ start request still takes both (`backup`, and `deleteSource` for a move: a
 final full backup, then deletion, as deleting one with a final backup
 does, needing its kind's delete permission and `backup.create`).
 
-The dialog brings everything besides the data, settings and limits along
-as one choice, **Copy metadata**, of what the kind has: people with access,
-backups, activity history, and for a move, domains and web routes. Its
-info card says which parts come and why any can't. When the Relay can't say
-which web routes it has, the dialog won't start a move that takes them, and
-Hearth reads them again before anything is made or stopped. Under it, the dialog
-lists what someone should know before copying this one, which each kind
-words for itself (a copy that starts empty, what stays behind, what stops
-reaching it).
+The dialog lists what comes along besides the data and settings, which
+always do: domains, for a move, people with access, backups and activity
+history, each with a switch of its own, and only what this one has. Each
+domain says what becomes of it: when its DNS switches, or that someone has to
+point it. Web routes its Relay can't say are never taken for none: the dialog
+won't start a move that takes them, and Hearth reads them again before
+anything is made or stopped.
+
+Under that it says what to know before copying this one, which each kind words
+for itself. What bites stands out (a copy that starts empty, what stops
+reaching it, schedules that go on naming the old one); the rest is only worth
+knowing.
+
+### Where domains would work
+
+Once a Relay is chosen for a move with domains, the dialog says whether they
+would work there (`relay-web-serving.server.ts`). Nothing waits for it, and
+nothing is refused:
+
+- **It can't serve websites**, as the Relay is set up: it has no web proxy, or
+  its Traefik isn't running or can't have its ports. Domains are moved and set
+  up there, and their DNS stays where it is until it can, which the DNS worker
+  looks for (`reconcileAddressEffect`); each says why on its Network page. A
+  move doesn't wait for the copy to be served there.
+- **Nothing answers there from outside**, on ports 80 and 443 of its public
+  address, or that's a private one. Asked from Hearth and from the old Relay
+  (`relay.web.reach`), usually on another network: Hearth may share the new
+  one's, which often can't reach its own public address. Domains move, and
+  don't answer until it does.
+- **Another proxy serves its websites**, which Kiln can't ask.
 
 ## Kinds
 

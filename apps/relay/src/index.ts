@@ -52,6 +52,8 @@ import {
   instanceTailscaleMemberId,
   relayInstanceWebRouteStateSchema,
   relayInstanceWebRoutesCheckSchema,
+  relayWebReachInputSchema,
+  relayWebReachResultSchema,
   relayInstanceWebRoutesReadSchema,
   relayCarriedPrimaryRoutesSchema,
   relayForgetCarriedPrimaryRoutesSchema,
@@ -211,6 +213,7 @@ import {
   WebCertificates,
   webCertificateStorePath,
 } from "./web-certificates.js"
+import { webReachable } from "./web-reach.js"
 import {
   forkPromise,
   promiseEffect,
@@ -2700,6 +2703,12 @@ async function executeControlRequest(
     case "relay.desktop.detach":
       desktop.detach(relayDesktopDetachSchema.parse(request.payload).ticket)
       return { detached: true }
+    case "relay.web.reach":
+      return relayWebReachResultSchema.parse({
+        reached: await webReachable(
+          relayWebReachInputSchema.parse(request.payload).host
+        ),
+      })
     case "relay.proxy.read": {
       const settings = await lifecycle.proxySettings()
       const input = relayProxyReadInputSchema.parse(request.payload)

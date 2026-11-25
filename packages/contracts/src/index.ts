@@ -1945,6 +1945,17 @@ export const relayInstanceWebRoutesCheckSchema = z
 
 export const RELAY_PROXY_TRIAL_PATH = "/.well-known/kiln-route"
 
+/**
+ * Whether something answers at a public host's website ports, asked of a Relay
+ * for how another network sees it. Never of a private address.
+ */
+export const relayWebReachInputSchema = z
+  .object({ host: z.string().trim().min(1).max(253) })
+  .strict()
+export const relayWebReachResultSchema = z
+  .object({ reached: z.boolean() })
+  .strict()
+
 export const relayProxyDiagnosticsSchema = z
   .object({
     browserOrigin: z.url(),

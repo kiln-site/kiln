@@ -52,7 +52,7 @@ const privateAddresses = (() => {
   return list
 })()
 
-function isPrivateAddress(host: string): boolean {
+export function isPrivateAddress(host: string): boolean {
   const family = isIP(host)
   return (
     family !== 0 && privateAddresses.check(host, family === 6 ? "ipv6" : "ipv4")

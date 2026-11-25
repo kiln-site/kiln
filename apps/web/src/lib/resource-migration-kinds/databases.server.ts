@@ -26,6 +26,7 @@ import {
   ownerHandOver,
   recordedIn,
   relays,
+  warns,
   type MigratedKind,
 } from "@/lib/resource-migration-kinds/kind.server"
 
@@ -203,7 +204,9 @@ export const databases: MigratedKind = {
     const dumped = databaseEngineSupportsLogicalBackups(database.engine)
     const data = dumped
       ? "The copy holds what was in it when the copy started. What's written after that isn't carried, so stop what writes to it first."
-      : `Kiln can't dump ${engineNames[database.engine]}, so its data isn't carried: the copy starts empty.`
+      : warns(
+          `Kiln can't dump ${engineNames[database.engine]}, so its data isn't carried: the copy starts empty.`
+        )
     const login =
       "The copy has its own password and hostname. What uses it needs both."
     const members = database.members.length
@@ -213,7 +216,9 @@ export const databases: MigratedKind = {
         data,
         ...(members > 0
           ? [
-              `${members === 1 ? "1 thing connects" : `${members} things connect`} to it on ${relay.name}. ${members === 1 ? "It stays" : "They stay"} there and can't reach the copy on another Relay.`,
+              warns(
+                `${members === 1 ? "1 thing connects" : `${members} things connect`} to it on ${relay.name}. ${members === 1 ? "It stays" : "They stay"} there and can't reach the copy on another Relay.`
+              ),
             ]
           : []),
         login,

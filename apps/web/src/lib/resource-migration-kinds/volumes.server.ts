@@ -14,6 +14,7 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import {
   fail,
   relay,
+  warns,
   type MigratedKind,
 } from "@/lib/resource-migration-kinds/kind.server"
 import { readRelayVolumes } from "@/server/app-backups.server"
@@ -132,7 +133,9 @@ export const volumes: MigratedKind = {
     const live =
       running.length > 0
         ? [
-            `${running.length === 1 ? `${running[0]!.container} is` : `${running.length} containers are`} running on it. What ${running.length === 1 ? "it writes" : "they write"} while it's copied may be carried half-written or not at all, so stop ${running.length === 1 ? "it" : "them"} first for an exact copy.`,
+            warns(
+              `${running.length === 1 ? `${running[0]!.container} is` : `${running.length} containers are`} running on it. What ${running.length === 1 ? "it writes" : "they write"} while it's copied may be carried half-written or not at all, so stop ${running.length === 1 ? "it" : "them"} first for an exact copy.`
+            ),
           ]
         : []
     const users = volume.users.length

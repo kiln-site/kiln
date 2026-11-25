@@ -505,6 +505,7 @@ export function controlRequestLocks(
     case "tunnel.state":
     case "relay.host.read":
     case "relay.proxy.read":
+    case "relay.web.reach":
     case "relay.proxy.config.read":
     case "relay.pairing.create":
     case "relay.pairing.list":

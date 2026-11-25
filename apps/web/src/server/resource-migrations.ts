@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
+  resourceMigrationServingInputSchema,
   resourceReferenceSchema,
   startResourceMigrationInputSchema,
 } from "@/lib/resource-migration-input"
@@ -15,6 +16,16 @@ export const previewResourceMigration = createServerFn({ method: "GET" })
     const { previewResourceMigrationHandler } =
       await import("@/server/resource-migrations.server")
     return previewResourceMigrationHandler(user, data)
+  })
+
+/** Whether domains moved with a resource to a Relay would work there. */
+export const getResourceMigrationServing = createServerFn({ method: "GET" })
+  .validator(resourceMigrationServingInputSchema)
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const { resourceMigrationServingHandler } =
+      await import("@/server/resource-migrations.server")
+    return resourceMigrationServingHandler(user, data)
   })
 
 /** Starts copying a resource to a new one, in the background. */

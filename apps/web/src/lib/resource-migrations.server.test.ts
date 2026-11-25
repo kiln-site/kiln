@@ -133,6 +133,8 @@ const relay = {
   proxy: null as "served" | "unrouted" | "down" | null,
   // How many times it answers before it can't be reached.
   proxyAnswers: Infinity,
+  // Whether each Relay's proxy runs at all.
+  proxyRuns: true,
   pulls: new Map<string, "pulling" | "cancelled">(),
   // What each Relay routes, by the instance it's for.
   routes: new Map<string, Array<Record<string, unknown>>>(),
@@ -151,6 +153,7 @@ function resetRelay() {
   relay.provisioningHeld.clear()
   relay.proxy = null
   relay.proxyAnswers = Infinity
+  relay.proxyRuns = true
   relay.pulls.clear()
   relay.routes.clear()
   relay.servers.clear()
@@ -353,6 +356,18 @@ function answer(
     case "backup.task.enqueue":
       // Followed by Hearth's own records here.
       throw new Error("The Relay's backup queue is busy")
+    case "relay.proxy.read":
+      return {
+        diagnostics: {
+          browserOrigin: "https://relay.test",
+          containerRunning: relay.proxyRuns,
+          mode: "traefik",
+          ports: [],
+          publicReachability: "unknown",
+          status: relay.proxyRuns ? "ready" : "starting",
+          warnings: [],
+        },
+      }
     case "instance.network.routes.check":
       relay.proxyAnswers -= 1
       if (relay.proxyAnswers < 0) throw new Error("The Relay is away")
@@ -1133,6 +1148,9 @@ describeMysql("Server migrations", () => {
           assert.deepStrictEqual(hostnamesOn(newRelay, copy), [])
           yield* stopHearth(first)
           const second = yield* startHearth
+          // Its Relay can't serve anything, so its DNS is what waits.
+          relay.proxy = "down"
+          relay.proxyRuns = false
           relay.deployment = { error: null, state: "succeeded" }
           const row = yield* migrationUntil(id, ended)
           yield* operationsEnded
