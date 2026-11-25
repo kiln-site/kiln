@@ -2718,8 +2718,8 @@ describeMysql("database migrations", () => {
       schemaBuildTimeout
     )
 
-    // An incremental step backed up game servers alone. Unnamed, it would now
-    // take what else its schedule has, backed up already or not its owner's.
+    // An incremental step backed up game servers alone, whatever it named. It
+    // would now take the rest, which no one was checked for when it was saved.
     it.effect(
       "keeps an incremental backup step to the game servers it backed up",
       () =>
@@ -2768,7 +2768,12 @@ describeMysql("database migrations", () => {
           yield* target(schedules.mixed, "database", "d".repeat(12))
           yield* target(schedules.servers, "instance", "a".repeat(12))
           yield* step(steps.mixed, schedules.mixed, 0, {})
-          yield* step(steps.named, schedules.mixed, 1, { targetKeys: [] })
+          yield* step(steps.named, schedules.mixed, 1, {
+            targetKeys: [
+              `${relayId}:database:${"d".repeat(12)}`,
+              `${relayId}:instance:${"a".repeat(12)}`,
+            ],
+          })
           yield* step(steps.servers, schedules.servers, 0, {})
 
           yield* applyMigrations(migrations)
@@ -2789,7 +2794,7 @@ describeMysql("database migrations", () => {
             ])
           ).toEqual([
             [steps.mixed, [`${relayId}:instance:${"a".repeat(12)}`]],
-            [steps.named, []],
+            [steps.named, [`${relayId}:instance:${"a".repeat(12)}`]],
             [steps.servers, undefined],
           ])
         }),

@@ -8,10 +8,10 @@ import { databaseTableName } from "@/lib/database-config"
 
 /**
  * An incremental backup step backed up the game servers of its schedule, and
- * now backs up everything in it that it isn't told to leave out. One that
- * named nothing, in a schedule with anything else, names those game servers,
- * so it goes on backing up what it did. What's sent of it is owed to the
- * Relays again.
+ * now backs up everything in it that it isn't told to leave out. In a schedule
+ * with anything else, one names the game servers it backed up, so it goes on
+ * backing up those alone: whoever saved it was never checked for the rest, even
+ * what it named. What's sent of it is owed to the Relays again.
  *
  * And which format a snapshot's download is prepared as, null being the zip
  * they all were.
@@ -44,9 +44,7 @@ export const incrementalDefault: Migration = {
     `
     for (const action of actions) {
       const config = record(action.config)
-      if (config?.mode !== "incremental" || config.targetKeys !== undefined) {
-        continue
-      }
+      if (config?.mode !== "incremental") continue
       const targets = yield* sql<{
         id: string
         kind: "app" | "database" | "instance" | "relay" | "volume"
@@ -57,11 +55,15 @@ export const incrementalDefault: Migration = {
          WHERE schedule_id = ${action.scheduleId}
       `
       if (targets.every(({ kind }) => kind === "instance")) continue
+      const servers = targets
+        .filter(({ kind }) => kind === "instance")
+        .map((target) => scheduleTargetKey(target))
+      const chosen = config.targetKeys
       const named = JSON.stringify({
         ...config,
-        targetKeys: targets
-          .filter(({ kind }) => kind === "instance")
-          .map((target) => scheduleTargetKey(target)),
+        targetKeys: Array.isArray(chosen)
+          ? servers.filter((key) => chosen.includes(key))
+          : servers,
       })
       yield* sql`
         UPDATE ${actionTable} SET action_config = ${named}

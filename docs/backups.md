@@ -579,8 +579,9 @@ The step waits for its task to arrive and finish. What that leaves:
 A step is incremental or full for everything it backs up but Kiln's own backup,
 which is full in either: each execution carries its own mode, and Kiln's in a
 bucket is Hearth's to take. A step from when only game servers could be
-incremental, which named no targets in a schedule with anything else, names those
-game servers since migration 101.
+incremental, in a schedule with anything else, names the game servers it backed
+up since migration 101, whatever it named: nothing checked the rest when it was
+saved.
 
 A step that backs up an App backs up each volume it uses, each admitted on its own. It's taken live,
 or stopped once for all of them as a batch; saving a stopped one takes
