@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import { encryptWithKeyring, parseSecretKeyring } from "../../keyring.mjs"
@@ -174,6 +175,19 @@ describeMysql("backup repository access", () => {
           )
           assert.strictEqual(yield* status("relay-two", write), "signed")
           assert.strictEqual(yield* status("relay-three", write), "refused")
+
+          // The last one deleted is still to be pruned.
+          const deletedAt = Date.parse("2026-11-25T00:00:00Z")
+          yield* database.execute(
+            "test_backup_deleted",
+            `UPDATE ${databaseTable("backup")}
+                SET status = 'deleted', deleted_at = ? WHERE id = ?`,
+            [deletedAt, "linked"]
+          )
+          yield* TestClock.setTime(deletedAt + Duration.toMillis("1 hour"))
+          assert.strictEqual(yield* status("relay-two", write), "signed")
+          yield* TestClock.setTime(deletedAt + Duration.toMillis("2 days"))
+          assert.strictEqual(yield* status("relay-two", write), "refused")
         })
     )
 

@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import type {
@@ -24,6 +24,9 @@ type RepositoryRow = RowDataPacket & {
   storage_id: string | null
 }
 
+// A delete's prune runs after the delete has ended, and writes as it did.
+const deletedReachMs = 24 * 60 * 60 * 1000
+
 const refused = (reason: string): BackupRepositoryAccessReply => ({
   reason: reason.slice(0, 600),
   status: "refused",
@@ -46,6 +49,7 @@ export const backupRepositoryAccessEffect = Effect.fnUntraced(function* (
   request: BackupRepositoryAccessRequest
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const [repository] = yield* database.queryRows<RepositoryRow>(
     "backup_repository_access",
     `SELECT repository.object_prefix, repository.storage_id,
@@ -55,7 +59,10 @@ export const backupRepositoryAccessEffect = Effect.fnUntraced(function* (
                WHERE backup.repository_id = repository.id
                  AND backup.relay_id = ?
                  AND backup.linked_from_backup_id IS NOT NULL
-                 AND backup.status IN ('available', 'deleting')
+                 AND (
+                   backup.status IN ('available', 'deleting')
+                   OR (backup.status = 'deleted' AND backup.deleted_at > ?)
+                 )
             ) AS linked,
             NOT EXISTS (
               SELECT 1 FROM ${databaseTable("relay")} relay
@@ -64,7 +71,7 @@ export const backupRepositoryAccessEffect = Effect.fnUntraced(function* (
        FROM ${databaseTable("backup_repository")} repository
       WHERE repository.id = ?
       LIMIT 1`,
-    [relayId, request.repositoryId]
+    [relayId, now - deletedReachMs, request.repositoryId]
   )
   const own = repository?.relay_id === relayId
   if (

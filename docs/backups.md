@@ -1164,7 +1164,9 @@ refuses that write, such as a bucket at its provider's storage cap or a
 read-only key, commands that only read the repository (snapshot lookups,
 sizes, restores, and export downloads) run again with `--no-lock`, so backups
 stay restorable. That's safe because the Relay's single backup worker is the
-only writer to its repositories. Creates, forgets, and prunes still need the
+only writer to its repositories. Another Relay reads without the lock too, and
+if the first prunes what it's reading, its restore fails before it changes
+anything and can be run again. Creates, forgets, and prunes still need the
 lock, so they fail until the storage accepts writes again.
 
 Pre-restore safety backups and final-deletion backups stay full zip archives
