@@ -7,6 +7,7 @@ import {
   type RelayInstanceWebRouteInput,
   type ResourceLimits,
 } from "@workspace/contracts"
+import { logException } from "@workspace/telemetry"
 import { Effect } from "effect"
 import type { WorkflowEngine } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
@@ -287,7 +288,7 @@ export interface MigratedKind {
     readonly served: (
       migration: Migration
     ) => Effect.Effect<
-      "down" | "served" | "unknown" | "unrouted",
+      "down" | "partly" | "served" | "unknown" | "unrouted",
       unknown,
       Database
     >
@@ -580,8 +581,8 @@ export const copyWebRoutes = Effect.fnUntraced(function* (
 
 /**
  * Whether a copy's Relay serves its routes yet: `unknown` where another proxy
- * does, which can't be asked, and `down` only when none of them reaches it,
- * since one that never did needn't now.
+ * does, which can't be asked, `down` when none of them reaches it, and
+ * `partly` when some do: the rest may not have started, or never did.
  */
 export const webRoutesServed = Effect.fnUntraced(function* (
   kind: "app" | "instance",
@@ -597,10 +598,9 @@ export const webRoutesServed = Effect.fnUntraced(function* (
     )
   )
   if (answers === null || answers.length === 0) return "unknown" as const
-  if (answers.some(({ state }) => state === "served")) return "served" as const
-  return answers.some(({ state }) => state === "down")
-    ? ("down" as const)
-    : ("unrouted" as const)
+  const is = (wanted: string) => answers.some(({ state }) => state === wanted)
+  if (is("down")) return is("served") ? ("partly" as const) : ("down" as const)
+  return is("served") ? ("served" as const) : ("unrouted" as const)
 })
 
 /**
@@ -661,9 +661,9 @@ export function moveWebRoutes(
         resourceType: kind,
       }
     )
-    // Their certificates are asked for once they point there: those Kiln
-    // doesn't point are up to whoever does, and one whose record couldn't be
-    // changed yet is released when it is.
+    // Their certificates are asked for once they point there, which changing
+    // a record says itself. This is for those Kiln doesn't point, which are
+    // up to whoever does.
     const addresses = yield* listResourceAddressesEffect({
       relayId: destination.id,
       resourceId: to.id,
@@ -677,6 +677,13 @@ export function moveWebRoutes(
     yield* releaseWebCertificatesEffect(
       destination.id,
       copy.flatMap(routeHostnames).filter((name) => !waiting.has(name))
+    ).pipe(
+      Effect.catch((cause) =>
+        logException(cause, {
+          attributes: { "relay.id": destination.id },
+          operation: "resourceMigrations.releaseCertificates",
+        })
+      )
     )
   })
 }

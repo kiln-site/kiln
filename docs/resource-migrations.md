@@ -124,7 +124,7 @@ deploys as any deployment of it would.
 
 Once it's ready its Relay is given its routes, and asked whether its own
 Traefik serves them, before any name points there. A copy that doesn't start,
-or that Traefik can't reach, ends the move: it's removed, the old one is
+or none of whose routes Traefik reaches, ends the move: it's removed, the old one is
 started again, and its domains, owner and deploying on a push never left it.
 It's the same when the move is cancelled while the copy starts. A Relay whose
 websites another proxy serves can't be asked, and isn't.

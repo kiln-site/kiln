@@ -675,11 +675,6 @@ const reconcileAddressEffect = Effect.fn("addresses.reconcile")(function* (
       recordAddressErrorEffect(row.id, error.message).pipe(Effect.ignore)
     )
   )
-  // It resolved all along, to where it was before, so the Relay it points at
-  // now held its certificate back, or was refused it.
-  if (!row.game && row.target !== null && row.target !== desired.target) {
-    yield* releaseWebCertificatesEffect(row.relayId, [row.hostname])
-  }
   return true
 })
 
@@ -845,6 +840,18 @@ const syncRecordsEffect = Effect.fnUntraced(function* (
     srvRecordId = found.id
   } else {
     yield* dropSrvRecordEffect(row, apiToken, zoneId)
+  }
+  // It resolved all along, to where it was before, so the Relay it points at
+  // now held its certificate back, or was refused it. Told before the address
+  // is in step, so one that couldn't be is told on the next try.
+  if (!row.game && row.target !== null && row.target !== desired.target) {
+    yield* releaseWebCertificatesEffect(row.relayId, [row.hostname]).pipe(
+      Effect.mapError(() =>
+        domainFailure(
+          `Points at ${desired.target}, whose Relay couldn't be told to ask for its certificate`
+        )
+      )
+    )
   }
   yield* activateAddressEffect({
     id: row.id,

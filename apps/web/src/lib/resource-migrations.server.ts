@@ -16,7 +16,7 @@
  */
 import { randomUUID } from "node:crypto"
 
-import { Cause, Clock, Duration, Effect, Schema } from "effect"
+import { Cause, Clock, Duration, Effect, Result, Schema } from "effect"
 import { Activity } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
 
@@ -580,9 +580,11 @@ const deployCopy = (
   })
 
 // Waits until the copy's Relay serves what it's about to be sent visitors
-// for. One whose Relay can't say, as where another proxy serves it, isn't
-// waited for, nor one that only ever answers as Traefik does with no route:
-// an App may answer just the same.
+// for, all of it while there's time, and some of it after that: a route that
+// never worked stops no move. One whose Relay can't say, as where another
+// proxy serves it, isn't waited for, nor one that only ever answers as
+// Traefik does with no route: an App may answer just the same. A Relay that
+// can't be reached just now is asked again.
 const copyServed = (
   input: ResourceMigrationInput,
   noun: string,
@@ -593,12 +595,19 @@ const copyServed = (
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       until ??= now + Duration.toMillis(SERVE_WITHIN)
-      const served = yield* deploy.served(input)
-      if (served === "served" || served === "unknown") return true
-      if (now < until) return false
-      if (served === "unrouted") return true
+      const served = yield* Effect.result(deploy.served(input))
+      if (Result.isSuccess(served)) {
+        const { success: state } = served
+        if (state === "served" || state === "unknown") return true
+        if (now < until) return false
+        if (state !== "down") return true
+      } else if (now < until) {
+        return false
+      }
       return yield* fail(
-        `The copied ${noun} runs, but its new Relay's proxy can't reach it`
+        Result.isSuccess(served)
+          ? `The copied ${noun} runs, but its new Relay's proxy can't reach it`
+          : `The copied ${noun} runs, but its new Relay couldn't be asked whether it serves it`
       )
     })
   )
