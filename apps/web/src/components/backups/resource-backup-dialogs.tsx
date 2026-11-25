@@ -81,6 +81,7 @@ export function ResourceBackupDialog({
       createBackupRun({
         data: {
           consistency: configuration.consistency,
+          mode: configuration.mode,
           name: configuration.name,
           storageIds: storageIds(configuration),
           targets: [{ ...target, relayId }],
