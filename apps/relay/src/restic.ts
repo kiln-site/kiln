@@ -1,14 +1,7 @@
 import { createHash } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
 import { createWriteStream } from "node:fs"
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  opendir,
-  rm,
-  writeFile,
-} from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, opendir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { Transform } from "node:stream"
@@ -39,11 +32,7 @@ const MAX_STAGING_ENTRIES = 100_000
 const MAX_SKIPPED_ENTRY_WARNINGS = 25
 const MAX_UNLIMITED_RESTORE_BYTES = 1024 ** 4
 const RESTIC_TERMINATE_TIMEOUT_MS = 5_000
-const RESTIC_ENV_ALLOWLIST = [
-  "HOME",
-  "PATH",
-  "TMPDIR",
-] as const
+const RESTIC_ENV_ALLOWLIST = ["HOME", "PATH", "TMPDIR"] as const
 // restic saved the snapshot but couldn't read some of its source files.
 const RESTIC_EXIT_INCOMPLETE = 3
 const MAX_UNREADABLE_FILE_WARNINGS = 25
@@ -68,6 +57,14 @@ export type ResticSnapshotSummary = {
   totalFilesProcessed: number | null
   /** Files restic couldn't read, so the snapshot left out. */
   warnings: Array<string>
+}
+
+/** What restic reads for a snapshot. */
+export type ResticBackupPaths = {
+  cwd: string
+  excludes: ReadonlyArray<string>
+  /** Below `cwd`. */
+  paths: ReadonlyArray<string>
 }
 
 export type TranslatedExcludes = {
@@ -100,17 +97,15 @@ export type ResticDriver = {
     passwords: BackupRecoveryPasswords
     signal: AbortSignal
   }) => Promise<void>
-  backup: (input: {
-    cwd: string
-    excludes: ReadonlyArray<string>
-    location: ResticDriverLocation
-    onProgress?: (progress: ResticProgress) => void
-    password: string
-    /** Below `cwd`. */
-    paths: ReadonlyArray<string>
-    signal: AbortSignal
-    tags: ReadonlyArray<string>
-  }) => Promise<ResticSnapshotSummary>
+  backup: (
+    input: ResticBackupPaths & {
+      location: ResticDriverLocation
+      onProgress?: (progress: ResticProgress) => void
+      password: string
+      signal: AbortSignal
+      tags: ReadonlyArray<string>
+    }
+  ) => Promise<ResticSnapshotSummary>
   cacheCleanup: (input: {
     location: ResticDriverLocation
     password: string
