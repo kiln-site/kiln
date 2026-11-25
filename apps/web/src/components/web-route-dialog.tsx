@@ -41,8 +41,6 @@ export interface WebRouteServiceOption {
   readonly state: string
 }
 
-type Route = RelayInstanceWebRouteInput & { readonly service?: string }
-
 // Adds or edits a domain: a route. Every field stays in place as the
 // choices change, so the dialog never changes size under the pointer.
 export function WebRouteDialog({
@@ -58,13 +56,16 @@ export function WebRouteDialog({
   // Whether Kiln keeps a hostname's record behind Cloudflare's proxy; null
   // when it keeps no record for it.
   proxiedFor: (hostname: string) => boolean | null
-  route?: Route
+  route?: RelayInstanceWebRouteInput
   // An app's services; a game server's routes reach the server itself.
   services?: ReadonlyArray<WebRouteServiceOption>
   onOpenChange: (open: boolean) => void
   // `proxied` when the person changed it, or when it's on, so a hostname
   // the save adds, such as a `www` counterpart, follows what it shows.
-  onSubmit: (route: Route, proxied: boolean | undefined) => Promise<void>
+  onSubmit: (
+    route: RelayInstanceWebRouteInput,
+    proxied: boolean | undefined
+  ) => Promise<void>
 }) {
   const [mode, setMode] = React.useState<"redirect" | "serve">(
     route?.redirect ? "redirect" : "serve"

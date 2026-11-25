@@ -2,10 +2,9 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   appIdSchema,
   instanceIdSchema,
-  relayAppWebRouteInputsSchema,
   relayIdSchema,
   relayInstanceWebRouteIdSchema,
-  relayInstanceWebRouteInputsSchema,
+  relayWebRouteInputsSchemaFor,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -119,14 +118,14 @@ const saveWebRoutesInputSchema = z.discriminatedUnion("resourceType", [
     relayId: relayIdSchema,
     resourceId: instanceIdSchema,
     resourceType: z.literal("instance"),
-    routes: relayInstanceWebRouteInputsSchema,
+    routes: relayWebRouteInputsSchemaFor("instance"),
   }),
   z.object({
     proxy: webRouteProxySchema.optional(),
     relayId: relayIdSchema,
     resourceId: appIdSchema,
     resourceType: z.literal("app"),
-    routes: relayAppWebRouteInputsSchema,
+    routes: relayWebRouteInputsSchemaFor("app"),
   }),
 ])
 

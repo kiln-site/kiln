@@ -150,11 +150,9 @@ export interface RelayAuditQuery {
   readonly to?: number
 }
 
-// A server's route, or an app's (owned by `app:<appId>`), which also names
-// the app's service it reaches.
+// A game server's route, or an App's, whose owner is `app:<appId>`.
 export interface RelayStoredWebRoute extends RelayInstanceWebRoute {
   readonly instanceId: string
-  readonly service?: string
 }
 
 /**
@@ -967,10 +965,7 @@ export class RelayStateStore extends Context.Service<
     >
     readonly listInstanceRoutes: (
       instanceId: string
-    ) => Effect.Effect<
-      ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>,
-      RelayStateError
-    >
+    ) => Effect.Effect<ReadonlyArray<RelayInstanceWebRoute>, RelayStateError>
     readonly listWebRoutes: () => Effect.Effect<
       ReadonlyArray<RelayStoredWebRoute>,
       RelayStateError
@@ -1112,9 +1107,7 @@ export class RelayStateStore extends Context.Service<
     ) => Effect.Effect<void, RelayStateError>
     readonly replaceInstanceRoutes: (
       instanceId: string,
-      routes: ReadonlyArray<
-        RelayInstanceWebRoute & { readonly service?: string }
-      >
+      routes: ReadonlyArray<RelayInstanceWebRoute>
     ) => Effect.Effect<void, RelayStateError>
     readonly touchClient: (
       clientId: string,

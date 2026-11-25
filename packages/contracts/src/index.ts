@@ -1741,6 +1741,9 @@ const relayInstanceWebRouteConfigurationSchema = z
       )
       .nullable(),
     redirect: relayWebRouteRedirectSchema.nullable().default(null),
+    // Which of an App's services it reaches. None for a game server's, which
+    // is one container.
+    service: appServiceNameSchema.optional(),
     stripPrefix: z.boolean().default(true),
     // The port it serves; none for a redirect.
     targetPort: z.number().int().min(1).max(65_535).nullable(),
@@ -1857,27 +1860,35 @@ export const relayInstanceWebRouteStateSchema = z
   })
   .strict()
 
-// App web routes are server routes aimed at one of the app's services.
-export const relayAppWebRouteInputSchema =
-  relayInstanceWebRouteInputSchema.extend({ service: appServiceNameSchema })
+/** The service an App's web route reaches: its only one, unless it says. */
+export function webRouteService(route: { readonly service?: string }): string {
+  return route.service ?? APP_SERVICE
+}
 
-export const relayAppWebRouteSchema = relayInstanceWebRouteSchema.extend({
-  service: appServiceNameSchema,
-})
-
-export const relayAppWebRouteStateSchema =
-  relayInstanceWebRouteStateSchema.extend({
-    routes: relayInstanceWebRouteArraySchema(relayAppWebRouteSchema),
+/**
+ * Web routes as one kind of instance saves them: an App's each name the
+ * service they reach, and a game server's, which has none, never do. It's
+ * the only difference between them.
+ */
+export function relayWebRouteInputsSchemaFor(kind: "app" | "instance") {
+  return relayInstanceWebRouteInputsSchema.superRefine((routes, context) => {
+    routes.forEach((route, index) => {
+      if ((route.service !== undefined) === (kind === "app")) return
+      context.addIssue({
+        code: "custom",
+        message:
+          kind === "app"
+            ? "Choose the service the route reaches"
+            : "A game server's route reaches no service",
+        path: [index, "service"],
+      })
+    })
   })
-
-export const relayAppWebRouteInputsSchema = relayInstanceWebRouteArraySchema(
-  relayAppWebRouteInputSchema
-)
+}
 
 /**
  * An instance's web routes: one request reads them and one saves them, for
- * every kind that has any, naming the kind beside its ID. An App's routes
- * each name the service of it they reach.
+ * every kind that has any, naming the kind beside its ID.
  */
 export const relayInstanceWebRoutesReadSchema = z.discriminatedUnion("kind", [
   z.object({ id: instanceIdSchema, kind: z.literal("instance") }).strict(),
@@ -1889,14 +1900,14 @@ export const relayInstanceWebRoutesWriteSchema = z.discriminatedUnion("kind", [
     .object({
       id: instanceIdSchema,
       kind: z.literal("instance"),
-      routes: relayInstanceWebRouteInputsSchema,
+      routes: relayWebRouteInputsSchemaFor("instance"),
     })
     .strict(),
   z
     .object({
       id: appIdSchema,
       kind: z.literal("app"),
-      routes: relayAppWebRouteInputsSchema,
+      routes: relayWebRouteInputsSchemaFor("app"),
     })
     .strict(),
 ])
@@ -3477,9 +3488,6 @@ export type RelayInstanceImageCheckResult = z.infer<
   typeof relayInstanceImageCheckResultSchema
 >
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
-export type RelayAppWebRoute = z.infer<typeof relayAppWebRouteSchema>
-export type RelayAppWebRouteInput = z.infer<typeof relayAppWebRouteInputSchema>
-export type RelayAppWebRouteState = z.infer<typeof relayAppWebRouteStateSchema>
 export type BrickId = z.infer<typeof brickIdSchema>
 export type BrickVariableValue = z.infer<typeof brickVariableValueSchema>
 export type BrickCatalogDocument = z.infer<typeof brickCatalogDocumentSchema>

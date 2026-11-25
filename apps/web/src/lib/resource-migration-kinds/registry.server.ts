@@ -1,5 +1,6 @@
 import type { AccessPermission } from "@workspace/contracts"
 
+import { PermissionDeniedError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type {
@@ -34,7 +35,8 @@ export function migratedKind(kind: MigratedKindName): MigratedKind {
 /**
  * Fails unless the person may copy a resource as they asked: what copying
  * its kind takes on the old one, creating one where the copy goes, and each
- * option's own permission on the old one.
+ * option's own permission on the old one, and where the copy goes too when
+ * its kind's owner needs it there.
  */
 export async function requireMigrationPermissions(
   user: AuthenticatedUser,
@@ -86,6 +88,14 @@ export async function requireMigrationPermissions(
       (options.moveWebRoutes && kind.handOver.routes))
   ) {
     source.require(kind.permissions.network)
+    if (
+      kind.permissions.networkThere &&
+      !destination.allows(kind.permissions.network)
+    ) {
+      throw PermissionDeniedError.make({
+        message: `Moving this ${kind.noun}'s domains takes permission to change networks on the Relay it moves to`,
+      })
+    }
   }
 }
 

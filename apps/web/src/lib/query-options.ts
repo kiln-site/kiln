@@ -5,11 +5,9 @@ import {
 } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import type {
-  RelayAppWebRouteState,
   RelayConsoleResource,
   RelayFileEntry,
   RelayInstance,
-  RelayInstanceWebRouteState,
 } from "@workspace/contracts"
 
 import type { BackupTarget } from "@workspace/contracts"
@@ -1592,38 +1590,17 @@ export function relayFileEntryQueryOptions(
   })
 }
 
-interface WebRoutesOf<Type extends "app" | "instance"> {
+/** An instance's web routes, whatever kind it is. */
+export const webRoutesQueryOptions = (resource: {
   relayId: string
   resourceId: string
-  resourceType: Type
-}
-
-const webRoutesOptions = <State>(resource: WebRoutesOf<"app" | "instance">) =>
+  resourceType: "app" | "instance"
+}) =>
   queryOptions({
     queryKey: queryKeys.relay.webRoutes(resource.relayId, resource.resourceId),
-    queryFn: async () => (await getWebRoutes({ data: resource })) as State,
+    queryFn: () => getWebRoutes({ data: resource }),
     staleTime: 10_000,
   })
-
-/**
- * An instance's web routes, whatever kind it is. The server reads an App's
- * as an App's, whose routes each name their service, so they are typed by
- * the kind asked for.
- */
-export function webRoutesQueryOptions<Type extends "app" | "instance">(
-  resource: WebRoutesOf<Type>
-) {
-  return webRoutesOptions<
-    (Type extends "app"
-      ? RelayAppWebRouteState
-      : RelayInstanceWebRouteState) & {
-      /** The route its primary address names, if one does. */
-      readonly primaryRouteId: string | null
-      /** Its name in a tailnet, whole, if its primary address is one. */
-      readonly primaryTunnelName: string | null
-    }
-  >(resource)
-}
 
 export function relayFileActivityQueryOptions(
   relayId: string,

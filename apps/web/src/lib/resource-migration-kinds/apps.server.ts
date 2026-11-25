@@ -59,6 +59,8 @@ export const apps: MigratedKind = {
     create: ["app.create"],
     delete: "app.delete",
     network: "instance.network.write",
+    // Owning an App doesn't carry it, so the copy's Relay has to.
+    networkThere: true,
   },
   // What making an App with its configuration takes on its Relay, as
   // installing one or saving its settings does: a path on the node reaches
@@ -369,7 +371,6 @@ export const apps: MigratedKind = {
     ).length
     const databases = app.savedDatabaseIds.length
     const both = [
-      "The copy isn't deployed: deploy it once you've checked its settings.",
       ...(copied > 0
         ? [
             `${count(copied, "Its volume is", "of its volumes are")} copied into ${count(copied, "a new volume", "new volumes")} the copy mounts instead.`,
@@ -399,6 +400,7 @@ export const apps: MigratedKind = {
         : []
     return {
       duplicate: [
+        "The copy isn't deployed: deploy it once you've checked its settings.",
         ...both,
         ...(config.ports.length > 0 || hostPaths > 0
           ? [
@@ -412,6 +414,7 @@ export const apps: MigratedKind = {
           : []),
       ],
       migrate: [
+        "The copy isn't deployed: deploy it once you've checked its settings. Domains that move with it don't answer until then.",
         ...both,
         ...elsewhere,
         "The old one is stopped and stays on its Relay with its volumes, until you delete them.",

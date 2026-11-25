@@ -2,6 +2,7 @@ import {
   relayControlDeadlineMs,
   relayInstanceWebRouteStateSchema,
   type AccessPermission,
+  type RelayInstanceWebRouteInput,
   type ResourceLimits,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -9,7 +10,12 @@ import type { RowDataPacket } from "mysql2/promise"
 
 import type { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
-import { promiseEffect, recoverPromise } from "@/effect/promise"
+import {
+  forgetPrimaryAddressEffect,
+  loadPrimaryAddressEffect,
+  setPrimaryAddressEffect,
+} from "@/effect/primary-addresses"
+import { promiseEffect } from "@/effect/promise"
 import {
   copyResourceAccessEffect,
   publishResourceAccessChange,
@@ -131,6 +137,11 @@ export interface MigratedKind {
     readonly delete: AccessPermission
     /** To hand its domains and web routes over, for a kind with either. */
     readonly network?: AccessPermission
+    /**
+     * Whether handing them over takes it on the Relay the copy goes to too:
+     * for a kind whose owner can't change its network by owning it.
+     */
+    readonly networkThere?: boolean
   }
   /**
    * What the Relay its copy goes to takes besides `permissions.create`, for
@@ -283,7 +294,8 @@ export interface MigrationHandOverCounts {
     readonly managed: boolean
     readonly names: ReadonlyArray<string>
   }
-  readonly webRoutes: ReadonlyArray<string>
+  /** The hostnames it answers on; null when its Relay couldn't say. */
+  readonly webRoutes: ReadonlyArray<string> | null
 }
 
 /** The scope a kind's permissions are held on: its own, or its Relay's. */
@@ -443,9 +455,32 @@ export function relayRequest(
   })
 }
 
+// Asks a Relay for an instance's web routes, or to keep these, as the
+// person, and answers with those it keeps.
+const webRoutes = (
+  relay: PersistedRelay,
+  operation: "instance.network.routes.read" | "instance.network.routes.write",
+  subject: string,
+  payload: {
+    readonly id: string
+    readonly kind: "app" | "instance"
+    readonly routes?: ReadonlyArray<RelayInstanceWebRouteInput>
+  }
+) =>
+  relayRequest(relay, operation, subject, payload).pipe(
+    Effect.flatMap((state) =>
+      Effect.try({
+        try: () => relayInstanceWebRouteStateSchema.parse(state).routes,
+        catch: (cause) =>
+          new Error(`${relay.name}'s web routes couldn't be read`, { cause }),
+      })
+    )
+  )
+
 /**
  * A move's copy takes the old one's web routes and their hostnames, for a
- * kind whose routes its Relay keeps under its own name.
+ * kind whose routes its Relay keeps under its own name. The one that is the
+ * old one's primary address is the copy's.
  */
 export function moveWebRoutes(
   kind: "app" | "instance",
@@ -454,28 +489,51 @@ export function moveWebRoutes(
 ) {
   return Effect.gen(function* () {
     const [source, destination] = yield* relays(migration)
-    const state = relayInstanceWebRouteStateSchema.parse(
-      yield* relayRequest(source, "instance.network.routes.read", actor.id, {
-        id: migration.source.id,
-        kind,
-      })
+    const old = { id: migration.source.id, type: kind }
+    const copy = { id: migration.destination.id, type: kind }
+    const moving = yield* webRoutes(
+      source,
+      "instance.network.routes.read",
+      actor.id,
+      { id: old.id, kind }
     )
+    const primary = yield* loadPrimaryAddressEffect(old)
     // Run again after the routes moved, it finds none, and still hands the
     // hostnames over.
-    if (state.routes.length > 0) {
-      const routes = state.routes.map(({ id: _id, ...route }) => route)
-      yield* relayRequest(
+    if (moving.length > 0) {
+      const moved = yield* webRoutes(
         destination,
         "instance.network.routes.write",
         actor.id,
-        { id: migration.destination.id, kind, routes }
+        {
+          id: copy.id,
+          kind,
+          routes: moving.map(({ id: _id, ...route }) => route),
+        }
       )
-      yield* relayRequest(source, "instance.network.routes.write", actor.id, {
-        id: migration.source.id,
+      // Each route has an ID of its own on the new Relay. Named before the
+      // old one's go, so a run cut short still finds which it was.
+      const was =
+        primary?.kind === "route"
+          ? moving.find((route) => route.id === primary.ref)
+          : undefined
+      const chosen = was
+        ? moved.find(
+            (route) =>
+              route.hostname === was.hostname && route.path === was.path
+          )
+        : undefined
+      if (chosen) {
+        yield* setPrimaryAddressEffect(copy, { kind: "route", ref: chosen.id })
+      }
+      yield* webRoutes(source, "instance.network.routes.write", actor.id, {
+        id: old.id,
         kind,
         routes: [],
       })
     }
+    // A name in a tunnel stays the old one's: it isn't handed over.
+    if (primary?.kind === "route") yield* forgetPrimaryAddressEffect(old)
     // Its hostnames belong to the copy now, and their DNS records point at
     // its Relay.
     yield* moveResourceWebHostnamesEffect(
@@ -493,27 +551,37 @@ export function moveWebRoutes(
   })
 }
 
-/** The hostnames its web routes answer on. */
+/**
+ * The hostnames its web routes answer on, or null when they couldn't be
+ * read, which is never the same as having none: a move would leave them.
+ */
 export async function webRouteHostnames(
   kind: "app" | "instance",
   relay: PersistedRelay,
   id: string,
   subject: string
-): Promise<Array<string>> {
-  const state = await recoverPromise(
-    () =>
-      Effect.runPromise(
-        relayRequest(relay, "instance.network.routes.read", subject, {
-          id,
-          kind,
+): Promise<Array<string> | null> {
+  const { reportAppError, runAppEffect } = await import("@/effect/runtime")
+  return runAppEffect(
+    "resourceMigrations.webRoutes",
+    webRoutes(relay, "instance.network.routes.read", subject, {
+      id,
+      kind,
+    }).pipe(
+      Effect.map((routes) => [
+        ...new Set(routes.map((route) => route.hostname)),
+      ]),
+      Effect.catch((cause) =>
+        Effect.sync(() => {
+          reportAppError(cause, {
+            attributes: { "relay.id": relay.id },
+            operation: "resourceMigrations.webRoutes",
+          })
+          return null
         })
-      ),
-    () => null
+      )
+    )
   )
-  const parsed = relayInstanceWebRouteStateSchema.safeParse(state)
-  return parsed.success
-    ? [...new Set(parsed.data.routes.map((route) => route.hostname))]
-    : []
 }
 
 export function relay(id: string) {

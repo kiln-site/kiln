@@ -23,7 +23,9 @@ does, needing its kind's delete permission and `backup.create`).
 The dialog brings everything besides the data, settings and limits along
 as one choice, **Copy metadata**, of what the kind has: people with access,
 backups, activity history, and for a move, domains and web routes. Its
-info card says which parts come and why any can't. Under it, the dialog
+info card says which parts come and why any can't. When the Relay can't say
+which web routes it has, the dialog won't start a move that takes them, and
+Hearth reads them again before anything is made or stopped. Under it, the dialog
 lists what someone should know before copying this one, which each kind
 words for itself (a copy that starts empty, what stays behind, what stops
 reaching it).
@@ -50,7 +52,7 @@ goes to.
 | People with access | Optional  | Optional | The same grants, permissions, and presets (presets are copied to the new server). Pending invitations aren't. Needs `access.read`.                                                                                                                                                                |
 | Activity history   | Optional  | Optional | The new server's activity includes the old server's history up to when the copy finished: shown as the old server's, and listed under the new one too, to whoever can see both; as the new server's own to whoever can see only it. It stays on the old Relay, so removing that Relay removes it. |
 | Managed domains    | —         | Optional | With Cloudflare connected, domains move to the new server and their records point at the new Relay. Without it, Kiln manages no DNS and the dialog says to repoint any domain of your own.                                                                                                        |
-| Web routes         | Stay      | Optional | Routes move to the new server; their hostnames must then point at the new Relay before HTTPS works.                                                                                                                                                                                               |
+| Web routes         | Stay      | Optional | Routes move to the new server, as below; their hostnames must then point at the new Relay before HTTPS works.                                                                                                                                                                                     |
 | Backups            | Optional  | Optional | Links the old server's full backups to the new one, sharing their archives ([Linked backups](backups.md#linked-backups)). Backups in S3 link anywhere; backups kept on the Relay only to a copy on the same Relay. Needs `backup.download`.                                                       |
 | Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before the source is stopped or copied. Needs `backup.create`. Not offered by the dialog.                                                                                                                                                         |
 
@@ -105,7 +107,10 @@ with what making an App with its settings takes there besides: the
 Relay's `relay.files.write` for a path on the node, as saving one in its
 settings takes, and its `app.manage` for published ports or a Compose
 file or Dockerfile, as installing one from a Brick takes. It has an owner
-and web routes to hand over.
+and web routes to hand over. Handing its routes over takes
+`instance.network.write` on the Relay the copy goes to as well as on the old
+one, since owning an App doesn't carry it. They move before the copy is
+deployed, and don't answer until it is, as the dialog says.
 
 A copy keeps the parts it settled on (`part_roots`), so undoing it
 discards exactly the transfers it started, though an App's settings and
@@ -126,6 +131,18 @@ chooses it in an App's settings.
 Copying one takes what backing it up and restoring it do, on the Relay:
 `relay.read`, `backup.create` and `backup.download` where it is, and
 `relay.configure` and `backup.restore` where the copy goes.
+
+### Web routes
+
+A kind with web routes hands them over whole: each keeps its hostname, path,
+options and, for an App, the service it reaches, and is given an ID of its
+own by the new Relay. A primary address that is one of them is the copy's;
+one that is a name in a tunnel stays the old one's.
+
+Every kind's routes are one schema (`relayInstanceWebRouteSchema`), so what
+reads them never asks whose they are. They differ in one thing, checked
+where they're saved (`relayWebRouteInputsSchemaFor`): an App's route names
+the service it reaches, and a game server's never does.
 
 ## Power
 

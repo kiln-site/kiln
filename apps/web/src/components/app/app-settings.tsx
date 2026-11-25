@@ -1,7 +1,11 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { appTailscaleMember, primaryWebRoute } from "@workspace/contracts"
-import type { RelayAppWebRoute } from "@workspace/contracts"
+import {
+  appTailscaleMember,
+  primaryWebRoute,
+  webRouteService,
+} from "@workspace/contracts"
+import type { RelayInstanceWebRoute } from "@workspace/contracts"
 import { Cable, Globe2, LoaderCircle, Rocket } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -143,7 +147,7 @@ const WebRouteFact = React.memo(function WebRouteFact({
 }: {
   app: App
   primary: boolean
-  route: RelayAppWebRoute
+  route: RelayInstanceWebRoute
 }) {
   const address = `${route.hostname}${route.path ?? ""}`
   return (
@@ -182,7 +186,7 @@ const WebRouteFact = React.memo(function WebRouteFact({
           <ServiceTarget
             app={app}
             port={String(route.targetPort)}
-            service={route.service}
+            service={webRouteService(route)}
           />
         )}
       </dd>

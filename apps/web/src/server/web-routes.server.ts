@@ -1,10 +1,8 @@
 import {
   APP_SERVICE,
-  relayAppWebRouteStateSchema,
   relayInstanceWebRouteStateSchema,
   webRouteHostnames,
   type AppBrickWeb,
-  type RelayAppWebRouteInput,
   type RelayInstanceWebRouteInput,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -48,20 +46,8 @@ import {
 /** What saves a game server's routes, or an App's. */
 export type SaveWebRoutesInput = WebHostnameResource & {
   proxy?: WebHostnameProxyChange
-} & (
-    | { resourceType: "app"; routes: ReadonlyArray<RelayAppWebRouteInput> }
-    | {
-        resourceType: "instance"
-        routes: ReadonlyArray<RelayInstanceWebRouteInput>
-      }
-  )
-
-// The routes as their Relay has them. An App's each name the service they
-// reach.
-const stateOf = (resource: WebHostnameResource, state: unknown) =>
-  resource.resourceType === "app"
-    ? relayAppWebRouteStateSchema.parse(state)
-    : relayInstanceWebRouteStateSchema.parse(state)
+  routes: ReadonlyArray<RelayInstanceWebRouteInput>
+}
 
 /**
  * The web route an instance's primary address names, if it is one, or its
@@ -113,8 +99,7 @@ export async function getWebRoutesHandler(
   const relay = await activeRelay(resource.relayId)
   return withPrimaryRoute(
     resource,
-    stateOf(
-      resource,
+    relayInstanceWebRouteStateSchema.parse(
       await relayRpc(
         relay,
         "instance.network.routes.read",
@@ -159,8 +144,7 @@ async function saveWebRoutesHandler(
     resource,
     routes.flatMap(webRouteHostnames),
     async () =>
-      stateOf(
-        resource,
+      relayInstanceWebRouteStateSchema.parse(
         await relayRpc(
           relay,
           "instance.network.routes.write",
@@ -227,8 +211,7 @@ async function setPrimaryWebRouteHandler(
 ) {
   const resource = appResource(input)
   const relay = await activeRelay(resource.relayId)
-  const state = stateOf(
-    resource,
+  const state = relayInstanceWebRouteStateSchema.parse(
     await relayRpc(
       relay,
       "instance.network.routes.read",
