@@ -98,6 +98,8 @@ import {
   finishTarRestore,
   removeLeftoverTarHelpers,
   restoreTarBackup,
+  restoreVolumeSnapshot,
+  VOLUME_MOUNT,
   type TarSource,
 } from "./backups/tar-archives.js"
 import {
@@ -107,6 +109,8 @@ import {
   TarRestoreFences,
   type TarRestoreJournal,
 } from "./backups/tar-restore-journal.js"
+import { TAR_RESTORE_STAGING_PREFIX } from "./backups/tar-restore-steps.js"
+import { resticHelperSpawn } from "./backups/restic-helper.js"
 import { DockerEngine } from "./docker-engine.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { backupFailureCode } from "./backups/failure.js"
@@ -256,6 +260,7 @@ export class BackupManager {
   readonly #apps: BackupApps | null
   readonly #volumes: BackupVolumes | null
   readonly #engine: DockerEngine
+  readonly #hostDataDirectory: () => Promise<string>
   readonly #fences: TarRestoreFences
   readonly #lanes: OperationLanes
   readonly #restic: ResticDriver
@@ -270,6 +275,7 @@ export class BackupManager {
     databases: DatabaseDriver | null
     apps: BackupApps | null
     volumes: BackupVolumes | null
+    hostDataDirectory: () => Promise<string>
     fences: TarRestoreFences
     lanes: OperationLanes
     restic: ResticDriver
@@ -283,6 +289,7 @@ export class BackupManager {
     this.#databases = options.databases
     this.#apps = options.apps
     this.#volumes = options.volumes
+    this.#hostDataDirectory = options.hostDataDirectory
     this.#engine = new DockerEngine(options.config.dockerSocket)
     this.#fences = options.fences
     this.#restic = options.restic
@@ -297,6 +304,8 @@ export class BackupManager {
     databases?: DatabaseDriver
     apps?: BackupApps
     volumes?: BackupVolumes
+    /** The Relay's data directory as Docker's host sees it. */
+    hostDataDirectory: () => Promise<string>
     /**
      * Each task holds its target's lane while it runs: a backup alongside
      * other work, a restore alone. While the lanes are paused, queued tasks
@@ -329,9 +338,11 @@ export class BackupManager {
         databases: options.databases ?? null,
         apps: options.apps ?? null,
         volumes: options.volumes ?? null,
+        hostDataDirectory: options.hostDataDirectory,
         fences,
         lanes: options.lanes,
         restic: createResticDriver({
+          binary: options.config.resticPath,
           cacheDirectory: resolve(
             options.config.dataDirectory,
             "restic",
@@ -859,7 +870,7 @@ export class BackupManager {
             // the batch has none: it is dumped once theirs are stopped.
             if (
               member.input.kind !== "create" ||
-              member.input.artifactKind !== "tar_archive"
+              member.input.target.kind !== "volume"
             ) {
               continue
             }
@@ -879,6 +890,15 @@ export class BackupManager {
       )
       const done = yield* Deferred.make<ReadonlyArray<string>>()
       const left = new Set<string>()
+      // Nothing stops until every backup here is ready for it: each first
+      // stores what it can while the Apps still run.
+      const ready = new Set<string>()
+      const allReady = yield* Deferred.make<void>()
+      const readyIfLast = Effect.suspend(() =>
+        members.every(({ taskId }) => ready.has(taskId) || left.has(taskId))
+          ? Deferred.succeed(allReady, undefined)
+          : Effect.void
+      )
       let restarting = false
       const finishIfLast = Effect.suspend(() => {
         if (restarting || left.size < members.length) return Effect.void
@@ -895,11 +915,18 @@ export class BackupManager {
             left.add(taskId)
             return finishIfLast.pipe(Effect.andThen(Deferred.await(done)))
           }),
-        begin,
+        begin: (taskId: string) =>
+          Effect.suspend(() => {
+            ready.add(taskId)
+            return readyIfLast.pipe(
+              Effect.andThen(Deferred.await(allReady)),
+              Effect.andThen(begin)
+            )
+          }),
         leave: (taskId: string) =>
           Effect.suspend(() => {
             left.add(taskId)
-            return finishIfLast
+            return Effect.andThen(readyIfLast, finishIfLast)
           }),
         lockedApps,
       } satisfies StoppedWindow
@@ -1033,7 +1060,7 @@ export class BackupManager {
       // the upload, which can take a while.
       // In a batch, its window stops and starts them, around every
       // backup's archive.
-      if (window && consistency === "stopped") yield* window.begin
+      if (window && consistency === "stopped") yield* window.begin(taskId)
       const stopped =
         consistency === "stopped" && !window
           ? yield* this.#stopApps(taskId, consumers, !final)
@@ -1106,6 +1133,19 @@ export class BackupManager {
       )
       return yield* Effect.tryPromise({
         try: async () => {
+          const from = input.source
+          if (from.kind === "restic") {
+            return this.#restoreVolumeSnapshot(
+              { ...input, source: from },
+              {
+                beginInstall,
+                lockedApps,
+                signal,
+                source,
+                target: input.target,
+              }
+            )
+          }
           const archive = await materializeBackupArtifact(
             this.#config,
             input,
@@ -1182,6 +1222,138 @@ export class BackupManager {
     })
   }
 
+  /**
+   * A volume's files, which restic reads in a helper. Stopped, they are read
+   * twice: once while everything runs, which stores nearly all of it, and
+   * again once it's stopped, which reads what changed since. Then what was
+   * stopped starts again, as after a full backup.
+   */
+  #volumeSnapshotSource(
+    input: BackupCreateTaskInput,
+    lockedApps: ReadonlySet<string>,
+    window: StoppedWindow | null
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const stopped = input.consistency === "stopped"
+      if (stopped) yield* this.#requireLockedApps(input.target, lockedApps)
+      const { consumers, source } = yield* this.#tarSource(
+        input.target,
+        stopped
+      )
+      const { excludes, warnings } = translateExcludePatterns(
+        // From the volume's root, which is a folder of the helper's.
+        input.exclude.map((pattern) =>
+          pattern.startsWith("/") ? `${VOLUME_MOUNT}${pattern}` : pattern
+        )
+      )
+      const files = {
+        cwd: "/",
+        excludes: [
+          ...excludes,
+          // A restore's staging folder, if one was left behind.
+          `${VOLUME_MOUNT}/${TAR_RESTORE_STAGING_PREFIX}*`,
+        ],
+        paths: [VOLUME_MOUNT.slice(1)],
+        spawn: this.#helperSpawn(source, true),
+      }
+      return {
+        logicalBytes: async () => 0,
+        reusable: window === null,
+        take: async (backup, progress) => {
+          if (!stopped) return backup(files)
+          await backup(files, "before")
+          progress.completed = 0
+          const stoppedApps = await Effect.runPromise(
+            window
+              ? window
+                  .begin(input.taskId)
+                  .pipe(Effect.as<ReadonlyArray<StoppedApp>>([]))
+              : this.#stopApps(input.taskId, consumers, true)
+          )
+          const taken = await Effect.runPromise(
+            Effect.result(promiseEffect(() => backup(files)))
+          )
+          const restarted = await Effect.runPromise(
+            window
+              ? window.arrive(input.taskId)
+              : stoppedApps.length > 0
+                ? this.#startApps(input.taskId, stoppedApps)
+                : Effect.succeed([])
+          )
+          if (Result.isFailure(taken)) throw taken.failure
+          return {
+            ...taken.success,
+            warnings: [...taken.success.warnings, ...restarted],
+          }
+        },
+        warnings,
+      } satisfies SnapshotSource
+    })
+  }
+
+  // Restores a volume from a snapshot: restic puts it in a folder of the
+  // volume's, which then takes the place of what it holds.
+  async #restoreVolumeSnapshot(
+    input: BackupRestoreTaskInput & { source: { kind: "restic" } },
+    restore: {
+      beginInstall: RestoreInstallGate
+      lockedApps: ReadonlySet<string>
+      signal: AbortSignal
+      source: TarSource
+      target: BackupTarget & { kind: "volume" }
+    }
+  ) {
+    const password = requiredRepositoryPassword(
+      input.source.repositoryPassword,
+      "restore.restic"
+    )
+    const targetId = input.archive?.targetId ?? input.target.id
+    return ensuringPromise(
+      () =>
+        restoreVolumeSnapshot({
+          beginInstall: restore.beginInstall,
+          config: this.#config,
+          consumers: [...restore.lockedApps],
+          engine: this.#engine,
+          fences: this.#fences,
+          restore: (folder) =>
+            this.#restic.restore({
+              location: resticDriverLocation(
+                this.#config,
+                targetId,
+                input.source.repository
+              ),
+              password,
+              selector: input.source.snapshotId,
+              signal: restore.signal,
+              spawn: this.#helperSpawn(restore.source, false),
+              target: folder,
+            }),
+          source: restore.source,
+          target: restore.target,
+          taskId: input.taskId,
+        }),
+      () =>
+        Effect.runPromise(
+          cleanupResticCache(this.#config, this.#restic, {
+            password,
+            repository: input.source.repository,
+            targetId,
+          })
+        )
+    )
+  }
+
+  #helperSpawn(source: TarSource, readOnly: boolean) {
+    return resticHelperSpawn({
+      config: this.#config,
+      engine: this.#engine,
+      hostDataDirectory: this.#hostDataDirectory,
+      readOnly,
+      source,
+    })
+  }
+
   // A database's dump from its snapshot, gzipped as a full backup's is.
   async #dumpSnapshotFile(
     input: BackupRestoreTaskInput,
@@ -1205,6 +1377,7 @@ export class BackupManager {
         await this.#restic.dump({
           destination,
           file: DATABASE_DUMP_FILE,
+          format: { compression: "gzip" },
           location,
           password,
           selector: source.snapshotId,
@@ -1224,9 +1397,16 @@ export class BackupManager {
   }
 
   // What an incremental backup of a target takes a snapshot of.
-  #snapshotSource(input: BackupCreateTaskInput, window: StoppedWindow | null) {
+  #snapshotSource(
+    input: BackupCreateTaskInput,
+    lockedApps: ReadonlySet<string>,
+    window: StoppedWindow | null
+  ) {
     return Effect.gen({ self: this }, function* () {
       const { target } = input
+      if (target.kind === "volume") {
+        return yield* this.#volumeSnapshotSource(input, lockedApps, window)
+      }
       if (target.kind === "database") {
         if (!this.#databases) {
           return yield* backupFailure(
@@ -2137,7 +2317,9 @@ export class BackupManager {
         // every App that uses the batch's volumes is stopped, so it and
         // their archives are taken while those Apps write nothing. The
         // window starts them again when the last of the batch has left.
-        if (window && input.consistency === "stopped") yield* window.begin
+        if (window && input.consistency === "stopped") {
+          yield* window.begin(task.taskId)
+        }
         const progress: BackupProgress = {
           completed: 0,
           currentArtifactId: null,
@@ -2248,7 +2430,7 @@ export class BackupManager {
         const result = yield* runResticCreate(
           this.#config,
           this.#restic,
-          yield* this.#snapshotSource(input, window),
+          yield* this.#snapshotSource(input, lockedApps, window),
           input,
           (progress) =>
             this.#state.updateBackupTaskProgress(
@@ -2446,14 +2628,14 @@ export class BackupManager {
 }
 
 /**
- * The stopped window a batch's backups share: `begin` stops what uses any
- * of them, once; `arrive` waits, once a backup's archive is taken, until
+ * The stopped window a batch's backups share: `begin` waits until every one
+ * of them is ready, then stops what uses any of them, once; `arrive` waits, once a backup's archive is taken, until
  * every backup's is, then answers the warnings starting things again left;
  * `leave` counts a backup that won't arrive, as one that failed first.
  */
 interface StoppedWindow {
   readonly arrive: (taskId: string) => Effect.Effect<ReadonlyArray<string>>
-  readonly begin: Effect.Effect<void, unknown>
+  readonly begin: (taskId: string) => Effect.Effect<void, unknown>
   readonly leave: (taskId: string) => Effect.Effect<void>
   readonly lockedApps: ReadonlySet<string>
 }
@@ -3115,7 +3297,14 @@ interface SnapshotSource {
    */
   readonly reusable: boolean
   readonly take: (
-    backup: (source: ResticBackupSource) => Promise<ResticSnapshotSummary>,
+    /**
+     * Takes the snapshot, or one `before` it for it to add to, which isn't
+     * kept.
+     */
+    backup: (
+      source: ResticBackupSource,
+      before?: "before"
+    ) => Promise<ResticSnapshotSummary>,
     progress: BackupProgress,
     signal: AbortSignal
   ) => Promise<ResticSnapshotSummary>
@@ -3192,7 +3381,7 @@ function databaseSnapshotSource(
       )
       return ensuringPromise(
         async () => {
-          if (window) await Effect.runPromise(window.begin)
+          if (window) await Effect.runPromise(window.begin(input.taskId))
           progress.phase = "dumping"
           await dumpCompressedDatabase(databases, input.target.id, dump, {
             maxDumpBytes: input.maxBytes,
@@ -3321,11 +3510,14 @@ async function createResticSnapshot(
   )
   // A snapshot an attempt before a Relay restart saved is kept, not taken
   // again.
+  const tag = `task:${input.taskId}`
+  const beforeTag = `before:${input.taskId}`
+  let addedTo = false
   const existing = await restic.openForBackup({
     location,
     password,
     signal,
-    tag: `task:${input.taskId}`,
+    tag,
   })
   const reuse = source.reusable ? existing[0] : undefined
   if (reuse) {
@@ -3380,8 +3572,9 @@ async function createResticSnapshot(
       Effect.tryPromise({
         try: () =>
           source.take(
-            (read) =>
-              restic.backup({
+            (read, before) => {
+              addedTo ||= before !== undefined
+              return restic.backup({
                 location,
                 onProgress: (update) => {
                   progress.completed = update.bytesCompleted
@@ -3397,8 +3590,9 @@ async function createResticSnapshot(
                 password,
                 signal,
                 source: read,
-                tags: [`task:${input.taskId}`, `backup:${input.backupId}`],
-              }),
+                tags: [before ? beforeTag : tag, `backup:${input.backupId}`],
+              })
+            },
             progress,
             signal
           ),
@@ -3410,12 +3604,10 @@ async function createResticSnapshot(
     await Effect.runPromise(
       Effect.tryPromise({
         try: () =>
-          forgetTaskSnapshotsAfterFailedCreate(restic, {
-            backupId: input.backupId,
+          forgetTaskSnapshots(restic, {
             location,
             password,
-            tag: `task:${input.taskId}`,
-            taskId: input.taskId,
+            tags: [tag, beforeTag],
           }),
         catch: (cause) => cause,
       }).pipe(
@@ -3433,8 +3625,20 @@ async function createResticSnapshot(
     )
     throw summary.failure
   }
-  // Those earlier attempts saved, which this one's stands in for.
-  await forgetSnapshots(restic, existing, { location, password })
+  // Those earlier attempts saved, and the one it added to. Nothing lists
+  // them, so one that stays only takes the space it adds.
+  if (existing.length > 0 || addedTo) {
+    await recoverPromise(
+      () =>
+        forgetTaskSnapshots(restic, {
+          keep: summary.success.snapshotId,
+          location,
+          password,
+          tags: [tag, beforeTag],
+        }),
+      () => undefined
+    )
+  }
   await rejectOverLimitSnapshot(restic, {
     backupId: input.backupId,
     location,
@@ -3506,50 +3710,29 @@ async function rejectOverLimitSnapshot(
   throw backupTooLarge()
 }
 
-// Nothing lists them, so one that stays only takes the space it adds.
-function forgetSnapshots(
-  restic: ResticDriver,
-  snapshots: ReadonlyArray<{ id: string }>,
-  input: { location: ResticDriverLocation; password: string }
-): Promise<void> {
-  return recoverPromise(
-    async () => {
-      for (const { id } of snapshots) {
-        await restic.forget({
-          ...input,
-          signal: AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS),
-          snapshotId: id,
-        })
-      }
-    },
-    () => undefined
-  )
-}
-
-async function forgetTaskSnapshotsAfterFailedCreate(
+async function forgetTaskSnapshots(
   restic: ResticDriver,
   input: {
-    backupId: string
+    /** The one that stays. */
+    keep?: string
     location: ResticDriverLocation
     password: string
-    tag: string
-    taskId: string
+    signal?: AbortSignal
+    tags: ReadonlyArray<string>
   }
 ): Promise<void> {
-  const signal = AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS)
-  const snapshots = await restic.snapshotsByTag({
-    location: input.location,
-    password: input.password,
-    signal,
-    tag: input.tag,
-  })
-  for (const snapshot of snapshots) {
-    await restic.forget({
-      location: input.location,
-      password: input.password,
+  const { keep, location, password } = input
+  const signal = input.signal ?? AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS)
+  for (const tag of input.tags) {
+    for (const { id } of await restic.snapshotsByTag({
+      location,
+      password,
       signal,
-      snapshotId: snapshot.id,
-    })
+      tag,
+    })) {
+      if (id === keep) continue
+      await restic.forget({ location, password, signal, snapshotId: id })
+    }
   }
 }
 
@@ -3729,20 +3912,15 @@ function runResticForget(
         if (destination.createTaskId) {
           // Its create's snapshot, which carries both: a task ID alone
           // could be another backup's in the same repository.
-          const snapshots = await restic.snapshotsByTag({
+          await forgetTaskSnapshots(restic, {
             location,
             password,
             signal,
-            tag: `task:${destination.createTaskId},backup:${input.backupId}`,
+            tags: ["task", "before"].map(
+              (kind) =>
+                `${kind}:${destination.createTaskId},backup:${input.backupId}`
+            ),
           })
-          for (const snapshot of snapshots) {
-            await restic.forget({
-              location,
-              password,
-              signal,
-              snapshotId: snapshot.id,
-            })
-          }
           return
         }
         if (!destination.snapshotId) {
@@ -4026,15 +4204,23 @@ function runResticExport(
         const onProgress = (bytes: number) => {
           progress.completed = bytes
         }
-        if (input.target.kind === "database") {
+        if (input.target.kind !== "instance") {
+          const database = input.target.kind === "database"
           const dumped = await restic.dump({
             destination: partial,
-            file: DATABASE_DUMP_FILE,
+            format: { compression: "gzip" },
             location,
             onProgress,
             password,
-            selector: input.snapshotId,
             signal,
+            ...(database
+              ? { file: DATABASE_DUMP_FILE, selector: input.snapshotId }
+              : {
+                  selector: resticSnapshotSelector(
+                    input.snapshotId,
+                    VOLUME_MOUNT
+                  ),
+                }),
           })
           return finishExport(dumped)
         }
@@ -4087,6 +4273,7 @@ function runResticExport(
           zipped ??
           (await restic.dump({
             destination: partial,
+            format: { archive: "zip" },
             location,
             onProgress,
             password,

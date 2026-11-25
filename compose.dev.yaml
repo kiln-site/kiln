@@ -36,7 +36,8 @@ services:
       KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX: ${KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX:-2097152}
       KILN_RELAY_BROWSER_FILE_REPLAYS_MAX: ${KILN_RELAY_BROWSER_FILE_REPLAYS_MAX:-65536}
       KILN_RELAY_NAME: ${KILN_RELAY_NAME:-D001-localdev}
-      # In a volume, so the inventory helpers this stock image starts share it.
+      # In a volume, so the helpers this stock image starts share them.
+      KILN_RELAY_RESTIC_PATH: /opt/kiln-tools/restic
       KILN_RELAY_SYFT_PATH: /opt/kiln-tools/syft
       KILN_RELAY_PROXY: ${KILN_RELAY_PROXY:-none}
       KILN_RELAY_TRAEFIK_IMAGE: ${KILN_RELAY_TRAEFIK_IMAGE:-traefik:v3.7.13}
@@ -95,7 +96,7 @@ services:
         fi
         # Pin restic to the version shipped in apps/relay/Dockerfile so dev
         # exercises the same CLI/JSON surface as production.
-        if ! restic version 2>/dev/null | grep -q '^restic 0.20.0'; then
+        if ! "$$KILN_RELAY_RESTIC_PATH" version 2>/dev/null | grep -q '^restic 0.20.0'; then
           arch=$$(uname -m)
           case "$$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
           attempt=0
@@ -104,10 +105,11 @@ services:
             if [ "$$attempt" -ge 5 ]; then echo "restic download failed" >&2; exit 1; fi
             sleep 2
           done
-          bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic
-          chmod +x /usr/local/bin/restic
+          mkdir -p "$$(dirname "$$KILN_RELAY_RESTIC_PATH")"
+          bunzip2 -c /tmp/restic.bz2 > "$$KILN_RELAY_RESTIC_PATH"
+          chmod +x "$$KILN_RELAY_RESTIC_PATH"
           rm -f /tmp/restic.bz2
-          if ! restic version | grep -q '^restic 0.20.0'; then
+          if ! "$$KILN_RELAY_RESTIC_PATH" version | grep -q '^restic 0.20.0'; then
             echo "restic install failed" >&2
             exit 1
           fi

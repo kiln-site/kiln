@@ -342,6 +342,7 @@ function backupManager(
 ) {
   return BackupManager.make({
     config,
+    hostDataDirectory: async () => config.dataDirectory,
     findInstance,
     isInstanceStopped: async () => true,
     lanes,

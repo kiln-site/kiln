@@ -1070,6 +1070,7 @@ const backupManager = await runRelayEffect(
     config,
     databases,
     fences: restoreFences,
+    hostDataDirectory: () => lifecycle.hostDataDirectory(),
     lanes,
     repositoryAccess: (request) =>
       askHearthForRepositoryAccess(

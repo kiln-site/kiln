@@ -895,8 +895,8 @@ export const reservePlatformBackupEffect = Effect.fn("backups.reservePlatform")(
 )
 
 /**
- * Reserves a backup of a volume, archived through Docker on its Relay, live
- * or with what uses it stopped. Always full.
+ * Reserves a full backup of a volume, archived through Docker on its Relay,
+ * live or with what uses it stopped.
  */
 export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
   (input: {

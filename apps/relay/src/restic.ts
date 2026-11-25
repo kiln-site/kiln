@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { Transform, type Readable, type Writable } from "node:stream"
 import { finished, pipeline } from "node:stream/promises"
-import { createGzip } from "node:zlib"
+import { createGzip, createZstdCompress } from "node:zlib"
 
 import type { BackupRecoveryPasswords } from "@workspace/contracts"
 import { Effect, Result, Schedule } from "effect"
@@ -26,7 +26,6 @@ import {
 import { backupFailureCode } from "./backups/failure.js"
 import { traceResticCommand } from "./backups/telemetry.js"
 
-const RESTIC_BINARY = "restic"
 const MAX_JSON_LINE_BYTES = 64 * 1024
 const MAX_STDERR_BYTES = 64 * 1024
 const MAX_STAGING_ENTRIES = 100_000
@@ -67,12 +66,20 @@ export type ResticBackupSource =
       excludes: ReadonlyArray<string>
       /** Below `cwd`. */
       paths: ReadonlyArray<string>
+      /** Where restic runs, other than beside the Relay. */
+      spawn?: ResticSpawn
     }
   | {
       filename: string
       /** Opened afresh for each attempt. */
       open: () => Readable
     }
+
+/** How a dump is written: a zip compresses itself. */
+export type ResticDumpFormat = {
+  archive?: "tar" | "zip"
+  compression?: "gzip" | "zstd"
+}
 
 export type TranslatedExcludes = {
   excludes: Array<string>
@@ -117,17 +124,18 @@ export type ResticDriver = {
     password: string
     signal: AbortSignal
   }) => Promise<void>
-  /**
-   * Writes a folder of a snapshot to a zip, or one of its files, gzipped.
-   */
+  /** Writes a folder of a snapshot, or one file of it, to a file. */
   dump: (input: {
     destination: string
+    /** The file itself, or the folder as an archive, compressed or not. */
+    format: ResticDumpFormat
     location: ResticDriverLocation
     onProgress?: (bytes: number) => void
-    password: string
-    /** The snapshot's folder to zip, or the snapshot and the file to gzip. */
-    selector: string
+    /** The file of the snapshot, when it's one. */
     file?: string
+    password: string
+    /** The snapshot, and the folder of it, when it's one. */
+    selector: string
     signal: AbortSignal
   }) => Promise<{ bytes: number; checksumSha256: string }>
   forget: (input: {
@@ -148,6 +156,8 @@ export type ResticDriver = {
     password: string
     selector: string
     signal: AbortSignal
+    /** Where restic runs, other than beside the Relay. */
+    spawn?: ResticSpawn
     target: string
   }) => Promise<void>
   /**
@@ -309,12 +319,14 @@ function unreadableFileWarnings(stderr: string): Array<string> {
 }
 
 export function createResticDriver(options?: {
+  binary?: string
   cacheDirectory?: string
   /** How a repository in a bucket is reached; without it, none is. */
   repositoryAccess?: ResticRepositoryAccess
   spawn?: ResticSpawn
 }): ResticDriver {
-  const spawnRestic = options?.spawn ?? defaultSpawn
+  const binary = options?.binary ?? "restic"
+  const spawnHere = options?.spawn ?? defaultSpawn
   const cacheDirectory = options?.cacheDirectory
   const repositoryAccess = options?.repositoryAccess
   const run = (
@@ -331,6 +343,7 @@ export function createResticDriver(options?: {
       readOnly?: boolean
       retryable?: boolean
       signal: AbortSignal
+      spawn?: ResticSpawn
       stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
       /** What restic reads, opened afresh for each attempt. */
       stdin?: () => Readable
@@ -339,7 +352,8 @@ export function createResticDriver(options?: {
     }
   ) => {
     const spawnCommand = (commandArgs: ReadonlyArray<string>) =>
-      spawnResticCommand(spawnRestic, commandArgs, {
+      spawnResticCommand(input.spawn ?? spawnHere, commandArgs, {
+        binary,
         cacheDirectory,
         cwd: input.cwd,
         location: input.location,
@@ -368,7 +382,8 @@ export function createResticDriver(options?: {
       ) {
         throw first.failure
       }
-      await spawnResticCommand(spawnRestic, ["unlock"], {
+      await spawnResticCommand(spawnHere, ["unlock"], {
+        binary,
         cacheDirectory,
         location: input.location,
         password: input.password,
@@ -487,7 +502,11 @@ export function createResticDriver(options?: {
         {
           ...("open" in source
             ? { stdin: source.open }
-            : { cwd: source.cwd, tolerateIncomplete: true }),
+            : {
+                cwd: source.cwd,
+                spawn: source.spawn,
+                tolerateIncomplete: true,
+              }),
           location: input.location,
           password: input.password,
           signal: input.signal,
@@ -549,8 +568,15 @@ export function createResticDriver(options?: {
             password: input.password,
             signal: input.signal,
             stdoutPipe: (stdout) =>
-              input.file
-                ? pipeline(stdout, createGzip({ level: 6 }), hasher, output)
+              input.format.compression
+                ? pipeline(
+                    stdout,
+                    input.format.compression === "zstd"
+                      ? createZstdCompress()
+                      : createGzip({ level: 6 }),
+                    hasher,
+                    output
+                  )
                 : pipeline(stdout, hasher, output),
           })
           return { bytes, checksumSha256: digest.digest("hex") }
@@ -568,7 +594,7 @@ export function createResticDriver(options?: {
       return readsWithoutLock(
         input.file
           ? ["dump", input.selector, input.file]
-          : ["dump", "-a", "zip", input.selector, "/"],
+          : ["dump", "-a", input.format.archive ?? "tar", input.selector, "/"],
         attempt
       )
     },
@@ -597,7 +623,9 @@ export function createResticDriver(options?: {
       })
     },
     restore: async (input) => {
-      await mkdir(input.target, { recursive: true, mode: 0o700 })
+      if (!input.spawn) {
+        await mkdir(input.target, { recursive: true, mode: 0o700 })
+      }
       await run(
         ["restore", "--json", input.selector, "--target", input.target],
         {
@@ -605,6 +633,7 @@ export function createResticDriver(options?: {
           password: input.password,
           readOnly: true,
           signal: input.signal,
+          spawn: input.spawn,
           onJson: (value) => {
             const progress = progressFromResticStatus(value)
             if (progress) input.onProgress?.(progress)
@@ -770,6 +799,7 @@ async function spawnResticCommand(
   spawnRestic: ResticSpawn,
   args: ReadonlyArray<string>,
   input: {
+    binary: string
     cacheDirectory?: string
     cwd?: string
     location: ResticDriverLocation
@@ -804,6 +834,7 @@ async function spawnResticOnce(
   spawnRestic: ResticSpawn,
   args: ReadonlyArray<string>,
   input: {
+    binary: string
     cacheDirectory?: string
     cwd?: string
     location: ResticDriverLocation
@@ -822,7 +853,7 @@ async function spawnResticOnce(
   }
   const env = resticSpawnEnv(input, repository)
   const child = spawnRestic(
-    RESTIC_BINARY,
+    input.binary,
     [...resticGlobalArgs(input.location), ...args],
     {
       cwd: input.cwd,

@@ -51,7 +51,8 @@ import { currentId } from "../instance-keys.js"
  * staging folder or through a symlink the archive made.
  */
 
-const MOUNT = "/volume"
+/** Where a helper has the volume. */
+export const VOLUME_MOUNT = "/volume"
 const SOURCE_PREFIX = "volume"
 const DATA_PREFIX = "data"
 const MANIFEST_PATH = ".kiln-backup/manifest.json"
@@ -99,7 +100,7 @@ export async function createTarBackup(options: {
     { readOnly: true },
     async (helper) => {
       const archive = await Effect.runPromise(
-        engine.containerArchive(helper, MOUNT)
+        engine.containerArchive(helper, VOLUME_MOUNT)
       )
       return repack(archive, options, (path, use) =>
         readOneFile(engine, helper, path, options.signal, use)
@@ -117,28 +118,21 @@ export async function createTarBackup(options: {
  * finished or undone later (`finishTarRestore`), and fences the target
  * meanwhile.
  */
-export async function restoreTarBackup(options: {
-  readonly archive: string
-  /** The backup the archive was made as. */
-  readonly backupId: string
-  /**
-   * The resource the archive was taken of, which its manifest names: the
-   * target, or another of its kind when restoring it elsewhere. Everything
-   * else, the journal and its fence among them, names the target.
-   */
-  readonly madeOf: BackupTarget
-  readonly beginInstall: () => void
-  readonly config: RelayConfig
-  /** Apps using the target, which can't start while it's partway swapped. */
-  readonly consumers: ReadonlyArray<string>
-  readonly engine: DockerEngine
-  readonly fences: TarRestoreFences
-  readonly signal: AbortSignal
-  readonly source: TarSource
-  readonly target: BackupTarget & { readonly kind: "app" | "volume" }
-  readonly taskId: string
-}): Promise<{ warnings: Array<string> }> {
-  const { config, engine, fences, source, taskId } = options
+export async function restoreTarBackup(
+  options: {
+    readonly archive: string
+    /** The backup the archive was made as. */
+    readonly backupId: string
+    /**
+     * The resource the archive was taken of, which its manifest names: the
+     * target, or another of its kind when restoring it elsewhere. Everything
+     * else, the journal and its fence among them, names the target.
+     */
+    readonly madeOf: BackupTarget
+    readonly signal: AbortSignal
+  } & StagedRestore
+): Promise<{ warnings: Array<string> }> {
+  const { config, engine, source } = options
   const manifest = await readTarManifest(options.archive)
   if (
     manifest.backupId !== options.backupId ||
@@ -152,6 +146,58 @@ export async function restoreTarBackup(options: {
       "The archive manifest does not match this backup and its target"
     )
   }
+  return swapStaged(options, (staging) =>
+    withHelper(config, engine, source, { readOnly: false }, (helper) =>
+      stage(engine, helper, options.archive, staging, options.signal)
+    )
+  )
+}
+
+/**
+ * Restores a volume from a snapshot of one, as restoring an archive does.
+ * `restore` puts what the snapshot holds in a folder the volume's helper has,
+ * where restic keeps the volume's root under its own name, with its owner,
+ * mode and extended attributes.
+ */
+export async function restoreVolumeSnapshot(
+  options: {
+    readonly restore: (folder: string) => Promise<void>
+  } & StagedRestore
+): Promise<{ warnings: Array<string> }> {
+  const { config, engine, source } = options
+  return swapStaged(options, async (staging) => {
+    await options.restore(`${VOLUME_MOUNT}/${staging}`)
+    const root = await withHelper(
+      config,
+      engine,
+      source,
+      { readOnly: true },
+      (helper) =>
+        stagedRoot(engine, helper, `${staging}/${VOLUME_MOUNT.slice(1)}`)
+    )
+    await runStep(config, engine, source, "unwrap", staging, null)
+    return root
+  })
+}
+
+/** A restore into what `source` holds, staged in it and then swapped in. */
+interface StagedRestore {
+  readonly beginInstall: () => void
+  readonly config: RelayConfig
+  /** Apps using the target, which can't start while it's partway swapped. */
+  readonly consumers: ReadonlyArray<string>
+  readonly engine: DockerEngine
+  readonly fences: TarRestoreFences
+  readonly source: TarSource
+  readonly target: BackupTarget & { readonly kind: "app" | "volume" }
+  readonly taskId: string
+}
+
+async function swapStaged(
+  options: StagedRestore,
+  fill: (staging: string) => Promise<TarRestoreRoot | null>
+): Promise<{ warnings: Array<string> }> {
+  const { config, engine, fences, source, taskId } = options
   const staging = tarRestoreStagingName(taskId)
   // Made here, or the restore stops: what has its name already isn't the
   // restore's to stage into or remove.
@@ -178,10 +224,7 @@ export async function restoreTarBackup(options: {
   await writeTarRestoreJournal(config, journal)
   const root = await Effect.runPromise(
     Effect.tryPromise({
-      try: () =>
-        withHelper(config, engine, source, { readOnly: false }, (helper) =>
-          stage(engine, helper, options.archive, staging, options.signal)
-        ),
+      try: () => fill(staging),
       catch: (cause) => cause,
     }).pipe(
       Effect.andThen((root) =>
@@ -600,7 +643,7 @@ async function stage(
   const pack = tarPack()
   const putting = () =>
     Effect.runPromise(
-      engine.putContainerArchive(helper, MOUNT, Readable.from(pack))
+      engine.putContainerArchive(helper, VOLUME_MOUNT, Readable.from(pack))
     )
   let root: TarRestoreRoot | null = null
   const feeding = async () => {
@@ -672,6 +715,42 @@ async function stage(
   return root
 }
 
+// The owner, mode and extended attributes of a staged root, as Docker
+// archives it, and nothing of what it holds.
+async function stagedRoot(
+  engine: DockerEngine,
+  helper: string,
+  path: string
+): Promise<TarRestoreRoot> {
+  const archive = await Effect.runPromise(
+    engine.containerArchive(helper, `${VOLUME_MOUNT}/${path}`)
+  )
+  const extract = tarExtract()
+  const header = await new Promise<Header | null>((resolveHeader) => {
+    extract.once("entry", (entry) => resolveHeader(entry))
+    extract.once("error", () => resolveHeader(null))
+    extract.once("finish", () => resolveHeader(null))
+    archive.once("error", () => resolveHeader(null))
+    archive.pipe(extract as unknown as NodeJS.WritableStream)
+  })
+  archive.destroy()
+  extract.destroy()
+  if (header?.type !== "directory") {
+    throw tarError(
+      "invalid_archive",
+      "restore.validate",
+      "The snapshot wasn't taken of a volume"
+    )
+  }
+  const xattrs = rootXattrs(header.pax)
+  return {
+    gid: header.gid ?? 0,
+    mode: header.mode ?? 0o755,
+    uid: header.uid ?? 0,
+    ...(xattrs && { xattrs }),
+  }
+}
+
 // An entry's path under `data/`, relative to it: "" for the root.
 function archivedDataPath(name: string): string {
   const trimmed = name.replace(/\/+$/u, "")
@@ -734,7 +813,7 @@ async function restoreRootXattrs(
   pack.entry({
     gid: root.gid,
     mode: root.mode & 0o7777,
-    name: `${MOUNT.slice(1)}/`,
+    name: `${VOLUME_MOUNT.slice(1)}/`,
     pax: { ...root.xattrs },
     type: "directory",
     uid: root.uid,
@@ -835,7 +914,7 @@ async function readOneFile(
   use: (header: Header, body: EntryBody) => Promise<void>
 ): Promise<void> {
   const archive = await Effect.runPromise(
-    engine.containerArchive(helper, `${MOUNT}/${path}`)
+    engine.containerArchive(helper, `${VOLUME_MOUNT}/${path}`)
   )
   const extract = tarExtract()
   const reading = settle(() => pipeline(archive, extract, { signal }))
@@ -915,34 +994,60 @@ async function runStep(
   await Effect.runPromise(run)
 }
 
-function helperBody(
+export function helperBody(
   config: RelayConfig,
   relay: { readonly Id: string; readonly Image: string },
   source: TarSource,
   options: {
+    /** Folders of Docker's host it has too. */
+    readonly binds?: ReadonlyArray<{
+      readonly source: string
+      readonly target: string
+    }>
     readonly cmd: ReadonlyArray<string>
     readonly development?: boolean
+    readonly entrypoint?: string
+    readonly env?: NodeJS.ProcessEnv
+    /** Null leaves it without a limit. */
+    readonly memoryBytes?: number | null
+    readonly networkMode?: string
     readonly readOnly: boolean
+    readonly workingDirectory?: string
   }
 ) {
+  const memoryBytes =
+    options.memoryBytes === undefined
+      ? HELPER_MEMORY_BYTES
+      : (options.memoryBytes ?? 0)
   return {
     Image: relay.Image,
-    Entrypoint: [process.execPath],
+    Entrypoint: [options.entrypoint ?? process.execPath],
     Cmd: options.cmd,
+    Env: Object.entries(options.env ?? {}).map(
+      ([name, value]) => `${name}=${value}`
+    ),
     User: "0:0",
-    WorkingDir: process.cwd(),
+    WorkingDir: options.workingDirectory ?? process.cwd(),
     Healthcheck: { Test: ["NONE"] },
     Labels: { [HELPER_LABEL]: "true", ...relayOwnerLabels(config) },
     HostConfig: {
       AutoRemove: false,
-      Memory: HELPER_MEMORY_BYTES,
-      MemorySwap: HELPER_MEMORY_BYTES,
+      // What it prints is read as it runs, or not at all.
+      ...(options.env && { LogConfig: { Type: "none" } }),
+      Memory: memoryBytes,
+      MemorySwap: memoryBytes,
       Mounts: [
+        ...(options.binds ?? []).map((bind) => ({
+          ReadOnly: false,
+          Source: bind.source,
+          Target: bind.target,
+          Type: "bind",
+        })),
         source.kind === "volume"
           ? {
               ReadOnly: options.readOnly,
               Source: source.name,
-              Target: MOUNT,
+              Target: VOLUME_MOUNT,
               Type: "volume",
               // An empty volume stays empty: nothing of the helper's image
               // is copied into it.
@@ -951,16 +1056,16 @@ function helperBody(
           : {
               ReadOnly: options.readOnly,
               Source: source.path,
-              Target: MOUNT,
+              Target: VOLUME_MOUNT,
               Type: "bind",
             },
       ],
-      NetworkMode: "none",
-      PidsLimit: 64,
+      NetworkMode: options.networkMode ?? "none",
+      PidsLimit: options.env ? 512 : 64,
       SecurityOpt: [
         "no-new-privileges",
         // SELinux would keep the helper from a bind's files.
-        ...(source.kind === "bind" ? ["label=disable"] : []),
+        ...(source.kind === "bind" || options.binds ? ["label=disable"] : []),
       ],
       // The Relay's source, which development mounts into its container.
       ...(options.development && { VolumesFrom: [relay.Id] }),
@@ -969,7 +1074,7 @@ function helperBody(
 }
 
 // The Relay's own container, whose image the helpers run.
-async function relayContainer(
+export async function relayContainer(
   config: RelayConfig,
   engine: DockerEngine
 ): Promise<{ Id: string; Image: string }> {
@@ -990,7 +1095,7 @@ async function relayContainer(
   return container
 }
 
-function helperName(config: RelayConfig): string {
+export function helperName(config: RelayConfig): string {
   const name = `kiln-backup-helper-${randomUUID().slice(0, 8)}`
   return config.resourceNamespace ? `${config.resourceNamespace}-${name}` : name
 }
@@ -1010,9 +1115,16 @@ export async function removeLeftoverTarHelpers(
               relayOwnsLabels(config, container.Labels)
             ),
             (container) =>
+              // restic takes its lock off a repository before it stops.
               engine
-                .removeContainer(container.Id, { force: true })
-                .pipe(Effect.ignore),
+                .stopContainer(container.Id, { seconds: 4 })
+                .pipe(
+                  Effect.ignore,
+                  Effect.andThen(
+                    engine.removeContainer(container.Id, { force: true })
+                  ),
+                  Effect.ignore
+                ),
             { discard: true }
           )
         ),

@@ -871,7 +871,7 @@ restic restore latest --target ./restored
 A provider that needs the bucket in the path takes
 `-o s3.bucket-lookup=path` too. `restored/` holds a server's files in a folder
 named by its ID, and its setup in `.kiln-setup/`; for a database, it holds its
-dump, `database.sql`.
+dump, `database.sql`, and for a volume its files, in `volume/`.
 
 A repository takes these passwords with its first backup made by a release that
 has them. One kept only on a Relay's disk, under `<data>/restic/`, opens with
@@ -1033,7 +1033,8 @@ The CLI uses the same authorization and task APIs: `kiln backups list`,
 
 An incremental backup is a snapshot in a restic repository of the instance's
 own, so each stores only what changed. A game server's are by default, and a
-database's can be. Each instance has one repository per destination:
+database's or a volume's can be. Each instance has one repository per
+destination:
 
 - Relay-local: `<data>/restic/instance/<id>/`
 - S3-compatible: `s3:https://<endpoint>/<bucket>/<stored-prefix>` where the
@@ -1119,6 +1120,23 @@ then doesn't hold the database's transaction open, and a dump that fails never
 reaches the repository. Input that fails partway never ends, since restic keeps
 whatever it was given by then as a whole snapshot: restic is stopped instead.
 
+A volume is read by restic itself, in a helper: the Relay's own image, as root,
+with the volume mounted read-only at `/volume`, so restic keeps each file's
+owner, mode, extended attributes, and links, and reads only those that changed.
+The helper has nothing more of the Relay than the repository needs, its folder
+or the Relay's network for the bridge to a bucket, and restic's cache
+(`apps/relay/src/backups/restic-helper.ts`). It stands in for a process of the
+Relay's, so its output, failures and cancelling are handled the same. One a
+stopped Relay left is asked to stop when the Relay next starts, so restic takes
+its lock off the repository; one killed can leave it locked to deletes for up to
+half an hour.
+
+A stopped volume is read twice. The first time is while everything still runs,
+and stores nearly all of it, as a snapshot of its own (`before:<task>`). Then
+what uses the volume stops, the second reads what changed since, and it starts
+again. Only the second is the backup; the first is forgotten. A stopped batch
+stops nothing until every one of its volumes has been read the first time.
+
 A snapshot an interrupted attempt of the same task saved is kept as the
 backup's, except in a stopped batch, whose members run again together: there it
 is forgotten once the new one is saved.
@@ -1198,7 +1216,12 @@ server it was taken of uses that server's directory; restoring into another,
 or exporting one whose server is gone, reads the path from the snapshot
 itself (`restic snapshots`), and the repository from the server it was
 taken of, which the task's `archive` names. A database's dump is written out
-gzipped, then imported as a full backup's is, or downloaded as `.sql.gz`.
+gzipped, then imported as a full backup's is, or downloaded as `.sql.gz`. A
+volume's is restored by restic into the staging folder a full backup's restore
+makes inside the volume, in a helper, and swapped in the same way. restic keeps
+the volume's root as a folder, `volume`, so its owner, mode and attributes are
+read from there and its contents moved up before anything is cleared. It
+downloads as `.tar.gz`.
 
 Destination deletion is two-phase: the row is marked `deleting` so new backups
 cannot select it, S3 repository prefixes are purged, then foreign keys on

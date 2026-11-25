@@ -776,8 +776,7 @@ export async function restoreResourceBackupHandler(
     !backup ||
     backup.status !== "available" ||
     backup.targetKind !== "volume" ||
-    backup.artifactKind !== "tar_archive" ||
-    backup.backupMode !== "full"
+    !restorableArtifact(backup, "tar_archive")
   ) {
     throw new Error("Backup is not available for a volume restore")
   }

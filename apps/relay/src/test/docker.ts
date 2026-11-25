@@ -77,6 +77,9 @@ export interface FakeContainer {
   labels: Record<string, string>
   env: Record<string, string>
   cmd: Array<string>
+  entrypoint: Array<string>
+  /** Attached to before it started, for what its program prints. */
+  attached: Duplex | null
   tty: boolean
   openStdin: boolean
   restartPolicy: string
@@ -239,6 +242,13 @@ export class FakeDocker {
    * stderr; they exit with code 1.
    */
   readonly programFailures = new Map<string, string>()
+  /** Programs a test runs in place of a container's entrypoint, by its name. */
+  readonly entrypoints = new Map<
+    string,
+    (
+      container: FakeContainer
+    ) => Promise<{ exitCode: number; stderr?: string; stdout?: string }>
+  >()
   /** Whether the kernel has legacy iptables, or only nftables. */
   legacyIptables = true
   /**
@@ -330,6 +340,7 @@ export class FakeDocker {
     this.#repoDigests.clear()
     this.unhealthyImages.clear()
     this.programFailures.clear()
+    this.entrypoints.clear()
     this.legacyIptables = true
     this.streamErrors.clear()
     this.tailscale.controlPlaneReachable = true
@@ -409,6 +420,8 @@ export class FakeDocker {
       autoRemove: false,
       volumesFrom: [],
       runOnce: null,
+      entrypoint: [],
+      attached: null,
       logs: [],
       stdin: "",
       processes: [],
@@ -1018,6 +1031,7 @@ export class FakeDocker {
   #createContainer(input: {
     autoRemove: boolean
     cmd: Array<string>
+    entrypoint: Array<string>
     hostname: string | undefined
     volumesFrom: Array<string>
     env: Record<string, string>
@@ -1066,6 +1080,7 @@ export class FakeDocker {
     })
     container.portBindings = input.portBindings
     container.cmd = input.cmd
+    container.entrypoint = input.entrypoint
     // Docker names a container's host after its ID when it isn't given one.
     container.hostname = input.hostname || container.id.slice(0, 12)
     container.volumesFrom = input.volumesFrom
@@ -1160,6 +1175,14 @@ export class FakeDocker {
   }
 
   #start(container: FakeContainer): void {
+    const program = this.entrypoints.get(container.entrypoint[0] ?? "")
+    if (program) {
+      container.state.running = true
+      container.state.startedAt = this.#timestamp()
+      container.starts += 1
+      setImmediate(() => void this.#runEntrypoint(container, program))
+      return
+    }
     if (container.cmd.some((argument) => TAR_HELPER.test(argument))) {
       container.state.running = true
       container.state.startedAt = this.#timestamp()
@@ -1195,6 +1218,19 @@ export class FakeDocker {
         })
       }
     }
+  }
+
+  async #runEntrypoint(
+    container: FakeContainer,
+    program: (
+      container: FakeContainer
+    ) => Promise<{ exitCode: number; stderr?: string; stdout?: string }>
+  ): Promise<void> {
+    const ran = await program(container)
+    if (ran.stdout) container.attached?.write(frame(1, Buffer.from(ran.stdout)))
+    if (ran.stderr) container.attached?.write(frame(2, Buffer.from(ran.stderr)))
+    container.attached?.end()
+    this.#stop(container, ran.exitCode)
   }
 
   /**
@@ -1253,8 +1289,12 @@ export class FakeDocker {
   }
 
   async #archiveFile(mount: FakeMount, path: string): Promise<Buffer> {
-    const content =
-      mount.type === "bind"
+    const folder =
+      mount.type === "volume" &&
+      this.volumes.get(mount.source)?.directories.has(path)
+    const content = folder
+      ? null
+      : mount.type === "bind"
         ? await readFile(join(mount.source, path))
         : (() => {
             const volume = this.volumes.get(mount.source)
@@ -1271,7 +1311,19 @@ export class FakeDocker {
       pack.on("end", () => resolve(Buffer.concat(chunks)))
       pack.on("error", reject)
     })
-    pack.entry({ name: posix.basename(path), type: "file" }, content)
+    if (content) {
+      pack.entry({ name: posix.basename(path), type: "file" }, content)
+    } else {
+      const owner = this.volumes.get(mount.source)?.owners.get(path)
+      pack.entry({
+        gid: 0,
+        mode: 0o755,
+        uid: 0,
+        ...owner,
+        name: `${posix.basename(path)}/`,
+        type: "directory",
+      })
+    }
     pack.finalize()
     return done
   }
@@ -2400,6 +2452,7 @@ export class FakeDocker {
     return this.#createContainer({
       autoRemove: host.AutoRemove ?? false,
       cmd: body.Cmd ?? [],
+      entrypoint: body.Entrypoint ?? [],
       hostname: body.Hostname,
       volumesFrom: host.VolumesFrom ?? [],
       env: Object.fromEntries(
@@ -2474,6 +2527,14 @@ export class FakeDocker {
         this.#finishRunOnce(container)
       })
       socket.on("error", () => undefined)
+      return
+    }
+    if (container && this.entrypoints.has(container.entrypoint[0] ?? "")) {
+      socket.write(
+        "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+      )
+      socket.on("error", () => undefined)
+      container.attached = socket
       return
     }
     if (!container?.state.running) {
@@ -2732,6 +2793,7 @@ export async function commandLines(
 
 interface CreateBody {
   Cmd?: Array<string> | null
+  Entrypoint?: Array<string> | null
   Env?: Array<string> | null
   Healthcheck?: { Test?: Array<string> }
   Hostname?: string
@@ -3008,13 +3070,16 @@ function fakeTarRestoreStep(
     each((path) => path !== "" && !inStaging(path) && remove(path))
     return
   }
-  if (step !== "install") throw new Error(`Unknown step ${step}`)
-  const prefix = `${staging}/`
+  if (step !== "install" && step !== "unwrap") {
+    throw new Error(`Unknown step ${step}`)
+  }
+  const prefix = step === "unwrap" ? `${staging}/volume/` : `${staging}/`
+  const up = step === "unwrap" ? `${staging}/` : ""
   const move = <V>(map: Map<string, V>) => {
     for (const [path, value] of Array.from(map)) {
       if (!path.startsWith(prefix)) continue
       map.delete(path)
-      map.set(path.slice(prefix.length), value)
+      map.set(`${up}${path.slice(prefix.length)}`, value)
     }
   }
   move(volume.files)
@@ -3024,9 +3089,9 @@ function fakeTarRestoreStep(
   for (const path of Array.from(volume.directories)) {
     if (!path.startsWith(prefix)) continue
     volume.directories.delete(path)
-    volume.directories.add(path.slice(prefix.length))
+    volume.directories.add(`${up}${path.slice(prefix.length)}`)
   }
-  remove(staging)
+  remove(step === "unwrap" ? `${staging}/volume` : staging)
   if (owner) volume.owners.set("", owner)
 }
 

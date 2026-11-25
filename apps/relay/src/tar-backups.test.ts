@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { createWriteStream } from "node:fs"
-import { mkdir, readdir, readFile, stat } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -24,6 +24,7 @@ import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayStateStore } from "./effect/state.js"
 import { fakeDocker } from "./test/docker.js"
+import { FakeRestic } from "./test/restic.js"
 import {
   relayHarness,
   TEST_NAMESPACE,
@@ -105,6 +106,7 @@ function backups(
         ...instead.apps,
       },
       config: harness.config,
+      hostDataDirectory: async () => harness.config.dataDirectory,
       fences: fencesOf.get(harness)!,
       findInstance: async () => null,
       isInstanceStopped: async () => true,
@@ -437,6 +439,190 @@ it("dumps a database of a stopped batch while the Apps of its volumes are stoppe
   expect(await Effect.runPromise(manager.get(dump.taskId))).toMatchObject({
     status: "succeeded",
   })
+})
+
+// An incremental backup's task for a volume, to a repository kept here.
+function snapshotInput(
+  id: string,
+  options: Partial<BackupCreateTaskInput> = {}
+): BackupTaskInput {
+  return createInput(
+    { id, kind: "volume" },
+    {
+      artifactKind: "restic_snapshot",
+      destination: {
+        kind: "restic",
+        repository: { kind: "local" },
+        repositoryPassword: "repo-secret",
+      },
+      mode: "incremental",
+      ...options,
+    }
+  )
+}
+
+it("backs up a volume incrementally and restores it as it was", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  const before = snapshot(volume)
+  const restic = new FakeRestic(harness.config.dataDirectory)
+  harness.config.resticPath = restic.path
+  const manager = await backups(harness, volumes)
+
+  const created = await runTask(manager, snapshotInput(volumeId))
+  expect(created).toMatchObject({ error: null, status: "succeeded" })
+
+  volume.files.set("pgdata/base/1", "changed")
+  volume.files.set("stray", "written since")
+  volume.symlinks.delete("current")
+  volume.owners.set("", { gid: 0, mode: 0o777, uid: 0 })
+  const restored = await runTask(manager, {
+    backupId: created.backupId,
+    kind: "restore",
+    source: {
+      kind: "restic",
+      repository: { kind: "local" },
+      repositoryPassword: "repo-secret",
+      snapshotId: (created.result as { snapshotId: string }).snapshotId,
+    },
+    target: created.input.target,
+    taskId: randomUUID(),
+  })
+
+  expect(restored).toMatchObject({ error: null, status: "succeeded" })
+  expect(snapshot(volume)).toEqual(before)
+  expect(helpersLeft()).toEqual([])
+})
+
+// An App, running, whose power and whose volumes' snapshots a test follows.
+async function stoppedSnapshots() {
+  const { harness, volumes } = await relay()
+  const restic = new FakeRestic(harness.config.dataDirectory)
+  harness.config.resticPath = restic.path
+  const seen: Array<string> = []
+  let running = true
+  restic.onBackup = () => {
+    seen.push(running ? "copied, running" : "copied, stopped")
+  }
+  const mounts = [kilnVolume()].map(({ name }) => ({
+    destination: "/data",
+    source: name,
+    type: "volume" as const,
+  }))
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts,
+    name: "site",
+  })
+  const manager = await backups(harness, volumes, {
+    apps: {
+      isRunning: async () => running,
+      start: async () => {
+        running = true
+        seen.push("started")
+      },
+      stop: async () => {
+        running = false
+        seen.push("stopped")
+      },
+    },
+    databases: dumping(() =>
+      seen.push(running ? "dumped, running" : "dumped, stopped")
+    ),
+  })
+  return { harness, manager, restic, seen }
+}
+
+// Most of it is stored while the App runs, so it's stopped only to store what
+// changed meanwhile.
+it("stores a stopped volume before it stops its App, and again after", async () => {
+  const { manager, restic, seen } = await stoppedSnapshots()
+
+  const created = await runTask(
+    manager,
+    snapshotInput(volumeId, { consistency: "stopped" })
+  )
+
+  expect(created).toMatchObject({ error: null, status: "succeeded" })
+  expect(seen).toEqual([
+    "copied, running",
+    "stopped",
+    "copied, stopped",
+    "started",
+  ])
+  // Only the second is the backup.
+  expect(restic.snapshots.map(({ id }) => id)).toEqual([
+    (created.result as { snapshotId: string }).snapshotId,
+  ])
+})
+
+it("starts a stopped volume's App again when its snapshot fails, and keeps none", async () => {
+  const { manager, restic, seen } = await stoppedSnapshots()
+  const follow = restic.onBackup
+  restic.onBackup = (tags) => {
+    follow(tags)
+    if (seen.includes("stopped")) throw new Error("the bucket is gone")
+  }
+
+  const created = await runTask(
+    manager,
+    snapshotInput(volumeId, { consistency: "stopped" })
+  )
+
+  expect(created).toMatchObject({
+    error: expect.stringContaining("the bucket is gone"),
+    status: "failed",
+  })
+  expect(seen.at(-1)).toBe("started")
+  expect(restic.snapshots).toEqual([])
+})
+
+// A Relay that stopped midway runs the whole batch again. What it stored
+// before is of another stopped window than the rest will be.
+it("takes a stopped batch's snapshots again after the Relay restarts", async () => {
+  const { harness, manager, restic, seen } = await stoppedSnapshots()
+  const batch = { id: randomUUID(), size: 2 }
+  const files = snapshotInput(volumeId, { batch, consistency: "stopped" })
+  const dump = createInput(
+    { id: "d".repeat(12), kind: "database" },
+    { artifactKind: "database_dump", batch, consistency: "stopped" }
+  )
+  await writeFile(
+    join(harness.config.dataDirectory, "fake-restic.json"),
+    JSON.stringify([
+      {
+        id: "0ld00000",
+        tags: [`task:${files.taskId}`, `backup:${files.backupId}`],
+        volume: { directories: [], files: [], owners: [], symlinks: [] },
+      },
+    ])
+  )
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(dump)
+      yield* manager.enqueue(files)
+      yield* manager.runPending()
+    })
+  )
+
+  const ended = await Effect.runPromise(manager.get(files.taskId))
+  expect(ended).toMatchObject({ error: null, status: "succeeded" })
+  // The database waits to be dumped until the volume is stored first.
+  expect(seen[0]).toBe("copied, running")
+  expect(seen[1]).toBe("stopped")
+  expect(seen.slice(2, 4).sort()).toEqual([
+    "copied, stopped",
+    "dumped, stopped",
+  ])
+  expect(seen.slice(4)).toEqual(["started"])
+  expect(restic.snapshots.map(({ id }) => id)).toEqual([
+    (ended!.result as { snapshotId: string }).snapshotId,
+  ])
 })
 
 // A schedule names the volumes its App used when it was last sent. One
