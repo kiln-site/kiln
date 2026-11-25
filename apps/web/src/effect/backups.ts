@@ -2620,7 +2620,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
 )(function* (relayId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
+  const failDependents = database.execute(
     "backup_dependency_failures",
     `UPDATE ${databaseTable("backup_task")} dependent
        JOIN ${databaseTable("backup_task")} dependency
@@ -2634,6 +2634,9 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         AND dependency.status IN ('failed', 'cancelled')`,
     [now, now]
   )
+  // It reads tasks others are adding, and MySQL may end it for a deadlock,
+  // which would end the Relay's whole pass: it runs once more.
+  yield* failDependents.pipe(Effect.catchIf(isDeadlock, () => failDependents))
   const rows = yield* database.queryRows<DispatchableBackupRow>(
     "backup_dispatchable_list",
     `SELECT backup.id AS backup_id, backup.target_kind, backup.target_id,

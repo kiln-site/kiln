@@ -3,10 +3,12 @@ import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
-import { BackupStorageError } from "@/effect/errors"
+import { Database } from "@/effect/database"
+import { BackupStorageError, DatabaseError } from "@/effect/errors"
 import {
   linkBackupEffect,
   linkInstanceBackupsEffect,
+  listDispatchableBackupTasksEffect,
   reserveBackupCopyEffect,
   reserveBackupDeleteEffect,
 } from "@/effect/backups"
@@ -322,6 +324,57 @@ describeMysql("linked backups", () => {
             "available"
           )
         })
+    )
+  })
+})
+
+describeMysql("dispatching a Relay's backup tasks", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("goes on past a deadlock", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay("relay-one")
+        yield* insertBackup("backup", {})
+        const task = (id: string, row: Record<string, unknown>) =>
+          insertRows("backup_task", {
+            backup_id: "backup",
+            created_at: now,
+            id,
+            updated_at: now,
+            ...row,
+          })
+        yield* task("safety", { status: "failed", task_kind: "create" })
+        yield* task("restore", {
+          depends_on_task_id: "safety",
+          status: "queued",
+          task_kind: "restore",
+        })
+        const database = yield* Database
+        let deadlocks = 0
+        const contended = Database.of({
+          ...database,
+          execute: (operation, statement, values) =>
+            Effect.suspend(() =>
+              operation === "backup_dependency_failures" && deadlocks++ === 0
+                ? Effect.fail(
+                    DatabaseError.make({ operation, cause: { errno: 1213 } })
+                  )
+                : database.execute(operation, statement, values)
+            ),
+        })
+
+        yield* listDispatchableBackupTasksEffect("relay-one").pipe(
+          Effect.provideService(Database, contended)
+        )
+
+        const tasks = yield* selectRows<{ id: string; status: string }>(
+          "backup_task"
+        )
+        assert.strictEqual(
+          tasks.find(({ id }) => id === "restore")?.status,
+          "failed"
+        )
+      })
     )
   })
 })
