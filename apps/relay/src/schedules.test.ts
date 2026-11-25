@@ -1109,3 +1109,42 @@ describe("Relay scheduled App backups, of an App that keeps nothing", () => {
     )
   })
 })
+
+// A Relay keeps the schedules it was sent, and runs them as it starts. One from
+// when an incremental step backed up game servers alone was never checked for
+// the rest of its targets.
+describe("Relay schedules kept from before", () => {
+  it("backs up nothing an incremental step wasn't admitted for", async () => {
+    const asked: Array<string> = []
+    const { schedules } = await manager({
+      enqueueBackup: async (input) => {
+        asked.push(input.target.kind)
+        throw new Error("not admitted")
+      },
+      listAppIds: async () => new Set(["c".repeat(12)]),
+      listDatabaseIds: async () => new Set(["d".repeat(12)]),
+    })
+    const target = (id: string, kind: "app" | "database" | "relay") => ({
+      id,
+      kind,
+      name: kind,
+      relayId: "relay-a",
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [{ ...localBackup, executions: [], mode: "incremental" }],
+      targets: [
+        target("c".repeat(12), "app"),
+        target("d".repeat(12), "database"),
+        target("relay-a", "relay"),
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("noop")
+    )
+    expect(asked).toEqual([])
+  })
+})

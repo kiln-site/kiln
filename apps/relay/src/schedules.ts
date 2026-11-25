@@ -702,7 +702,10 @@ export class ScheduleManager {
       )
       return
     }
-    if (!scheduleActionAppliesToTarget(action, state.target)) {
+    if (
+      !scheduleActionAppliesToTarget(action, state.target) ||
+      notAdmitted(action, state.target)
+    ) {
       state.attempts.push(
         attempt({
           action,
@@ -997,7 +1000,7 @@ export class ScheduleManager {
       target.kind === "relay" ? "full" : (execution?.mode ?? action.mode)
     const deployedDestination =
       execution?.destination ??
-      (mode === "full" && action.destination.kind === "local"
+      (action.mode === "full" && action.destination.kind === "local"
         ? ({ kind: "local" } as const)
         : null)
     if (!deployedDestination) {
@@ -1548,6 +1551,21 @@ function powerOwner(target: ScheduleTarget) {
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Unknown schedule error"
+}
+
+// Whether an incremental step reaches a target Hearth never admitted to it, as
+// in a schedule kept from when one backed up game servers alone, until Hearth
+// sends it again.
+function notAdmitted(
+  action: TargetScheduleAction,
+  target: ScheduleTarget
+): boolean {
+  return (
+    action.type === "backup" &&
+    action.mode === "incremental" &&
+    (target.kind === "database" || target.kind === "relay") &&
+    !backupExecution(action, target)
+  )
 }
 
 // What Hearth admitted of a backup step for one target.
