@@ -80,7 +80,7 @@ ADD --checksum=sha256:efa38cb7aa7db2dbb9ad049b00b0a9737f66f033626177b5a4e845184a
 
 FROM compose-${TARGETARCH} AS compose
 
-FROM restic/restic:0.19.1 AS restic
+FROM restic/restic:0.20.0 AS restic
 
 # Syft inventories the host and the images it runs, for Hearth's
 # vulnerability checks, in helpers the Relay starts from its own image.

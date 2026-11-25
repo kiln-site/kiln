@@ -432,7 +432,7 @@ export interface BackupExportDispatch {
   kind: "export"
   repositoryPassword?: string
   snapshotId: string
-  target: { id: string; kind: "instance" }
+  target: { id: string; kind: BackupTargetKind }
   taskId: string
   ttlMs: number
 }
@@ -1545,18 +1545,14 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         // full backup would be recorded as one.
         if (knownTask.task_kind !== task.kind) return
         // And it names the resource Hearth sent it for, as the task was
-        // dispatched: a restore's destination, or the backup's own target
-        // (an export is sent as its game server's). A failure with no result
-        // is the exception: the Relay could report it under the right
-        // target anyway, and one whose journal row it couldn't read names
-        // none it knows, yet must still end the task.
-        const sentFor =
-          task.kind === "export"
-            ? { id: knownTask.backup_target_id, kind: "instance" }
-            : {
-                id: knownTask.task_target_id ?? knownTask.backup_target_id,
-                kind: knownTask.task_target_kind ?? knownTask.backup_target_kind,
-              }
+        // dispatched: a restore's destination, or the backup's own target.
+        // A failure with no result is the exception: the Relay could report
+        // it under the right target anyway, and one whose journal row it
+        // couldn't read names none it knows, yet must still end the task.
+        const sentFor = {
+          id: knownTask.task_target_id ?? knownTask.backup_target_id,
+          kind: knownTask.task_target_kind ?? knownTask.backup_target_kind,
+        }
         if (
           (task.input.target.id !== sentFor.id ||
             task.input.target.kind !== sentFor.kind) &&
@@ -2781,7 +2777,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         backupId: row.backup_id,
         kind: "export",
         snapshotId: row.restic_snapshot_id,
-        target: { id: row.target_id, kind: "instance" },
+        target: { id: row.target_id, kind: row.target_kind },
         taskId: row.task_id,
         ttlMs: clampBackupExportTtlMs(
           // Export tasks store the requested TTL (ms) in reserved_bytes.
@@ -4099,7 +4095,7 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
           backupId: backup.id,
           kind: "export",
           snapshotId,
-          target: { id: backup.target_id, kind: "instance" },
+          target: { id: backup.target_id, kind: backup.target_kind },
           taskId,
           ttlMs,
         })
@@ -4191,6 +4187,7 @@ export const ensureBackupRepositoryEffect = Effect.fn(
   relayId: string
   storageId: string | null
   targetId: string
+  targetKind: BackupTargetKind
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -4219,7 +4216,7 @@ export const ensureBackupRepositoryEffect = Effect.fn(
           relayId: input.relayId,
           storageId: input.storageId,
           targetId: input.targetId,
-          targetKind: "instance",
+          targetKind: input.targetKind,
         })
         return {
           id: repository.id,

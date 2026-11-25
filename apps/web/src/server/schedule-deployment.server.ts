@@ -41,7 +41,7 @@ import {
   readRelayVolumes,
   scheduledAppTargets,
 } from "@/server/app-backups.server"
-import type { RelayVolumes } from "@workspace/contracts"
+import type { BackupTargetKind, RelayVolumes } from "@workspace/contracts"
 import { defaultKilnBackupsSettingId } from "@/migrations/0024_default_kiln_backups"
 
 // Saving schedules and handing them to their Relays, shared by the schedule
@@ -615,7 +615,8 @@ async function scheduledBackupExecution(
   }
   const { repositoryId, ...destination } = await scheduledResticDestination(
     action,
-    target
+    target,
+    targetKind
   )
   return {
     ...execution,
@@ -770,7 +771,8 @@ export async function scheduledBucketBackupStep(
 
 async function scheduledResticDestination(
   action: Extract<ScheduleAction, { type: "backup" }>,
-  target: BackupMember
+  target: BackupMember,
+  targetKind: BackupTargetKind
 ) {
   const storageId =
     action.destination.kind === "storage" ? action.destination.storageId : null
@@ -780,6 +782,7 @@ async function scheduledResticDestination(
       relayId: target.relayId,
       storageId,
       targetId: target.id,
+      targetKind,
     })
   )
   const location = await runAppEffect(

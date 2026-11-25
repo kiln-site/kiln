@@ -95,11 +95,11 @@ services:
         fi
         # Pin restic to the version shipped in apps/relay/Dockerfile so dev
         # exercises the same CLI/JSON surface as production.
-        if ! restic version 2>/dev/null | grep -q '^restic 0.19.1'; then
+        if ! restic version 2>/dev/null | grep -q '^restic 0.20.0'; then
           arch=$$(uname -m)
           case "$$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
           attempt=0
-          until wget -qO /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_linux_$${arch}.bz2"; do
+          until wget -qO /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v0.20.0/restic_0.20.0_linux_$${arch}.bz2"; do
             attempt=$$((attempt + 1))
             if [ "$$attempt" -ge 5 ]; then echo "restic download failed" >&2; exit 1; fi
             sleep 2
@@ -107,7 +107,7 @@ services:
           bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic
           chmod +x /usr/local/bin/restic
           rm -f /tmp/restic.bz2
-          if ! restic version | grep -q '^restic 0.19.1'; then
+          if ! restic version | grep -q '^restic 0.20.0'; then
             echo "restic install failed" >&2
             exit 1
           fi

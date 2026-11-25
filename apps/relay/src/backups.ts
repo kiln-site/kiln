@@ -70,7 +70,7 @@ import { collectPlatformRecovery } from "./platform-recovery.js"
 import { restoreUnfinished } from "./platform-restore.js"
 import { PlatformError, withPlatformLock } from "./platform-state.js"
 import { RelayBackupError } from "./effect/errors.js"
-import { promiseEffect } from "./effect/promise.js"
+import { ensuringPromise, promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
 import {
   exclusive,
@@ -136,6 +136,7 @@ import {
   resticSnapshotSelector,
   translateExcludePatterns,
   validateStagingTree,
+  type ResticBackupPaths,
   type ResticDriver,
   type ResticDriverLocation,
   type ResticSnapshotSummary,
@@ -1174,6 +1175,43 @@ export class BackupManager {
     })
   }
 
+  // What an incremental backup of a target takes a snapshot of.
+  #snapshotSource(input: BackupCreateTaskInput) {
+    return Effect.gen({ self: this }, function* () {
+      const { target } = input
+      if (target.kind === "instance") {
+        const instance = yield* Effect.tryPromise({
+          try: () => this.#findInstance(target.id),
+          catch: (cause) =>
+            RelayBackupError.make({
+              code: "instance_lookup_failed",
+              operation: "create.lookup",
+              reason: "The backup target could not be loaded",
+              cause,
+            }),
+        })
+        if (!instance) {
+          return yield* backupFailure(
+            "instance_not_found",
+            "create.lookup",
+            "The backup target no longer exists on this Relay"
+          )
+        }
+        return instanceSnapshotSource(
+          this.#config,
+          input,
+          instance,
+          yield* this.#state.listInstanceRoutes(target.id)
+        )
+      }
+      return yield* backupFailure(
+        "unsupported_backup",
+        "create",
+        "This Relay has no incremental backups of that"
+      )
+    })
+  }
+
   #requiredVolume(id: string, restoring = false) {
     return Effect.gen({ self: this }, function* () {
       const volume = this.#volumes
@@ -2140,15 +2178,13 @@ export class BackupManager {
       if (
         input.destination.kind === "restic" &&
         input.mode === "incremental" &&
-        input.artifactKind === "restic_snapshot" &&
-        input.target.kind === "instance"
+        input.artifactKind === "restic_snapshot"
       ) {
         const destination = input.destination
         const result = yield* runResticCreate(
           this.#config,
           this.#restic,
-          this.#findInstance,
-          yield* this.#state.listInstanceRoutes(input.target.id),
+          yield* this.#snapshotSource(input),
           input,
           (progress) =>
             this.#state.updateBackupTaskProgress(
@@ -2899,8 +2935,7 @@ async function readExportExpiry(path: string): Promise<number | null> {
 function runResticCreate(
   config: RelayConfig,
   restic: ResticDriver,
-  findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
-  webRoutes: ReadonlyArray<RelayInstanceWebRoute>,
+  source: SnapshotSource,
   input: BackupCreateTaskInput & { kind?: "create" },
   updateProgress: (
     progress: BackupProgress
@@ -2914,23 +2949,6 @@ function runResticCreate(
         : undefined,
       "create.restic"
     )
-    const instance = yield* Effect.tryPromise({
-      try: () => findInstance(input.target.id),
-      catch: (cause) =>
-        RelayBackupError.make({
-          code: "instance_lookup_failed",
-          operation: "create.lookup",
-          reason: "The backup target could not be loaded",
-          cause,
-        }),
-    })
-    if (!instance) {
-      return yield* backupFailure(
-        "instance_not_found",
-        "create.lookup",
-        "The backup target no longer exists on this Relay"
-      )
-    }
     const progress: BackupProgress = {
       completed: 0,
       currentArtifactId: input.destination.artifactId ?? null,
@@ -2953,8 +2971,7 @@ function runResticCreate(
           config,
           restic,
           input,
-          instance,
-          webRoutes,
+          source,
           password,
           progress,
           signal,
@@ -2984,16 +3001,17 @@ function runResticCreate(
         })
       )
     )
-    if (input.destination.kind === "restic") {
-      yield* addRecoveryPasswords(
-        config,
-        restic,
-        input.target.id,
-        input.destination,
-        password,
-        signal
-      )
-    }
+    const unopened: ReadonlyArray<string> =
+      input.destination.kind === "restic"
+        ? yield* addRecoveryPasswords(
+            config,
+            restic,
+            input.target.id,
+            input.destination,
+            password,
+            signal
+          )
+        : []
     const taken = summary as ResticSnapshotSummary | null
     yield* Effect.annotateCurrentSpan({
       "restic.snapshot.id": result.snapshotId,
@@ -3019,8 +3037,60 @@ function runResticCreate(
             : "local",
       })
     }
-    return result
+    return { ...result, warnings: [...result.warnings, ...unopened] }
   })
+}
+
+/** What an incremental backup's snapshots hold, and how they're taken. */
+interface SnapshotSource {
+  /** About as much as a first snapshot holds. */
+  readonly logicalBytes: (signal: AbortSignal) => Promise<number>
+  readonly take: (
+    backup: (paths: ResticBackupPaths) => Promise<ResticSnapshotSummary>
+  ) => Promise<ResticSnapshotSummary>
+  readonly warnings: ReadonlyArray<string>
+}
+
+/** A game server's folder, with its setup beside it. */
+function instanceSnapshotSource(
+  config: RelayConfig,
+  input: BackupCreateTaskInput,
+  instance: RelayInstanceConfig,
+  webRoutes: ReadonlyArray<RelayInstanceWebRoute>
+): SnapshotSource {
+  const { excludes, warnings } = translateExcludePatterns([
+    ...DEFAULT_EXCLUDES,
+    ...input.exclude,
+  ])
+  return {
+    logicalBytes: (signal) =>
+      directoryLogicalBytes(
+        resolve(config.rootDirectory, instance.directory),
+        signal
+      ),
+    take: async (backup) => {
+      const setup = await writeInstanceSetup(config, instance, webRoutes)
+      return ensuringPromise(
+        () =>
+          backup({
+            cwd: config.rootDirectory,
+            // The server's own patterns, which can't leave out its setup.
+            excludes: [
+              ...excludes,
+              `!${SETUP_DIRECTORY}`,
+              `!${SETUP_DIRECTORY}/**`,
+            ],
+            paths: [instance.directory, setup],
+          }),
+        () =>
+          rm(resolve(config.rootDirectory, setup), {
+            force: true,
+            recursive: true,
+          })
+      )
+    },
+    warnings,
+  }
 }
 
 // A snapshot's servers' setups are beside their folders, out of them, so a
@@ -3070,7 +3140,7 @@ const addRecoveryPasswords = Effect.fn("Backups.addRecoveryPasswords")(
     signal: AbortSignal
   ) {
     const passwords = destination.recoveryPasswords ?? []
-    if (passwords.length === 0) return
+    if (passwords.length === 0) return []
     yield* Effect.tryPromise({
       try: () =>
         restic.addPasswords({
@@ -3085,11 +3155,16 @@ const addRecoveryPasswords = Effect.fn("Backups.addRecoveryPasswords")(
         }),
       catch: (cause) => cause,
     })
+    return []
   },
   Effect.catch((cause) =>
     Effect.logWarning(
       "A backup repository's recovery passwords couldn't be added yet",
       cause
+    ).pipe(
+      Effect.as([
+        "Only Kiln can open this backup until the next one adds its destination's password and Kiln's",
+      ])
     )
   )
 )
@@ -3098,8 +3173,7 @@ async function createResticSnapshot(
   config: RelayConfig,
   restic: ResticDriver,
   input: BackupCreateTaskInput,
-  instance: RelayInstanceConfig,
-  webRoutes: ReadonlyArray<RelayInstanceWebRoute>,
+  source: SnapshotSource,
   password: string,
   progress: BackupProgress,
   signal: AbortSignal,
@@ -3114,10 +3188,6 @@ async function createResticSnapshot(
       ? input.destination.repository
       : undefined
   )
-  const translated = translateExcludePatterns([
-    ...DEFAULT_EXCLUDES,
-    ...input.exclude,
-  ])
   // A snapshot an attempt before a Relay restart saved is kept, not taken
   // again.
   const existing = await restic.openForBackup({
@@ -3158,59 +3228,49 @@ async function createResticSnapshot(
       bytes: stats.totalSize,
       snapshotId: reuse.id,
       warnings: [
-        ...translated.warnings,
+        ...source.warnings,
         // restic's report of files it couldn't read went with the process.
         "Recovered after the Relay restarted, so files restic couldn't read, if any, aren't listed",
       ],
     }
   }
   if (location.kind === "local") {
-    // Worst case a snapshot stores one full compressed copy of the instance;
+    // Worst case a snapshot stores one full compressed copy of its source;
     // deduplicated runs use far less, so this is a conservative preflight.
     await mkdir(location.path, { recursive: true, mode: 0o700 })
     await requireBackupSpace(
       location.path,
-      await directoryLogicalBytes(
-        resolve(config.rootDirectory, instance.directory),
-        signal
-      ),
+      await source.logicalBytes(signal),
       input.maxBytes
     )
   }
-  const setup = await writeInstanceSetup(config, instance, webRoutes)
   const summary = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
         try: () =>
-          restic.backup({
-            cwd: config.rootDirectory,
-            // The server's own patterns, which can't leave out its setup.
-            excludes: [
-              ...translated.excludes,
-              `!${SETUP_DIRECTORY}`,
-              `!${SETUP_DIRECTORY}/**`,
-            ],
-            location,
-            onProgress: (update) => {
-              progress.completed = update.bytesCompleted
-              progress.total = update.bytesTotal ?? progress.total
-              if (input.maxBytes !== null && progress.total > input.maxBytes) {
-                throw backupTooLarge()
-              }
-            },
-            password,
-            paths: [instance.directory, setup],
-            signal,
-            tags: [`task:${input.taskId}`, `backup:${input.backupId}`],
-          }),
+          source.take((paths) =>
+            restic.backup({
+              ...paths,
+              location,
+              onProgress: (update) => {
+                progress.completed = update.bytesCompleted
+                progress.total = update.bytesTotal ?? progress.total
+                if (
+                  input.maxBytes !== null &&
+                  progress.total > input.maxBytes
+                ) {
+                  throw backupTooLarge()
+                }
+              },
+              password,
+              signal,
+              tags: [`task:${input.taskId}`, `backup:${input.backupId}`],
+            })
+          ),
         catch: (cause) => cause,
       })
     )
   )
-  await rm(resolve(config.rootDirectory, setup), {
-    force: true,
-    recursive: true,
-  })
   if (Result.isFailure(summary)) {
     await Effect.runPromise(
       Effect.tryPromise({
@@ -3262,7 +3322,7 @@ async function createResticSnapshot(
       : undefined,
     bytes: summary.success.totalBytesProcessed,
     snapshotId: summary.success.snapshotId,
-    warnings: [...translated.warnings, ...summary.success.warnings],
+    warnings: [...source.warnings, ...summary.success.warnings],
   }
 }
 
