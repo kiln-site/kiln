@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vite-plus/test"
+import vm from "node:vm"
+
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import {
   requireFastReservedPatterns,
@@ -16,5 +18,18 @@ describe("reserved vanity names", () => {
     for (let index = 0; index < 20; index += 1)
       expect(vanityLabelAllowed("a".repeat(40), [slow])).toBe(false)
     expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  // One pause of Hearth's would otherwise reserve every name of a domain
+  // until Hearth next starts.
+  it("doesn't take a pattern interrupted once for a slow one", () => {
+    const run = vi
+      .spyOn(vm.Script.prototype, "runInContext")
+      .mockImplementationOnce(() => {
+        throw new Error("Script execution timed out after 25ms")
+      })
+    expect(vanityLabelAllowed("play", ["^interrupted$"])).toBe(true)
+    expect(vanityLabelAllowed("interrupted", ["^interrupted$"])).toBe(false)
+    run.mockRestore()
   })
 })
