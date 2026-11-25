@@ -1537,7 +1537,7 @@ function DownloadBackupDialog({
             Choose an available copy, then download it or create a temporary
             signed URL.
             {backup.artifactKind === "restic_snapshot"
-              ? " Incremental snapshots are exported to a zip first."
+              ? " An incremental backup is put together into one file first."
               : ""}
           </DialogDescription>
         </DialogHeader>

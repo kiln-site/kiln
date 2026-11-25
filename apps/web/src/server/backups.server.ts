@@ -4,6 +4,7 @@ import {
   relaySnapshotSchema,
   relayVolumesSchema,
   type AccessGrantScopeType,
+  type BackupArtifactKind,
   type BackupTarget,
 } from "@workspace/contracts"
 
@@ -628,6 +629,16 @@ async function restorableBackup(
   return linked
 }
 
+/** A snapshot, or a full backup of its kind. */
+export function restorableArtifact(
+  backup: Pick<BackupCatalogRecord, "artifactKind" | "backupMode">,
+  full: BackupArtifactKind
+): boolean {
+  return backup.backupMode === "incremental"
+    ? backup.artifactKind === "restic_snapshot"
+    : backup.artifactKind === full
+}
+
 export async function restoreInstanceBackupHandler(
   user: AuthenticatedUser,
   data: BackupRestoreInput
@@ -640,11 +651,7 @@ export async function restoreInstanceBackupHandler(
     !backup ||
     backup.status !== "available" ||
     backup.targetKind !== "instance" ||
-    (backup.artifactKind !== "archive" &&
-      backup.artifactKind !== "restic_snapshot") ||
-    (backup.artifactKind === "archive" && backup.backupMode !== "full") ||
-    (backup.artifactKind === "restic_snapshot" &&
-      backup.backupMode !== "incremental")
+    !restorableArtifact(backup, "archive")
   ) {
     throw new Error("Backup is not available for an instance restore")
   }
@@ -705,8 +712,7 @@ export async function restoreDatabaseBackupHandler(
     !backup ||
     backup.status !== "available" ||
     backup.targetKind !== "database" ||
-    backup.artifactKind !== "database_dump" ||
-    backup.backupMode !== "full"
+    !restorableArtifact(backup, "database_dump")
   ) {
     throw new Error("Backup is not available for a database restore")
   }

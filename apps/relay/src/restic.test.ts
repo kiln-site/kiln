@@ -1,9 +1,10 @@
+import { spawn } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { PassThrough } from "node:stream"
+import { PassThrough, Readable } from "node:stream"
 
 import type { BackupRecoveryPasswords } from "@workspace/contracts"
 import { afterAll, afterEach, describe, expect, it, vi } from "vite-plus/test"
@@ -141,12 +142,10 @@ describe("restic S3 driver", () => {
     )
     const failure = await createResticDriver({ spawn })
       .backup({
-        cwd: testDirectory,
-        excludes: [],
         location: s3Location,
         password: "repo-secret",
-        paths: ["instance"],
         signal: new AbortController().signal,
+        source: { cwd: testDirectory, excludes: [], paths: ["instance"] },
         tags: ["task:1"],
       })
       .then(
@@ -156,6 +155,57 @@ describe("restic S3 driver", () => {
     expect(failure).toBeInstanceOf(RelayBackupError)
     const reason = failure instanceof RelayBackupError ? failure.reason : ""
     expect(reason).toBe("Fatal: could not open the bucket with [redacted]")
+  })
+})
+
+describe("a backup read from a stream", () => {
+  // restic saves what it was given once its input ends, whole or not.
+  const saved = async (name: string, source: () => Readable) => {
+    const snapshot = join(testDirectory, name)
+    const script = `
+      const chunks = []
+      process.stdin.on("data", (chunk) => chunks.push(chunk))
+      process.stdin.on("end", () => {
+        require("node:fs").writeFileSync(${JSON.stringify(snapshot)}, Buffer.concat(chunks))
+        console.log(JSON.stringify({ message_type: "summary", snapshot_id: "abcdef12", total_bytes_processed: 1 }))
+      })`
+    const backup = createResticDriver({
+      spawn: (_command, _args, options) =>
+        spawn(process.execPath, ["-e", script], options),
+    }).backup({
+      location: { kind: "local", path: testDirectory },
+      password: "repo-secret",
+      signal: new AbortController().signal,
+      source: { filename: "database.sql", open: source },
+      tags: ["task:1"],
+    })
+    const outcome = await backup.then(
+      () => "saved",
+      (cause: unknown) => (cause as Error).message
+    )
+    return {
+      outcome,
+      snapshot: existsSync(snapshot) ? readFileSync(snapshot, "utf8") : null,
+    }
+  }
+
+  it("keeps all of it", async () => {
+    expect(
+      await saved("whole", () => Readable.from(["-- dump\n", "rows"]))
+    ).toEqual({ outcome: "saved", snapshot: "-- dump\nrows" })
+  })
+
+  it("keeps nothing of one that fails partway", async () => {
+    const { outcome, snapshot } = await saved("broken", () =>
+      Readable.from(
+        (async function* () {
+          yield "-- dump\n"
+          throw new Error("the dump was cut short")
+        })()
+      )
+    )
+    expect(outcome).toContain("the dump was cut short")
+    expect(snapshot).toBeNull()
   })
 })
 

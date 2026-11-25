@@ -28,13 +28,15 @@ import {
   resolve,
   sep,
 } from "node:path"
-import { constants as zlibConstants } from "node:zlib"
+import { pipeline } from "node:stream"
+import { constants as zlibConstants, createGunzip } from "node:zlib"
 import { logException } from "@workspace/telemetry"
 import { Deferred, Effect, Fiber, Option, Queue, Result, Schema } from "effect"
 import ZipStream from "zip-stream"
 
 import {
   backupArtifactFilename,
+  backupExportFilename,
   type BackupArchiveCreateTaskResult,
   type BackupArchiveManifest,
   type BackupCreateTaskInput,
@@ -62,6 +64,7 @@ import { brickSnapshotDirectory, readRecordedBrickSnapshot } from "./bricks.js"
 import type { DatabaseDriver } from "./databases.js"
 import {
   createCompressedDatabaseBackup,
+  dumpCompressedDatabase,
   restoreCompressedDatabaseBackup,
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
@@ -70,7 +73,11 @@ import { collectPlatformRecovery } from "./platform-recovery.js"
 import { restoreUnfinished } from "./platform-restore.js"
 import { PlatformError, withPlatformLock } from "./platform-state.js"
 import { RelayBackupError } from "./effect/errors.js"
-import { ensuringPromise, promiseEffect } from "./effect/promise.js"
+import {
+  ensuringPromise,
+  promiseEffect,
+  recoverPromise,
+} from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
 import {
   exclusive,
@@ -136,7 +143,7 @@ import {
   resticSnapshotSelector,
   translateExcludePatterns,
   validateStagingTree,
-  type ResticBackupPaths,
+  type ResticBackupSource,
   type ResticDriver,
   type ResticDriverLocation,
   type ResticSnapshotSummary,
@@ -1175,10 +1182,66 @@ export class BackupManager {
     })
   }
 
+  // A database's dump from its snapshot, gzipped as a full backup's is.
+  async #dumpSnapshotFile(
+    input: BackupRestoreTaskInput,
+    destination: string,
+    signal: AbortSignal
+  ): Promise<string> {
+    const { source } = input
+    if (source.kind !== "restic") return destination
+    const password = requiredRepositoryPassword(
+      source.repositoryPassword,
+      "restore.restic"
+    )
+    const targetId = input.archive?.targetId ?? input.target.id
+    const location = resticDriverLocation(
+      this.#config,
+      targetId,
+      source.repository
+    )
+    return ensuringPromise(
+      async () => {
+        await this.#restic.dump({
+          destination,
+          file: DATABASE_DUMP_FILE,
+          location,
+          password,
+          selector: source.snapshotId,
+          signal,
+        })
+        return destination
+      },
+      () =>
+        Effect.runPromise(
+          cleanupResticCache(this.#config, this.#restic, {
+            password,
+            repository: source.repository,
+            targetId,
+          })
+        )
+    )
+  }
+
   // What an incremental backup of a target takes a snapshot of.
-  #snapshotSource(input: BackupCreateTaskInput) {
+  #snapshotSource(input: BackupCreateTaskInput, window: StoppedWindow | null) {
     return Effect.gen({ self: this }, function* () {
       const { target } = input
+      if (target.kind === "database") {
+        if (!this.#databases) {
+          return yield* backupFailure(
+            "database_driver_unavailable",
+            "create.database",
+            "The database backup driver is unavailable"
+          )
+        }
+        return databaseSnapshotSource(
+          this.#config,
+          this.#databases,
+          input,
+          input.consistency === "stopped" ? window : null
+        )
+      }
       if (target.kind === "instance") {
         const instance = yield* Effect.tryPromise({
           try: () => this.#findInstance(target.id),
@@ -1734,7 +1797,9 @@ export class BackupManager {
           )
           const artifact = yield* Effect.tryPromise({
             try: () =>
-              materializeBackupArtifact(this.#config, input, temporary),
+              input.source.kind === "restic"
+                ? this.#dumpSnapshotFile(input, temporary, signal)
+                : materializeBackupArtifact(this.#config, input, temporary),
             catch: (cause) =>
               RelayBackupError.make({
                 code: "database_restore_download_failed",
@@ -1762,11 +1827,10 @@ export class BackupManager {
           }).pipe(
             Effect.withSpan("Backups.database.import"),
             Effect.ensuring(
-              input.source.kind === "remote"
-                ? promiseEffect(() => rm(temporary, { force: true })).pipe(
-                    Effect.ignore
-                  )
-                : Effect.void
+              // A local archive is restored where it's kept, not from here.
+              promiseEffect(() => rm(temporary, { force: true })).pipe(
+                Effect.ignore
+              )
             )
           )
           const completed = yield* this.#state.completeBackupTask(
@@ -2184,7 +2248,7 @@ export class BackupManager {
         const result = yield* runResticCreate(
           this.#config,
           this.#restic,
-          yield* this.#snapshotSource(input),
+          yield* this.#snapshotSource(input, window),
           input,
           (progress) =>
             this.#state.updateBackupTaskProgress(
@@ -3043,10 +3107,17 @@ function runResticCreate(
 
 /** What an incremental backup's snapshots hold, and how they're taken. */
 interface SnapshotSource {
-  /** About as much as a first snapshot holds. */
+  /** About as much as a first snapshot holds, where it's known. */
   readonly logicalBytes: (signal: AbortSignal) => Promise<number>
+  /**
+   * Whether a snapshot an earlier attempt saved stands for this one. One of a
+   * batch is taken in its stopped window with the rest, or it doesn't agree.
+   */
+  readonly reusable: boolean
   readonly take: (
-    backup: (paths: ResticBackupPaths) => Promise<ResticSnapshotSummary>
+    backup: (source: ResticBackupSource) => Promise<ResticSnapshotSummary>,
+    progress: BackupProgress,
+    signal: AbortSignal
   ) => Promise<ResticSnapshotSummary>
   readonly warnings: ReadonlyArray<string>
 }
@@ -3068,6 +3139,7 @@ function instanceSnapshotSource(
         resolve(config.rootDirectory, instance.directory),
         signal
       ),
+    reusable: true,
     take: async (backup) => {
       const setup = await writeInstanceSetup(config, instance, webRoutes)
       return ensuringPromise(
@@ -3090,6 +3162,64 @@ function instanceSnapshotSource(
       )
     },
     warnings,
+  }
+}
+
+// A database's snapshots hold its dump under this name.
+const DATABASE_DUMP_FILE = "database.sql"
+
+/**
+ * A database's dump, made whole first, so a slow bucket doesn't hold the
+ * database's transaction open and a dump that fails leaves no snapshot.
+ * restic stores it uncompressed, which is what makes two nights' the same.
+ */
+function databaseSnapshotSource(
+  config: RelayConfig,
+  databases: DatabaseDriver,
+  input: BackupCreateTaskInput,
+  window: StoppedWindow | null
+): SnapshotSource {
+  return {
+    logicalBytes: async () => 0,
+    reusable: window === null,
+    take: async (backup, progress, signal) => {
+      const directory = backupDirectoryPath(config)
+      await mkdir(directory, { mode: 0o700, recursive: true })
+      await cleanupBackupPartials(directory, input.backupId)
+      const dump = resolve(
+        directory,
+        `.${input.backupId}.${randomUUID()}.partial`
+      )
+      return ensuringPromise(
+        async () => {
+          if (window) await Effect.runPromise(window.begin)
+          progress.phase = "dumping"
+          await dumpCompressedDatabase(databases, input.target.id, dump, {
+            progress,
+            signal,
+          })
+          // As a full one does, it waits for every other of its batch before
+          // the Apps start again, and only then is it stored.
+          const restarted = window
+            ? await Effect.runPromise(window.arrive(input.taskId))
+            : []
+          progress.phase = "archiving"
+          progress.completed = 0
+          const taken = await backup({
+            filename: DATABASE_DUMP_FILE,
+            open: () => {
+              const plain = createGunzip()
+              // A failed read fails what it's read through.
+              pipeline(createReadStream(dump), plain, () => undefined)
+              return plain
+            },
+          })
+          return { ...taken, warnings: [...taken.warnings, ...restarted] }
+        },
+        () => rm(dump, { force: true })
+      )
+    },
+    warnings: [],
   }
 }
 
@@ -3196,7 +3326,7 @@ async function createResticSnapshot(
     signal,
     tag: `task:${input.taskId}`,
   })
-  const reuse = existing[0]
+  const reuse = source.reusable ? existing[0] : undefined
   if (reuse) {
     const stats = await restic.stats({
       location,
@@ -3248,24 +3378,28 @@ async function createResticSnapshot(
     Effect.result(
       Effect.tryPromise({
         try: () =>
-          source.take((paths) =>
-            restic.backup({
-              ...paths,
-              location,
-              onProgress: (update) => {
-                progress.completed = update.bytesCompleted
-                progress.total = update.bytesTotal ?? progress.total
-                if (
-                  input.maxBytes !== null &&
-                  progress.total > input.maxBytes
-                ) {
-                  throw backupTooLarge()
-                }
-              },
-              password,
-              signal,
-              tags: [`task:${input.taskId}`, `backup:${input.backupId}`],
-            })
+          source.take(
+            (read) =>
+              restic.backup({
+                location,
+                onProgress: (update) => {
+                  progress.completed = update.bytesCompleted
+                  progress.total = update.bytesTotal ?? progress.total
+                  if (
+                    input.maxBytes !== null &&
+                    Math.max(progress.total, progress.completed) >
+                      input.maxBytes
+                  ) {
+                    throw backupTooLarge()
+                  }
+                },
+                password,
+                signal,
+                source: read,
+                tags: [`task:${input.taskId}`, `backup:${input.backupId}`],
+              }),
+            progress,
+            signal
           ),
         catch: (cause) => cause,
       })
@@ -3298,6 +3432,8 @@ async function createResticSnapshot(
     )
     throw summary.failure
   }
+  // Those earlier attempts saved, which this one's stands in for.
+  await forgetSnapshots(restic, existing, { location, password })
   await rejectOverLimitSnapshot(restic, {
     backupId: input.backupId,
     location,
@@ -3367,6 +3503,26 @@ async function rejectOverLimitSnapshot(
   })
   // The failed create queues the prune; see `scheduleBackupPrune`.
   throw backupTooLarge()
+}
+
+// Nothing lists them, so one that stays only takes the space it adds.
+function forgetSnapshots(
+  restic: ResticDriver,
+  snapshots: ReadonlyArray<{ id: string }>,
+  input: { location: ResticDriverLocation; password: string }
+): Promise<void> {
+  return recoverPromise(
+    async () => {
+      for (const { id } of snapshots) {
+        await restic.forget({
+          ...input,
+          signal: AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS),
+          snapshotId: id,
+        })
+      }
+    },
+    () => undefined
+  )
 }
 
 async function forgetTaskSnapshotsAfterFailedCreate(
@@ -3805,7 +3961,11 @@ function runResticExport(
       `.${input.backupId}.${taskId}${EXPORT_STAGING_SUFFIX}`
     )
     const existing = yield* promiseEffect(() =>
-      reuseValidExport(destination, Date.now() + input.ttlMs)
+      reuseValidExport(
+        destination,
+        Date.now() + input.ttlMs,
+        backupExportFilename(input.backupId, input.target.kind)
+      )
     )
     if (existing) return existing
     const progress: BackupProgress = {
@@ -3823,6 +3983,26 @@ function runResticExport(
         Effect.forever
       )
     )
+    const finishExport = async (dumped: {
+      bytes: number
+      checksumSha256: string
+    }) => {
+      await rename(partial, destination)
+      const expiresAt = Date.now() + input.ttlMs
+      await writeExportExpiry(
+        backupExportExpiryPath(config, input.backupId),
+        expiresAt
+      )
+      progress.completed = dumped.bytes
+      progress.total = dumped.bytes
+      return {
+        bytes: dumped.bytes,
+        checksumSha256: dumped.checksumSha256,
+        expiresAt,
+        filename: backupExportFilename(input.backupId, input.target.kind),
+        warnings: [],
+      } satisfies BackupExportTaskResult
+    }
     const result = yield* Effect.tryPromise({
       try: async () => {
         await mkdir(backupExportDirectoryPath(config), {
@@ -3844,6 +4024,18 @@ function runResticExport(
         )
         const onProgress = (bytes: number) => {
           progress.completed = bytes
+        }
+        if (input.target.kind === "database") {
+          const dumped = await restic.dump({
+            destination: partial,
+            file: DATABASE_DUMP_FILE,
+            location,
+            onProgress,
+            password,
+            selector: input.snapshotId,
+            signal,
+          })
+          return finishExport(dumped)
         }
         // Its server may be gone, or another Relay's that it's linked from.
         const selector = await resticSnapshotSource(config, restic, {
@@ -3892,7 +4084,7 @@ function runResticExport(
         }
         const dumped =
           zipped ??
-          (await restic.dumpZip({
+          (await restic.dump({
             destination: partial,
             location,
             onProgress,
@@ -3900,21 +4092,7 @@ function runResticExport(
             selector,
             signal,
           }))
-        await rename(partial, destination)
-        const expiresAt = Date.now() + input.ttlMs
-        await writeExportExpiry(
-          backupExportExpiryPath(config, input.backupId),
-          expiresAt
-        )
-        progress.completed = dumped.bytes
-        progress.total = dumped.bytes
-        return {
-          bytes: dumped.bytes,
-          checksumSha256: dumped.checksumSha256,
-          expiresAt,
-          filename: backupArtifactFilename(input.backupId, "restic_snapshot"),
-          warnings: [],
-        } satisfies BackupExportTaskResult
+        return finishExport(dumped)
       },
       catch: (cause) =>
         cause instanceof RelayBackupError
@@ -3980,7 +4158,8 @@ function backupExportExpiryPath(config: RelayConfig, backupId: string): string {
 
 async function reuseValidExport(
   destination: string,
-  expiresAt: number
+  expiresAt: number,
+  filename: string
 ): Promise<BackupExportTaskResult | null> {
   if (expiresAt <= Date.now()) return null
   const metadata = await optionalLstat(destination)
@@ -3999,11 +4178,7 @@ async function reuseValidExport(
     bytes: metadata.size,
     checksumSha256: digest.digest("hex"),
     expiresAt: nextExpiresAt,
-    filename: backupArtifactFilename(
-      /([0-9a-f-]{36})\.zip$/iu.exec(basename(destination))?.[1] ??
-        basename(destination).replace(/\.zip$/u, ""),
-      "restic_snapshot"
-    ),
+    filename,
     warnings: [],
   }
 }

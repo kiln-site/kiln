@@ -89,6 +89,16 @@ export const backupConsistencySchema = z.enum(["live", "stopped"])
 
 export const backupModeSchema = z.enum(["full", "incremental"])
 
+/**
+ * Whether a target's backups can be incremental. Kiln's own are always full:
+ * they restore Kiln where there is none.
+ */
+export function backupTargetSupportsIncremental(
+  kind: z.infer<typeof backupTargetKindSchema>
+): boolean {
+  return kind === "instance" || kind === "database"
+}
+
 export const backupReasonSchema = z.enum([
   "manual",
   "pre_restore",
@@ -547,10 +557,10 @@ function refineResticCreateInput(
         path: ["artifactKind"],
       })
     }
-    if (input.target.kind !== "instance") {
+    if (!backupTargetSupportsIncremental(input.target.kind)) {
       context.addIssue({
         code: "custom",
-        message: "Restic backups are only supported for instance targets",
+        message: "This target's backups can't be incremental",
         path: ["target", "kind"],
       })
     }
@@ -1270,7 +1280,19 @@ export function backupArtifactFilename(
   backupId: string,
   artifactKind: BackupArtifactKind
 ): string {
-  return `backup-${backupId.slice(0, 8)}.${BACKUP_ARTIFACT_EXTENSIONS[artifactKind]}`
+  return backupFilename(backupId, BACKUP_ARTIFACT_EXTENSIONS[artifactKind])
+}
+
+/** The file an incremental backup downloads as. */
+export function backupExportFilename(
+  backupId: string,
+  targetKind: BackupTargetKind
+): string {
+  return backupFilename(backupId, targetKind === "database" ? "sql.gz" : "zip")
+}
+
+function backupFilename(backupId: string, extension: string): string {
+  return `backup-${backupId.slice(0, 8)}.${extension}`
 }
 
 export function isArchiveCreateTaskResult(

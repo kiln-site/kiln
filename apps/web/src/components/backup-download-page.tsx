@@ -60,7 +60,7 @@ export const BackupDownloadPage = React.memo(function BackupDownloadPage({
 
   if (!share) return <UnavailableDownload />
 
-  const TypeIcon = artifactIcon(share.artifactKind)
+  const TypeIcon = artifactIcon(share)
   const directPath = `/downloads/${encodeURIComponent(downloadId)}?direct=true`
   const downloadTarget = `kiln-backup-download-${downloadId}`
 
@@ -102,10 +102,7 @@ export const BackupDownloadPage = React.memo(function BackupDownloadPage({
 
             <dl className="mt-5 grid grid-cols-3 overflow-hidden rounded-xl border">
               <DownloadFact label="Size" value={formatBytes(share.bytes)} />
-              <DownloadFact
-                label="Type"
-                value={artifactLabel(share.artifactKind)}
-              />
+              <DownloadFact label="Type" value={artifactLabel(share)} />
               <DownloadFact label="Source" value={share.sourceName} />
             </dl>
 
@@ -228,16 +225,22 @@ function DownloadFact({ label, value }: { label: string; value: string }) {
   )
 }
 
-function artifactIcon(kind: DownloadShare["artifactKind"]) {
-  if (kind === "database_dump") return Database
-  if (kind === "platform_bundle") return FileArchive
+type SharedFile = Pick<DownloadShare, "artifactKind" | "filename">
+
+function holdsDatabase({ artifactKind, filename }: SharedFile): boolean {
+  return artifactKind === "database_dump" || filename.includes(".sql")
+}
+
+function artifactIcon(share: SharedFile) {
+  if (holdsDatabase(share)) return Database
+  if (share.artifactKind === "platform_bundle") return FileArchive
   return Archive
 }
 
-function artifactLabel(kind: DownloadShare["artifactKind"]): string {
-  if (kind === "database_dump") return "Database backup"
-  if (kind === "platform_bundle") return "Kiln bundle"
-  return "ZIP archive"
+function artifactLabel(share: SharedFile): string {
+  if (holdsDatabase(share)) return "Database backup"
+  if (share.artifactKind === "platform_bundle") return "Kiln bundle"
+  return share.filename.includes(".tar") ? "TAR archive" : "ZIP archive"
 }
 
 function formatBytes(bytes: number | null): string {

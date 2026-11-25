@@ -857,7 +857,7 @@ repository. Opening one takes the bucket's keys and one password:
   It asks for the code, and needs no Kiln, Relay or network.
 
 Each repository is a folder of the bucket,
-`<prefix>/kiln/<installation>/<relay>/restic/instance/<server>/<repository>`, with
+`<prefix>/kiln/<installation>/<relay>/restic/instance/<instance>/<repository>`, with
 a file named `config` in it. Then, with restic installed:
 
 ```sh
@@ -869,8 +869,9 @@ restic restore latest --target ./restored
 ```
 
 A provider that needs the bucket in the path takes
-`-o s3.bucket-lookup=path` too. `restored/` holds the server's files in a folder
-named by its ID, and its setup in `.kiln-setup/`.
+`-o s3.bucket-lookup=path` too. `restored/` holds a server's files in a folder
+named by its ID, and its setup in `.kiln-setup/`; for a database, it holds its
+dump, `database.sql`.
 
 A repository takes these passwords with its first backup made by a release that
 has them. One kept only on a Relay's disk, under `<data>/restic/`, opens with
@@ -929,8 +930,8 @@ it, while those Apps are stopped. That is all it promises: nothing else
 that writes to the database is stopped, nothing is coordinated between
 Relays, and each backup is still restored on its own. Game
 servers and Kiln are taken as they run, as is a database with no volume
-beside it. Incremental is a game server's choice, offered when only game servers
-are chosen; chosen with anything else, each is a full archive.
+beside it. Incremental or Full is the choice of those that can be incremental;
+the rest are full.
 
 It offers each Kiln volume alongside game servers, databases and
 Kiln: every row that is chosen is one thing a backup keeps. An App, and a
@@ -1030,8 +1031,9 @@ The CLI uses the same authorization and task APIs: `kiln backups list`,
 
 ## Incremental snapshots
 
-Live game-server backups default to restic incremental snapshots. Each instance
-has one restic repository per destination:
+An incremental backup is a snapshot in a restic repository of the instance's
+own, so each stores only what changed. A game server's are by default, and a
+database's can be. Each instance has one repository per destination:
 
 - Relay-local: `<data>/restic/instance/<id>/`
 - S3-compatible: `s3:https://<endpoint>/<bucket>/<stored-prefix>` where the
@@ -1110,6 +1112,17 @@ download of its files doesn't reach. A Relay compares a backup with the
 repository's newest snapshot, whatever its own container is called now, so
 replacing the Relay doesn't make it read every file again.
 
+A database's snapshot holds its dump as one file, `database.sql`. The Relay
+dumps the database whole first, gzipped beside its backups, and then has restic
+store it uncompressed, so two nights' dumps have the same pieces. A slow bucket
+then doesn't hold the database's transaction open, and a dump that fails never
+reaches the repository. Input that fails partway never ends, since restic keeps
+whatever it was given by then as a whole snapshot: restic is stopped instead.
+
+A snapshot an interrupted attempt of the same task saved is kept as the
+backup's, except in a stopped batch, whose members run again together: there it
+is forgotten once the new one is saved.
+
 A live server can have files restic can't read, such as one locked or
 replaced mid-backup. restic still saves the snapshot and exits with code 3;
 Kiln keeps it and lists the skipped files as the backup's warnings, shown
@@ -1117,8 +1130,8 @@ beside its size. A snapshot recovered after a Relay restart can't list them,
 so it says so instead.
 
 Retention counts each snapshot as a backup. Its space uses each snapshot's
-logical restore size because physical repository bytes are shared. Database
-dumps and platform bundles stay full archives. Incremental backups accept
+logical restore size because physical repository bytes are shared. Kiln's own
+backups stay full archives. Incremental backups accept
 exactly one destination. The 5 GiB single-PUT ceiling applies only to full
 archive uploads, not to restic's own pack writes.
 
@@ -1184,7 +1197,8 @@ the server's directory below the Relay's server root. Restoring into the
 server it was taken of uses that server's directory; restoring into another,
 or exporting one whose server is gone, reads the path from the snapshot
 itself (`restic snapshots`), and the repository from the server it was
-taken of, which the task's `archive` names.
+taken of, which the task's `archive` names. A database's dump is written out
+gzipped, then imported as a full backup's is, or downloaded as `.sql.gz`.
 
 Destination deletion is two-phase: the row is marked `deleting` so new backups
 cannot select it, S3 repository prefixes are purged, then foreign keys on

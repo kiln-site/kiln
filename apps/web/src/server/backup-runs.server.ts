@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import {
+  backupTargetSupportsIncremental,
   databaseEngineSupportsLogicalBackups,
   relaySnapshotSchema,
   type BackupConsistency,
@@ -47,7 +48,7 @@ export interface BackupRunTarget {
 export interface BackupRunInput {
   /** For the volumes among them: live, or with what uses them stopped. */
   consistency: BackupConsistency
-  /** For the game servers among them; a run of anything else is full. */
+  /** For those of them that can be incremental; the rest are full. */
   mode?: "full" | "incremental" | undefined
   name: string
   storageIds: Array<string | null>
@@ -128,13 +129,12 @@ async function relayMembers(
   const members: Array<Member> = []
 
   const instances = of("instance")
-  // Incremental or full is a game server's choice, for a run of game
-  // servers alone: left unsaid there, it is incremental, as it always was.
-  // In a run with anything else each is a full archive, as the rest are,
-  // which is what choosing them together offers.
-  const mode = data.targets.every((target) => target.kind === "instance")
-    ? data.mode
-    : "full"
+  // Left unsaid, each kind's own, or full beside one that can only be full.
+  const mode =
+    data.mode ??
+    (data.targets.every((target) => target.kind === "instance")
+      ? undefined
+      : "full")
   if (instances.length > 0) {
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
@@ -176,6 +176,7 @@ async function relayMembers(
       members.push({
         artifactKind: "database_dump",
         ...(withStopped ? { consistency: "stopped" as const } : {}),
+        ...(mode === undefined ? {} : { mode }),
         relay,
         targetId: id,
         targetKind: "database",
@@ -242,11 +243,9 @@ export async function createBackupRunHandler(
   }
   if (
     data.mode === "incremental" &&
-    data.targets.some((target) => target.kind !== "instance")
+    !data.targets.some(({ kind }) => backupTargetSupportsIncremental(kind))
   ) {
-    throw new Error(
-      "Incremental backups are for game servers; choose a full archive to back up anything else with them"
-    )
+    throw new Error("None of these can be backed up incrementally")
   }
   await requireRunStorage(user, data)
   const members: Array<Member> = []
