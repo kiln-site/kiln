@@ -1133,7 +1133,8 @@ cannot select it, S3 repository prefixes are purged, then foreign keys on
 deleted catalog rows are cleared and the destination is removed. A removed
 Relay's prefixes aren't purged: forgetting its backups says their files stay.
 Their passwords in Hearth go with the destination, its own too, which is why
-deleting one says to save it first; Kiln's recovery code still opens them. A purge failure leaves the destination
+deleting one says to save it first. That and Kiln's recovery code open only the
+repositories they were added to, which a Relay removed before then never did. A purge failure leaves the destination
 listed as `deleting` with `last_error` so the operator can retry instead of
 silently orphaning data.
 
