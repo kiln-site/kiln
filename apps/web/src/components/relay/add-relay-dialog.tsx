@@ -468,23 +468,26 @@ export function InstallationChoice({
         className="grid gap-2 sm:grid-cols-2"
       >
         {installationChoices.map(([value, label, detail]) => (
-          <button
+          <label
             key={value}
-            role="radio"
-            aria-checked={choice === value}
-            type="button"
-            disabled={disabled}
             className={cn(
-              "flex flex-col gap-0.5 border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
+              "relative flex cursor-pointer flex-col gap-0.5 border px-3 py-2.5 transition-colors has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
               choice === value
                 ? "border-primary/60 bg-primary/10"
                 : "hover:bg-muted/40"
             )}
-            onClick={() => onChange(value)}
           >
+            <input
+              type="radio"
+              name="relay-installation"
+              className="sr-only"
+              checked={choice === value}
+              disabled={disabled}
+              onChange={() => onChange(value)}
+            />
             <span className="text-[0.8125rem] font-medium">{label}</span>
             <span className="text-xs text-muted-foreground">{detail}</span>
-          </button>
+          </label>
         ))}
       </div>
     </div>
