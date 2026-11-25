@@ -516,16 +516,14 @@ const removeSchedule = operation<ScheduleId>()({
   locks: ({ input }) => [exclusive(scheduleKey(input.id))],
   run: ({ context: { person, schedule } }) =>
     promiseEffect(async () => {
-      const revision = await markScheduleDeleted(schedule.id)
+      const deleted = await markScheduleDeleted(schedule.id)
       // Deleting a resource deleted the schedule it was all that was left of.
-      if (revision === null) return { deleted: true, id: schedule.id }
-      publishScheduleCollectionChange(
-        schedule.targets.map((target) => target.relayId)
-      )
+      if (deleted === null) return { deleted: true, id: schedule.id }
+      publishScheduleCollectionChange(deleted.relayIds)
       await removeRelayProjections(
         schedule.id,
-        revision,
-        [...new Set(schedule.targets.map((target) => target.relayId))],
+        deleted.revision,
+        deleted.relayIds,
         person.id
       )
       return { deleted: true, id: schedule.id }
@@ -533,10 +531,13 @@ const removeSchedule = operation<ScheduleId>()({
   audit: scheduleAudit,
 })
 
-// Deleting a resource rewrites the schedules that target it outside this
-// lane, so the deletion's revision comes from the row as it's deleted, and
-// its removal outranks what that sent the Relays.
-function markScheduleDeleted(id: string): Promise<number | null> {
+// Deleting or moving a resource rewrites the schedules that target it outside
+// this lane, so the deletion's revision, and the Relays it's removed from,
+// come from what's there as it's deleted, and its removal outranks what that
+// sent them.
+function markScheduleDeleted(
+  id: string
+): Promise<{ relayIds: Array<string>; revision: number } | null> {
   return runAppEffect(
     "schedules.delete",
     Effect.gen(function* () {
@@ -561,7 +562,27 @@ function markScheduleDeleted(id: string): Promise<number | null> {
               WHERE id = ?`,
             [revision, now, now, id]
           )
-          return revision
+          const relayIds = new Set<string>()
+          for (const table of [
+            "schedule_target",
+            "schedule_deployment",
+          ] as const) {
+            const on = yield* transaction.queryRows<
+              RowDataPacket & { relay_id: string }
+            >(
+              `SELECT relay_id FROM ${databaseTable(table)}
+                WHERE schedule_id = ? FOR UPDATE`,
+              [id]
+            )
+            for (const { relay_id: relayId } of on) relayIds.add(relayId)
+          }
+          yield* oweSchedule(transaction, {
+            now,
+            relayIds,
+            revision,
+            scheduleId: id,
+          })
+          return { relayIds: [...relayIds], revision }
         })
       )
     })

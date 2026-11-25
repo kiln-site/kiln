@@ -21,6 +21,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { ownerGrant } from "@/lib/resource-permissions"
+import { requireScheduleAppBackups } from "@/lib/schedule-app-backups.server"
 import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
 import {
   hasScheduleTargetPermission,
@@ -132,8 +133,15 @@ export const moveSchedulesEffect = Effect.fn("schedules.move")(
       const move = Effect.gen(function* () {
         if (!schedule || !names(from)(schedule)) return
         const asItIs = schedule
-        const stays = yield* promiseEffect(() =>
-          whyItStays({ copy, from, grants, schedule: asItIs, user })
+        const stays = yield* promiseEffect(
+          async () =>
+            (await whyItStays({
+              copy,
+              from,
+              grants,
+              schedule: asItIs,
+              user,
+            })) ?? (await stoppedBackupRefusal(asItIs, user, from))
         )
         if (stays !== null) {
           yield* Effect.logInfo("A schedule stays with what moved", {
@@ -263,7 +271,6 @@ function movedSchedule(
 // Why someone may not point a schedule at the copy; null when they may. It
 // takes `schedule.update` and every step's permission on all its targets, as
 // it is and as it would be, and its backup destinations, as any edit does.
-// Its other targets' steps are as they were.
 async function whyItStays(input: {
   readonly copy: MovedSide
   readonly from: Omit<MovedSide, "name">
@@ -314,6 +321,31 @@ async function whyItStays(input: {
         grants,
         owner: schedule.createdBy,
         targets: moved.targets,
+        user,
+      })
+      return null
+    },
+    (cause) => (cause instanceof Error ? cause.message : String(cause))
+  )
+}
+
+// The rest of what an edit takes, which its Relays are asked: stopping every
+// App a stopped backup of its other targets stops.
+function stoppedBackupRefusal(
+  schedule: LoadedSchedule,
+  user: AuthenticatedUser,
+  from: Omit<MovedSide, "name">
+): Promise<string | null> {
+  const old = scheduleTargetKey(from)
+  const { actions } = schedule
+  return recoverPromise(
+    async () => {
+      await requireScheduleAppBackups({
+        actions,
+        existing: schedule,
+        targets: schedule.targets.filter(
+          (target) => scheduleTargetKey(target) !== old
+        ),
         user,
       })
       return null

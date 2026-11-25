@@ -99,10 +99,11 @@ A move ([Moving and duplicating](resource-migrations.md)) points each schedule
 that names the old game server, database or App at its copy, in its targets
 and in every step that named it. It's an edit, so it takes what saving it by
 hand does, of whoever moved it: `schedule.update` and every step's permission
-on all its targets and on the copy, and its backup destinations. One they
-can't save that way stays on the old one, and the dialog says so; nothing is
-asked of its other targets, which it runs on as before. Its owner, times and
-steps don't change. Both Relays are sent it in the background, once the copy
+on all its targets and on the copy, its backup destinations, and stopping what
+its stopped backups stop. One they can't save that way stays on the old one,
+and the dialog says so, but for that last part, which takes asking the Relays. Its owner, times and
+steps don't change; a command goes on naming its App's service, which is
+checked as it runs, since a copy may not be deployed yet. Both Relays are sent it in the background, once the copy
 is ready. A volume's schedules stay with it, since what uses it does.
 
 ## Where it runs
