@@ -13,7 +13,7 @@ import {
   type ScheduleDefinition,
 } from "@workspace/contracts/schedules"
 import { Effect } from "effect"
-import { afterAll, beforeAll, vi } from "vite-plus/test"
+import { afterAll, vi } from "vite-plus/test"
 
 import { saveBackupStorageEffect } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
@@ -158,12 +158,6 @@ vi.mock("@/lib/realtime-source.server", () => ({
 // A destination's keys are kept encrypted.
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
-// One clock for every test: the real one, put back after each, would drop the
-// timer of a pass still to come, and Hearth, still counting on it, would
-// start none in the tests after.
-beforeAll(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
-})
 afterAll(async () => {
   vi.useRealTimers()
   await stopScheduleDeliveries()
@@ -310,7 +304,7 @@ const takenOf = (reply: ScheduledBucketBackupReply, member: Member) => {
 // moment later, and follows each task until it has ended. That moment is
 // the test's to pass: each pass is started, then read after while it has
 // its turn, until no task is left to follow and Hearth has stopped asking
-// the Relay, so nothing of this test runs on into the next.
+// the Relay. A pass may still be ending then.
 // Until a pass is reading the Relay's backups: a pass reads Hearth's own
 // records first, which takes real time the fake clock doesn't move.
 const passReading = Effect.gen(function* () {
@@ -338,7 +332,17 @@ const passesRun = Effect.gen(function* () {
   return yield* Effect.die("Hearth never finished with the Relay's backups")
 })
 const inTestTime = <A, E, R>(test: Effect.Effect<A, E, R>) =>
-  test.pipe(Effect.tap(() => passesRun))
+  // Faked by the first test and kept for the rest: the real clock, put back
+  // between them, would drop the timer of a pass still to come, and Hearth,
+  // still counting on it, would start none in the tests after.
+  Effect.sync(() => {
+    if (!vi.isFakeTimers()) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    }
+  }).pipe(
+    Effect.andThen(test),
+    Effect.tap(() => passesRun)
+  )
 
 const backups = () =>
   selectRows<{
