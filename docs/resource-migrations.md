@@ -169,8 +169,9 @@ A copy's Relay has its routes before its names point there, and the old one's
 are taken from it before they do. Until then bundled Traefik asks for no
 certificate for them (`holdCertificates`): the names resolve, to the old Relay,
 so Let's Encrypt would check there and fail, and Traefik doesn't ask again. Once
-they point at the copy's Relay, it asks
-([Certificates](domains.md#certificates)).
+they point at the copy's Relay, it's told so (`relay.certificates.release`) and
+asks ([Certificates](domains.md#certificates)); a name whose record can't change
+yet is released when it does, by the DNS worker.
 
 A kind with web routes hands them over whole: each keeps its hostname, path,
 options and, for an App, the service it reaches, and is given an ID of its

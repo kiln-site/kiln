@@ -1796,6 +1796,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
         ? "instance.network.write"
         : null
     }
+    case "relay.certificates.release":
+      return "relay.configure"
     case "relay.volumes.read":
     case "relay.docker.storage":
       return "relay.read"

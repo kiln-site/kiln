@@ -71,6 +71,7 @@ export const relayControlOperations = [
   "relay.proxy.write",
   "relay.proxy.trial",
   "relay.certificates.check",
+  "relay.certificates.release",
   "relay.volumes.read",
   "relay.docker.storage",
   "relay.docker.cleanup",
@@ -365,6 +366,7 @@ export function relayControlOperationChanges(
     case "relay.proxy.write":
     case "relay.proxy.trial":
     case "relay.certificates.check":
+    case "relay.certificates.release":
     case "relay.volumes.create":
     case "relay.volumes.rename":
     case "relay.volumes.delete":

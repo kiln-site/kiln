@@ -190,14 +190,22 @@ export class WebCertificates {
     for (const hostname of hostnames) this.#held.add(hostname.toLowerCase())
   }
 
-  /** Asks for those held, soon, now that their records point here. */
+  /**
+   * Asks for these soon, held or not, now that their records point here. One
+   * asked for already, as by a Relay that restarted meanwhile, failed while
+   * they pointed elsewhere.
+   */
   release(hostnames: Iterable<string>): void {
+    const now = Date.now()
     for (const hostname of hostnames) {
       const name = hostname.toLowerCase()
-      if (!this.#held.delete(name)) continue
-      this.#moved.set(name, 0)
+      this.#held.delete(name)
       const pending = this.#pending.get(name)
-      if (pending) pending.nextCheckAt = Date.now() + settleTime
+      if (!pending) continue
+      this.#moved.set(name, 0)
+      pending.failed = false
+      if (pending.waitingFor === "dns") pending.nextCheckAt = now + settleTime
+      else pending.since = now
     }
   }
 

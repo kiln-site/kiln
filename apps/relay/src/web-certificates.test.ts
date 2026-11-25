@@ -155,6 +155,24 @@ describe("bundled Traefik certificates", () => {
     expect(configurations.size).toBe(4)
   })
 
+  // A record that only changes later, as once its Relay can serve, is asked
+  // for then, whatever was asked while it pointed elsewhere.
+  it("asks again for a hostname refused while its record pointed elsewhere", async () => {
+    answers.set("shop.example.com", "found")
+    await certificates.track([route])
+    await certificates.check()
+    const refused = traefik()
+    vi.setSystemTime(Date.now() + 3 * 60 * minute)
+    await certificates.check()
+    expect(certificates.pending()).toMatchObject([{ failed: true }])
+
+    certificates.release(["shop.example.com"])
+    expect(certificates.pending()).toMatchObject([{ failed: false }])
+    vi.setSystemTime(Date.now() + minute)
+    await certificates.check()
+    expect(traefik()).not.toEqual(refused)
+  })
+
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {
     const other: RelayStoredWebRoute = {
       ...route,

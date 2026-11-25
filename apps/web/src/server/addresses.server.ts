@@ -117,6 +117,7 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
 import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
+import { releaseWebCertificatesEffect } from "@/lib/web-certificates.server"
 import { activeRelay } from "@/lib/relay-registry"
 import { exclusive } from "@/operations/lanes"
 import {
@@ -674,6 +675,11 @@ const reconcileAddressEffect = Effect.fn("addresses.reconcile")(function* (
       recordAddressErrorEffect(row.id, error.message).pipe(Effect.ignore)
     )
   )
+  // It resolved all along, to where it was before, so the Relay it points at
+  // now held its certificate back, or was refused it.
+  if (!row.game && row.target !== null && row.target !== desired.target) {
+    yield* releaseWebCertificatesEffect(row.relayId, [row.hostname])
+  }
   return true
 })
 

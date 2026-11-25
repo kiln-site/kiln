@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import {
+  relayCertificateReleaseInputSchema,
   relayInstanceWebRoutesWriteSchema,
   type RelayInstanceWebRouteInput,
 } from "@workspace/contracts"
@@ -29,6 +30,8 @@ const fake = vi.hoisted(() => ({
   ids: 0,
   // What the next request to each Relay to keep routes fails with.
   refuses: new Map<string, string>(),
+  // The hostnames whose certificates may be asked for again.
+  released: new Set<string>(),
   routes: new Map<string, Array<object>>(),
   unreadable: false,
 }))
@@ -41,6 +44,11 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ) => {
     // Neither App is deployed.
     if (operation === "app.list") return []
+    if (operation === "relay.certificates.release") {
+      const { hostnames } = relayCertificateReleaseInputSchema.parse(payload)
+      for (const hostname of hostnames) fake.released.add(hostname)
+      return {}
+    }
     const key = `${relay.id}/${payload.id}`
     if (operation === "instance.network.routes.write") {
       const refused = fake.refuses.get(relay.id)
@@ -128,6 +136,7 @@ const routesOf = (relayId: string, appId: string) =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   fake.held.clear()
+  fake.released.clear()
   fake.refuses.clear()
   fake.routes.clear()
   fake.unreadable = false
@@ -165,7 +174,7 @@ const handedOver = Effect.gen(function* () {
   assert.deepEqual(routesOf(newRelay, newApp), everyRoute)
   assert.deepEqual(routesOf(oldRelay, oldApp), [])
   // Its names point at its Relay now, so their certificates are asked for.
-  assert.isFalse(fake.held.get(`${newRelay}/${newApp}`))
+  assert.sameMembers([...fake.released], ["example.test", "www.example.test"])
   assert.strictEqual(yield* primaryOfCopy, "example.test/api")
   assert.isNull(yield* loadPrimaryAddressEffect({ id: oldApp, type: "app" }))
 })
@@ -223,6 +232,7 @@ describeMysql("handing an App's domains to the one it moved to", () => {
         assert.match(String(yield* Effect.flip(handOver)), /Connection lost/u)
         assert.deepEqual(routesOf(oldRelay, oldApp), everyRoute)
         assert.isTrue(fake.held.get(`${newRelay}/${newApp}`))
+        assert.strictEqual(fake.released.size, 0)
         yield* handOver
         yield* handedOver
       })

@@ -1886,9 +1886,9 @@ export function relayWebRouteInputsSchemaFor(kind: "app" | "instance") {
   })
 }
 
-// Names that point elsewhere until a later save says otherwise, as ones being
-// moved here: no certificate is asked for until then, since Let's Encrypt
-// would check the old place and fail.
+// Names that point elsewhere, as ones being moved here: no certificate is
+// asked for until they're released, since Let's Encrypt would check the old
+// place and fail.
 const holdCertificatesSchema = z.boolean().optional()
 
 /**
@@ -2015,6 +2015,11 @@ export const relayCertificateCheckInputSchema = z.object({
   /** The game server or App whose route it should be. */
   owner: relayPendingCertificateSchema.shape.owner,
 })
+
+/** Names whose records now point at the Relay. */
+export const relayCertificateReleaseInputSchema = z
+  .object({ hostnames: z.array(z.string().min(1).max(253)).min(1).max(1_000) })
+  .strict()
 
 /** What a hostname still waits for (null once it has one), and whether Traefik asked. */
 export const relayCertificateCheckResultSchema = z.object({

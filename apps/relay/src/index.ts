@@ -98,6 +98,7 @@ import {
   relayProxyReadInputSchema,
   relayCertificateCheckInputSchema,
   relayCertificateCheckResultSchema,
+  relayCertificateReleaseInputSchema,
   relayProxyConfigurationSchema,
   RELAY_PROXY_TRIAL_PATH,
   relayProxySettingsSchema,
@@ -2791,6 +2792,11 @@ async function executeControlRequest(
             .find((pending) => pending.hostname === name) ?? null,
       })
     }
+    case "relay.certificates.release":
+      lifecycle.certificates.release(
+        relayCertificateReleaseInputSchema.parse(request.payload).hostnames
+      )
+      return {}
     case "relay.volumes.read":
       return {
         ...(await runRelayEffect("relay.volumes.read", volumes.list())),
@@ -4094,7 +4100,6 @@ async function executeControlRequest(
       )
       const hostnames = routes.flatMap(webRouteHostnames)
       if (input.holdCertificates) lifecycle.certificates.hold(hostnames)
-      else lifecycle.certificates.release(hostnames)
       await Effect.runPromise(
         relayOperation(async () => {
           await lifecycle.configureWebRoutes(

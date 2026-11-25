@@ -79,6 +79,8 @@ const relays = vi.hoisted(() => {
   const state = {
     connected: new Set<string>(),
     instances: {} as Record<string, Array<unknown>>,
+    // The names each was told point at it now.
+    released: new Set<string>(),
     snapshot: (relayId: string) => ({
       instances: state.instances[relayId] ?? [],
       node: {
@@ -104,9 +106,15 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   relayRpc: async (
     relay: { id: string },
     operation: string,
-    payload: { routes?: Array<object> }
+    payload: { hostnames?: Array<string>; routes?: Array<object> }
   ) => {
     if (operation === "relay.snapshot") return relays.snapshot(relay.id)
+    if (operation === "relay.certificates.release") {
+      for (const hostname of payload.hostnames ?? []) {
+        relays.released.add(`${relay.id}/${hostname}`)
+      }
+      return {}
+    }
     if (operation === "instance.network.routes.write") {
       return {
         edgeConnected: true,

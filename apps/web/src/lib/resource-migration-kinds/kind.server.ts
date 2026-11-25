@@ -2,6 +2,7 @@ import {
   relayControlDeadlineMs,
   relayInstanceWebRoutesCheckSchema,
   relayInstanceWebRouteStateSchema,
+  webRouteHostnames as routeHostnames,
   type AccessPermission,
   type RelayInstanceWebRouteInput,
   type ResourceLimits,
@@ -10,6 +11,7 @@ import { Effect } from "effect"
 import type { WorkflowEngine } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
 
+import { listResourceAddressesEffect } from "@/effect/addresses"
 import type { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
 import {
@@ -31,6 +33,7 @@ import type {
   ResourceMigrationOptions,
 } from "@/lib/resource-migration-input"
 import type { ResourceScope } from "@/lib/resource-permissions"
+import { releaseWebCertificatesEffect } from "@/lib/web-certificates.server"
 import { moveResourceWebHostnamesEffect } from "@/server/addresses.server"
 
 // Moving and duplicating is one operation for every kind of resource
@@ -658,13 +661,23 @@ export function moveWebRoutes(
         resourceType: kind,
       }
     )
-    if (copy.length > 0) {
-      yield* webRoutes(destination, "instance.network.routes.write", actor.id, {
-        id: to.id,
-        kind,
-        routes: copy,
-      })
-    }
+    // Their certificates are asked for once they point there: those Kiln
+    // doesn't point are up to whoever does, and one whose record couldn't be
+    // changed yet is released when it is.
+    const addresses = yield* listResourceAddressesEffect({
+      relayId: destination.id,
+      resourceId: to.id,
+      resourceType: kind,
+    })
+    const waiting = new Set(
+      addresses.flatMap((row) =>
+        row.recordId !== null && row.lastError !== null ? [row.hostname] : []
+      )
+    )
+    yield* releaseWebCertificatesEffect(
+      destination.id,
+      copy.flatMap(routeHostnames).filter((name) => !waiting.has(name))
+    )
   })
 }
 
