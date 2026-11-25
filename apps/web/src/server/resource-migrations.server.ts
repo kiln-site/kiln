@@ -91,6 +91,8 @@ export interface ResourceMigrationPreview extends MigrationHandOverCounts {
     readonly nameLimit: number
     /** Whether it has to run to be copied, so it's never stopped first. */
     readonly copiedRunning: boolean
+    /** Whether a move can deploy its copy before handing anything over. */
+    readonly deploy: boolean
     readonly handOvers: ReadonlyArray<MigrationHandOver>
     /** Whether its copy can be given limits of its own. */
     readonly limits: boolean
@@ -108,6 +110,8 @@ export interface ResourceMigrationPreview extends MigrationHandOverCounts {
   /** What to know before each way of copying it. */
   readonly warnings: MigrationWarnings
   readonly source: {
+    /** Whether a move deploys its copy unless it's asked not to. */
+    readonly deploys: boolean
     readonly id: string
     /** The limits its copy takes unless it's given others. */
     readonly limits: ResourceLimits | null
@@ -208,6 +212,7 @@ export async function previewResourceMigrationHandler(
       // History is read from a game server's own records so far.
       activity: kind.kind === "instance",
       copiedRunning: kind.copiedRunning,
+      deploy: Boolean(kind.deploy),
       nameLimit: kind.nameLimit,
       handOvers: migrationHandOvers.filter((name) => kind.handOver[name]),
       limits: description.limits !== null,
@@ -224,6 +229,7 @@ export async function previewResourceMigrationHandler(
       migrate: [],
     },
     source: {
+      deploys: description.deploys ?? false,
       id: data.id,
       limits: description.limits,
       name: description.name,
@@ -257,6 +263,7 @@ export async function startResourceMigrationHandler(
     backup: kind.backupFirst ? data.options.backup : null,
     copyAccess: Boolean(kind.handOver.access) && data.options.copyAccess,
     deleteSource: moved ? data.options.deleteSource : null,
+    deployCopy: moved && Boolean(kind.deploy) && data.options.deployCopy,
     limits: description.limits ? data.options.limits : null,
     linkBackups: Boolean(kind.handOver.backups) && data.options.linkBackups,
     moveDomain:

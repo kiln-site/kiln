@@ -127,6 +127,8 @@ function migrationProgress(migration: ResourceMigrationView): string {
       )
       return `Copying its data${part} · ${percent}% of ${formatBytes(migration.totalBytes)}`
     }
+    case "deploy":
+      return "Starting it on the new Relay…"
     case "finish":
       return "Carrying over its settings…"
   }

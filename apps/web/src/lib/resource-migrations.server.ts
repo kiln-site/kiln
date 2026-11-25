@@ -103,6 +103,7 @@ type MigrationStep =
   | "backup"
   | "stop"
   | "copy"
+  | "deploy"
   | "finish"
 
 interface MigrationRow extends RowDataPacket {
@@ -480,6 +481,11 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
       )
     }
     if (stops && kind.copiedRunning && input.mode === "migrate") yield* stop
+    const deploy =
+      options.deployCopy && input.mode === "migrate" ? kind.deploy : undefined
+    const deployed = deploy
+      ? yield* deployCopy(input, operationId, kind.noun, deploy)
+      : false
     // From here what's handed over stays handed over. A cancel accepted
     // meanwhile stops it before its next part.
     yield* checkpoint(input, "finish")
@@ -499,6 +505,7 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
     yield* handOver("domains", moved && options.moveDomain)
     yield* handOver("routes", moved && options.moveWebRoutes)
     yield* handOver("deploys", moved)
+    if (deploy && deployed) yield* deploy.after(operationId, deployStep)
     if (input.mode === "duplicate" && kind.powered) {
       yield* step(input, "finish/restart", (actor) =>
         restartSource(input.migrationId, actor)
@@ -524,6 +531,49 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
     }
     yield* endStep(input.migrationId, "completed", null)
   })
+
+// Runs the copy as the old one ran, and waits until it's ready, before
+// anything is handed to it: one that never is ends the move with the old one
+// started again and everything still its own. One that wasn't running isn't
+// run. Says whether it was.
+const deployCopy = (
+  input: ResourceMigrationInput,
+  // What its deployment is known by too, so nothing else follows it.
+  operationId: string,
+  noun: string,
+  deploy: NonNullable<MigratedKind["deploy"]>
+) =>
+  Effect.gen(function* () {
+    const ran = yield* Activity.make({
+      name: "deploy/needed",
+      success: Schema.Boolean,
+      execute: loadMigration(input.migrationId).pipe(
+        Effect.map((row) => row?.source_was_running === 1),
+        untilMySqlAnswers
+      ),
+    })
+    if (!ran) return false
+    yield* checkpoint(input, "deploy")
+    // As the person, while they may still do what they asked.
+    yield* step(input, "deploy/allowed", () => Effect.void)
+    yield* deploy
+      .start(input, input.requestedBy, operationId, deployStep)
+      .pipe(Effect.mapError(asMigrationError))
+    yield* watch(input, "deploy/follow", null, "the copy to start", () =>
+      deploy
+        .state(operationId)
+        .pipe(
+          Effect.flatMap((state) =>
+            typeof state === "object"
+              ? fail(`The copied ${noun} didn't start: ${state.failed}`)
+              : Effect.succeed(state === "ready")
+          )
+        )
+    )
+    return true
+  })
+
+const deployStep = (name: string) => `deploy/${name}`
 
 // One step that changes something, run once, its failure kept for the
 // person. Unless the migration was cancelled meanwhile, it runs as the

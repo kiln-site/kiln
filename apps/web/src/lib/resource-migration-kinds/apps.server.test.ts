@@ -37,6 +37,8 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: { id: string }
   ) => {
+    // Neither App is deployed.
+    if (operation === "app.list") return []
     const key = `${relay.id}/${payload.id}`
     if (operation === "instance.network.routes.write") {
       const refused = fake.refuses.get(relay.id)

@@ -4,15 +4,20 @@ import {
   RELAY_VOLUME_NAME_MAX_LENGTH,
   appFileRootId,
   appVolumeFileRootId,
+  imageDigestSchema,
   relayAppSchema,
+  relayInstanceWebRouteStateSchema,
   type AppConfig,
   type RelayApp,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { logException } from "@workspace/telemetry"
+import { Effect, Schema } from "effect"
+import { Activity } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
 import {
+  latestAppDeploymentsEffect,
   loadAppGitHubSourceEffect,
   saveAppGitHubSourceEffect,
 } from "@/effect/app-deployments"
@@ -20,6 +25,7 @@ import { reserveInstanceIdEffect } from "@/effect/instance-ids"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
@@ -28,11 +34,13 @@ import {
   ownerHandOver,
   recordedIn,
   relay,
+  relayRequest,
   relays,
   webRouteHostnames,
   type MigratedKind,
   type Migration,
   type MigrationPart,
+  type MigrationSide,
 } from "@/lib/resource-migration-kinds/kind.server"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 import { readRelayVolumes } from "@/server/app-backups.server"
@@ -58,6 +66,7 @@ export const apps: MigratedKind = {
     copy: ["app.manage", "instance.files.read"],
     create: ["app.create"],
     delete: "app.delete",
+    deploy: "instance.deploy",
     network: "instance.network.write",
     // Owning an App doesn't carry it, so the copy's Relay has to.
     networkThere: true,
@@ -90,6 +99,9 @@ export const apps: MigratedKind = {
     ])
     return (
       app && {
+        // One connected to a database would start without it: its copy's
+        // connections are its owner's to make.
+        deploys: !stopped(app) && app.savedDatabaseIds.length === 0,
         // Its services' limits are part of its configuration, which the
         // copy takes whole.
         limits: null,
@@ -315,9 +327,68 @@ export const apps: MigratedKind = {
         : []
     )
   }),
+  // As the old one last deployed: the commit it was built from, or the
+  // digest its image is run by, so a move never also updates it.
+  deploy: {
+    start: Effect.fnUntraced(function* (migration, actorId, id, named) {
+      const { deployHeldApp } = yield* deployments
+      const runs = yield* Activity.make({
+        name: named("runs"),
+        success: Runs,
+        error: VersionUnread,
+        execute: runningVersion(
+          migration.source,
+          migration.destination.id
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new VersionUnread({
+                message: `Which version ${migration.source.name} runs couldn't be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+              })
+          )
+        ),
+      })
+      yield* deployHeldApp(
+        {
+          appId: migration.destination.id,
+          id,
+          relayId: migration.destination.relayId,
+          userId: actorId,
+          ...runs,
+        },
+        named
+      )
+    }),
+    state: Effect.fnUntraced(function* (id) {
+      const { heldAppDeploymentEffect } = yield* deployments
+      const deployment = yield* heldAppDeploymentEffect(id)
+      if (!deployment) return { failed: "there was nothing to deploy" }
+      if (deployment.status === "running") return "running" as const
+      if (deployment.status === "succeeded") return "ready" as const
+      return { failed: deployment.error ?? "its deployment failed" }
+    }),
+    after: Effect.fnUntraced(function* (id, named) {
+      const { afterHeldAppDeployment } = yield* deployments
+      yield* afterHeldAppDeployment(id, named)
+    }),
+  },
   handOver: {
     owner: ownerHandOver("app"),
-    routes: (migration, actor) => moveWebRoutes("app", migration, actor),
+    routes: (migration, actor) =>
+      moveWebRoutes("app", migration, actor).pipe(
+        Effect.andThen(
+          // They're the copy's already: one that couldn't be asked to apply
+          // them says so on its Network page.
+          applyRoutes(migration, actor).pipe(
+            Effect.catch((cause) =>
+              logException(cause, {
+                attributes: { "app.id": migration.destination.id },
+                operation: "resourceMigrations.applyRoutes",
+              })
+            )
+          )
+        )
+      ),
     // Deploying on a push becomes the copy's, as the old one had it, and
     // stops for the old one, which would otherwise start again by itself.
     deploys: Effect.fnUntraced(function* (migration, actor) {
@@ -414,7 +485,6 @@ export const apps: MigratedKind = {
           : []),
       ],
       migrate: [
-        "The copy isn't deployed: deploy it once you've checked its settings. Domains that move with it don't answer until then.",
         ...both,
         ...elsewhere,
         "The old one is stopped and stays on its Relay with its volumes, until you delete them.",
@@ -425,6 +495,87 @@ export const apps: MigratedKind = {
     }
   },
 }
+
+// Imported as it's used: deployments reach most of what Apps do.
+const deployments = Effect.promise(() => import("@/lib/app-deployments.server"))
+
+const Runs = Schema.Struct({
+  commit: Schema.optionalKey(
+    Schema.Struct({ sha: Schema.String, source: Schema.String })
+  ),
+  image: Schema.optionalKey(
+    Schema.Struct({ digest: Schema.String, source: Schema.String })
+  ),
+})
+
+class VersionUnread extends Schema.TaggedError<VersionUnread>()(
+  "VersionUnread",
+  { message: Schema.String }
+) {}
+
+// What an App runs, for another to run just the same: nothing for one whose
+// source changed since, or that has no version of its own, which deploys as
+// any deploy of it would.
+const runningVersion = Effect.fnUntraced(function* (
+  { id, relayId }: Pick<MigrationSide, "id" | "relayId">,
+  forId: string
+) {
+  const record = yield* loadAppConfigEffect(relayId, id)
+  if (record?.config.sourceType === "github") {
+    const [{ succeeded }, source] = yield* Effect.all([
+      latestAppDeploymentsEffect(id),
+      loadAppGitHubSourceEffect(forId),
+    ])
+    return succeeded?.commitSha && succeeded.repository === source?.repository
+      ? { commit: { sha: succeeded.commitSha, source: succeeded.repository } }
+      : {}
+  }
+  if (record?.config.sourceType !== "image") return {}
+  const image = record.config.image
+  const from = yield* relay(relayId)
+  const app = yield* promiseEffect(() => relayApp(from, id, undefined))
+  const digest = app?.containers
+    .filter(({ labels }) => labels["kiln.app.image"] === image)
+    .map(({ labels }) =>
+      imageDigestSchema.safeParse(labels["kiln.app.image.digest"])
+    )
+    .find((parsed) => parsed.success)?.data
+  return digest ? { image: { digest, source: image } } : {}
+})
+
+// An external Traefik reads an App's routes from its containers' labels,
+// which are set as it deploys: a copy that runs already is deployed again to
+// carry what it was just handed. Queued, it waits for the move, which holds
+// the copy, to end. Bundled Traefik serves them as they're saved.
+const applyRoutes = Effect.fnUntraced(function* (
+  migration: Migration,
+  actor: AuthenticatedUser
+) {
+  const { id, relayId } = migration.destination
+  const destination = yield* relay(relayId)
+  const [state, app] = yield* Effect.all(
+    [
+      relayRequest(destination, "instance.network.routes.read", actor.id, {
+        id,
+        kind: "app",
+      }).pipe(
+        Effect.map((value) => relayInstanceWebRouteStateSchema.parse(value))
+      ),
+      promiseEffect(() => relayApp(destination, id, actor.id)),
+    ],
+    { concurrency: 2 }
+  )
+  if (state.status !== "pending_restart" || !app || stopped(app)) return
+  const { askAppDeploymentEffect } = yield* deployments
+  const runs = yield* runningVersion(migration.destination, id)
+  yield* askAppDeploymentEffect({
+    appId: id,
+    relayId,
+    trigger: runs.commit || runs.image ? "redeploy" : "manual",
+    userId: actor.id,
+    ...runs,
+  })
+})
 
 /** Whether nothing of it runs: no container, and no deployment under way. */
 function stopped(app: RelayApp): boolean {

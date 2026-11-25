@@ -37,6 +37,8 @@ export const resourceMigrationOptionsSchema = z.object({
   moveDomain: z.boolean(),
   /** A move gives the copy the old one's web routes. */
   moveWebRoutes: z.boolean(),
+  /** A move deploys the copy before anything is handed to it. */
+  deployCopy: z.boolean().default(false),
   /** The old one stops while it is copied, then starts again. */
   stopSource: z.boolean(),
   /**

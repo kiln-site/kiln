@@ -6,6 +6,7 @@ import {
   type ResourceLimits,
 } from "@workspace/contracts"
 import { Effect } from "effect"
+import type { WorkflowEngine } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
 
 import type { AppCache } from "@/effect/cache"
@@ -80,6 +81,11 @@ export interface MigratedDescription {
   /** The limits its copy takes unless it's given others; null without any. */
   readonly limits: ResourceLimits | null
   /**
+   * Whether its copy is deployed unless it's asked not to be, for a kind
+   * whose copy can be: not when it would start without what it runs on.
+   */
+  readonly deploys?: boolean
+  /**
    * How much it holds when its Relay can't measure it: a running one's
    * live figure, else its disk limit.
    */
@@ -135,6 +141,8 @@ export interface MigratedKind {
     /** On the Relay its copy goes to, to make it there and fill it. */
     readonly create: ReadonlyArray<AccessPermission>
     readonly delete: AccessPermission
+    /** To run a move's copy, on the Relay it goes to. */
+    readonly deploy?: AccessPermission
     /** To hand its domains and web routes over, for a kind with either. */
     readonly network?: AccessPermission
     /**
@@ -240,6 +248,40 @@ export interface MigratedKind {
     migration: Migration,
     actor: AuthenticatedUser
   ) => Effect.Effect<ReadonlyArray<string>, unknown, Database>
+  /**
+   * Runs a move's copy once it's filled, as the old one ran, before anything
+   * is handed to it: for a kind whose copy is made without running. Its
+   * steps are its own, named by `named`, under an ID chosen for it.
+   */
+  readonly deploy?: {
+    readonly start: (
+      migration: Migration,
+      actorId: string,
+      id: string,
+      named: (step: string) => string
+    ) => Effect.Effect<
+      void,
+      unknown,
+      Database | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+    >
+    /** Whether it's still under way, or why it failed, if it did. */
+    readonly state: (
+      id: string
+    ) => Effect.Effect<
+      "running" | "ready" | { readonly failed: string },
+      unknown,
+      Database
+    >
+    /** What follows one that's ready. */
+    readonly after: (
+      id: string,
+      named: (step: string) => string
+    ) => Effect.Effect<
+      void,
+      never,
+      Database | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+    >
+  }
   /** What one that was started again needs besides, of its own. */
   readonly started?: (
     relay: PersistedRelay,
