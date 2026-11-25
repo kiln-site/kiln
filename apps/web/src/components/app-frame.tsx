@@ -24,6 +24,11 @@ import type { AppearancePreferences } from "@/lib/appearance"
 import { uiPreferencesQueryOptions } from "@/lib/query-options"
 import type { UiPreferences } from "@/lib/query-options"
 
+// A development stack's data is disposable, so only builds ask for its
+// recovery code to be saved, unless the reminder itself is being worked on.
+const remindsOfRecoveryCode =
+  !import.meta.env.DEV || import.meta.env.VITE_RECOVERY_CODE_REMINDER === "true"
+
 function selectAppFramePreferences(preferences: UiPreferences) {
   return {
     appearance: preferences.appearance,
@@ -61,7 +66,7 @@ export const AppFrame = React.memo(function AppFrame({
               data-slot="app-content"
               className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
             >
-              <RecoveryCodeToast />
+              {remindsOfRecoveryCode ? <RecoveryCodeToast /> : null}
               <AppRouteContent>{children}</AppRouteContent>
             </div>
             <PanelFooter />

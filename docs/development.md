@@ -23,6 +23,10 @@ to enable the toolbar and `window.__hearthRenderAudit` for profiling. Restart
 with ordinary `pnpm dev:docker` to disable it again. For a local web process,
 use `VITE_REACT_SCAN=true pnpm --filter web dev`.
 
+Development stacks don't ask you to save their recovery code, which is still on
+Kiln → Security. To work on the reminder itself, start with
+`VITE_RECOVERY_CODE_REMINDER=true pnpm dev:docker`.
+
 ## Access and worktrees
 
 Standard Docker uses `http://localhost:3000`, with the shared MySQL on port 3307
