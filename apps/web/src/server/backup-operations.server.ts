@@ -140,25 +140,28 @@ const restoreOperation = <A>(
           Effect.gen(function* () {
             const backup = yield* getBackupCatalogRecordEffect(input.backupId)
             // The run says why one that's gone can't be restored.
-            if (!backup) return { backup: null, destination: null, user: person }
+            if (!backup) return { backup: null, user: person }
             const destination = backupRestoreDestination(backup, input.targetId)
+            const relayId = input.relayId ?? backup.relayId
             yield* promiseEffect(() =>
-              requireRestoreAuthority(person, backup, destination)
+              requireRestoreAuthority(person, backup, destination, relayId)
             )
-            return { backup, destination, user: person }
+            return { backup, destination, relayId, user: person }
           })
         )
       ),
-    locks: ({ context: { backup, destination } }) =>
-      backup && destination ? restoreLocks(backup, destination) : [],
+    locks: ({ context }) =>
+      context.backup
+        ? restoreLocks(context.backup, context.destination, context.relayId)
+        : [],
     run: ({ context, input }) =>
       promiseEffect(() => handler(context.user, input)),
-    audit: ({ context: { backup, destination } }) =>
-      backup && destination
+    audit: ({ context }) =>
+      context.backup
         ? {
-            id: destination.id,
-            kind: destination.kind,
-            relayId: backup.relayId,
+            id: context.destination.id,
+            kind: context.destination.kind,
+            relayId: context.relayId,
           }
         : null,
   })
@@ -198,7 +201,12 @@ export const resolveRestore = operation<{
           // The run says why one it doesn't know can't be resolved.
           if (restore) {
             yield* promiseEffect(() =>
-              requireRestoreAuthority(person, restore.backup, restore.target)
+              requireRestoreAuthority(
+                person,
+                restore.backup,
+                restore.target,
+                restore.backup.relayId
+              )
             )
           }
           return { restore, user: person }
@@ -206,7 +214,9 @@ export const resolveRestore = operation<{
       )
     ),
   locks: ({ context: { restore } }) =>
-    restore ? restoreLocks(restore.backup, restore.target) : [],
+    restore
+      ? restoreLocks(restore.backup, restore.target, restore.backup.relayId)
+      : [],
   run: ({ context, input }) =>
     promiseEffect(() => resolveUnfinishedRestoreHandler(context.user, input)),
   audit: ({ context: { restore }, input }) => ({
@@ -218,10 +228,11 @@ export const resolveRestore = operation<{
 
 function restoreLocks(
   backup: BackupCatalogRecord,
-  destination: BackupTarget
+  destination: BackupTarget,
+  relayId: string
 ): Array<LaneLock> {
   return [
-    exclusive(backupTargetKey(backup.relayId, destination)),
+    exclusive(backupTargetKey(relayId, destination)),
     shared(backupKey(backup.id)),
   ]
 }

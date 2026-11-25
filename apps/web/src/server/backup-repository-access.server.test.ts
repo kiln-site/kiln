@@ -1,9 +1,11 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import { encryptWithKeyring, parseSecretKeyring } from "../../keyring.mjs"
 import {
+  backupFailureCodeFromMessage,
   backupRepositoryAccessRequestSchema,
   type BackupRepositoryAccessRequest,
 } from "@workspace/contracts"
@@ -12,7 +14,12 @@ import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 import { backupRepositoryAccessEffect } from "@/server/backup-repository-access.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertBackupStorage, insertRows } from "@/test/seed"
+import {
+  insertBackup,
+  insertBackupStorage,
+  insertRelay,
+  insertRows,
+} from "@/test/seed"
 
 const secrets = `1:${"x".repeat(32)}`
 const storageId = "a1b2c3d4e5f6"
@@ -119,6 +126,68 @@ describeMysql("backup repository access", () => {
             const reply = yield* backupRepositoryAccessEffect(relayId, request)
             assert.strictEqual(reply.status, "refused")
           }
+        })
+    )
+
+    it.effect(
+      "lets a Relay a backup is linked to read its repository, and write once no other can",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertRelay("relay-one")
+          yield* insertBackup("linked", {
+            artifact_kind: "restic_snapshot",
+            backup_mode: "incremental",
+            linked_from_backup_id: "original",
+            linked_from_target_id: "server-one",
+            relay_id: "relay-two",
+            repository_id: bucketRepository,
+            status: "available",
+            storage_id: storageId,
+            target_id: "server-two",
+          })
+          const write = { ...read, method: "PUT" as const }
+          const status = (relayId: string, request: typeof read) =>
+            backupRepositoryAccessEffect(relayId, request).pipe(
+              Effect.map((reply) => reply.status)
+            )
+
+          assert.strictEqual(yield* status("relay-two", read), "signed")
+          assert.strictEqual(yield* status("relay-three", read), "refused")
+          const refused = yield* backupRepositoryAccessEffect(
+            "relay-two",
+            write
+          )
+          assert.strictEqual(refused.status, "refused")
+          assert.strictEqual(
+            refused.status === "refused"
+              ? backupFailureCodeFromMessage(refused.reason)
+              : null,
+            // restic then reads the repository without its lock.
+            "storage_access_denied"
+          )
+
+          const database = yield* Database
+          yield* database.execute(
+            "test_relay_removed",
+            `DELETE FROM ${databaseTable("relay")} WHERE id = ?`,
+            ["relay-one"]
+          )
+          assert.strictEqual(yield* status("relay-two", write), "signed")
+          assert.strictEqual(yield* status("relay-three", write), "refused")
+
+          // The last one deleted is still to be pruned.
+          const deletedAt = Date.parse("2026-11-25T00:00:00Z")
+          yield* database.execute(
+            "test_backup_deleted",
+            `UPDATE ${databaseTable("backup")}
+                SET status = 'deleted', deleted_at = ? WHERE id = ?`,
+            [deletedAt, "linked"]
+          )
+          yield* TestClock.setTime(deletedAt + Duration.toMillis("1 hour"))
+          assert.strictEqual(yield* status("relay-two", write), "signed")
+          yield* TestClock.setTime(deletedAt + Duration.toMillis("2 days"))
+          assert.strictEqual(yield* status("relay-two", write), "refused")
         })
     )
 

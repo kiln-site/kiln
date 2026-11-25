@@ -668,7 +668,10 @@ each task it sends a `Backups.dispatch`.
 ## Restore and deletion safety
 
 A backup restores into the resource it was taken of, or into another of the
-same kind on its Relay: a game server, a database, or a volume. That's how a backup of a resource since deleted is restored, and the
+same kind: a game server, a database, or a volume, on its Relay, or for one kept
+in a bucket, on any, its own Relay there or not. On another Relay the resource
+first gets a link to it (`linkBackupEffect`, see [Linked
+backups](#linked-backups)), which that Relay restores as its own. That's how a backup of a resource since deleted is restored, and the
 restore dialog and `kiln backup restore --to` offer it. Restoring into
 another resource copies the backup's data there, so it takes `backup.download`
 on the backup, as linking it to a copy does, and permission to restore the
@@ -815,7 +818,12 @@ owner can then download and restore them.
 - Full archives in S3 can be linked to a copy on any Relay.
 - Archives kept on the Relay can be linked only to a copy on the same Relay,
   so a backup never counts as local on a Relay that doesn't hold it.
-- Incremental snapshots aren't linked; they belong to their own repository.
+- Incremental snapshots aren't linked with the copy. Restoring one in a bucket on
+  another Relay links that one: its repository stays the first Relay's, and the
+  other reads it through Hearth. It writes to it only once the first has been
+  removed from Kiln, when deleting the link's snapshot is left to it. Until then
+  deleting the link removes its record alone, so a snapshot whose own record was
+  deleted first stays in the bucket.
 
 Restore and delete tasks for a linked backup carry `archive`, the identity
 it was made as, so the Relay finds the archive by that name and checks its
@@ -1067,9 +1075,10 @@ in five minutes, which a download needs: it reads each file in the backup on
 its own.
 
 Hearth's rule is one (`backup-repository-access.server.ts`): a Relay reaches
-only its own repositories. Hearth finds the repository by its ID and the Relay
-whose connection asks, and works out the object from the repository's stored
-prefix, under which files are where restic's own S3 backend keeps them. The
+its own repositories, and one a backup was linked to it from. Hearth finds the
+repository by its ID and the Relay whose connection asks, and works out the
+object from the repository's stored prefix, under which files are where restic's
+own S3 backend keeps them. The
 Relay names only a file restic could have there. Hearth refuses a destination
 being deleted. It doesn't check what a Relay does to its own server's
 repositories: that Relay takes the backups, and could as well back up
@@ -1155,7 +1164,9 @@ refuses that write, such as a bucket at its provider's storage cap or a
 read-only key, commands that only read the repository (snapshot lookups,
 sizes, restores, and export downloads) run again with `--no-lock`, so backups
 stay restorable. That's safe because the Relay's single backup worker is the
-only writer to its repositories. Creates, forgets, and prunes still need the
+only writer to its repositories. Another Relay reads without the lock too, and
+if the first prunes what it's reading, its restore fails before it changes
+anything and can be run again. Creates, forgets, and prunes still need the
 lock, so they fail until the storage accepts writes again.
 
 Pre-restore safety backups and final-deletion backups stay full zip archives

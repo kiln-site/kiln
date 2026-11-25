@@ -12,12 +12,15 @@ import {
 export interface RestoreDestination {
   id: string
   name: string
+  relayId: string
+  /** The Relay it's on, when that isn't the backup's. */
+  relayName?: string | undefined
 }
 
 /**
  * Where a restore goes: the backup's own resource while it exists, or
- * another of its kind on its Relay, as when its own is gone. Starts on its
- * own, else the first other one.
+ * another of its kind, as when its own is gone: on its Relay, or for a backup
+ * kept in a bucket, on any. Starts on its own, else the first other one.
  */
 export function useRestoreDestination(
   ownId: string,
@@ -67,16 +70,16 @@ export const RestoreDestinationSelect = React.memo(
             aria-label="Restore to"
             className="h-8 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left"
           >
-            <SelectValue
-              placeholder={`No ${kindLabel} on this Relay to restore into`}
-            />
+            <SelectValue placeholder={`No ${kindLabel} to restore into`} />
           </SelectTrigger>
           <SelectContent>
             {destinations.map((destination) => (
               <SelectItem key={destination.id} value={destination.id}>
                 {destination.id === ownId
                   ? `${destination.name} (backed up from)`
-                  : destination.name}
+                  : destination.relayName
+                    ? `${destination.name} on ${destination.relayName}`
+                    : destination.name}
               </SelectItem>
             ))}
           </SelectContent>

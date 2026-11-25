@@ -82,6 +82,7 @@ import {
   createBackupDialogStore,
   createBackupNameStore,
   createBackupSelectionStore,
+  backupIsInBucket,
   createBackupStatusFilterStore,
   type Backup,
   type BackupAvailabilityDestination,
@@ -948,6 +949,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
                 kind: "database" as const,
                 name: database.name,
                 relayId: database.relayId,
+                relayName: database.relayName,
               },
             ]
           : []
@@ -1107,6 +1109,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
         createSelection={createSelection}
         storage={storage}
         storageNames={storageNames}
+        relays={relays}
         restoreTargets={restoreTargets}
         targetNames={targetNames}
         targets={createTargets}
@@ -1341,6 +1344,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
   deleteFeedbackStore,
   dialogStore,
   groups,
+  relays,
   restoreTargets,
   storage,
   storageNames,
@@ -1352,6 +1356,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
   /** What a new backup starts on; nothing in particular when undefined. */
   createSelection: ReadonlyArray<string> | undefined
   groups: ReadonlyArray<PickerGroup>
+  relays: ReadonlyArray<{ relayId: string; relayName: string }>
   restoreTargets: ReadonlyArray<RestoreTarget>
   storage: Array<BackupStorage>
   storageNames: ReadonlyMap<string, string>
@@ -1393,6 +1398,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
       <ResourceRestoreDialog
         backup={dialog.backup}
         open
+        relays={relays}
         targetName={backupTargetName(dialog.backup, targetNames)}
         onOpenChange={close}
       />
@@ -2601,16 +2607,18 @@ function DeleteBackupStorageDialog({
   )
 }
 
-// The game servers or databases on a backup's Relay it can be restored into.
+// The game servers or databases a backup can be restored into.
 interface RestoreTarget {
   id: string
   kind: "database" | "instance"
   name: string
   relayId: string
+  relayName: string
 }
 
-// Its own while it exists, then the others of its kind on its Relay the
-// person may restore into; Hearth checks again.
+// Its own while it exists, then the others of its kind the person may restore
+// into, those on its Relay first; another Relay's only for one kept in a
+// bucket, which it reads it from. Hearth checks again.
 function restoreDestinations(
   backup: Backup,
   targets: ReadonlyArray<RestoreTarget>,
@@ -2619,16 +2627,33 @@ function restoreDestinations(
   const ownName = targetNames.get(
     targetKey(backup.targetKind, backup.relayId, backup.targetId)
   )
-  const others = targets.flatMap((target) =>
-    target.kind === backup.targetKind &&
-    target.relayId === backup.relayId &&
-    target.id !== backup.targetId
-      ? [{ id: target.id, name: target.name }]
-      : []
-  )
+  const inBucket = backupIsInBucket(backup)
+  const others = targets
+    .filter(
+      (target) =>
+        target.kind === backup.targetKind &&
+        target.id !== backup.targetId &&
+        (target.relayId === backup.relayId || inBucket)
+    )
+    .map(
+      ({ id, name, relayId, relayName }): RestoreDestination => ({
+        id,
+        name,
+        relayId,
+        ...(relayId === backup.relayId ? {} : { relayName }),
+      })
+    )
+    .sort(
+      (left, right) =>
+        Number(left.relayName !== undefined) -
+        Number(right.relayName !== undefined)
+    )
   return ownName === undefined
     ? others
-    : [{ id: backup.targetId, name: ownName }, ...others]
+    : [
+        { id: backup.targetId, name: ownName, relayId: backup.relayId },
+        ...others,
+      ]
 }
 
 function RestoreBackupDialog({
@@ -2654,7 +2679,9 @@ function RestoreBackupDialog({
       const data = {
         backupId: backup.id,
         safetyBackup,
-        ...(elsewhere && destination ? { targetId: destination.id } : {}),
+        ...(elsewhere && destination
+          ? { relayId: destination.relayId, targetId: destination.id }
+          : {}),
       }
       return backup.targetKind === "database"
         ? restoreDatabaseBackup({ data })
