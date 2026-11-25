@@ -97,11 +97,8 @@ interface BackupConfigurationFormProps {
    * however many, or none.
    */
   step?: boolean
-  /** Beneath the targets, for the keys chosen and how they're backed up. */
-  targetsNote?: (
-    chosen: ReadonlyArray<string>,
-    mode: BackupConfiguration["mode"]
-  ) => React.ReactNode
+  /** Beneath the targets, for the keys chosen. */
+  targetsNote?: (chosen: ReadonlyArray<string>) => React.ReactNode
   title: string
 }
 
@@ -196,13 +193,13 @@ function BackupConfigurationForm({
   const effectiveConsistency =
     consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
   // For those of them that can be incremental; the rest are full.
-  const modeChoice = step
-    ? chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
-    : // A volume's own, where there are no targets to choose.
-      !showTargets ||
-      chosen.some(
-        ({ kind }) => kind !== "app" && backupTargetSupportsIncremental(kind)
-      )
+  const modeChoice =
+    // A volume's own, where there are no targets to choose.
+    !showTargets ||
+    chosen.some(
+      // An App is backed up as its volumes.
+      ({ kind }) => kind === "app" || backupTargetSupportsIncremental(kind)
+    )
   // Kiln's own backup goes only where the platform keeps its own.
   const platformChosen = chosen.some(({ kind }) => kind === "platform")
   // A step left with none keeps its mode for those added later.
@@ -285,10 +282,7 @@ function BackupConfigurationForm({
             />
             {targetsNote ? (
               <p className="type-meta mt-1.5 text-muted-foreground">
-                {targetsNote(
-                  chosen.map(({ key }) => key),
-                  effectiveMode
-                )}
+                {targetsNote(chosen.map(({ key }) => key))}
               </p>
             ) : null}
             {tooMany ? (

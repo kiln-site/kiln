@@ -293,10 +293,8 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
       )
     }
     const storageId = yield* parseBackupStorageEffect(args.storage)
-    if (args.mode && targetKind.data !== "server") {
-      return yield* invalidUsage(
-        "--mode is only valid when creating a server backup."
-      )
+    if (args.mode === "incremental" && targetKind.data === "platform") {
+      return yield* invalidUsage("Kiln's own backups are always full.")
     }
     const common = {
       name: args.name?.trim() || "CLI backup",
@@ -409,7 +407,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
       session,
       "/api/cli/v1/backup/download",
       cliBackupDownloadResponseSchema,
-      jsonRequest("POST", { backupId, poll })
+      jsonRequest("POST", { backupId, format: args.format, poll })
     )
     while (signed.status === "preparing") {
       writeLine("Preparing snapshot export…")
@@ -419,7 +417,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         session,
         "/api/cli/v1/backup/download",
         cliBackupDownloadResponseSchema,
-        jsonRequest("POST", { backupId, poll })
+        jsonRequest("POST", { backupId, format: args.format, poll })
       )
     }
     const localPath = rest[1] || basename(signed.filename)
@@ -1261,7 +1259,7 @@ Commands:
   backups list                            List accessible backups
   backups create <type> <reference> --storage <local|id>
                                           Create a manual backup
-                                          (server default: incremental)
+                                          (incremental unless --mode full)
   backup restore <backup-id>              Restore a server or database backup
   backup download <backup-id> [local]     Download a backup
   backup delete <backup-id> --confirm <backup-id>
@@ -1293,6 +1291,9 @@ Options:
       --disk <size|none>
                        Set the disk limit (minimum 0.1GiB), for example 25GiB
   -f, --follow        Follow server logs
+      --format <format>
+                       Download an incremental backup as zip, tar.gz, or
+                       tar.zst, or a database's as sql.gz, sql.zst, or zip
       --game-version <version>
                        Set the Brick's version variable
   -h, --help          Show help
@@ -1302,7 +1303,7 @@ Options:
       --memory <size|none>
                        Set the memory limit, for example 4GiB
       --mode <full|incremental>
-                       Server backup mode (default incremental)
+                       Server or database backup mode (default incremental)
       --name <name>   Name this CLI credential, server, or backup
       --no-open       Do not open a browser during login
       --no-safety-backup

@@ -992,9 +992,12 @@ export class ScheduleManager {
       throw new Error("Volumes are backed up together")
     }
     const execution = backupExecution(action, target)
+    // Kiln's own is full, whatever the step's.
+    const mode =
+      target.kind === "relay" ? "full" : (execution?.mode ?? action.mode)
     const deployedDestination =
       execution?.destination ??
-      (action.mode === "full" && action.destination.kind === "local"
+      (mode === "full" && action.destination.kind === "local"
         ? ({ kind: "local" } as const)
         : null)
     if (!deployedDestination) {
@@ -1016,7 +1019,7 @@ export class ScheduleManager {
     const artifactId = scheduledBackupArtifactId(backupId)
     const targetKind = target.kind === "relay" ? "platform" : target.kind
     const artifactKind =
-      action.mode === "incremental"
+      mode === "incremental"
         ? ("restic_snapshot" as const)
         : targetKind === "instance"
           ? ("archive" as const)
@@ -1039,7 +1042,7 @@ export class ScheduleManager {
           scheduleName: schedule.name,
           timestamp: scheduledAt,
         }),
-        ...(action.mode === "incremental" && execution?.repositoryId
+        ...(mode === "incremental" && execution?.repositoryId
           ? { repositoryId: execution.repositoryId }
           : {}),
         storageId:
@@ -1051,7 +1054,7 @@ export class ScheduleManager {
       exclude: [],
       kind: "create",
       maxBytes: execution?.maxBytes ?? null,
-      mode: action.mode,
+      mode,
       reason: "scheduled",
       target: {
         id:
@@ -1209,11 +1212,15 @@ export class ScheduleManager {
         targetId: execution.targetId,
         targetKind: execution.targetKind,
       })
+      const incremental = execution.mode === "incremental"
       return {
-        artifactKind: "tar_archive",
+        artifactKind: incremental ? "restic_snapshot" : "tar_archive",
         backupId,
         catalog: {
           batchId,
+          ...(incremental && execution.repositoryId
+            ? { repositoryId: execution.repositoryId }
+            : {}),
           name: resolveScheduleBackupName(action.name, {
             backupId,
             instanceId: of,
@@ -1237,7 +1244,7 @@ export class ScheduleManager {
         exclude: [],
         kind: "create",
         maxBytes: execution.maxBytes ?? null,
-        mode: "full",
+        mode: execution.mode,
         reason: "scheduled",
         target: { id: execution.targetId, kind: "volume" },
         taskId: scheduledBackupTaskId(backupId),
@@ -1579,7 +1586,7 @@ function stoppedTogether(
   running: ReadonlyArray<ScheduleTarget>,
   action: Extract<TargetScheduleAction, { type: "backup" }>
 ): StoppedTogether | null {
-  if (action.consistency !== "stopped" || action.mode !== "full") return null
+  if (action.consistency !== "stopped") return null
   const targets = running.filter(
     (target) =>
       scheduleActionAppliesToTarget(action, target) &&

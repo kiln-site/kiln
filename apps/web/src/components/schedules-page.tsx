@@ -4195,7 +4195,7 @@ function createScheduleAction(
     return {
       destination: { kind: "local" },
       id,
-      mode: "full",
+      mode: "incremental",
       name: "scheduled-<schedule>-<timestamp>",
       type,
     }

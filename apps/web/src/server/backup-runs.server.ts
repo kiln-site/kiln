@@ -129,12 +129,9 @@ async function relayMembers(
   const members: Array<Member> = []
 
   const instances = of("instance")
-  // Left unsaid, each kind's own, or full beside one that can only be full.
+  // Left unsaid, incremental, which goes to one destination.
   const mode =
-    data.mode ??
-    (data.targets.every((target) => target.kind === "instance")
-      ? undefined
-      : "full")
+    data.mode ?? (data.storageIds.length > 1 ? "full" : "incremental")
   if (instances.length > 0) {
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
@@ -144,7 +141,7 @@ async function relayMembers(
       if (!known.has(id)) throw new Error("Server not found on this Relay")
       members.push({
         artifactKind: "archive",
-        ...(mode === undefined ? {} : { mode }),
+        mode,
         relay,
         targetId: id,
         targetKind: "instance",
@@ -176,7 +173,7 @@ async function relayMembers(
       members.push({
         artifactKind: "database_dump",
         ...(withStopped ? { consistency: "stopped" as const } : {}),
-        ...(mode === undefined ? {} : { mode }),
+        mode,
         relay,
         targetId: id,
         targetKind: "database",
@@ -210,7 +207,7 @@ async function relayMembers(
     members.push({
       artifactKind: "tar_archive",
       consistency: data.consistency,
-      mode: mode ?? "full",
+      mode,
       relay,
       targetId: id,
       targetKind: "volume",

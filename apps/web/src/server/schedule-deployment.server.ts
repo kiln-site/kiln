@@ -41,7 +41,11 @@ import {
   readRelayVolumes,
   scheduledAppTargets,
 } from "@/server/app-backups.server"
-import type { BackupTargetKind, RelayVolumes } from "@workspace/contracts"
+import {
+  backupTargetSupportsIncremental,
+  type BackupTargetKind,
+  type RelayVolumes,
+} from "@workspace/contracts"
 import { defaultKilnBackupsSettingId } from "@/migrations/0024_default_kiln_backups"
 
 // Saving schedules and handing them to their Relays, shared by the schedule
@@ -566,9 +570,12 @@ async function scheduledBackupExecution(
   refused: string | null = null
 ) {
   const targetKind = target.kind === "relay" ? "platform" : target.kind
+  const mode = backupTargetSupportsIncremental(targetKind)
+    ? action.mode
+    : "full"
   const execution = {
     ...(target.appIds ? { appIds: [...target.appIds] } : {}),
-    mode: action.mode,
+    mode,
     targetId: target.id,
     targetKind: target.kind,
   }
@@ -584,7 +591,7 @@ async function scheduledBackupExecution(
   const admission = await runAppEffect(
     "schedules.backupAdmission",
     scheduledBackupAdmissionEffect({
-      mode: action.mode,
+      mode,
       owner,
       relayId: target.relayId,
       storageId:
@@ -604,7 +611,7 @@ async function scheduledBackupExecution(
       repositoryId: null,
     }
   }
-  if (action.mode === "full") {
+  if (mode === "full") {
     return {
       ...execution,
       destination: scheduledFullBackupDestination(action),
@@ -734,7 +741,6 @@ export async function scheduledBucketBackupStep(
   const action = stored.data
   if (
     action.type !== "backup" ||
-    action.mode !== "full" ||
     action.destination.kind !== "storage"
   ) {
     return null

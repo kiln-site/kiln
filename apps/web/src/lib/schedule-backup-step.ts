@@ -1,5 +1,4 @@
 import {
-  scheduleActionSupportsTarget,
   scheduleTargetKey,
   type ScheduleAction,
   type ScheduleTarget,
@@ -67,8 +66,8 @@ export function appVolumes(
 /** What a schedule's backup step can back up, and which of it it does. */
 export interface BackupStep<Option extends BackupStepOption> {
   /**
-   * What it's chosen from, whatever its mode: every target this person may
-   * back up, and any other it names and reaches, which can only be taken off.
+   * What it's chosen from: every target this person may back up, and any
+   * other it names, which can only be taken off.
    */
   readonly listed: ReadonlyArray<{
     readonly key: string
@@ -103,15 +102,10 @@ export function backupStep<Option extends BackupStepOption>(
   let volumesKnown = true
   const restricted: Array<Option> = []
   for (const option of targets) {
-    if (!scheduleActionSupportsTarget({ ...action, mode: "full" }, option)) {
-      continue
-    }
     const key = scheduleTargetKey(option)
     if (!option[permission] || !option.permittedActions.includes("backup")) {
       restricted.push(option)
-      if (!named?.has(key) || !scheduleActionSupportsTarget(action, option)) {
-        continue
-      }
+      if (!named?.has(key)) continue
       listed.push({ key, option, removeOnly: true })
       chosen.push(key)
       continue
@@ -120,13 +114,7 @@ export function backupStep<Option extends BackupStepOption>(
     const bare = used?.length === 0
     if (bare) empty.push(option)
     listed.push({ key, option, removeOnly: false })
-    // Naming none, it runs on each target its mode supports.
-    if (
-      !(named ? named.has(key) : true) ||
-      !scheduleActionSupportsTarget(action, option)
-    ) {
-      continue
-    }
+    if (named && !named.has(key)) continue
     chosen.push(key)
     if (bare) continue
     if (option.kind === "relay") counts.relays += 1
@@ -152,21 +140,17 @@ export function backupStep<Option extends BackupStepOption>(
 }
 
 /**
- * The targets a step names once `chosen` is saved for it. All its mode can
- * back up is every target, later ones included, so it names none; unless it
- * would then reach one this person can't back up.
+ * The targets a step names once `chosen` is saved for it. All it can back up
+ * is every target, later ones included, so it names none; unless it would
+ * then reach one this person can't back up.
  */
 export function backupStepTargetKeys(
   step: Pick<BackupStep<BackupStepOption>, "listed" | "restricted">,
-  mode: ScheduleBackupAction["mode"],
   chosen: ReadonlyArray<string>
 ): ReadonlyArray<string> | undefined {
-  const supports = (option: BackupStepOption) =>
-    scheduleActionSupportsTarget({ type: "backup", mode }, option)
-  const every = step.listed.filter(({ option }) => supports(option))
-  return !step.restricted.some(supports) &&
-    every.length === chosen.length &&
-    every.every(({ key }) => chosen.includes(key))
+  return step.restricted.length === 0 &&
+    step.listed.length === chosen.length &&
+    step.listed.every(({ key }) => chosen.includes(key))
     ? undefined
     : chosen
 }

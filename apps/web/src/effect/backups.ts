@@ -11,10 +11,13 @@ import type {
   BackupTaskPhase,
   BackupTarget,
   BackupTaskStatus,
+  BackupDownloadFormat,
   BackupTargetKind,
   RelayBackupTaskReport,
 } from "@workspace/contracts"
 import {
+  backupDownloadFormats,
+  backupDownloadFormatSchema,
   backupExportFilename,
   backupFailureCodeFromMessage,
   BACKUP_EXPORT_TTL_MAX_MS,
@@ -247,6 +250,7 @@ interface DispatchableBackupRow extends RowDataPacket {
   consistency: BackupConsistency | null
   create_task_id: string | null
   exclude_patterns: unknown
+  export_format: string | null
   linked_from_backup_id: string | null
   linked_from_target_id: string | null
   /** Its old ID, from before 12-character instance IDs. */
@@ -430,6 +434,7 @@ export interface BackupRestoreDispatch {
 
 export interface BackupExportDispatch {
   backupId: string
+  format: BackupDownloadFormat
   kind: "export"
   repositoryPassword?: string
   snapshotId: string
@@ -603,9 +608,7 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
     input.reason === "final_delete" ||
     !backupTargetSupportsIncremental(input.targetKind)
       ? "full"
-      : // Left unsaid, only a game server's is incremental.
-        (input.mode ??
-        (input.targetKind === "instance" ? "incremental" : "full"))
+      : (input.mode ?? "incremental")
   const artifactKind =
     mode === "incremental" ? "restic_snapshot" : input.artifactKind
   const requestedStorageIds = deduplicateStorageIds(input.storageIds)
@@ -2646,6 +2649,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
                LIMIT 1
             ) AS create_task_id,
             task.id AS task_id, task.task_kind, task.reserved_bytes,
+            task.export_format,
             task.created_at AS task_created_at_ms,
             task.target_kind AS task_target_kind,
             task.target_id AS task_target_id,
@@ -2778,6 +2782,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
       }
       return {
         backupId: row.backup_id,
+        format: storedExportFormat(row.export_format),
         kind: "export",
         snapshotId: row.restic_snapshot_id,
         target: { id: row.target_id, kind: row.target_kind },
@@ -3989,12 +3994,17 @@ export type BackupExportReservation =
       kind: "dispatch"
     }
 
+// An export from before there were formats is a zip.
+function storedExportFormat(stored: string | null): BackupDownloadFormat {
+  return backupDownloadFormatSchema.safeParse(stored).data ?? "zip"
+}
+
 /**
- * How a snapshot's latest export is coming along: `preparing`, `ready` to
+ * How a snapshot's latest export in a format is coming along: `preparing`, `ready` to
  * sign until it expires, `failed`, or `none` when there's none to use.
  */
 export const backupExportStateEffect = Effect.fn("backups.exportState")(
-  function* (backupId: string) {
+  function* (backupId: string, format: BackupDownloadFormat) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     const rows = yield* database.queryRows<
@@ -4010,9 +4020,10 @@ export const backupExportStateEffect = Effect.fn("backups.exportState")(
               task.finished_at
          FROM ${databaseTable("backup_task")} task
         WHERE task.backup_id = ? AND task.task_kind = 'export'
+          AND COALESCE(task.export_format, 'zip') = ?
         ORDER BY task.created_at DESC, task.id DESC
         LIMIT 1`,
-      [backupId]
+      [backupId, format]
     )
     const latest = rows[0]
     if (!latest) return { state: "none" as const }
@@ -4036,6 +4047,8 @@ export const backupExportStateEffect = Effect.fn("backups.exportState")(
 export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
   function* (input: {
     backupId: string
+    /** Left out, its target's usual one. */
+    format?: BackupDownloadFormat | undefined
     replaceFailed?: boolean
     requestedBy: string
     requireFullTtl?: boolean
@@ -4073,7 +4086,16 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
           targetId: backup.target_id,
           targetKind: backup.target_kind,
         })
-        const filename = backupExportFilename(backup.id, backup.target_kind)
+        const formats = backupDownloadFormats(backup.target_kind)
+        const format = input.format ?? formats[0]
+        if (!formats.includes(format)) {
+          return yield* BackupStorageError.make({
+            code: "backup_unavailable",
+            operation: "backup.export",
+            reason: `This backup downloads as ${formats.join(", ")}`,
+          })
+        }
+        const filename = backupExportFilename(backup.id, format)
         const existing = yield* transaction.queryRows<
           {
             created_at: number
@@ -4087,14 +4109,16 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
                   task.finished_at
              FROM ${databaseTable("backup_task")} task
             WHERE task.backup_id = ? AND task.task_kind = 'export'
+              AND COALESCE(task.export_format, 'zip') = ?
             ORDER BY task.created_at DESC, task.id DESC
             LIMIT 1
             FOR UPDATE`,
-          [input.backupId]
+          [input.backupId, format]
         )
         const latest = existing[0]
         const dispatchFor = (taskId: string): BackupExportDispatch => ({
           backupId: backup.id,
+          format,
           kind: "export",
           snapshotId,
           target: { id: backup.target_id, kind: backup.target_kind },
@@ -4105,9 +4129,10 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
           transaction.execute(
             `DELETE FROM ${databaseTable("backup_task")}
               WHERE backup_id = ? AND task_kind = 'export'
+                AND COALESCE(export_format, 'zip') = ?
                 AND status IN ('succeeded', 'failed', 'cancelled')
                 AND id <> ?`,
-            [input.backupId, keepTaskId]
+            [input.backupId, format, keepTaskId]
           )
         if (latest?.status === "succeeded") {
           const storedTtl = clampBackupExportTtlMs(
@@ -4163,10 +4188,18 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("backup_task")}
             (id, backup_id, task_kind, status, reserved_bytes, requested_by,
-             created_at, updated_at)
-           VALUES (?, ?, 'export', 'queued', ?, ?, ?, ?)`,
+             export_format, created_at, updated_at)
+           VALUES (?, ?, 'export', 'queued', ?, ?, ?, ?, ?)`,
           // reserved_bytes holds the export TTL in milliseconds, not a byte count.
-          [input.taskId, input.backupId, ttlMs, input.requestedBy, now, now]
+          [
+            input.taskId,
+            input.backupId,
+            ttlMs,
+            input.requestedBy,
+            format,
+            now,
+            now,
+          ]
         )
         return {
           dispatch: dispatchFor(input.taskId),

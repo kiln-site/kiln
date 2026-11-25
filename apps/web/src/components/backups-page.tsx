@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 import {
   appBackupVolumes,
+  backupDownloadFormats,
   backupStorageProviderName,
   type BackupTargetKind,
 } from "@workspace/contracts"
@@ -1458,6 +1459,12 @@ function DownloadBackupDialog({
       availableArtifacts[0]?.id ??
       ""
   )
+  // An incremental backup is put together as the file it's downloaded as.
+  const formats =
+    backup.artifactKind === "restic_snapshot"
+      ? backupDownloadFormats(backup.targetKind)
+      : null
+  const [format, setFormat] = React.useState(formats?.[0])
   const [expiryValue, setExpiryValue] = React.useState("15")
   const [expiryUnit, setExpiryUnit] = React.useState<"hours" | "minutes">(
     "minutes"
@@ -1487,6 +1494,7 @@ function DownloadBackupDialog({
             afterExport,
             artifactId,
             backupId: backup.id,
+            format,
             expiresInSeconds: mode === "download" ? 300 : expiresInSeconds,
             preview: shouldPreviewBackupDownload(
               mode,
@@ -1500,7 +1508,7 @@ function DownloadBackupDialog({
         for (;;) {
           await new Promise((resolve) => setTimeout(resolve, 1_000))
           const { state } = await getBackupExportState({
-            data: { backupId: backup.id },
+            data: { backupId: backup.id, format: format ?? "zip" },
           })
           if (state === "failed") throw new Error("The snapshot export failed")
           if (state !== "preparing") {
@@ -1575,6 +1583,33 @@ function DownloadBackupDialog({
               </SelectContent>
             </Select>
           </label>
+
+          {formats && format ? (
+            <label className="block">
+              <span className="mb-2 block text-xs font-medium">Format</span>
+              <Select
+                value={format}
+                onValueChange={(value) => {
+                  setFormat(formats.find((candidate) => candidate === value))
+                  setShared(null)
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Backup download format"
+                  className="h-10 w-full px-3"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {formats.map((candidate) => (
+                    <SelectItem key={candidate} value={candidate}>
+                      .{candidate}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/15 p-3">
             <div>

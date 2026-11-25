@@ -61,43 +61,21 @@ const names = (keys: ReadonlyArray<string> | undefined) =>
   keys?.map((key) => key.split(":").at(-1))
 
 /** What a step names once saved, by default with what it chose. */
-const saved = (
-  some: ReturnType<typeof step>,
-  mode: ScheduleBackupAction["mode"] = "full",
-  chosen = some.chosen
-) => names(backupStepTargetKeys(some, mode, chosen))
+const saved = (some: ReturnType<typeof step>, chosen = some.chosen) =>
+  names(backupStepTargetKeys(some, chosen))
 
 describe("a schedule's backup step", () => {
   it("takes every target, and later ones, once all are chosen", () => {
     const every = step([server, site])
     expect(names(every.chosen)).toEqual(["server", "site"])
     expect(saved(every)).toBeUndefined()
-    expect(saved(every, "full", every.chosen.slice(0, 1))).toEqual(["server"])
-  })
-
-  it("covers later game servers, and nothing more, when incremental", () => {
-    const incremental = step([server, site], { mode: "incremental" })
-    expect(names(incremental.chosen)).toEqual(["server"])
-    expect(saved(incremental, "incremental")).toBeUndefined()
-    // Made full, naming none would take the App too.
-    expect(saved(incremental, "full")).toEqual(["server"])
+    expect(saved(every, every.chosen.slice(0, 1))).toEqual(["server"])
   })
 
   it("never reaches what this person can't back up", () => {
     const some = step([server, others])
     expect(names(some.chosen)).toEqual(["server"])
     expect(saved(some)).toEqual(["server"])
-  })
-
-  it("covers later game servers past a database this person can't back up", () => {
-    const incremental = step([server, others], { mode: "incremental" })
-    expect(saved(incremental, "incremental")).toBeUndefined()
-    expect(saved(incremental, "full")).toEqual(["server"])
-  })
-
-  it("keeps covering later game servers once its last one is gone", () => {
-    const incremental = step([others], { mode: "incremental" })
-    expect(saved(incremental, "incremental")).toBeUndefined()
   })
 
   it("keeps covering an App while it uses no volume", () => {
@@ -111,18 +89,9 @@ describe("a schedule's backup step", () => {
     expect(
       saved(
         every,
-        "full",
         every.chosen.filter((key) => !key.endsWith("site"))
       )
     ).toEqual(["bare", "server"])
-  })
-
-  it("leaves a database this person can't back up out of an incremental step", () => {
-    const named = step([server, others], {
-      mode: "incremental",
-      targetKeys: [`${relayId}:instance:server`, `${relayId}:database:others`],
-    })
-    expect(names(named.chosen)).toEqual(["server"])
   })
 
   it("keeps one it names that this person can't back up removable", () => {

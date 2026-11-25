@@ -178,7 +178,7 @@ Reasons are `manual`, `pre_restore`, `final_delete`, and `scheduled`.
 Artifact kinds are `archive`, `database_dump`, `platform_bundle`,
 `restic_snapshot`, and `tar_archive`.
 A backup's `full`/`incremental` mode is recorded separately from its artifact
-kind; incremental game-server backups are `restic_snapshot`s.
+kind; incremental ones are `restic_snapshot`s.
 
 Each resource can set exclude patterns and its retention (see
 [Retention](#retention)): the most backups it keeps, the most logical space
@@ -576,6 +576,12 @@ The step waits for its task to arrive and finish. What that leaves:
   back up to a bucket finish and be read before updating, then rotate the
   bucket's keys.
 
+A step is incremental or full for everything it backs up but Kiln's own backup,
+which is full in either: each execution carries its own mode, and Kiln's in a
+bucket is Hearth's to take. A step from when only game servers could be
+incremental, which named no targets in a schedule with anything else, names those
+game servers since migration 101.
+
 A step that backs up an App backs up each volume it uses, each admitted on its own. It's taken live,
 or stopped once for all of them as a batch; saving a stopped one takes
 `instance.power.stop` on the App and every App using those volumes, and while their
@@ -930,8 +936,8 @@ it, while those Apps are stopped. That is all it promises: nothing else
 that writes to the database is stopped, nothing is coordinated between
 Relays, and each backup is still restored on its own. Game
 servers and Kiln are taken as they run, as is a database with no volume
-beside it. Incremental or Full is the choice of those that can be incremental;
-the rest are full.
+beside it. Incremental or Full is everything's choice but Kiln's own, which is
+full in either. Incremental goes to one destination.
 
 It offers each Kiln volume alongside game servers, databases and
 Kiln: every row that is chosen is one thing a backup keeps. An App, and a
@@ -1032,9 +1038,10 @@ The CLI uses the same authorization and task APIs: `kiln backups list`,
 ## Incremental snapshots
 
 An incremental backup is a snapshot in a restic repository of the instance's
-own, so each stores only what changed. A game server's are by default, and a
-database's or a volume's can be. Each instance has one repository per
-destination:
+own, so each stores only what changed. It's the default for game servers,
+databases, and volumes, so for Apps, in New Backup, a schedule's new backup step,
+and the CLI. Kiln's own backup, a safety backup, and a final backup are always
+full. Each instance has one repository per destination:
 
 - Relay-local: `<data>/restic/instance/<id>/`
 - S3-compatible: `s3:https://<endpoint>/<bucket>/<stored-prefix>` where the
@@ -1153,16 +1160,21 @@ backups stay full archives. Incremental backups accept
 exactly one destination. The 5 GiB single-PUT ceiling applies only to full
 archive uploads, not to restic's own pack writes.
 
-Downloading any backup yields the complete file. For restic snapshots (local or
-S3), creating a download link reserves an `export` task. Relay stages the zip
+Downloading any backup yields the complete file, unencrypted. For restic
+snapshots (local or S3), creating a download link reserves an `export` task, in
+the format chosen: zip, tar.gz or tar.zst, or for a database sql.gz, sql.zst or
+zip (`backupDownloadFormats`). A backup can have one of each at once, each with a
+task of its own (`backup_task.export_format`). Relay stages the file
 locally and serves it with the existing Relay download token. From a bucket it
-restores the snapshot to a folder beside the zip and zips that: a restore reads
-in bulk, where `restic dump` reads each small file from the bucket on its own,
-which is slow and counts against a provider's request limits. That needs room
-for the files as well as the zip. Without it, for a repository on the Relay's
-own disk, and for a snapshot with something Relay's zip can't hold as it is,
-such as a name with a backslash, Relay runs `restic dump -a zip`. Either way the
-zip holds the same files, folders and links. Export files expire after five
+restores the snapshot to a folder beside the file and archives that: a restore
+reads in bulk, where `restic dump` reads each small file from the bucket on its
+own, which is slow and counts against a provider's request limits. That needs
+room for the files as well as the archive. Without it, for a repository on the
+Relay's own disk, and for a snapshot with something Relay's zip can't hold as it
+is, such as a name with a backslash, Relay runs `restic dump`. Either way the
+archive holds the same files, folders and links. Only a tar keeps owners, and
+one from a bucket leaves out extended attributes and pipes, which a restore
+keeps. Export files expire after five
 minutes and are swept on Relay startup, as is a folder a stopped Relay left.
 
 Delete runs `restic forget` for the cataloged snapshot, or — when a failed
@@ -1216,13 +1228,12 @@ server it was taken of uses that server's directory; restoring into another,
 or exporting one whose server is gone, reads the path from the snapshot
 itself (`restic snapshots`), and the repository from the server it was
 taken of, which the task's `archive` names. A database's dump is written out
-gzipped, then imported as a full backup's is, or downloaded as `.sql.gz`. A
+gzipped, then imported as a full backup's is. A
 volume's is restored by restic into the staging folder a full backup's restore
 makes inside the volume, in a helper, and swapped in the same way. restic keeps
 the volume's root as a folder, `volume`, so its owner and mode are read from
 there and its contents moved up before anything is cleared. Docker doesn't say
-its extended attributes, so restic sets those once it's swapped in. It
-downloads as `.tar.gz`.
+its extended attributes, so restic sets those once it's swapped in.
 
 Destination deletion is two-phase: the row is marked `deleting` so new backups
 cannot select it, S3 repository prefixes are purged, then foreign keys on

@@ -5,6 +5,7 @@ import {
   relayVolumesSchema,
   type AccessGrantScopeType,
   type BackupArtifactKind,
+  type BackupDownloadFormat,
   type BackupTarget,
 } from "@workspace/contracts"
 
@@ -97,6 +98,7 @@ import {
 import type {
   BackupDownloadInput,
   BackupExcludesInput,
+  BackupExportStateInput,
   BackupIdInput,
   BackupLimitsInput,
   BackupPolicyInput,
@@ -482,6 +484,7 @@ export async function getBackupDownloadUrlHandler(
       afterExport: data.afterExport,
       backup,
       expiresInSeconds: data.expiresInSeconds,
+      format: data.format,
       preview: data.preview,
       user,
     })
@@ -546,7 +549,7 @@ export async function getBackupDownloadUrlHandler(
 // failed or expired is prepared again by asking for the download again.
 export async function getBackupExportStateHandler(
   user: AuthenticatedUser,
-  data: BackupIdInput
+  data: BackupExportStateInput
 ) {
   const backup = await runAppEffect(
     "backups.getForExportState",
@@ -557,7 +560,10 @@ export async function getBackupExportStateHandler(
   if (!hasBackupPermission(user, grants, backup, "backup.download")) {
     throw new Error("You do not have permission to download this backup")
   }
-  return runAppEffect("backups.exportState", backupExportStateEffect(backup.id))
+  return runAppEffect(
+    "backups.exportState",
+    backupExportStateEffect(backup.id, data.format)
+  )
 }
 
 /** Where a restore goes: the backup's own resource, or `targetId` of its kind. */
@@ -932,6 +938,7 @@ async function resticBackupDownload(input: {
   afterExport: boolean
   backup: BackupCatalogRecord
   expiresInSeconds: number
+  format: BackupDownloadFormat | undefined
   preview: boolean
   user: AuthenticatedUser
 }): Promise<
@@ -941,6 +948,7 @@ async function resticBackupDownload(input: {
     "backups.reserveExport",
     reserveBackupExportEffect({
       backupId: input.backup.id,
+      format: input.format,
       replaceFailed: true,
       requestedBy: input.user.id,
       requireFullTtl: !input.afterExport,

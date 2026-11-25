@@ -729,9 +729,31 @@ export const backupExportTtlMsSchema = z
   .min(BACKUP_EXPORT_TTL_MIN_MS)
   .max(BACKUP_EXPORT_TTL_MAX_MS)
 
+export const backupDownloadFormatSchema = z.enum([
+  "sql.gz",
+  "sql.zst",
+  "tar.gz",
+  "tar.zst",
+  "zip",
+])
+export type BackupDownloadFormat = z.infer<typeof backupDownloadFormatSchema>
+
+/** What an incremental backup of a target downloads as, the usual one first. */
+export function backupDownloadFormats(
+  kind: z.infer<typeof backupTargetKindSchema>
+): readonly [BackupDownloadFormat, ...Array<BackupDownloadFormat>] {
+  if (kind === "database") return ["sql.gz", "sql.zst", "zip"]
+  // A zip keeps no owners, which a volume's files need.
+  return kind === "volume"
+    ? ["tar.gz", "tar.zst", "zip"]
+    : ["zip", "tar.gz", "tar.zst"]
+}
+
 export const backupExportTaskInputSchema = z
   .object({
     backupId: backupIdSchema,
+    // A Relay's task from before there were others.
+    format: backupDownloadFormatSchema.default("zip"),
     repository: resticRepositoryLocationSchema.default(
       defaultLocalResticRepository
     ),
@@ -1290,16 +1312,9 @@ export function backupArtifactFilename(
 /** The file an incremental backup downloads as. */
 export function backupExportFilename(
   backupId: string,
-  targetKind: BackupTargetKind
+  format: BackupDownloadFormat
 ): string {
-  return backupFilename(
-    backupId,
-    targetKind === "database"
-      ? "sql.gz"
-      : targetKind === "volume"
-        ? "tar.gz"
-        : "zip"
-  )
+  return backupFilename(backupId, format)
 }
 
 function backupFilename(backupId: string, extension: string): string {

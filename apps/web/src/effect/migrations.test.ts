@@ -2718,6 +2718,84 @@ describeMysql("database migrations", () => {
       schemaBuildTimeout
     )
 
+    // An incremental step backed up game servers alone. Unnamed, it would now
+    // take what else its schedule has, backed up already or not its owner's.
+    it.effect(
+      "keeps an incremental backup step to the game servers it backed up",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 100)
+          )
+          const relayId = "1".repeat(12)
+          const schedules = { mixed: "5".repeat(36), servers: "6".repeat(36) }
+          const steps = {
+            mixed: "7".repeat(36),
+            named: "8".repeat(36),
+            servers: "9".repeat(36),
+          }
+          const target = (scheduleId: string, kind: string, id: string) =>
+            insertRows("schedule_target", {
+              created_at: 1,
+              relay_id: relayId,
+              schedule_id: scheduleId,
+              target_id: id,
+              target_kind: kind,
+              target_name: kind,
+            })
+          const step = (
+            id: string,
+            scheduleId: string,
+            position: number,
+            config: object
+          ) =>
+            insertRows("schedule_action", {
+              action_config: JSON.stringify({
+                mode: "incremental",
+                type: "backup",
+                ...config,
+              }),
+              action_type: "backup",
+              created_at: 1,
+              id,
+              position,
+              schedule_id: scheduleId,
+            })
+          yield* sql`SET FOREIGN_KEY_CHECKS = 0`
+          yield* target(schedules.mixed, "instance", "a".repeat(12))
+          yield* target(schedules.mixed, "database", "d".repeat(12))
+          yield* target(schedules.servers, "instance", "a".repeat(12))
+          yield* step(steps.mixed, schedules.mixed, 0, {})
+          yield* step(steps.named, schedules.mixed, 1, { targetKeys: [] })
+          yield* step(steps.servers, schedules.servers, 0, {})
+
+          yield* applyMigrations(migrations)
+
+          yield* sql`SET FOREIGN_KEY_CHECKS = 1`
+          const kept = yield* sql<{ config: unknown; id: string }>`
+            SELECT id, action_config AS config
+              FROM ${sql(databaseTableName("schedule_action"))} ORDER BY id
+          `
+          expect(
+            kept.map(({ config, id }) => [
+              id,
+              (
+                (typeof config === "string" ? JSON.parse(config) : config) as {
+                  targetKeys?: Array<string>
+                }
+              ).targetKeys,
+            ])
+          ).toEqual([
+            [steps.mixed, [`${relayId}:instance:${"a".repeat(12)}`]],
+            [steps.named, []],
+            [steps.servers, undefined],
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
     // A destination's ID is in its backups, the schedules that back up to
     // it and the keys it is encrypted with. Moving it to a 12-character ID
     // has to carry all of them, or backups stop finding their bucket.

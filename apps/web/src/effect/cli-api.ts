@@ -697,6 +697,7 @@ export const getCliBackupDownloadEffect = Effect.fn("cli.api.backups.download")(
       const reserved = yield* mapCliBackupFailure(
         reserveBackupExportEffect({
           backupId: backup.id,
+          format: input.format,
           replaceFailed: !input.poll,
           requestedBy: principal.user.id,
           requireFullTtl: !input.poll,

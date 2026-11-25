@@ -36,12 +36,14 @@ import ZipStream from "zip-stream"
 
 import {
   backupArtifactFilename,
+  backupDownloadFormatSchema,
   backupExportFilename,
   type BackupArchiveCreateTaskResult,
   type BackupArchiveManifest,
   type BackupCreateTaskInput,
   type BackupCreateTaskResult,
   type BackupDeleteTaskInput,
+  type BackupDownloadFormat,
   type BackupExportTaskResult,
   type BackupFailureCode,
   type BackupResticCreateTaskResult,
@@ -128,6 +130,7 @@ import {
   resticRepositoryKey,
 } from "./backups/destinations/index.js"
 import type { ResticRepositoryAccess } from "./backups/destinations/s3/restic-bridge.js"
+import { tarTree } from "./backups/tar-tree.js"
 import { UnzippableEntryError, zipTree } from "./backups/zip-tree.js"
 import {
   installPreparedInstanceRestore,
@@ -3119,12 +3122,19 @@ function deleteBackupArtifact(
       })
 }
 
-function backupExportDirectoryPath(config: RelayConfig): string {
+function backupExportDirectoryPath(
+  config: Pick<RelayConfig, "dataDirectory">
+): string {
   return resolve(config.dataDirectory, "exports")
 }
 
-function backupExportPath(config: RelayConfig, backupId: string): string {
-  return resolve(backupExportDirectoryPath(config), `${backupId}.zip`)
+/** A backup's export, one for each format it's downloaded as. */
+function backupExportPath(
+  config: Pick<RelayConfig, "dataDirectory">,
+  backupId: string,
+  format: BackupDownloadFormat
+): string {
+  return resolve(backupExportDirectoryPath(config), `${backupId}.${format}`)
 }
 
 function backupExportPartialPath(
@@ -3160,7 +3170,8 @@ async function sweepExpiredBackupExports(config: RelayConfig): Promise<void> {
       await rm(path, { force: true })
       continue
     }
-    if (!entry.name.endsWith(".zip")) continue
+    // Its own marker beside it.
+    if (entry.name.startsWith(".")) continue
     const metadata = await optionalLstat(path)
     if (!metadata) continue
     const marker = resolve(directory, `.${entry.name}.expires`)
@@ -4164,7 +4175,7 @@ function runResticExport(
       input.target.id,
       input.repository
     )
-    const destination = backupExportPath(config, input.backupId)
+    const destination = backupExportPath(config, input.backupId, input.format)
     const partial = backupExportPartialPath(config, input.backupId, taskId)
     const staged = resolve(
       backupExportDirectoryPath(config),
@@ -4174,7 +4185,7 @@ function runResticExport(
       reuseValidExport(
         destination,
         Date.now() + input.ttlMs,
-        backupExportFilename(input.backupId, input.target.kind)
+        backupExportFilename(input.backupId, input.format)
       )
     )
     if (existing) return existing
@@ -4200,7 +4211,7 @@ function runResticExport(
       await rename(partial, destination)
       const expiresAt = Date.now() + input.ttlMs
       await writeExportExpiry(
-        backupExportExpiryPath(config, input.backupId),
+        backupExportExpiryPath(config, input.backupId, input.format),
         expiresAt
       )
       progress.completed = dumped.bytes
@@ -4209,7 +4220,7 @@ function runResticExport(
         bytes: dumped.bytes,
         checksumSha256: dumped.checksumSha256,
         expiresAt,
-        filename: backupExportFilename(input.backupId, input.target.kind),
+        filename: backupExportFilename(input.backupId, input.format),
         warnings: [],
       } satisfies BackupExportTaskResult
     }
@@ -4235,37 +4246,35 @@ function runResticExport(
         const onProgress = (bytes: number) => {
           progress.completed = bytes
         }
-        if (input.target.kind !== "instance") {
-          const database = input.target.kind === "database"
+        const zip = input.format === "zip"
+        const compression = input.format.endsWith(".zst") ? "zstd" : "gzip"
+        if (input.target.kind === "database") {
           const dumped = await restic.dump({
             destination: partial,
-            format: { compression: "gzip" },
+            format: zip ? { archive: "zip" } : { compression },
             location,
             onProgress,
             password,
+            selector: input.snapshotId,
             signal,
-            ...(database
-              ? { file: DATABASE_DUMP_FILE, selector: input.snapshotId }
-              : {
-                  selector: resticSnapshotSelector(
-                    input.snapshotId,
-                    VOLUME_MOUNT
-                  ),
-                }),
+            ...(zip ? {} : { file: DATABASE_DUMP_FILE }),
           })
           return finishExport(dumped)
         }
-        // Its server may be gone, or another Relay's that it's linked from.
-        const selector = await resticSnapshotSource(config, restic, {
-          directory: null,
-          location,
-          password,
-          signal,
-          snapshotId: input.snapshotId,
-        })
-        // restic writes a zip a file at a time, each read from the bucket on
-        // its own. A restore reads them in bulk, where there's room for the
-        // files beside the zip.
+        const selector =
+          input.target.kind === "volume"
+            ? resticSnapshotSelector(input.snapshotId, VOLUME_MOUNT)
+            : // Its server may be gone, or another Relay's it's linked from.
+              await resticSnapshotSource(config, restic, {
+                directory: null,
+                location,
+                password,
+                signal,
+                snapshotId: input.snapshotId,
+              })
+        // restic writes an archive a file at a time, each read from the
+        // bucket on its own. A restore reads them in bulk, where there's room
+        // for the files beside the archive.
         const bulk =
           location.kind === "s3" &&
           (await hasFreeBytes(
@@ -4282,29 +4291,32 @@ function runResticExport(
             target: staged,
           })
         }
-        const zipped = bulk
+        const archived = bulk
           ? await Effect.runPromise(
-              zipTree(staged, partial, {
-                onProgress,
-                totalBytes: stats.totalSize,
-              }).pipe(
-                // restic writes what that can't, as a name with a backslash.
-                Effect.catchIf(
-                  (cause) => cause instanceof UnzippableEntryError,
-                  () => Effect.succeed(null)
-                )
-              ),
+              zip
+                ? zipTree(staged, partial, {
+                    onProgress,
+                    totalBytes: stats.totalSize,
+                  }).pipe(
+                    // restic writes what that can't, as a name with a
+                    // backslash.
+                    Effect.catchIf(
+                      (cause) => cause instanceof UnzippableEntryError,
+                      () => Effect.succeed(null)
+                    )
+                  )
+                : tarTree(staged, partial, { compression, onProgress }),
               { signal }
             )
           : null
-        if (bulk && !zipped) {
+        if (bulk && !archived) {
           await rm(staged, { force: true, recursive: true })
         }
         const dumped =
-          zipped ??
+          archived ??
           (await restic.dump({
             destination: partial,
-            format: { archive: "zip" },
+            format: zip ? { archive: "zip" } : { archive: "tar", compression },
             location,
             onProgress,
             password,
@@ -4349,8 +4361,10 @@ async function removeBackupExport(
   backupId: string
 ): Promise<void> {
   const directory = backupExportDirectoryPath(config)
-  await rm(backupExportPath(config, backupId), { force: true })
-  await rm(backupExportExpiryPath(config, backupId), { force: true })
+  for (const format of backupDownloadFormatSchema.options) {
+    await rm(backupExportPath(config, backupId, format), { force: true })
+    await rm(backupExportExpiryPath(config, backupId, format), { force: true })
+  }
   const listing = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
@@ -4371,8 +4385,15 @@ async function removeBackupExport(
   }
 }
 
-function backupExportExpiryPath(config: RelayConfig, backupId: string): string {
-  return resolve(backupExportDirectoryPath(config), `.${backupId}.zip.expires`)
+function backupExportExpiryPath(
+  config: RelayConfig,
+  backupId: string,
+  format: BackupDownloadFormat
+): string {
+  return resolve(
+    backupExportDirectoryPath(config),
+    `.${backupId}.${format}.expires`
+  )
 }
 
 async function reuseValidExport(
