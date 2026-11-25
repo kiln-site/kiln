@@ -66,7 +66,8 @@ const TunnelNameFact = React.memo(function TunnelNameFact({
         ) : (
           <InfoCopyValue label="tunnel address" value={address} />
         )}
-        <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:inline">
+        {/* Gives way before the name does. */}
+        <span className="hidden min-w-0 shrink-999 truncate text-xs text-muted-foreground sm:inline">
           {[
             name.name.primary ? "Primary" : null,
             name.tunnelName,
