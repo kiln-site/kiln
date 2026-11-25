@@ -126,7 +126,9 @@ Once it's ready its Relay is given its routes, and asked whether its own
 Traefik serves them, before any name points there. A copy that doesn't start,
 or none of whose routes Traefik reaches, ends the move: it's removed, the old one is
 started again, and its domains, owner and deploying on a push never left it.
-It's the same when the move is cancelled while the copy starts. A Relay whose
+It's the same when the move is cancelled while the copy starts. It waits up to
+20 seconds for every route, then goes on if any is reached: one may have led to
+nothing all along. A Relay whose
 websites another proxy serves can't be asked, and isn't.
 
 The old one stays stopped until then, so it's away for as long as its data

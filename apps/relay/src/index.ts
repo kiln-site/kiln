@@ -142,7 +142,6 @@ import {
   relayPlatformActionInputSchema,
   type RelayPlatformActionInput,
   RelayTunnelOpenSchema,
-  webRouteHostnames,
   webRouteService,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
@@ -4098,8 +4097,7 @@ async function executeControlRequest(
         "relay.network.routes.replace",
         startup.state.replaceInstanceRoutes(owner, routes)
       )
-      const hostnames = routes.flatMap(webRouteHostnames)
-      if (input.holdCertificates) lifecycle.certificates.hold(hostnames)
+      lifecycle.certificates.hold(input.holdCertificates ?? [])
       await Effect.runPromise(
         relayOperation(async () => {
           await lifecycle.configureWebRoutes(

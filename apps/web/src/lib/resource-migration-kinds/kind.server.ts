@@ -525,7 +525,7 @@ const webRoutes = (
   operation: "instance.network.routes.read" | "instance.network.routes.write",
   subject: string,
   payload: {
-    readonly holdCertificates?: boolean
+    readonly holdCertificates?: ReadonlyArray<string>
     readonly id: string
     readonly kind: "app" | "instance"
     readonly routes?: ReadonlyArray<RelayInstanceWebRouteInput>
@@ -563,13 +563,27 @@ export const copyWebRoutes = Effect.fnUntraced(function* (
     kind,
   })
   if (old.length === 0 || copy.length > 0) return { copy, old }
+  // One Kiln has yet to make a record for points nowhere, and its certificate
+  // is asked for once it's made, as any new name's is.
+  const addresses = yield* listResourceAddressesEffect({
+    relayId: source.id,
+    resourceId: migration.source.id,
+    resourceType: kind,
+  })
+  const unmade = new Set(
+    addresses.flatMap((row) =>
+      row.connectionId !== null && row.recordId === null ? [row.hostname] : []
+    )
+  )
   return {
     copy: yield* webRoutes(
       destination,
       "instance.network.routes.write",
       actor.id,
       {
-        holdCertificates: true,
+        holdCertificates: [...new Set(old.flatMap(routeHostnames))].filter(
+          (name) => !unmade.has(name)
+        ),
         id: migration.destination.id,
         kind,
         routes: old.map(({ id: _id, ...route }) => route),

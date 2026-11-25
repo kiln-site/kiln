@@ -25,8 +25,8 @@ type Route = RelayInstanceWebRouteInput & { id: string }
 // The Relays are the only fake: each keeps the routes it is sent, as a real
 // one checks them, giving each an ID of its own.
 const fake = vi.hoisted(() => ({
-  // Whose certificates each Relay isn't to ask for yet.
-  held: new Map<string, boolean>(),
+  // The hostnames each isn't to ask for a certificate of yet.
+  held: new Map<string, ReadonlyArray<string>>(),
   ids: 0,
   // What the next request to each Relay to keep routes fails with.
   refuses: new Map<string, string>(),
@@ -56,7 +56,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       if (refused) throw new Error(refused)
       const { holdCertificates, routes } =
         relayInstanceWebRoutesWriteSchema.parse(payload)
-      fake.held.set(key, holdCertificates ?? false)
+      fake.held.set(key, holdCertificates ?? [])
       fake.routes.set(
         key,
         routes.map((route) => ({
@@ -231,7 +231,10 @@ describeMysql("handing an App's domains to the one it moved to", () => {
         fake.refuses.set(oldRelay, "Connection lost")
         assert.match(String(yield* Effect.flip(handOver)), /Connection lost/u)
         assert.deepEqual(routesOf(oldRelay, oldApp), everyRoute)
-        assert.isTrue(fake.held.get(`${newRelay}/${newApp}`))
+        assert.sameMembers(
+          [...(fake.held.get(`${newRelay}/${newApp}`) ?? [])],
+          ["example.test", "www.example.test"]
+        )
         assert.strictEqual(fake.released.size, 0)
         yield* handOver
         yield* handedOver

@@ -1889,7 +1889,10 @@ export function relayWebRouteInputsSchemaFor(kind: "app" | "instance") {
 // Names that point elsewhere, as ones being moved here: no certificate is
 // asked for until they're released, since Let's Encrypt would check the old
 // place and fail.
-const holdCertificatesSchema = z.boolean().optional()
+const holdCertificatesSchema = z
+  .array(z.string().min(1).max(253))
+  .max(1_000)
+  .optional()
 
 /**
  * An instance's web routes: one request reads them and one saves them, for

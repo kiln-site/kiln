@@ -595,13 +595,19 @@ const copyServed = (
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       until ??= now + Duration.toMillis(SERVE_WITHIN)
-      const served = yield* Effect.result(deploy.served(input))
+      const served = yield* deploy
+        .served(input)
+        .pipe(
+          Effect.timeout(Duration.millis(Math.max(until - now, 1_000))),
+          Effect.result
+        )
+      const waits = (yield* Clock.currentTimeMillis) < until
       if (Result.isSuccess(served)) {
         const { success: state } = served
         if (state === "served" || state === "unknown") return true
-        if (now < until) return false
+        if (waits) return false
         if (state !== "down") return true
-      } else if (now < until) {
+      } else if (waits) {
         return false
       }
       return yield* fail(
