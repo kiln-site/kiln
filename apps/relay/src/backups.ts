@@ -3195,6 +3195,7 @@ function databaseSnapshotSource(
           if (window) await Effect.runPromise(window.begin)
           progress.phase = "dumping"
           await dumpCompressedDatabase(databases, input.target.id, dump, {
+            maxDumpBytes: input.maxBytes,
             progress,
             signal,
           })

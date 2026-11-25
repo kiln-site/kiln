@@ -60,6 +60,8 @@ export async function dumpCompressedDatabase(
   options: {
     /** The most the stored dump may take; unlimited when null or left out. */
     readonly maxBytes?: number | null
+    /** The most the dump itself may be, however it's stored. */
+    readonly maxDumpBytes?: number | null
     readonly progress?: DatabaseBackupProgress
     readonly signal?: AbortSignal
   } = {}
@@ -72,7 +74,7 @@ export async function dumpCompressedDatabase(
   const stderr = collectProcessErrors(child)
   const sourceMeter = byteMeter((bytes) => {
     if (progress) progress.completed = bytes
-  })
+  }, options.maxDumpBytes)
   const storedLimit = byteMeter(undefined, options.maxBytes)
   const writing = pipeline(
     child.stdout,
