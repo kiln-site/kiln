@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start"
 import {
   appIdSchema,
+  databaseIdSchema,
   instanceIdSchema,
   relayIdSchema,
   relayInstanceWebRouteIdSchema,
@@ -107,6 +108,11 @@ const resourceWebHostnamesInputSchema = z.discriminatedUnion("resourceType", [
     relayId: relayIdSchema,
     resourceId: appIdSchema,
     resourceType: z.literal("app"),
+  }),
+  z.object({
+    relayId: relayIdSchema,
+    resourceId: databaseIdSchema,
+    resourceType: z.literal("database"),
   }),
 ])
 
@@ -252,6 +258,11 @@ export interface WebHostnameOverview {
     | {
         id: string
         kind: "app"
+        name: string
+      }
+    | {
+        id: string
+        kind: "database"
         name: string
       }
     | {

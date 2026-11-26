@@ -2768,7 +2768,7 @@ async function requiredRelay(id: string): Promise<PersistedRelay> {
  */
 function recordComment(row: Address): string {
   return kilnRecordComment(
-    `${row.resourceType === "app" ? "app" : "server"} ${row.resourceId}`,
+    `${row.resourceType === "instance" ? "server" : row.resourceType} ${row.resourceId}`,
     recordMarker(row)
   )
 }

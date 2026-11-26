@@ -56,6 +56,12 @@ function permissionFor(
   resource: Pick<WebHostnameResource, "resourceType">,
   change: boolean
 ) {
+  // A database's one name is its public address.
+  if (resource.resourceType === "database") {
+    return change
+      ? ("database.network.public-port.write" as const)
+      : ("database.network.read" as const)
+  }
   if (change) return "instance.network.write" as const
   return resource.resourceType === "app"
     ? ("app.read" as const)
@@ -74,7 +80,9 @@ export function requireResourcePermission(
   return requireRelayPermission({
     ...(resource.resourceType === "app"
       ? { appId: resource.resourceId }
-      : { instanceId: resource.resourceId }),
+      : resource.resourceType === "database"
+        ? { databaseId: resource.resourceId }
+        : { instanceId: resource.resourceId }),
     permission: permissionFor(resource, change),
     relayId: resource.relayId,
     user,
@@ -106,8 +114,13 @@ export async function getResourceWebHostnamesHandler(
     certificates: pendingWebCertificates(data),
     hostnames: rows.map((row) => ({
       canAdopt: adoptable.has(row.id),
-      // Only an app's generated address no route uses.
-      canRelease: canChange && row.generated && !row.routed,
+      // Only an app's generated address no route uses; a database's goes
+      // when it's closed.
+      canRelease:
+        canChange &&
+        row.generated &&
+        !row.routed &&
+        row.resourceType !== "database",
       // Only to someone who can take it over: what's at the name otherwise
       // isn't this page's to show.
       existingRecord: adoptable.has(row.id) ? row.existingRecord : null,
@@ -150,7 +163,10 @@ const checkCertificate = operation<CheckWebCertificateInput>()({
             // The Relay refuses a hostname this resource's routes don't serve.
             owner: {
               id: input.resourceId,
-              kind: input.resourceType === "app" ? "app" : "server",
+              kind:
+                input.resourceType === "instance"
+                  ? "server"
+                  : input.resourceType,
             },
           },
           30_000,
@@ -192,6 +208,12 @@ const releaseHostname = operation<ReleaseWebHostnameInput>()({
   run: ({ context: row }) =>
     promiseEffect(async () => {
       if (!row) return
+      // Closing it removes its gate before its name, which this can't.
+      if (row.resourceType === "database") {
+        throw new Error(
+          `Close the database to the internet to delete ${row.hostname}`
+        )
+      }
       await runAppEffect("webHostnames.release", releaseWebHostnameEffect(row))
       publishWebHostnameChange([row.relayId])
     }),

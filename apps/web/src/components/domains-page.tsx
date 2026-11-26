@@ -265,7 +265,7 @@ export const DomainsPage = React.memo(function DomainsPage({
   )
   const rows = React.useMemo(() => {
     const inScope = (
-      kind: DomainScope["kind"],
+      kind: DomainScope["kind"] | "database",
       resourceId: string,
       relayId: string
     ) =>
@@ -1050,9 +1050,9 @@ function webResourceRef(hostname: WebHostnameOverview) {
     relayId: hostname.relayId,
     resourceId: hostname.resource.id,
     resourceType:
-      hostname.resource.kind === "app"
-        ? ("app" as const)
-        : ("instance" as const),
+      hostname.resource.kind === "server"
+        ? ("instance" as const)
+        : hostname.resource.kind,
   }
 }
 
@@ -1125,8 +1125,8 @@ const HostnameResourceCell = React.memo(function HostnameResourceCell({
     <InstanceCard
       className="min-w-0 flex-1"
       instance={
-        resource.kind === "app"
-          ? { id: resource.id, kind: "app", relayId: hostname.relayId }
+        resource.kind !== "server"
+          ? { id: resource.id, kind: resource.kind, relayId: hostname.relayId }
           : {
               brickId: resource.brickId,
               id: resource.id,
@@ -1148,6 +1148,15 @@ const HostnameResourceCell = React.memo(function HostnameResourceCell({
     <Link
       to="/app/$appId/network"
       params={{ appId: resource.id }}
+      preload="intent"
+      className={className}
+    >
+      {card}
+    </Link>
+  ) : resource.kind === "database" ? (
+    <Link
+      to="/db/$databaseId/network"
+      params={{ databaseId: resource.id }}
       preload="intent"
       className={className}
     >
@@ -1276,6 +1285,10 @@ function deleteDisabledReason(row: DomainRow): string | null {
       ? null
       : "Needs network access to this game server"
   }
+  // A database's name goes when it's closed to the internet, gate first.
+  if (row.hostname.resource.kind === "database") {
+    return "Close the database to the internet to delete it"
+  }
   // A route's record follows the route; deleting it alone would come back.
   if (!row.hostname.generated || row.hostname.routed) {
     return "Remove its web route to delete it"
@@ -1339,6 +1352,15 @@ function ResourceNetworkLink({
       {...props}
       to="/app/$appId/network"
       params={{ appId: resource.id }}
+      preload="intent"
+    >
+      {children}
+    </Link>
+  ) : resource.kind === "database" ? (
+    <Link
+      {...props}
+      to="/db/$databaseId/network"
+      params={{ databaseId: resource.id }}
       preload="intent"
     >
       {children}

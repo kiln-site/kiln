@@ -185,14 +185,8 @@ export async function getDomainSettingsHandler() {
   )
 
   const webHostnames = hostnames.flatMap((row): Array<WebHostnameOverview> => {
-    const isApp = row.resourceType === "app"
-    const readable = isApp
-      ? access.app(row.relayId, row.resourceId, false)
-      : access.instance(row.relayId, row.resourceId, false)
-    if (!readable) return []
-    const canManage = isApp
-      ? access.app(row.relayId, row.resourceId, true)
-      : access.instance(row.relayId, row.resourceId, true)
+    if (!access.hostname(row, false)) return []
+    const canManage = access.hostname(row, true)
     return [
       {
         // The listed connections are the person's to manage.
@@ -423,7 +417,7 @@ function resourceDirectory(
     relayName: (relayId: string) => relayNames.get(relayId) ?? "Unknown Relay",
     server,
     webResource(
-      resourceType: "app" | "instance",
+      resourceType: "app" | "database" | "instance",
       relayId: string,
       resourceId: string
     ): WebHostnameOverview["resource"] {
@@ -433,6 +427,14 @@ function resourceDirectory(
           id: resourceId,
           kind: "app",
           name: app?.name ?? resourceId,
+        }
+      }
+      // A public database's name, from the instance directory.
+      if (resourceType === "database") {
+        return {
+          id: resourceId,
+          kind: "database",
+          name: server(relayId, resourceId)?.name ?? resourceId,
         }
       }
       const record = server(relayId, resourceId)
@@ -719,11 +721,7 @@ async function resyncDomainsFor(user: AuthenticatedUser) {
   )
   const { serverFailures: failures, ...hostnames } = await runAppEffect(
     "domains.resync",
-    resyncAddressesEffect(instances, (row) =>
-      row.resourceType === "app"
-        ? access.app(row.relayId, row.resourceId, true)
-        : access.instance(row.relayId, row.resourceId, true)
-    )
+    resyncAddressesEffect(instances, (row) => access.hostname(row, true))
   )
   // Ones still waiting on work, as deletes left by a removed Relay, are
   // retried now rather than after their wait.

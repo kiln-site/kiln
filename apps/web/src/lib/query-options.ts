@@ -189,7 +189,7 @@ export const queryKeys = {
   domains: {
     hostnames: (
       relayId: string,
-      resourceType: "app" | "instance",
+      resourceType: "app" | "database" | "instance",
       resourceId: string
     ) => ["domains", "hostnames", relayId, resourceType, resourceId] as const,
     instance: (relayId: string, instanceId: string) =>
@@ -1424,7 +1424,7 @@ export function hearthEdgeQueryOptions() {
  */
 export function resourceWebHostnamesQueryOptions(
   relayId: string,
-  resourceType: "app" | "instance",
+  resourceType: "app" | "database" | "instance",
   resourceId: string
 ) {
   return queryOptions({
@@ -1434,7 +1434,9 @@ export function resourceWebHostnamesQueryOptions(
         data:
           resourceType === "app"
             ? { relayId, resourceId, resourceType }
-            : { relayId, resourceId, resourceType },
+            : resourceType === "database"
+              ? { relayId, resourceId, resourceType }
+              : { relayId, resourceId, resourceType },
       }),
     retry: false,
     staleTime: 10_000,

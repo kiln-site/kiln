@@ -9,7 +9,7 @@ import { databaseTable } from "@/lib/database-config"
 export interface HostnameOwner {
   readonly relayId: string
   readonly resourceId: string
-  readonly resourceType: "app" | "instance"
+  readonly resourceType: "app" | "database" | "instance"
 }
 
 interface ClaimRow extends RowDataPacket {

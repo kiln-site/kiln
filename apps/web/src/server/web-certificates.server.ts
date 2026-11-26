@@ -6,14 +6,15 @@ import type { WebHostnameCertificate } from "@/server/domains"
 interface CertificateOwner {
   readonly relayId: string
   readonly resourceId: string
-  readonly resourceType: "app" | "instance"
+  readonly resourceType: "app" | "database" | "instance"
 }
 
 /** A resource's hostnames still waiting on a certificate, from its Relay's snapshot. */
 export function pendingWebCertificates(
   owner: CertificateOwner
 ): Array<WebHostnameCertificate & { hostname: string }> {
-  const kind = owner.resourceType === "app" ? "app" : "server"
+  const kind =
+    owner.resourceType === "instance" ? "server" : owner.resourceType
   return (
     relayConnectionSnapshot(owner.relayId)?.relay?.certificates ?? []
   ).flatMap((pending) =>
