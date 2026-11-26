@@ -542,14 +542,22 @@ export async function redeemInvitedAccount(input: {
   return { email: result.email }
 }
 
+// A locking read, so it sees a credential another transaction committed
+// after this one's snapshot was taken, rather than setting up the account
+// twice.
 function hasCredentials(transaction: DatabaseTransaction, userId: string) {
-  return transaction
-    .queryRows<RowDataPacket>(
-      `SELECT id FROM ${databaseTable("account")} WHERE userId = ?
-       UNION ALL SELECT id FROM ${databaseTable("passkey")} WHERE userId = ? LIMIT 1`,
-      [userId, userId]
-    )
-    .pipe(Effect.map((rows) => rows.length > 0))
+  return Effect.all([
+    transaction.queryRows<RowDataPacket>(
+      `SELECT id FROM ${databaseTable("account")} WHERE userId = ? LIMIT 1 LOCK IN SHARE MODE`,
+      [userId]
+    ),
+    transaction.queryRows<RowDataPacket>(
+      `SELECT id FROM ${databaseTable("passkey")} WHERE userId = ? LIMIT 1 LOCK IN SHARE MODE`,
+      [userId]
+    ),
+  ]).pipe(
+    Effect.map(([accounts, passkeys]) => accounts.length + passkeys.length > 0)
+  )
 }
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex")

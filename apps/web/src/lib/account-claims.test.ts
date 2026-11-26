@@ -1,7 +1,7 @@
 import { expect, layer } from "@effect/vitest"
 import { createHash } from "node:crypto"
 
-import { Effect } from "effect"
+import { Effect, Exit } from "effect"
 import { afterEach, beforeEach, vi } from "vite-plus/test"
 
 import {
@@ -275,6 +275,27 @@ describeMysql("setting up an invited account from its invitation", () => {
         )
 
         expect(yield* passwords).toEqual([])
+      })
+    )
+
+    it.effect("sets up the account once when two requests race", () =>
+      Effect.gen(function* () {
+        yield* seedInvitation()
+        const emailed = {
+          id: invitationId,
+          key: invitationLinkKey(invitationId, "email"),
+        }
+
+        const outcomes = yield* Effect.all(
+          [
+            Effect.exit(redeemInvitation(emailed)),
+            Effect.exit(redeemInvitation({ token: invitationToken })),
+          ],
+          { concurrency: "unbounded" }
+        )
+
+        expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1)
+        expect(yield* passwords).toEqual(["hashed-password"])
       })
     )
 

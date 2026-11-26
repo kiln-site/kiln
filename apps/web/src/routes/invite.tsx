@@ -52,12 +52,15 @@ export const Route = createFileRoute("/invite")({
         const preview = search.key
           ? await recoverPromise(
               () =>
-                context.queryClient.ensureQueryData(
-                  invitationPreviewQueryOptions({
+                context.queryClient.fetchQuery({
+                  ...invitationPreviewQueryOptions({
                     id: search.id!,
                     key: search.key!,
-                  })
-                ),
+                  }),
+                  // Whether the account is set up yet decides between
+                  // setup and sign-in, so never decide from the cache.
+                  staleTime: 0,
+                }),
               () => null
             )
           : null
@@ -108,9 +111,10 @@ export const Route = createFileRoute("/invite")({
     }
     const preview = await recoverPromise(
       () =>
-        context.queryClient.ensureQueryData(
-          invitationPreviewQueryOptions({ token })
-        ),
+        context.queryClient.fetchQuery({
+          ...invitationPreviewQueryOptions({ token }),
+          staleTime: 0,
+        }),
       () => null
     )
     // A new person sets up their account right here.
@@ -137,7 +141,10 @@ export const Route = createFileRoute("/invite")({
       { name: "referrer", content: "no-referrer" },
     ],
   }),
-  headers: () => ({ "Cache-Control": "no-store" }),
+  headers: () => ({
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  }),
   component: InviteRoute,
 })
 

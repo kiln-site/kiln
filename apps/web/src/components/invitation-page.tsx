@@ -123,10 +123,11 @@ export function InvitationPage({
             }),
           catch: (cause) => cause,
         })
-        const signedIn = yield* Effect.promise(() =>
+        // The account exists now, so any trouble signing in goes to sign-in.
+        const signedIn = yield* Effect.tryPromise(() =>
           authClient.signIn.email({ email, password })
-        )
-        if (signedIn.error) {
+        ).pipe(Effect.catch(() => Effect.succeed(null)))
+        if (!signedIn || signedIn.error) {
           window.location.assign(
             `/?email=${encodeURIComponent(email)}&redirect=${encodeURIComponent(invitePath)}`
           )
@@ -211,7 +212,7 @@ export function InvitationPage({
                   : preview.accessType === "relay_creator"
                     ? "You’ve been invited to create and manage your own Relays, including Relay updates. Hearth updates stay restricted."
                     : `You’ve been invited as ${preview.role ?? "a user"}${
-                        preview.instanceId
+                        preview.instanceId || preview.databaseId
                           ? " on one managed instance."
                           : " across this Relay."
                       }`}
@@ -232,9 +233,11 @@ export function InvitationPage({
                 {platformInvitation
                   ? invitationLabel
                   : `${
-                      preview.instanceId
-                        ? `Instance · ${preview.instanceId}`
-                        : "Entire Relay"
+                      preview.databaseId
+                        ? `Database · ${preview.databaseId}`
+                        : preview.instanceId
+                          ? `Instance · ${preview.instanceId}`
+                          : "Entire Relay"
                     } · ${invitationLabel}`}
               </span>
             </div>

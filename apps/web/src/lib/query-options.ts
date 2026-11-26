@@ -789,7 +789,9 @@ export function activityQueryOptions(from?: string, to?: string) {
 export function invitationPreviewQueryOptions(reference: InvitationReference) {
   return queryOptions({
     queryKey: queryKeys.access.invitation(
-      "token" in reference ? reference.token : reference.id
+      "token" in reference
+        ? reference.token
+        : `${reference.id}:${reference.key}`
     ),
     queryFn: () => getInvitationPreview({ data: reference }),
     staleTime: 30_000,

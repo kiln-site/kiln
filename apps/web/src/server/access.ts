@@ -463,7 +463,9 @@ export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
     }
   })
 
-export const getInvitationPreview = createServerFn({ method: "GET" })
+// POST, so the token or key that sets up the invited account stays out of
+// request URLs and caches.
+export const getInvitationPreview = createServerFn({ method: "POST" })
   .validator(
     z
       .object({
@@ -477,6 +479,8 @@ export const getInvitationPreview = createServerFn({ method: "GET" })
       )
   )
   .handler(async ({ data }) => {
+    const { setResponseHeader } = await import("@tanstack/react-start/server")
+    setResponseHeader("Cache-Control", "no-store")
     const invitation = await readInvitation(data.token, data.id)
     if (!invitation || !isInvitationPending(invitation)) return null
     // A token or a link key proves the link came from the invitation's
