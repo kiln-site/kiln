@@ -16,6 +16,7 @@ import {
   type DatabaseMemberCandidate,
 } from "@/components/database/database-network"
 import {
+  databaseAddress,
   databaseRelayAvailable,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
@@ -44,7 +45,7 @@ export function DatabaseNetworkPage() {
           </p>
           <CopyMetaRow
             label="Internal address"
-            value={`${database.hostname}:${database.internalPort}`}
+            value={databaseAddress(database.hostname, database)}
           />
         </InfoCard>
 
