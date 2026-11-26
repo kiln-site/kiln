@@ -1,12 +1,15 @@
 // The migration server functions in ./resource-migrations authenticate the
 // caller and hand the signed-in user to these handlers.
 import type { ResourceLimits } from "@workspace/contracts"
+import type { RowDataPacket } from "mysql2/promise"
 import type { z } from "zod"
 
+import { listResourceAddressesEffect } from "@/effect/addresses"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { databaseTable } from "@/lib/database-config"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import {
   activeRelay,
@@ -15,6 +18,7 @@ import {
 } from "@/lib/relay-registry"
 import type {
   MigratedKindName,
+  resourceMigrationServingInputSchema,
   resourceReferenceSchema,
   startResourceMigrationInputSchema,
 } from "@/lib/resource-migration-input"
@@ -48,6 +52,10 @@ import {
   startResourceMigrationEffect,
 } from "@/lib/resource-migrations.server"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
+import {
+  relayWebServing,
+  type RelayWebServing,
+} from "@/server/relay-web-serving.server"
 import {
   relayTransferProblemsEffect,
   type RelayTransferProblem,
@@ -107,6 +115,10 @@ export interface ResourceMigrationPreview extends MigrationHandOverCounts {
     readonly resource: MigrationSourceRoom
     readonly source: MigrationRelayRoom
   } | null
+  /** Its hostnames whose DNS Kiln doesn't keep. */
+  readonly manualDns: ReadonlyArray<string>
+  /** The schedules that name it, which go on naming the old one. */
+  readonly schedules: ReadonlyArray<string>
   /** What to know before each way of copying it. */
   readonly warnings: MigrationWarnings
   readonly source: {
@@ -198,12 +210,19 @@ export async function previewResourceMigrationHandler(
       authorization.allows("instance.power.start"),
     stop: authorization.allows("instance.power.stop"),
   }
-  const counts = await kind.handOverCounts(relay, data.id, user, {
-    backups: authorization.allows("backup.read"),
-    network: allowed.network,
-  })
+  const reference = { id: data.id, kind: kind.kind, relayId: relay.id }
+  const [counts, manualDns, schedules] = await Promise.all([
+    kind.handOverCounts(relay, data.id, user, {
+      backups: authorization.allows("backup.read"),
+      network: allowed.network,
+    }),
+    allowed.network ? manualHostnames(reference) : [],
+    authorization.allows("schedule.read") ? schedulesNaming(reference) : [],
+  ])
   return {
     ...counts,
+    manualDns,
+    schedules,
     allowed,
     destinations: destinations.filter((item) => item !== null),
     kind: kind.kind,
@@ -364,6 +383,73 @@ export async function startResourceMigrationHandler(
     })
   )
   return { id }
+}
+
+/** Whether domains moved with it to a Relay would work there. */
+export async function resourceMigrationServingHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof resourceMigrationServingInputSchema>
+): Promise<RelayWebServing> {
+  const { kind, relay } = await authorizeSource(user, data)
+  const destination = await activeRelay(data.destinationRelayId)
+  const there = await resolveScopeAuthorization({
+    scope: {
+      relayId: destination.id,
+      resourceId: destination.id,
+      resourceType: "relay",
+    },
+    user,
+  })
+  for (const permission of await destinationPermissions(kind, {
+    id: data.id,
+    relayId: relay.id,
+  })) {
+    there.require(permission)
+  }
+  return relayWebServing(destination, relay)
+}
+
+// Its hostnames whose DNS someone keeps themselves, or that Cloudflare had
+// before Kiln: each is theirs to point at the new Relay.
+async function manualHostnames(reference: {
+  readonly id: string
+  readonly kind: MigratedKindName
+  readonly relayId: string
+}): Promise<Array<string>> {
+  if (reference.kind !== "app" && reference.kind !== "instance") return []
+  const rows = await runAppEffect(
+    "resourceMigrations.preview.addresses",
+    listResourceAddressesEffect({
+      relayId: reference.relayId,
+      resourceId: reference.id,
+      resourceType: reference.kind,
+    })
+  )
+  return rows
+    .filter((row) => row.connectionId === null || row.status === "external")
+    .map((row) => row.hostname)
+}
+
+async function schedulesNaming(reference: {
+  readonly id: string
+  readonly kind: MigratedKindName
+  readonly relayId: string
+}): Promise<Array<string>> {
+  const { databasePool } = await import("@/lib/database")
+  const [rows] = await databasePool.query<
+    Array<RowDataPacket & { name: string }>
+  >(
+    `SELECT DISTINCT schedule.name
+       FROM ${databaseTable("schedule_target")} target
+       JOIN ${databaseTable("schedule")} schedule
+         ON schedule.id = target.schedule_id
+      WHERE target.relay_id = ? AND target.target_kind = ?
+        AND target.target_id = ? AND schedule.deleted_at IS NULL
+      ORDER BY schedule.name
+      LIMIT 20`,
+    [reference.relayId, reference.kind, reference.id]
+  )
+  return rows.map((row) => row.name)
 }
 
 export function listResourceMigrationsHandler(user: AuthenticatedUser) {

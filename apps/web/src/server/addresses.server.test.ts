@@ -5,6 +5,7 @@ import { afterAll, afterEach, vi } from "vite-plus/test"
 
 import { setPrimaryAddressEffect } from "@/effect/primary-addresses"
 import { keepTunnelNamesOfEffect } from "@/effect/tunnel-names"
+import { retryAddressesNowEffect } from "@/effect/addresses"
 import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
 import type { WebHostnameResource } from "@/effect/addresses"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -79,8 +80,14 @@ const relays = vi.hoisted(() => {
   const state = {
     connected: new Set<string>(),
     instances: {} as Record<string, Array<unknown>>,
+    // Whether none answers what its proxy is.
+    away: false,
+    // Whether none can be told of a name.
+    deaf: false,
     // The names each was told point at it now.
     released: new Set<string>(),
+    // Relays with no web proxy, which serve no websites.
+    withoutProxy: new Set<string>(),
     snapshot: (relayId: string) => ({
       instances: state.instances[relayId] ?? [],
       node: {
@@ -110,10 +117,30 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ) => {
     if (operation === "relay.snapshot") return relays.snapshot(relay.id)
     if (operation === "relay.certificates.release") {
+      if (relays.deaf) throw new Error("The Relay is away")
       for (const hostname of payload.hostnames ?? []) {
         relays.released.add(`${relay.id}/${hostname}`)
       }
       return {}
+    }
+    if (operation === "relay.proxy.read") {
+      if (relays.away) throw new Error("The Relay is away")
+      const mode = relays.withoutProxy.has(relay.id) ? "hearth" : "traefik"
+      return {
+        diagnostics: {
+          browserOrigin: "https://relay.test",
+          containerRunning: mode === "traefik",
+          mode,
+          ports: [80, 443].map((port) => ({
+            available: true,
+            owner: null,
+            port,
+          })),
+          publicReachability: "unknown",
+          status: mode === "traefik" ? "ready" : "hearth",
+          warnings: [],
+        },
+      }
     }
     if (operation === "instance.network.routes.write") {
       return {
@@ -290,6 +317,10 @@ const seed = Effect.gen(function* () {
   yield* resetDatabase
   relays.instances = {}
   relays.connected.clear()
+  relays.away = false
+  relays.deaf = false
+  relays.released.clear()
+  relays.withoutProxy.clear()
   yield* insertRelay(relayOne)
   yield* insertRelay(relayTwo)
   yield* insertRows("domain_integration", {
@@ -854,6 +885,82 @@ describeMysql("a game server's names when it or its Relay goes", () => {
           // Nothing is left with the old one.
           assert.isNull(yield* addressOf(relayOne, serverId))
           assert.deepEqual(yield* routeStatuses(server), {})
+        })
+    )
+
+    // Visitors sent to a Relay that can't serve them find nothing.
+    it.effect(
+      "keeps a moved name where it is until its new Relay can serve websites",
+      () =>
+        Effect.gen(function* () {
+          const cloudflare = yield* served
+          relays.withoutProxy.add(relayTwo)
+          const moved = gameServer(movedServerId, {
+            connectAddress: "203.0.113.20:25566",
+            publicHost: "203.0.113.20",
+            publicPort: 25_566,
+          })
+          yield* runs(relayTwo, moved)
+          const taking = {
+            relayId: relayTwo,
+            resourceId: movedServerId,
+            resourceType: "instance",
+          } as const
+          const mapRecord = () =>
+            cloudflare.records().find((record) => record.includes("map."))
+          yield* Effect.promise(() =>
+            runAppEffect(
+              "webHostnames.move",
+              moveResourceWebHostnamesEffect(server, taking)
+            )
+          )
+
+          // The copy's name, its record still where the old one serves it.
+          assert.strictEqual(
+            mapRecord(),
+            `CNAME map.kiln.test ${webHost(relayOne)}`
+          )
+          assert.match(
+            (yield* routeStatuses(taking))["map.kiln.test"] ?? "",
+            /^error: Still points at .*no web proxy/u
+          )
+
+          // Away, it isn't known to serve them either.
+          relays.withoutProxy.clear()
+          relays.away = true
+          yield* dnsWorkerPass
+          assert.strictEqual(
+            mapRecord(),
+            `CNAME map.kiln.test ${webHost(relayOne)}`
+          )
+          assert.strictEqual(relays.released.size, 0)
+
+          // Pointed there, but not yet told to ask Let's Encrypt.
+          relays.away = false
+          relays.deaf = true
+          yield* retryAddressesNowEffect()
+          yield* dnsWorkerPass
+          assert.strictEqual(
+            mapRecord(),
+            `CNAME map.kiln.test ${webHost(relayTwo)}`
+          )
+          assert.match(
+            (yield* routeStatuses(taking))["map.kiln.test"] ?? "",
+            /^error: .*couldn't be told/u
+          )
+
+          relays.deaf = false
+          yield* retryAddressesNowEffect()
+          yield* dnsWorkerPass
+          assert.strictEqual(
+            mapRecord(),
+            `CNAME map.kiln.test ${webHost(relayTwo)}`
+          )
+          assert.deepEqual(yield* routeStatuses(taking), {
+            "map.kiln.test": "active",
+          })
+          // Let's Encrypt is asked only now that it points there.
+          assert.deepEqual([...relays.released], [`${relayTwo}/map.kiln.test`])
         })
     )
 

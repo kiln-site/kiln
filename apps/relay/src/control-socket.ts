@@ -1775,6 +1775,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.terminal"
     case "relay.host.read":
     case "relay.proxy.read":
+    case "relay.web.reach":
     case "relay.security.targets":
     case "relay.security.inventory":
       return "relay.read"

@@ -7,15 +7,18 @@ import {
   type ResourceLimits,
 } from "@workspace/contracts"
 import {
+  Archive,
   ArrowRight,
   ArrowRightLeft,
-  Check,
   ChevronsUpDown,
   Copy,
+  Globe2,
+  HardDrive,
+  History,
   Info,
   LoaderCircle,
-  Minus,
   TriangleAlert,
+  Users,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -35,6 +38,7 @@ import {
   DrawerPopoverContent,
   DrawerPopoverTrigger,
 } from "@/components/drawer-popover"
+import { SubjectIcon } from "@/components/icon-image"
 import { InstanceCard } from "@/components/instance-card"
 import {
   AppKindIcon,
@@ -60,8 +64,11 @@ import {
 } from "@/lib/resource-migration-room"
 import {
   resourceMigrationPreviewQueryOptions,
+  resourceMigrationServingQueryOptions,
   resourceMigrationsQueryOptions,
 } from "@/lib/resource-migration-queries"
+import type { MigrationNote } from "@/lib/resource-migration-kinds/kind.server"
+import type { RelayWebServing } from "@/server/relay-web-serving.server"
 import type {
   ResourceMigrationDestination,
   ResourceMigrationPreview,
@@ -89,8 +96,19 @@ const liveRisk: Record<MigratedKindName, string> = {
   volume: "What's written while it's copied can be missed.",
 }
 
-const undeployedWarning =
-  "The copy isn't deployed: deploy it once you've checked its settings. Domains that move with it don't answer until then."
+const undeployedNote: MigrationNote = {
+  text: "The copy isn't deployed: deploy it once you've checked its settings. Domains that move with it don't answer until then.",
+  warns: true,
+}
+
+// They name the old one, which stays where it is, stopped.
+const schedulesNote = (schedules: ReadonlyArray<string>): MigrationNote => ({
+  text:
+    schedules.length === 1
+      ? `The schedule “${schedules[0]}” still runs on the old one. Point it at the copy.`
+      : `${schedules.length} schedules still run on the old one: ${schedules.join(", ")}. Point them at the copy.`,
+  warns: true,
+})
 
 // "a game server", "an App".
 function aNoun(noun: string) {
@@ -112,10 +130,11 @@ const GIBIBYTE = 1024 ** 3
  * the copy carries on in the background with a progress toast.
  *
  * It is one dialog for every kind. The resource and its Relay sit beside
- * the copy and where it goes, then the copy's limits and a few choices,
- * each shown only for a kind that has it. Explanations live in tooltips and
- * the metadata checklist; what's wrong takes one line, and what to know
- * first sits above the buttons.
+ * the copy and where it goes, with what that Relay can't do under it; then
+ * the copy's limits, what comes along, each with its own switch and each
+ * domain with what becomes of it, and a few choices, each shown only for a
+ * kind that has it. What's wrong takes one line, and what to know first sits
+ * above the buttons, only what bites standing out.
  */
 export function ResourceMigrationDialog({
   initialMode,
@@ -282,23 +301,33 @@ function MigrationForm({
         ? preview.backups.here
         : preview.backups.anywhere
       : 0
-  const metadata = metadataItems({
-    linkableBackups,
-    moving,
-    preview,
-    relay: selected,
-  })
-  // Everything besides its data and settings comes along, or none of it.
-  const [copyMetadata, setCopyMetadata] = React.useState(true)
-  const copies = (key: MetadataKey) =>
-    copyMetadata && metadata.find((item) => item.key === key)?.reason === null
+  const carried = carriedItems({ linkableBackups, moving, preview })
+  // Everything that can come along does, unless it's turned off.
+  const [left, setLeft] = React.useState<ReadonlySet<CarriedKey>>(new Set())
+  const takes = (key: CarriedKey) =>
+    !left.has(key) && carried.find((item) => item.key === key)?.reason === null
+  const toggle = React.useCallback((key: CarriedKey, taken: boolean) => {
+    setLeft((current) => {
+      const next = new Set(current)
+      if (taken) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   // Not the same as having none: a move now would leave its domains behind.
   const routesUnread =
     moving &&
-    copyMetadata &&
+    !left.has("domains") &&
     offers.handOvers.includes("routes") &&
     preview.webRoutes === null
+  const takesDomains = moving && takes("domains")
+  // Whether they'd work there takes reaching it from outside, so it's asked
+  // of the Relay chosen, and nothing waits for it.
+  const serving = useQuery({
+    ...resourceMigrationServingQueryOptions(resource, selected?.id ?? ""),
+    enabled: takesDomains && selected !== undefined && webNames(preview) > 0,
+  })
 
   const [stopSource, setStopSource] = React.useState(
     preview.source.running && preview.allowed.power
@@ -308,10 +337,13 @@ function MigrationForm({
   // runs. One that isn't running isn't deployed.
   const offersDeploy = moving && offers.deploy
   const [deployCopy, setDeployCopy] = React.useState(preview.source.deploys)
-  const warnings =
-    offersDeploy && !deployCopy
-      ? [undeployedWarning, ...preview.warnings[mode]]
-      : preview.warnings[mode]
+  const notes: ReadonlyArray<MigrationNote> = [
+    ...(offersDeploy && !deployCopy ? [undeployedNote] : []),
+    ...(moving && preview.schedules.length > 0
+      ? [schedulesNote(preview.schedules)]
+      : []),
+    ...preview.warnings[mode],
+  ]
 
   const start = useMutation({
     mutationFn: () => {
@@ -326,14 +358,14 @@ function MigrationForm({
           name: effectiveName.trim(),
           options: {
             backup: null,
-            copyAccess: copies("access"),
+            copyAccess: takes("access"),
             deleteSource: null,
             deployCopy: offersDeploy && deployCopy,
-            keepActivity: copies("activity"),
+            keepActivity: takes("activity"),
             limits: limitsChanged ? limits : null,
-            linkBackups: copies("backups"),
-            moveDomain: copies("domains"),
-            moveWebRoutes: copies("routes"),
+            linkBackups: takes("backups"),
+            moveDomain: takesDomains && gameNames(preview).length > 0,
+            moveWebRoutes: takesDomains && webNames(preview) > 0,
             stopSource: moving || stopSource,
           },
           relayId: resource.relayId,
@@ -441,7 +473,7 @@ function MigrationForm({
         if (!blocked) start.mutate()
       }}
     >
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-flow-col sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:grid-rows-[auto_auto]">
         <CardBox>
           <ResourceCard
             meta={
@@ -452,13 +484,21 @@ function MigrationForm({
             resource={resource}
           />
         </CardBox>
+        <CardBox>
+          <RelayCard
+            arch={preview.source.nodeArch}
+            freeBytes={preview.room ? freeBytes(preview.room.source) : null}
+            id={preview.source.relayId}
+            name={preview.source.relayName}
+          />
+        </CardBox>
         {/* A duplicate shows a copy above the arrow, which stays put. */}
         <span
           aria-hidden="true"
-          className="relative hidden self-center text-muted-foreground sm:row-span-2 sm:block"
+          className="relative place-self-center text-muted-foreground max-sm:rotate-90 sm:row-span-2"
         >
           {moving ? null : (
-            <Copy className="absolute bottom-full left-1/2 mb-1.5 size-3.5 -translate-x-1/2 text-primary-ink" />
+            <Copy className="absolute bottom-full left-1/2 mb-1.5 size-3.5 -translate-x-1/2 text-primary-ink max-sm:hidden" />
           )}
           <ArrowRight className="size-4" />
         </span>
@@ -476,14 +516,6 @@ function MigrationForm({
             onChange={(event) => setName(event.currentTarget.value)}
           />
         </CardBox>
-        <CardBox>
-          <RelayCard
-            arch={preview.source.nodeArch}
-            freeBytes={preview.room ? freeBytes(preview.room.source) : null}
-            id={preview.source.relayId}
-            name={preview.source.relayName}
-          />
-        </CardBox>
         <RelayPicker
           destinations={destinations}
           disabled={pending || destinations.length === 0}
@@ -491,6 +523,13 @@ function MigrationForm({
           selected={selected}
           onSelect={setRelayId}
         />
+        {takesDomains && selected && webNames(preview) > 0 ? (
+          <RelayNotice
+            checking={serving.isFetching && !serving.data}
+            relayName={selected.name}
+            serving={serving.data}
+          />
+        ) : null}
       </div>
 
       {offers.limits ? (
@@ -523,18 +562,28 @@ function MigrationForm({
         </section>
       ) : null}
 
-      {metadata.length > 0 || offers.power ? (
+      <CarriedList
+        domains={
+          takesDomains
+            ? domainFates({
+                deploys: offersDeploy && deployCopy,
+                preview,
+                relayName: selected?.name ?? "the new Relay",
+                serving: serving.data,
+              })
+            : []
+        }
+        items={carried}
+        left={left}
+        moving={moving}
+        pending={pending}
+        usedBytes={usedBytes}
+        onToggle={toggle}
+      />
+
+      {offers.power ? (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-x-8 gap-y-2 sm:grid-cols-2">
-          {metadata.length > 0 ? (
-            <SwitchRow
-              checked={copyMetadata}
-              disabled={pending}
-              label="Copy metadata"
-              info={<MetadataCard items={metadata} />}
-              onCheckedChange={setCopyMetadata}
-            />
-          ) : null}
-          {!offers.power ? null : offers.copiedRunning ? (
+          {offers.copiedRunning ? (
             // It has to run to be copied, so it's never stopped first.
             <SwitchRow
               checked={moving}
@@ -583,7 +632,7 @@ function MigrationForm({
         </div>
       ) : null}
 
-      <MigrationWarnings warnings={warnings} />
+      <MigrationNotes notes={notes} />
 
       <DialogFooter className="items-center">
         <div className="min-w-0 sm:mr-auto">
@@ -807,23 +856,90 @@ function freeBytes(room: {
   return Math.min(room.rootsFreeBytes, room.transferFreeBytes)
 }
 
-// One line, kept whether or not it has anything to say.
-// What to know before copying this one this way: kept apart from what's
-// wrong, which blocks it, and never more than its kind has to say.
-function MigrationWarnings({ warnings }: { warnings: ReadonlyArray<string> }) {
-  if (warnings.length === 0) return null
+// What to know before copying this one this way, kept apart from what's wrong,
+// which blocks it. What bites stands out from what's only worth knowing.
+function MigrationNotes({ notes }: { notes: ReadonlyArray<MigrationNote> }) {
+  const warnings = notes.filter((note) => typeof note !== "string")
+  const asides = notes.filter((note) => typeof note === "string")
+  if (notes.length === 0) return null
   return (
-    <ul className="type-meta grid gap-1.5 border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-amber-200 light:text-amber-900">
-      {warnings.map((warning) => (
-        <li className="flex items-start gap-2" key={warning}>
-          <TriangleAlert
-            aria-hidden="true"
-            className="mt-[0.15em] size-3.5 shrink-0"
-          />
-          <span>{warning}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="grid gap-2">
+      {warnings.length > 0 ? (
+        <ul className="type-meta grid gap-1.5 border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-amber-200 light:text-amber-900">
+          {warnings.map((note) => (
+            <li className="flex items-start gap-2" key={note.text}>
+              <TriangleAlert
+                aria-hidden="true"
+                className="mt-[0.15em] size-3.5 shrink-0"
+              />
+              <span>{note.text}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {asides.length > 0 ? (
+        <ul className="type-meta grid gap-1 px-0.5 text-muted-foreground">
+          {asides.map((note) => (
+            <li className="flex items-start gap-2" key={note}>
+              <Info
+                aria-hidden="true"
+                className="mt-[0.15em] size-3.5 shrink-0"
+              />
+              <span>{note}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
+// Under the Relay chosen: what becomes of domains there, when not simply
+// that they work. Its line stays while it's checked, so nothing moves.
+function RelayNotice({
+  checking,
+  relayName,
+  serving,
+}: {
+  checking: boolean
+  relayName: string
+  serving: RelayWebServing | undefined
+}) {
+  const bad = serving?.state === "cant" || serving?.state === "unreachable"
+  const text = checking
+    ? `Checking whether ${relayName} can serve its domains…`
+    : serving?.state === "serves"
+      ? `${relayName} answers at ${serving.host}`
+      : serving?.state === "cant"
+        ? `${serving.reason}. Its domains are set up there, and their DNS stays where it is until it can.`
+        : serving?.state === "unreachable"
+          ? `${serving.reason}. Its domains won't work there until something does.`
+          : serving?.reason
+            ? `${serving.reason}.`
+            : null
+  return (
+    <p
+      aria-live="polite"
+      className={cn(
+        "type-meta flex min-h-[1lh] items-start gap-2 sm:col-span-3 sm:col-start-1 sm:row-start-3",
+        bad ? "text-amber-300 light:text-amber-800" : "text-muted-foreground"
+      )}
+    >
+      {checking ? (
+        <LoaderCircle
+          aria-hidden="true"
+          className="mt-[0.15em] size-3.5 shrink-0 animate-spin"
+        />
+      ) : bad ? (
+        <TriangleAlert
+          aria-hidden="true"
+          className="mt-[0.15em] size-3.5 shrink-0"
+        />
+      ) : text ? (
+        <Globe2 aria-hidden="true" className="mt-[0.15em] size-3.5 shrink-0" />
+      ) : null}
+      <span>{text}</span>
+    </p>
   )
 }
 
@@ -885,7 +1001,12 @@ function ResourceIcon({ resource }: { resource: MigratedResource }) {
     case "database":
       return <DatabaseKindIcon className="size-4" />
     case "app":
-      return <AppKindIcon className="size-4" />
+      return (
+        <SubjectIcon
+          fallback={<AppKindIcon className="size-4" />}
+          subject={{ id: resource.id, kind: "app", relayId: resource.relayId }}
+        />
+      )
     case "volume":
       return <VolumeKindIcon className="size-4" />
   }
@@ -970,122 +1091,279 @@ function limitFix(
     : undefined
 }
 
-type MetadataKey = "access" | "activity" | "backups" | "domains" | "routes"
+type CarriedKey = "access" | "activity" | "backups" | "domains"
 
-type MetadataItem = {
+type CarriedItem = {
   detail: string
-  key: MetadataKey
+  icon: React.ReactNode
+  key: CarriedKey
   label: string
   /** Why it can't come along; null when it can. */
   reason: string | null
 }
 
-// What a copy can take besides its data and settings, of what its kind has
-// at all, and why not when it can't.
-function metadataItems({
+/** A domain, and what becomes of it. */
+type DomainFate = { name: string; text: string; warns: boolean }
+
+// A game server's join addresses, which Kiln moves only where it keeps DNS.
+const gameNames = (preview: ResourceMigrationPreview) =>
+  preview.domains.managed ? preview.domains.names : []
+
+const webNames = (preview: ResourceMigrationPreview) =>
+  preview.webRoutes?.length ?? 0
+
+// What a copy can take besides its data and settings, of what this one has,
+// and why not when it can't. What it has none of isn't listed.
+function carriedItems({
   linkableBackups,
   moving,
   preview,
-  relay,
 }: {
   linkableBackups: number
   moving: boolean
   preview: ResourceMigrationPreview
-  relay: ResourceMigrationDestination | undefined
-}): ReadonlyArray<MetadataItem> {
-  const { access, allowed, backups, domains, offers, webRoutes } = preview
-  const items: ReadonlyArray<MetadataItem> = [
-    {
+}): ReadonlyArray<CarriedItem> {
+  const { access, allowed, backups, offers } = preview
+  const names = gameNames(preview).length + webNames(preview)
+  const items: Array<CarriedItem> = []
+  if (
+    moving &&
+    (offers.handOvers.includes("routes") ||
+      offers.handOvers.includes("domains")) &&
+    (names > 0 || preview.webRoutes === null)
+  ) {
+    items.push({
+      detail: names === 1 ? "1 domain" : `${names} domains`,
+      icon: <Globe2 />,
+      key: "domains",
+      label: "Domains",
+      reason:
+        preview.webRoutes === null
+          ? "They couldn't be read"
+          : !allowed.network
+            ? "Needs permission to change its network"
+            : null,
+    })
+  }
+  if (offers.handOvers.includes("access") && access > 0) {
+    items.push({
       detail:
         access === 1
           ? "1 person, with the same permissions"
           : `${access} people, with the same permissions`,
+      icon: <Users />,
       key: "access",
       label: "User access",
-      reason: !allowed.copyAccess
-        ? "You can't see who has access"
-        : access === 0
-          ? "Only its owner has access"
-          : null,
-    },
-    {
+      reason: allowed.copyAccess ? null : "You can't see who has access",
+    })
+  }
+  if (offers.handOvers.includes("backups") && backups.total > 0) {
+    items.push({
       detail:
         linkableBackups === 1
           ? "1 full backup, linked to the copy"
           : `${linkableBackups} full backups, linked to the copy`,
+      icon: <Archive />,
       key: "backups",
       label: "Backups",
-      reason:
-        backups.total === 0
-          ? "It has no backups"
-          : !allowed.linkBackups
-            ? "Needs permission to download its backups"
-            : linkableBackups === 0
-              ? relay?.current
-                ? "Its backups are incremental"
-                : "Its backups are on this Relay or incremental"
-              : null,
-    },
-    {
+      reason: !allowed.linkBackups
+        ? "Needs permission to download its backups"
+        : linkableBackups === 0
+          ? "Its backups are incremental, or on its own Relay"
+          : null,
+    })
+  }
+  if (offers.activity) {
+    items.push({
       detail: "Its history, up to the copy",
+      icon: <History />,
       key: "activity",
       label: "Activity history",
       reason: null,
-    },
-    {
-      detail: `${domains.names.join(", ")}, pointed at ${relay?.name ?? "the new Relay"}`,
-      key: "domains",
-      label: "Domains",
-      reason: !moving
-        ? "Only a move takes its domains"
-        : !domains.managed
-          ? "Kiln doesn't manage DNS without Cloudflare"
-          : !domains.names.length
-            ? "It has no managed domain"
-            : !allowed.network
-              ? "Needs permission to change its network"
-              : null,
-    },
-    {
-      detail: `${webRoutes?.join(", ") ?? ""}, once DNS reaches ${relay?.name ?? "the new Relay"}`,
-      key: "routes",
-      label: "Web routes",
-      reason: !moving
-        ? "Only a move takes its web routes"
-        : webRoutes === null
-          ? "They couldn't be read"
-          : !webRoutes.length
-            ? "It has no web routes"
-            : !allowed.network
-              ? "Needs permission to change its network"
-              : null,
-    },
+    })
+  }
+  return items
+}
+
+// What becomes of each domain: where its DNS goes by itself, and when, or
+// what's left for someone to do.
+function domainFates({
+  deploys,
+  preview,
+  relayName,
+  serving,
+}: {
+  deploys: boolean
+  preview: ResourceMigrationPreview
+  relayName: string
+  serving: RelayWebServing | undefined
+}): ReadonlyArray<DomainFate> {
+  const manual = new Set(preview.manualDns)
+  const web = (preview.webRoutes ?? []).map((name): DomainFate => {
+    if (manual.has(name)) {
+      return {
+        name,
+        text: `You point it at ${serving?.host ?? relayName}`,
+        warns: false,
+      }
+    }
+    switch (serving?.state) {
+      case "cant":
+        return { name, text: "DNS waits", warns: true }
+      case "unreachable":
+        return { name, text: "Won't answer yet", warns: true }
+      default:
+        return {
+          name,
+          text: deploys
+            ? serving?.state === "unchecked"
+              ? "DNS switches once the copy runs"
+              : "DNS switches once the copy answers"
+            : "DNS switches when it's moved",
+          warns: false,
+        }
+    }
+  })
+  const game = gameNames(preview).map((name): DomainFate => ({
+    name,
+    text: "DNS switches when it's moved",
+    warns: false,
+  }))
+  return [
+    ...game,
+    ...web.filter(({ name }) => !game.some((g) => g.name === name)),
   ]
-  return items.filter((item) =>
-    item.key === "activity"
-      ? offers.activity
-      : offers.handOvers.includes(item.key)
+}
+
+// What comes along: its data and settings always, and each other thing it
+// has with a switch of its own. A domain says what becomes of it.
+function CarriedList({
+  domains,
+  items,
+  left,
+  moving,
+  onToggle,
+  pending,
+  usedBytes,
+}: {
+  domains: ReadonlyArray<DomainFate>
+  items: ReadonlyArray<CarriedItem>
+  left: ReadonlySet<CarriedKey>
+  moving: boolean
+  onToggle: (key: CarriedKey, taken: boolean) => void
+  pending: boolean
+  usedBytes: number | null
+}) {
+  return (
+    <section className="grid gap-2">
+      <h3 className="type-technical-label text-muted-foreground">
+        {moving ? "Moves with it" : "Copies with it"}
+      </h3>
+      <div className="rounded-md border border-border/60 bg-background/30">
+        <CarriedRow
+          detail={usedBytes === null ? null : formatBytes(usedBytes)}
+          icon={<HardDrive />}
+          label="Data and settings"
+        >
+          <span className="type-meta text-muted-foreground">Always</span>
+        </CarriedRow>
+        {items.map((item) => (
+          <React.Fragment key={item.key}>
+            <CarriedRow
+              detail={item.reason ?? item.detail}
+              icon={item.icon}
+              label={item.label}
+              muted={item.reason !== null}
+            >
+              <Switch
+                aria-label={item.label}
+                checked={item.reason === null && !left.has(item.key)}
+                disabled={pending || item.reason !== null}
+                onCheckedChange={(taken) => onToggle(item.key, taken)}
+              />
+            </CarriedRow>
+            {item.key === "domains" && domains.length > 0 ? (
+              <ul className="max-h-32 overflow-y-auto border-t border-border/50 py-1">
+                {domains.map((domain) => (
+                  <li
+                    className="type-meta flex min-h-6 flex-wrap items-center justify-between gap-x-3 py-0.5 pr-3 pl-9"
+                    key={domain.name}
+                  >
+                    <span className="min-w-0 truncate font-mono text-foreground">
+                      {domain.name}
+                    </span>
+                    <span
+                      className={cn(
+                        "flex items-center gap-1.5",
+                        domain.warns
+                          ? "text-amber-300 light:text-amber-800"
+                          : "text-muted-foreground"
+                      )}
+                    >
+                      {domain.warns ? (
+                        <TriangleAlert aria-hidden="true" className="size-3" />
+                      ) : null}
+                      {domain.text}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </React.Fragment>
+        ))}
+      </div>
+    </section>
   )
 }
 
-// A label and its switch, the label's explanation in a tooltip or, with
-// `info`, in a card behind an info button.
+function CarriedRow({
+  children,
+  detail,
+  icon,
+  label,
+  muted = false,
+}: {
+  children: React.ReactNode
+  detail: string | null
+  icon: React.ReactNode
+  label: string
+  muted?: boolean
+}) {
+  return (
+    <div className="flex min-h-10 items-center gap-2.5 border-t border-border/50 px-3 py-1 first:border-t-0">
+      <span
+        aria-hidden="true"
+        className="shrink-0 text-muted-foreground [&_svg]:size-3.5"
+      >
+        {icon}
+      </span>
+      <span
+        className={cn("type-label shrink-0", muted && "text-muted-foreground")}
+      >
+        {label}
+      </span>
+      <span className="type-meta min-w-0 flex-1 truncate text-muted-foreground">
+        {detail}
+      </span>
+      {children}
+    </div>
+  )
+}
+
+// A label and its switch, the label's explanation in a tooltip.
 function SwitchRow({
   checked,
   disabled,
-  info,
   label,
   onCheckedChange,
   title,
 }: {
   checked: boolean
   disabled: boolean
-  info?: React.ReactNode
   label: string
   onCheckedChange: (checked: boolean) => void
   title?: string
 }) {
-  const [infoOpen, setInfoOpen] = React.useState(false)
   return (
     <div
       className={cn(
@@ -1093,28 +1371,8 @@ function SwitchRow({
         disabled && !checked && "opacity-60"
       )}
     >
-      <span className="flex min-w-0 items-center gap-1.5" title={title}>
-        <span className="type-label truncate">{label}</span>
-        {info ? (
-          <DrawerPopover open={infoOpen} onOpenChange={setInfoOpen}>
-            <DrawerPopoverTrigger asChild>
-              <button
-                aria-label={`What ${label.toLowerCase()} includes`}
-                className="grid size-5 place-items-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
-                type="button"
-              >
-                <Info className="size-3.5" />
-              </button>
-            </DrawerPopoverTrigger>
-            <DrawerPopoverContent
-              align="start"
-              className="w-80 p-0"
-              title={`What ${label.toLowerCase()} includes`}
-            >
-              {info}
-            </DrawerPopoverContent>
-          </DrawerPopover>
-        ) : null}
+      <span className="type-label min-w-0 truncate" title={title}>
+        {label}
       </span>
       <Switch
         aria-label={label}
@@ -1122,40 +1380,6 @@ function SwitchRow({
         disabled={disabled}
         onCheckedChange={onCheckedChange}
       />
-    </div>
-  )
-}
-
-// What copying metadata takes along: a check for each part that comes, and
-// why not for each that can't.
-function MetadataCard({ items }: { items: ReadonlyArray<MetadataItem> }) {
-  return (
-    <div className="py-1.5">
-      <p className="type-technical-label px-3 pb-1 text-[0.6875rem] text-muted-foreground">
-        Comes along
-      </p>
-      {items.map((item) => (
-        <div key={item.key} className="flex items-start gap-2.5 px-3 py-1.5">
-          {item.reason === null ? (
-            <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-400 light:text-emerald-700" />
-          ) : (
-            <Minus className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="min-w-0">
-            <span
-              className={cn(
-                "type-label block",
-                item.reason !== null && "text-muted-foreground"
-              )}
-            >
-              {item.label}
-            </span>
-            <span className="type-meta block text-muted-foreground">
-              {item.reason ?? item.detail}
-            </span>
-          </span>
-        </div>
-      ))}
     </div>
   )
 }

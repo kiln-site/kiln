@@ -37,6 +37,7 @@ import {
   relay,
   relayRequest,
   relays,
+  warns,
   webRouteHostnames,
   webRoutesServed,
   type MigratedKind,
@@ -453,24 +454,32 @@ export const apps: MigratedKind = {
         : []),
       ...(shared.length > 0
         ? [
-            `${shared.map((volume) => volume.name).join(", ")} ${shared.length === 1 ? "is" : "are"} shared with other Apps. The copy gets its own copy of ${shared.length === 1 ? "it" : "each"}, and stops seeing what the others write.`,
+            warns(
+              `${shared.map((volume) => volume.name).join(", ")} ${shared.length === 1 ? "is" : "are"} shared with other Apps. The copy gets its own copy of ${shared.length === 1 ? "it" : "each"}, and stops seeing what the others write.`
+            ),
           ]
         : []),
       ...(carried.unnamed.length > 0
         ? [
-            `${carried.unnamed.map((volume) => volume.name).join(", ")} ${carried.unnamed.length === 1 ? "is" : "are"} mounted by its containers but named by neither its settings nor its Compose file, so ${carried.unnamed.length === 1 ? "it isn't" : "they aren't"} copied.`,
+            warns(
+              `${carried.unnamed.map((volume) => volume.name).join(", ")} ${carried.unnamed.length === 1 ? "is" : "are"} mounted by its containers but named by neither its settings nor its Compose file, so ${carried.unnamed.length === 1 ? "it isn't" : "they aren't"} copied.`
+            ),
           ]
         : []),
       ...(databases > 0
         ? [
-            `It's connected to ${count(databases, "a database", "databases")}. The copy isn't: its environment still names ${databases === 1 ? "it" : "them"}, and connecting is yours to do.`,
+            warns(
+              `It's connected to ${count(databases, "a database", "databases")}. The copy isn't: its environment still names ${databases === 1 ? "it" : "them"}, and connecting is yours to do.`
+            ),
           ]
         : []),
     ]
     const elsewhere =
       hostPaths > 0
         ? [
-            `It mounts ${count(hostPaths, "a path", "paths")} on ${source.name}'s node. Nothing there is copied, and the copy mounts the same ${hostPaths === 1 ? "path" : "paths"} on its own node.`,
+            warns(
+              `It mounts ${count(hostPaths, "a path", "paths")} on ${source.name}'s node. Nothing there is copied, and the copy mounts the same ${hostPaths === 1 ? "path" : "paths"} on its own node.`
+            ),
           ]
         : []
     return {
@@ -479,7 +488,9 @@ export const apps: MigratedKind = {
         ...both,
         ...(config.ports.length > 0 || hostPaths > 0
           ? [
-              `On ${source.name} the copy would publish the same ports${hostPaths > 0 ? " and mount the same paths on the node" : ""} as this one. Change them before deploying it there.`,
+              warns(
+                `On ${source.name} the copy would publish the same ports${hostPaths > 0 ? " and mount the same paths on the node" : ""} as this one. Change them before deploying it there.`
+              ),
             ]
           : []),
         ...(github

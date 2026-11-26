@@ -3,6 +3,7 @@ import { queryOptions } from "@tanstack/react-query"
 import type { MigratedKindName } from "@/lib/resource-migration-input"
 import {
   getResourceMigrations,
+  getResourceMigrationServing,
   previewResourceMigration,
 } from "@/server/resource-migrations"
 
@@ -47,6 +48,37 @@ export function resourceMigrationPreviewQueryOptions(resource: {
     queryFn: () => previewResourceMigration({ data: reference }),
     // Long enough that the dialog opens on what pointing at its button
     // fetched; starting the copy checks everything again.
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * Whether domains moved with a resource to a Relay would work there. Asked
+ * of the one chosen, once chosen: reaching it from outside takes seconds
+ * when nothing answers.
+ */
+export function resourceMigrationServingQueryOptions(
+  resource: { id: string; kind: MigratedKindName; relayId: string },
+  destinationRelayId: string
+) {
+  return queryOptions({
+    queryKey: [
+      "resource-migrations",
+      "serving",
+      resource.relayId,
+      resource.id,
+      destinationRelayId,
+    ],
+    queryFn: () =>
+      getResourceMigrationServing({
+        data: {
+          destinationRelayId,
+          id: resource.id,
+          kind: resource.kind,
+          relayId: resource.relayId,
+        },
+      }),
     staleTime: 30_000,
     retry: false,
   })

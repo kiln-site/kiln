@@ -64,6 +64,10 @@ export const resourceReferenceSchema = z.object({
 })
 export type ResourceReference = z.infer<typeof resourceReferenceSchema>
 
+/** One resource, and a Relay it could be moved to. */
+export const resourceMigrationServingInputSchema =
+  resourceReferenceSchema.extend({ destinationRelayId: relayIdSchema })
+
 export const startResourceMigrationInputSchema = resourceReferenceSchema.extend(
   {
     /**

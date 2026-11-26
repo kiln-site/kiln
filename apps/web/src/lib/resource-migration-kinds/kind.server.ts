@@ -33,6 +33,7 @@ import type {
   MigratedKindName,
   ResourceMigrationOptions,
 } from "@/lib/resource-migration-input"
+import { relayWebCapability } from "@/lib/relay-web.server"
 import type { ResourceScope } from "@/lib/resource-permissions"
 import { releaseWebCertificatesEffect } from "@/lib/web-certificates.server"
 import { moveResourceWebHostnamesEffect } from "@/server/addresses.server"
@@ -332,10 +333,17 @@ export interface MigratedKind {
   ) => Promise<MigrationHandOverCounts>
 }
 
+/** One thing to know before copying one, and whether it's one that bites. */
+export type MigrationNote =
+  | string
+  | { readonly text: string; readonly warns: true }
+
+export const warns = (text: string): MigrationNote => ({ text, warns: true })
+
 /** What to know before each way of copying one. */
 export interface MigrationWarnings {
-  readonly duplicate: ReadonlyArray<string>
-  readonly migrate: ReadonlyArray<string>
+  readonly duplicate: ReadonlyArray<MigrationNote>
+  readonly migrate: ReadonlyArray<MigrationNote>
 }
 
 /** How much there is of each thing a copy could be handed. */
@@ -595,8 +603,9 @@ export const copyWebRoutes = Effect.fnUntraced(function* (
 
 /**
  * Whether a copy's Relay serves its routes yet: `unknown` where another proxy
- * does, which can't be asked, `down` when none of them reaches it, and
- * `partly` when some do: the rest may not have started, or never did.
+ * does, which can't be asked, or none can, whose names stay pointed where they
+ * are; `down` when none of them reaches it, and `partly` when some do: the rest
+ * may not have started, or never did.
  */
 export const webRoutesServed = Effect.fnUntraced(function* (
   kind: "app" | "instance",
@@ -613,8 +622,11 @@ export const webRoutesServed = Effect.fnUntraced(function* (
   )
   if (answers === null || answers.length === 0) return "unknown" as const
   const is = (wanted: string) => answers.some(({ state }) => state === wanted)
-  if (is("down")) return is("served") ? ("partly" as const) : ("down" as const)
-  return is("served") ? ("served" as const) : ("unrouted" as const)
+  if (!is("down"))
+    return is("served") ? ("served" as const) : ("unrouted" as const)
+  if (is("served")) return "partly" as const
+  const { cant } = yield* promiseEffect(() => relayWebCapability(destination))
+  return cant === null ? ("down" as const) : ("unknown" as const)
 })
 
 /**

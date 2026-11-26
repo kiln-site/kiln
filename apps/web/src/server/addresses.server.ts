@@ -484,23 +484,23 @@ const zoneRefreshIntervalMs = 60_000
  * The public address a Relay's web routes are served at, as it reports it,
  * or its game servers' address, or the address Hearth reaches it at.
  */
-const relayPublicHostEffect = Effect.fn("addresses.relayHost")(function* (
-  relayId: string
-) {
-  const snapshot = relayConnectionSnapshot(relayId)
-  const reported =
-    snapshot?.relay?.publicHost ??
-    snapshot?.instances.find((instance) => instance.publicHost)?.publicHost
-  if (reported) return reported
-  const relay = yield* promiseEffect(() => activeRelay(relayId)).pipe(
-    Effect.mapError(() =>
-      DomainConfigurationError.make({
-        message: "The Relay hasn't reported a public address yet",
-      })
+export const relayPublicHostEffect = Effect.fn("addresses.relayHost")(
+  function* (relayId: string) {
+    const snapshot = relayConnectionSnapshot(relayId)
+    const reported =
+      snapshot?.relay?.publicHost ??
+      snapshot?.instances.find((instance) => instance.publicHost)?.publicHost
+    if (reported) return reported
+    const relay = yield* promiseEffect(() => activeRelay(relayId)).pipe(
+      Effect.mapError(() =>
+        DomainConfigurationError.make({
+          message: "The Relay hasn't reported a public address yet",
+        })
+      )
     )
-  )
-  return relay.hostname
-})
+    return relay.hostname
+  }
+)
 
 /** Where a game server is reached, as its Relay reports it. */
 function endpointOf(
@@ -533,6 +533,11 @@ interface ReconcileContext {
    * null while its Relay is away, when an address keeps what Kiln recorded.
    */
   endpoint: GameEndpoint | null
+  /**
+   * Why its Relay serves no websites, or isn't known to; null when it may.
+   * Asked for once.
+   */
+  cantServe: Effect.Effect<string | null>
   /** Where the Relay answers web traffic. Asked for once. */
   relayHost: Effect.Effect<string, DomainConfigurationError>
   /**
@@ -542,12 +547,34 @@ interface ReconcileContext {
   verify: boolean
 }
 
+const unasked = "its Relay couldn't be asked whether it can serve websites"
+
 function contextFor(
   resource: WebHostnameResource,
   options: { endpoint?: GameEndpoint | null; verify?: boolean } = {}
 ): ReconcileContext {
   let host: Result.Result<string, DomainConfigurationError> | undefined
+  let cant: string | null | undefined
   return {
+    cantServe: Effect.suspend(() =>
+      cant !== undefined
+        ? Effect.succeed(cant)
+        : promiseEffect(async () => {
+            const { relayWebCapability } =
+              await import("@/lib/relay-web.server")
+            const { answered, cant } = await relayWebCapability(
+              await activeRelay(resource.relayId)
+            )
+            return answered ? cant : unasked
+          }).pipe(
+            Effect.orElseSucceed(() => unasked),
+            Effect.tap((found) =>
+              Effect.sync(() => {
+                cant = found
+              })
+            )
+          )
+    ),
     endpoint:
       options.endpoint !== undefined
         ? options.endpoint
@@ -669,6 +696,24 @@ const reconcileAddressEffect = Effect.fn("addresses.reconcile")(function* (
     if (!row.lastError || (row.game && !context.endpoint)) return worked
     yield* clearAddressErrorEffect(row.id)
     return true
+  }
+  // Visitors stay where they're served: a name that moved to a Relay certain
+  // not to serve it, or that can't be asked, keeps its record until that Relay
+  // can, which the DNS worker looks for.
+  if (
+    !row.game &&
+    row.recordId &&
+    row.target !== null &&
+    row.target !== desired.target
+  ) {
+    const cant = yield* context.cantServe
+    if (cant) {
+      yield* recordAddressErrorEffect(
+        row.id,
+        `Still points at ${row.target}: ${cant}`
+      )
+      return true
+    }
   }
   yield* syncRecordsEffect(row, desired).pipe(
     Effect.tapError((error) =>
