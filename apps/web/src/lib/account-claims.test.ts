@@ -299,6 +299,44 @@ describeMysql("setting up an invited account from its invitation", () => {
       })
     )
 
+    it.effect("sets up two invited accounts at once", () =>
+      Effect.gen(function* () {
+        yield* seedInvitation()
+        const otherId = "8e2f5c9a-3b4d-4e6f-9a01-2b3c4d5e6f70"
+        yield* insertUser("other", {
+          email: "other@example.test",
+          emailVerified: false,
+        })
+        yield* insertRows("invitation", {
+          id: otherId,
+          token_hash: createHash("sha256").update("o".repeat(43)).digest("hex"),
+          email: "other@example.test",
+          user_id: "other",
+          access_type: "relay_creator",
+          invited_by: "admin",
+          expires_at: Date.now() + 60_000,
+          created_at: Date.now() - 60_000,
+        })
+
+        yield* Effect.all(
+          [
+            redeemInvitation({ token: invitationToken }),
+            redeemInvitation({
+              id: otherId,
+              key: invitationLinkKey(otherId, "email"),
+            }),
+          ],
+          { concurrency: "unbounded" }
+        )
+
+        const owners = yield* selectRows<{ userId: string }>("account")
+        expect(owners.map((row) => row.userId).sort()).toEqual([
+          "other",
+          "recipient",
+        ])
+      })
+    )
+
     it.effect("never replaces an invited account's existing credential", () =>
       Effect.gen(function* () {
         yield* seedInvitation()

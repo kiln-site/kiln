@@ -5,6 +5,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { isDeadlock } from "@/effect/database-deadlocks"
 import { AccountClaimEmail } from "@/emails/account-claim-email"
 import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { runAppEffect } from "@/effect/runtime"
@@ -37,6 +38,9 @@ interface ClaimRow extends RowDataPacket {
   consumed_at: number | null
 }
 const CLAIM_LIFETIME_MS = 30 * 60 * 1000
+// The credential checks lock the gap where a password would go, so two
+// accounts set up at once can deadlock on it; the loser starts over.
+const retryDeadlock = Effect.retry({ times: 3, while: isDeadlock })
 
 export async function issueManualAccountClaim(input: {
   userId: string
@@ -227,7 +231,7 @@ async function issueClaim(input: {
           return user
         })
       )
-    })
+    }).pipe(retryDeadlock)
   )
   if (!subject) return null
   const url = new URL("/claim", kilnPublicUrl())
@@ -353,7 +357,7 @@ export async function redeemAccountClaim(input: {
             return { ...revision, userId: user.id, email: user.email }
           })
       )
-    })
+    }).pipe(retryDeadlock)
   )
   for (const relayId of result.relayIds) wakeAuthorizationDelivery(relayId)
   publishRealtimeChange({
@@ -531,7 +535,7 @@ export async function redeemInvitedAccount(input: {
             return { ...revision, userId: user.id, email: user.email }
           })
       )
-    })
+    }).pipe(retryDeadlock)
   )
   for (const relayId of result.relayIds) wakeAuthorizationDelivery(relayId)
   publishRealtimeChange({
