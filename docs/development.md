@@ -64,6 +64,49 @@ to be unique across running stacks.
 | `pnpm dev:docker:test`    | Run web tests on the box's MySQL                 |
 | `pnpm dev:docker:shared`  | Manage the box's shared MySQL and Valkey         |
 | `pnpm dev:docker:s3`      | Manage the tailnet's S3 endpoint                 |
+| `pnpm dev:docker:share`   | Put Hearth on the tailnet for other devices      |
+
+## Sharing a stack
+
+`pnpm dev:docker:share` gives a running stack's Hearth a tailnet-only HTTPS
+link, for opening it on a phone or another machine. It needs Tailscale with
+HTTPS on, and the account as a Tailscale operator.
+
+```sh
+pnpm dev:docker:share         # start, or print the link again
+pnpm dev:docker:share status  # the link and its container
+pnpm dev:docker:share off     # stop sharing
+```
+
+The link is `https://<box>.<tailnet>.ts.net:<port>`, with a port from 8600
+that the stack keeps. `dev:docker:refresh` leaves it up. `dev:docker:down`
+takes it down, and the next `share` brings it back at the same address.
+`dev:docker:destroy` removes it for good.
+
+A stack only accepts its own `KILN_URL`, so the stack's `share` service
+(`scripts/dev-share-proxy.mjs`) forwards to Hearth as that host and points
+redirects back at the link. A first dev load fetches about 1,300 modules, and
+one failed module keeps the page from hydrating, so buttons stay disabled.
+Through Tailscale Serve's HTTP proxy, a cold first load had over a hundred of
+those requests answered 502, most likely from Serve reusing connections the
+backend had already closed. So Serve only terminates TLS and passes each
+connection on (`--tls-terminated-tcp`), and the proxy opens a new connection
+to Hearth for every request. It also compresses responses, which cuts that
+first load from about 80 MB to about a quarter of that.
+
+Sign-in sends the page's own origin as its callback, so the first `share` of
+a link restarts Hearth with the link in `BETTER_AUTH_TRUSTED_ORIGINS`.
+Password sign-in and dev sign-in work through the link. Passkeys are tied to
+`KILN_URL`'s host and don't.
+
+Every stack shared from a box has the box's host name, and cookies ignore
+ports, so the proxy gives each link its own session cookie names. Signing in
+on one stack leaves the others signed in. UI preferences, such as the sidebar
+state, are still shared between them.
+
+With OrbStack, the browser reaches the Relay at its own `.orb.local` address,
+which other devices can't resolve, so Relay-backed views such as the console
+and files don't load through the link.
 
 ## Shared services
 

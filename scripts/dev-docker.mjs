@@ -5,8 +5,11 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs"
+import { createServer } from "node:net"
 import { homedir, networkInterfaces } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -34,6 +37,9 @@ const s3File = join(homedir(), ".config", "kiln-dev", "s3.env")
 const S3_PORT = "8480"
 const S3_LOCAL_PORT = "9100"
 const S3_BUCKET = "kiln-dev"
+// Tailnet ports `dev:docker:share` picks from, one per stack, each
+// forwarding from the loopback port 5000 below it.
+const SHARE_PORTS = { first: 8600, last: 8999 }
 
 // Rows on the MySQL they describe, so they can't disagree with it about what
 // exists. Everything teardown deletes is named here, never guessed from a
@@ -68,6 +74,11 @@ const projectFile = resolve(
   worktreeRoot,
   git("rev-parse", "--git-path", "kiln-dev-project")
 )
+// The stack's tailnet and loopback ports, kept so its link stays the same.
+const shareFile = resolve(
+  worktreeRoot,
+  git("rev-parse", "--git-path", "kiln-dev-share")
+)
 const stack = projectName()
 const namespace = primaryWorktree ? "" : stack
 const environmentFile = resolve(primaryRoot, ".env")
@@ -98,7 +109,7 @@ if (command === "setup") {
 
 requireEnvironment()
 const settings = parseEnvironment(readFileSync(environmentFile, "utf8"))
-if (["start", "up", "down", "destroy", "refresh"].includes(command)) {
+if (["start", "up", "down", "destroy", "refresh", "share"].includes(command)) {
   requireProjectOwnership()
 }
 if (["start", "up", "refresh"].includes(command)) {
@@ -140,6 +151,7 @@ const composeEnvironment = {
   KILN_RELAY_PUBLIC_PORT: orbstack ? "443" : "4100",
   KILN_RELAY_RESOURCE_NAMESPACE: namespace,
   KILN_URL: hearthUrl,
+  ...shareEnvironment(savedShare()),
 }
 
 switch (command) {
@@ -159,6 +171,8 @@ switch (command) {
     console.log("\nDevelopment stack is ready.")
     break
   case "down":
+    // The link comes back, at the same address, with the next share.
+    unserveShare({ strict: false })
     compose(["down"], composeEnvironment)
     break
   case "destroy":
@@ -184,6 +198,9 @@ switch (command) {
     break
   case "s3":
     s3(process.argv[3] ?? "status")
+    break
+  case "share":
+    await share(process.argv[3] ?? "up")
     break
   default:
     fail(`Unknown development Docker command: ${command}`)
@@ -638,6 +655,8 @@ async function destroy() {
   process.on("exit", unfinished)
 
   Object.assign(composeEnvironment, await resolveS3Host())
+  unserveShare({ strict: true })
+  rmSync(shareFile, { force: true })
   compose(["stop"], composeEnvironment)
   if (namespace) destroyNamespacedContainers()
   compose(["down"], composeEnvironment)
@@ -970,6 +989,215 @@ function s3(action) {
     default:
       fail("Usage: pnpm dev:docker:s3 <up|status|env|down>")
   }
+}
+
+// Hearth on the tailnet for phones and other devices. Tailscale Serve only
+// terminates TLS and passes each connection to the stack's share service,
+// rather than proxying HTTP itself: through its proxy, cold loads had module
+// requests answered 502, which keeps pages from hydrating. See
+// docs/development.md.
+async function share(action) {
+  switch (action) {
+    case "up":
+      // Held throughout, so a destroy can't remove the stack between the
+      // check that Hearth runs and the link going up.
+      await withStackLock(stack, shareUp)
+      break
+    case "status": {
+      const saved = savedShare()
+      if (!saved) {
+        console.log("This stack isn't shared.")
+        break
+      }
+      const entry = serveStatus()?.TCP?.[String(saved.public)]
+      const served = entry?.TCPForward === `127.0.0.1:${saved.local}`
+      console.log(`Link:    ${saved.origin}${served ? "" : " (not served)"}`)
+      compose(["ps", "share"], composeEnvironment)
+      break
+    }
+    case "off":
+      await withStackLock(stack, () => {
+        unserveShare({ strict: true })
+        compose(["rm", "--stop", "--force", "share"], composeEnvironment)
+        rmSync(shareFile, { force: true })
+      })
+      console.log("This stack is no longer shared.")
+      break
+    default:
+      fail("Usage: pnpm dev:docker:share [up|status|off]")
+  }
+}
+
+async function shareUp() {
+  const hearth = captureCompose(["ps", "--quiet", "hearth"], composeEnvironment)
+  if (!hearth) {
+    fail("Hearth isn't running. Start the stack with pnpm dev:docker:up.")
+  }
+  const self = tailscaleSelf()
+  const saved = savedShare()
+  const status = requireServeStatus()
+  // Only an unclaimed port or this link's own; never another listener.
+  const entry = saved && status.TCP?.[String(saved.public)]
+  const ports =
+    saved && (!entry || entry.TCPForward === `127.0.0.1:${saved.local}`)
+      ? saved
+      : await chooseSharePorts(status)
+  const link = `https://${self.host}:${ports.public}`
+  const current = { ...ports, origin: link }
+  writeFileSync(
+    shareFile,
+    `${current.public} ${current.local} ${current.origin}\n`
+  )
+  Object.assign(composeEnvironment, shareEnvironment(current))
+  // Sign-in sends the page's own origin as its callback, so Hearth has to
+  // trust the link. That takes a new container, once per link, made the way
+  // `up` makes it.
+  if (!hearthTrustedOrigins(hearth).includes(link)) {
+    console.log("Restarting Hearth so it accepts sign-ins from the link.")
+    await prepareStack()
+    compose(["up", "--detach", "--wait", "hearth"], composeEnvironment)
+  }
+  compose(
+    // Recreated, so it always runs this checkout's proxy.
+    ["up", "--detach", "--no-deps", "--force-recreate", "--wait", "share"],
+    composeEnvironment
+  )
+  run(
+    "tailscale",
+    [
+      "serve",
+      "--bg",
+      `--tls-terminated-tcp=${ports.public}`,
+      `tcp://127.0.0.1:${ports.local}`,
+    ],
+    process.env
+  )
+  await waitForShare(link)
+  console.log(`\nHearth is on the tailnet at ${link}`)
+  console.log("Stop sharing with pnpm dev:docker:share off.")
+}
+
+function savedShare() {
+  if (!existsSync(shareFile)) return null
+  const [publicPort, localPort, origin] = readFileSync(shareFile, "utf8")
+    .trim()
+    .split(/\s+/u)
+  return Number(publicPort) && Number(localPort) && origin
+    ? { local: Number(localPort), origin, public: Number(publicPort) }
+    : null
+}
+
+function shareEnvironment(saved) {
+  if (!saved) return {}
+  return {
+    KILN_DEV_SHARE_LOCAL_PORT: String(saved.local),
+    KILN_DEV_SHARE_ORIGIN: saved.origin,
+    // Compose appends it to the configured origins, read its own way.
+    KILN_DEV_SHARE_TRUSTED_ORIGIN: `,${saved.origin}`,
+  }
+}
+
+function hearthTrustedOrigins(container) {
+  const prefix = "BETTER_AUTH_TRUSTED_ORIGINS="
+  const line = capture("docker", [
+    "inspect",
+    "--format",
+    "{{range .Config.Env}}{{println .}}{{end}}",
+    container,
+  ])
+    .split("\n")
+    .find((entry) => entry.startsWith(prefix))
+  return (line?.slice(prefix.length) ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+}
+
+// Null when Tailscale can't say, which is never the same as an unused port.
+function serveStatus() {
+  const result = spawnSync("tailscale", ["serve", "status", "--json"], {
+    encoding: "utf8",
+  })
+  if (result.error || result.status !== 0) return null
+  try {
+    return JSON.parse(result.stdout || "{}")
+  } catch {
+    return null
+  }
+}
+
+function requireServeStatus() {
+  return (
+    serveStatus() ??
+    fail("Couldn't read tailscale serve status. Is Tailscale running?")
+  )
+}
+
+// Skipping ports another stack of this checkout keeps while it's down.
+async function chooseSharePorts(status) {
+  const taken = new Set(Object.keys(status.TCP ?? {}).map(Number))
+  const worktrees = resolve(commonGitDirectory, "worktrees")
+  const saved = [
+    resolve(commonGitDirectory, "kiln-dev-share"),
+    ...(existsSync(worktrees)
+      ? readdirSync(worktrees).map((name) =>
+          resolve(worktrees, name, "kiln-dev-share")
+        )
+      : []),
+  ]
+  for (const file of saved.filter(existsSync)) {
+    taken.add(Number(readFileSync(file, "utf8").trim().split(/\s+/u)[0]))
+  }
+  for (let port = SHARE_PORTS.first; port <= SHARE_PORTS.last; port += 1) {
+    if (taken.has(port)) continue
+    if (await loopbackPortFree(port - 5000))
+      return { local: port - 5000, public: port }
+  }
+  fail(
+    `No free tailnet port between ${SHARE_PORTS.first} and ${SHARE_PORTS.last}.`
+  )
+}
+
+function loopbackPortFree(port) {
+  return new Promise((resolvePort) => {
+    const probe = createServer()
+    probe.once("error", () => resolvePort(false))
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolvePort(true)))
+  })
+}
+
+// Only this stack's own Serve entry. When Tailscale can't say what that is,
+// `strict` stops before the saved ports go, so the entry can't outlive them
+// pointing at a port something else may take.
+function unserveShare({ strict }) {
+  const saved = savedShare()
+  if (!saved) return
+  const status = serveStatus()
+  if (!status) {
+    const message = `Couldn't read tailscale serve status, so ${saved.origin} may still be served. Check with tailscale serve status.`
+    if (strict) fail(message)
+    console.warn(message)
+    return
+  }
+  const entry = status.TCP?.[String(saved.public)]
+  if (entry?.TCPForward !== `127.0.0.1:${saved.local}`) return
+  run(
+    "tailscale",
+    ["serve", `--tls-terminated-tcp=${saved.public}`, "off"],
+    process.env
+  )
+}
+
+async function waitForShare(link) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const healthy = await fetch(`${link}/api/health`, {
+      signal: AbortSignal.timeout(2000),
+    })
+      .then((response) => response.ok)
+      .catch(() => false)
+    if (healthy) return
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1000))
+  }
+  fail(`${link} didn't answer. Check pnpm dev:docker:share status.`)
 }
 
 function stackContainers() {
