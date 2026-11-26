@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
@@ -13,16 +13,24 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
 
 import { HearthMark } from "@/components/hearth-mark"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { clearAppearanceCache } from "@/lib/appearance"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { DISPLAY_NAME_MAX_LENGTH } from "@/lib/display-name"
+import {
+  invitationReferencePath,
+  type InvitationReference,
+} from "@/lib/invitation-auth"
 import { queryKeys } from "@/lib/query-options"
 import type { getInvitationPreview } from "@/server/access"
 import { acceptAccessInvitation } from "@/server/access"
 import { disableDevelopmentBypass } from "@/server/auth"
+import { decideResourceInvitation } from "@/server/resource-access"
+import { claimInvitedAccount } from "@/server/users"
 
 type InvitationPreview = NonNullable<
   Awaited<ReturnType<typeof getInvitationPreview>>
@@ -30,25 +38,18 @@ type InvitationPreview = NonNullable<
 
 export function InvitationPage({
   preview,
-  token,
+  reference,
   user,
 }: {
   preview: InvitationPreview | null
-  token: string
+  reference: InvitationReference | null
   user: AuthenticatedUser | null
 }) {
   const queryClient = useQueryClient()
-  const acceptInvitationMutation = useMutation({
-    mutationFn: acceptAccessInvitation,
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.access.capabilities,
-      }),
-  })
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [accepted, setAccepted] = React.useState(false)
-  const invitePath = `/invite?token=${encodeURIComponent(token)}`
+  const invitePath = reference ? invitationReferencePath(reference) : "/invite"
   const destination = preview?.returnPath ?? "/"
   const platformInvitation = preview?.accessType !== "scoped"
   const invitationLabel = preview
@@ -59,31 +60,87 @@ export function InvitationPage({
         : (preview.role ?? "Scoped Access")
     : "Access"
 
+  const acceptInvitation = Effect.tryPromise({
+    try: async () => {
+      if (!reference) throw new Error("Invitation not found")
+      await ("token" in reference
+        ? acceptAccessInvitation({ data: { token: reference.token } })
+        : decideResourceInvitation({
+            data: { id: reference.id, decision: "accept", force: false },
+          }))
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.access.capabilities,
+      })
+    },
+    catch: (cause) => cause,
+  })
+
+  const opened = Effect.sync(() => {
+    setAccepted(true)
+    window.setTimeout(() => window.location.assign(destination), 700)
+  })
+
+  const failed = (fallback: string) => (cause: unknown) =>
+    Effect.sync(() => {
+      setError(cause instanceof Error ? cause.message : fallback)
+      setPending(false)
+    })
+
   async function accept() {
     setPending(true)
     setError(null)
     await Effect.runPromise(
-      Effect.tryPromise({
-        try: () => acceptInvitationMutation.mutateAsync({ data: { token } }),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            setAccepted(true)
-            window.setTimeout(() => window.location.assign(destination), 700)
-          })
-        ),
-        Effect.catch((cause) =>
-          Effect.sync(() => {
-            setError(
-              cause instanceof Error
-                ? cause.message
-                : "Could not accept invitation"
-            )
-            setPending(false)
-          })
-        )
+      acceptInvitation.pipe(
+        Effect.andThen(opened),
+        Effect.catch(failed("Could not accept invitation"))
       )
+    )
+  }
+
+  // Sets up the invited account, signs in, and accepts, in one step. The link
+  // itself authorizes the setup, so no second email is needed.
+  async function createAccount(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (pending || !reference) return
+    const form = new FormData(event.currentTarget)
+    const password = String(form.get("password") ?? "")
+    if (password !== form.get("confirmation")) {
+      setError("The passwords do not match")
+      return
+    }
+    setPending(true)
+    setError(null)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { email } = yield* Effect.tryPromise({
+          try: () =>
+            claimInvitedAccount({
+              data: {
+                invitation: reference,
+                password,
+                displayName: String(form.get("name") ?? ""),
+              },
+            }),
+          catch: (cause) => cause,
+        })
+        const signedIn = yield* Effect.promise(() =>
+          authClient.signIn.email({ email, password })
+        )
+        if (signedIn.error) {
+          window.location.assign(
+            `/?email=${encodeURIComponent(email)}&redirect=${encodeURIComponent(invitePath)}`
+          )
+          return
+        }
+        // The account is ready either way; if accepting fails, the
+        // invitation is still there to accept once signed in.
+        yield* acceptInvitation.pipe(
+          Effect.andThen(opened),
+          Effect.catch(() =>
+            Effect.sync(() => window.location.assign(invitePath))
+          )
+        )
+      }).pipe(Effect.catch(failed("Could not create your account")))
     )
   }
 
@@ -220,29 +277,97 @@ export function InvitationPage({
                   </Button>
                 </div>
               )
-            ) : (
+            ) : preview.accountExists ? (
               <Button className="mt-6 h-11 w-full" asChild>
                 <Link
                   to="/"
-                  search={{
-                    email: preview.email,
-                    redirect: invitePath,
-                    ...(preview.accountExists ? {} : { signup: true }),
-                  }}
+                  search={{ email: preview.email, redirect: invitePath }}
                 >
-                  {preview.accountExists
-                    ? "Sign in to accept"
-                    : "Create an account"}{" "}
-                  <ArrowRight />
+                  Sign in to accept <ArrowRight />
                 </Link>
               </Button>
+            ) : (
+              <InvitedAccountForm
+                email={preview.email}
+                pending={pending}
+                onSubmit={(event) => void createAccount(event)}
+              />
             )}
             <p className="type-meta mt-5 text-center text-muted-foreground">
-              Only the invited, verified account can accept this invitation.
+              {user || preview.accountExists
+                ? "Only the invited, verified account can accept this invitation."
+                : "Creating your account accepts this invitation."}
             </p>
           </>
         )}
       </section>
     </main>
+  )
+}
+
+function InvitedAccountForm({
+  email,
+  pending,
+  onSubmit,
+}: {
+  email: string
+  pending: boolean
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <form onSubmit={onSubmit} className="mt-6 grid gap-4">
+      <label className="type-control-sm grid gap-1.5 text-foreground">
+        Email
+        <Input
+          name="email"
+          type="email"
+          autoComplete="username"
+          value={email}
+          readOnly
+          className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
+        />
+      </label>
+      <label className="type-control-sm grid gap-1.5 text-foreground">
+        Display name
+        <Input
+          name="name"
+          className="h-11 bg-card/60"
+          autoComplete="nickname"
+          minLength={1}
+          maxLength={DISPLAY_NAME_MAX_LENGTH}
+          required
+          autoFocus
+        />
+      </label>
+      <label className="type-control-sm grid gap-1.5 text-foreground">
+        Password
+        <Input
+          name="password"
+          type="password"
+          className="h-11 bg-card/60 font-mono"
+          placeholder="At least 12 characters"
+          autoComplete="new-password"
+          minLength={12}
+          maxLength={128}
+          required
+        />
+      </label>
+      <label className="type-control-sm grid gap-1.5 text-foreground">
+        Confirm password
+        <Input
+          name="confirmation"
+          type="password"
+          className="h-11 bg-card/60 font-mono"
+          autoComplete="new-password"
+          minLength={12}
+          maxLength={128}
+          required
+        />
+      </label>
+      <Button className="mt-1 h-11 w-full" disabled={pending}>
+        {pending ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}
+        Create account &amp; join
+      </Button>
+    </form>
   )
 }

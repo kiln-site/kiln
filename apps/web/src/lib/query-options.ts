@@ -12,6 +12,7 @@ import type {
 
 import type { BackupTarget } from "@workspace/contracts"
 import { getAccessCapabilities, getInvitationPreview } from "@/server/access"
+import type { InvitationReference } from "@/lib/invitation-auth"
 import { getActivity } from "@/server/activity"
 import {
   getAppBackups,
@@ -785,10 +786,12 @@ export function activityQueryOptions(from?: string, to?: string) {
   })
 }
 
-export function invitationPreviewQueryOptions(token: string) {
+export function invitationPreviewQueryOptions(reference: InvitationReference) {
   return queryOptions({
-    queryKey: queryKeys.access.invitation(token),
-    queryFn: () => getInvitationPreview({ data: { token } }),
+    queryKey: queryKeys.access.invitation(
+      "token" in reference ? reference.token : reference.id
+    ),
+    queryFn: () => getInvitationPreview({ data: reference }),
     staleTime: 30_000,
   })
 }

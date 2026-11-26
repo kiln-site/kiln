@@ -28,6 +28,7 @@ import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
 import { invitationDestination } from "@/lib/invitation-auth"
+import { isInvitationEmailKey } from "@/lib/invitation-email-key"
 import { grantHasPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -465,7 +466,11 @@ export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
 export const getInvitationPreview = createServerFn({ method: "GET" })
   .validator(
     z
-      .object({ token: z.string().min(32).optional(), id: z.uuid().optional() })
+      .object({
+        token: z.string().min(32).optional(),
+        id: z.uuid().optional(),
+        key: z.string().max(128).optional(),
+      })
       .refine(
         (value) => Boolean(value.token || value.id),
         "An invitation is required"
@@ -474,9 +479,13 @@ export const getInvitationPreview = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const invitation = await readInvitation(data.token, data.id)
     if (!invitation || !isInvitationPending(invitation)) return null
-    // A token proves receipt of the email. A bare ID does not, so only the
-    // recipient or an administrator may resolve it to an address.
-    if (!data.token) {
+    // A token, or the key only the invitation's email carries, proves the
+    // link came from the inviter. A bare ID does not, so only the recipient
+    // or an administrator may resolve it to an address.
+    if (
+      !data.token &&
+      !(data.key && isInvitationEmailKey(invitation.id, data.key))
+    ) {
       const viewer = await getCurrentUser()
       if (
         !viewer ||

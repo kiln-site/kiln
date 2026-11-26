@@ -51,15 +51,31 @@ on the sessions it already has.
 
 ### Setting up an invited account
 
-An account with no password or passkey is set up with a **claim**: a
+An invited person sets up their account from the invitation link itself.
+Opening it while signed out shows the invitation with a name and password
+form, and **Create account & join** sets the password, signs them in, and
+accepts the invitation. Either link works:
+
+- The emailed link carries a key derived from the invitation's ID and
+  `BETTER_AUTH_SECRETS` (`invitation-email-key.ts`). Only that email has it,
+  so setting up from it records email verification.
+- The token link the inviter copies records manual verification by the
+  inviter, who vouched for whoever they gave it to.
+
+The link sets up the account once. Afterwards the account has a password and
+the link only leads to sign-in. A person whose account already has a password
+or passkey signs in, and returns to the invitation.
+
+An account with no password or passkey can also be set up with a **claim**: a
 single-use link that expires after 30 minutes. The person can request one by
-email while email delivery is configured, at most once a minute. A platform
-administrator can also issue one and share it by hand. Redeeming a claim sets
-the password and records email or manual verification, depending on which
-kind it was. Issuing a claim invalidates the account's earlier ones. Redeeming
-one doesn't accept any invitation. With public sign-up off, Better Auth's
-sign-up endpoint refuses new accounts, so invited people use their claim
-instead.
+email while email delivery is configured, at most once a minute, from **Claim
+an invited account** on the sign-in page. A platform administrator can also
+issue one and share it by hand. Redeeming a claim sets the password and
+records email or manual verification, depending on which kind it was. Issuing
+a claim invalidates the account's earlier ones. Setting up the account either
+way spends any open claim. Redeeming a claim doesn't accept any invitation.
+With public sign-up off, Better Auth's sign-up endpoint refuses new accounts,
+so invited people use their invitation or a claim instead.
 
 ## Invitations
 
@@ -91,10 +107,10 @@ attempt fails. A pending grant with no live attempt grants nothing.
 Email goes out after the transaction commits, as a durable operation
 (`access-invitation-delivery.ts`). It retries after 2, 10, and 30 minutes,
 then 2 hours, then every 6 hours, and stops once the invitation is answered,
-revoked, or expired. The emailed link names the invitation by ID, so the
-recipient must sign in as the invited account to answer it. The inviter gets
-a token link they can share themselves. A failed email never undoes the
-account or the invitation.
+revoked, or expired. The emailed link names the invitation by ID with its
+key, so sending it again needs no stored secret. A signed-in recipient answers
+it as the invited account. The inviter gets a token link they can share
+themselves. A failed email never undoes the account or the invitation.
 
 Platform administrators give platform roles. An account picked on the Users
 page, or any account that can already sign in, gets the role at once. Any

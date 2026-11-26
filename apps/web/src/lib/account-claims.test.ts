@@ -1,12 +1,16 @@
 import { expect, layer } from "@effect/vitest"
+import { createHash } from "node:crypto"
+
 import { Effect } from "effect"
 import { afterEach, beforeEach, vi } from "vite-plus/test"
 
 import {
   issueManualAccountClaim,
   redeemAccountClaim,
+  redeemInvitedAccount,
   requestEmailAccountClaim,
 } from "@/lib/account-claims"
+import { invitationEmailKey } from "@/lib/invitation-email-key"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -89,6 +93,7 @@ beforeEach(() => {
   vi.stubEnv("RESEND_API_KEY", "test-only")
   vi.stubEnv("RESEND_FROM_EMAIL", "kiln@example.test")
   vi.stubEnv("KILN_URL", "https://kiln.example.test")
+  vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -154,6 +159,112 @@ describeMysql("credentialless identity claim", () => {
 
         expect(yield* passwords).toEqual(["existing-hash"])
         expect(yield* openClaims).toBe(1)
+      })
+    )
+  })
+})
+
+const invitationId = "7d1f4b8e-2a3c-4d5e-8f90-1a2b3c4d5e6f"
+const invitationToken = "t".repeat(43)
+
+const seedInvitation = (fields: Record<string, unknown> = {}) =>
+  Effect.gen(function* () {
+    yield* seedRecipient
+    yield* insertRows("invitation", {
+      id: invitationId,
+      token_hash: createHash("sha256").update(invitationToken).digest("hex"),
+      email,
+      user_id: "recipient",
+      access_type: "relay_creator",
+      invited_by: "admin",
+      expires_at: Date.now() + 60_000,
+      created_at: Date.now() - 60_000,
+      ...fields,
+    })
+  })
+
+const redeemInvitation = (
+  invitation: Parameters<typeof redeemInvitedAccount>[0]["invitation"]
+) => Effect.tryPromise(() => redeemInvitedAccount({ ...input, invitation }))
+
+describeMysql("setting up an invited account from its invitation", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "takes the emailed link as proof of the mailbox, and only once",
+      () =>
+        Effect.gen(function* () {
+          yield* seedInvitation()
+
+          yield* Effect.flip(
+            redeemInvitation({ id: invitationId, key: "k".repeat(43) })
+          )
+          expect(yield* passwords).toEqual([])
+
+          const emailed = {
+            id: invitationId,
+            key: invitationEmailKey(invitationId),
+          }
+          expect(yield* redeemInvitation(emailed)).toEqual({ email })
+          expect(yield* recipient).toEqual({
+            name: "Recipient",
+            emailVerified: true,
+            emailVerifiedAt: true,
+            manuallyVerifiedAt: false,
+            manuallyVerifiedBy: null,
+          })
+
+          // The account now has a password, so the link sets nothing again.
+          yield* Effect.flip(redeemInvitation(emailed))
+          yield* Effect.flip(redeemInvitation({ token: invitationToken }))
+          expect(yield* passwords).toEqual(["hashed-password"])
+        })
+    )
+
+    it.effect(
+      "records a copied link as the inviter's vouching and spends earlier setup links",
+      () =>
+        Effect.gen(function* () {
+          yield* seedInvitation()
+          yield* issueManual
+
+          yield* redeemInvitation({ token: invitationToken })
+
+          expect(yield* recipient).toEqual({
+            name: "Recipient",
+            emailVerified: false,
+            emailVerifiedAt: false,
+            manuallyVerifiedAt: true,
+            manuallyVerifiedBy: "admin",
+          })
+          expect(yield* openClaims).toBe(0)
+        })
+    )
+
+    it.effect("refuses an invitation that is no longer open", () =>
+      Effect.gen(function* () {
+        yield* seedInvitation({ cancelled_at: Date.now() })
+        yield* Effect.flip(redeemInvitation({ token: invitationToken }))
+
+        yield* seedInvitation({ expires_at: Date.now() - 1 })
+        yield* Effect.flip(
+          redeemInvitation({
+            id: invitationId,
+            key: invitationEmailKey(invitationId),
+          })
+        )
+
+        expect(yield* passwords).toEqual([])
+      })
+    )
+
+    it.effect("never replaces an invited account's existing credential", () =>
+      Effect.gen(function* () {
+        yield* seedInvitation()
+        yield* credential("existing-hash")
+
+        yield* Effect.flip(redeemInvitation({ token: invitationToken }))
+
+        expect(yield* passwords).toEqual(["existing-hash"])
       })
     )
   })

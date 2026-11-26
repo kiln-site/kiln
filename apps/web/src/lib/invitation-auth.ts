@@ -1,38 +1,44 @@
 import { Result } from "effect"
 
 const INVITE_TOKEN_MIN_LENGTH = 32
+const INVITATION_ID =
+  /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/iu
+
+/**
+ * What an invitation link carries: the token of a link the inviter copied, or
+ * the ID and key of the emailed one. Either lets a new person set up the
+ * invited account.
+ */
+export type InvitationReference =
+  | { token: string }
+  | { id: string; key: string }
 
 export function invitePath(token: string): string {
   return `/invite?token=${encodeURIComponent(token)}`
 }
 
-function inviteTokenFromRedirect(
-  redirectPath: string | undefined
-): string | null {
-  if (!redirectPath?.startsWith("/invite?")) return null
-  const token = Result.getOrNull(
-    Result.try(() =>
-      new URL(redirectPath, "http://kiln.local").searchParams.get("token")
-    )
-  )
-  if (!token || token.length < INVITE_TOKEN_MIN_LENGTH) return null
-  return token
+export function invitationReferencePath(
+  reference: InvitationReference
+): string {
+  return "token" in reference
+    ? invitePath(reference.token)
+    : `/invite?id=${encodeURIComponent(reference.id)}&key=${encodeURIComponent(reference.key)}`
 }
 
+/** The invitation a sign-in page returns to, with whatever proof it had. */
 export function invitationReferenceFromRedirect(
   redirectPath: string | undefined
-): { token: string } | { id: string } | null {
-  const token = inviteTokenFromRedirect(redirectPath)
-  if (token) return { token }
+): { token: string } | { id: string; key?: string } | null {
   if (!redirectPath?.startsWith("/invite?")) return null
-  const parsed = Result.getOrNull(
-    Result.try(() => new URL(redirectPath, "https://kiln.invalid"))
+  const search = Result.getOrNull(
+    Result.try(() => new URL(redirectPath, "http://kiln.local").searchParams)
   )
-  const id = parsed?.searchParams.get("id")
-  return id &&
-    /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/iu.test(id)
-    ? { id }
-    : null
+  const token = search?.get("token")
+  if (token && token.length >= INVITE_TOKEN_MIN_LENGTH) return { token }
+  const id = search?.get("id")
+  if (!id || !INVITATION_ID.test(id)) return null
+  const key = search?.get("key")
+  return key ? { id, key } : { id }
 }
 
 export function invitationDestination(invitation: {

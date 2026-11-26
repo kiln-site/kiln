@@ -45,7 +45,6 @@ export function AuthPage({
   emailDeliveryEnabled = false,
   forgotPassword,
   initialEmail,
-  initialMode,
   lockedEmail,
   setupRequired = false,
   setupToken,
@@ -60,7 +59,6 @@ export function AuthPage({
   emailDeliveryEnabled?: boolean
   forgotPassword?: boolean
   initialEmail?: string
-  initialMode?: "claim"
   lockedEmail?: string
   setupRequired?: boolean
   setupToken?: string
@@ -72,13 +70,11 @@ export function AuthPage({
   const [mode, setMode] = React.useState<AuthMode>(
     setupRequired
       ? "setup"
-      : initialMode === "claim"
-        ? "claim"
-        : forgotPassword
-          ? "forgot-password"
-          : startWithSignup && signupEnabled
-            ? "sign-up"
-            : "sign-in"
+      : forgotPassword
+        ? "forgot-password"
+        : startWithSignup && signupEnabled
+          ? "sign-up"
+          : "sign-in"
   )
   const [pending, setPending] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -834,12 +830,12 @@ function AuthHeading({
       title: addingAccount
         ? "Add another account"
         : lockedEmail
-          ? "Sign in to continue"
+          ? "Sign in to accept"
           : "Welcome to Kiln",
       description: addingAccount
         ? "Your other accounts stay signed in on this browser."
         : lockedEmail
-          ? "Sign in to your account to continue."
+          ? "Sign in to your account to accept your invitation."
           : signupEnabled
             ? "Sign in or create a new account."
             : "Sign in to your control plane.",

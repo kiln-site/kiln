@@ -19,6 +19,8 @@ import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-rev
 import { databaseTable } from "@/lib/database-config"
 import { parseDisplayName } from "@/lib/display-name"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
+import type { InvitationReference } from "@/lib/invitation-auth"
+import { isInvitationEmailKey } from "@/lib/invitation-email-key"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 interface ClaimUser extends RowDataPacket {
@@ -339,6 +341,179 @@ export async function redeemAccountClaim(input: {
                   issuerId: claim.created_by,
                   claimId: claim.id,
                   method: claim.proof_method,
+                }),
+                now,
+              ]
+            )
+            const revision = yield* advanceSubjectAcrossEnabledRelaysEffect(
+              transaction,
+              user.id,
+              [{ kind: "subject_relay" }]
+            )
+            return { ...revision, userId: user.id, email: user.email }
+          })
+      )
+    })
+  )
+  for (const relayId of result.relayIds) wakeAuthorizationDelivery(relayId)
+  publishRealtimeChange({
+    type: "access.changed",
+    reauthenticate: true,
+    userIds: [result.userId],
+  })
+  return { email: result.email }
+}
+
+interface InvitedAccountRow extends RowDataPacket {
+  id: string
+  user_id: string
+  invited_by: string | null
+  expires_at: number
+  accepted_at: number | null
+  declined_at: number | null
+  revoked_at: number | null
+  cancelled_at: number | null
+}
+
+const INVITATION_UNAVAILABLE =
+  "This invitation is invalid, expired, or already used"
+
+// The invitation link is the authority to set up the account it names, as a
+// claim's link is. The emailed link's key proves the mailbox. A token link
+// the inviter shared proves only that the inviter vouched for whoever opens
+// it, so it's recorded as their manual verification. Either way, it works
+// once: the account has a password afterwards, and accepting ends the
+// invitation.
+function invitationLookup(reference: InvitationReference) {
+  if ("token" in reference)
+    return {
+      column: "token_hash",
+      value: tokenHash(reference.token),
+      proof: "manual" as const,
+    }
+  if (!isInvitationEmailKey(reference.id, reference.key)) return null
+  return { column: "id", value: reference.id, proof: "email" as const }
+}
+
+function invitationIsOpen(row: InvitedAccountRow, now: number) {
+  return (
+    !row.accepted_at &&
+    !row.declined_at &&
+    !row.revoked_at &&
+    !row.cancelled_at &&
+    Number(row.expires_at) > now
+  )
+}
+
+export async function redeemInvitedAccount(input: {
+  invitation: InvitationReference
+  password: string
+  displayName: string
+}) {
+  const name = parseDisplayName(input.displayName)
+  if (input.password.length < 12 || input.password.length > 128)
+    throw new Error("Password must contain 12–128 characters")
+  const lookup = invitationLookup(input.invitation)
+  if (!lookup) throw new Error(INVITATION_UNAVAILABLE)
+  const select = `SELECT id, user_id, invited_by, expires_at, accepted_at, declined_at, revoked_at, cancelled_at
+    FROM ${databaseTable("invitation")} WHERE ${lookup.column} = ? LIMIT 1`
+  // Reject a dead link or a set-up account before hashing the password.
+  await runAppEffect(
+    "account.invitation.preflight",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
+      const rows = yield* database.queryRows<InvitedAccountRow>(
+        "account.invitation.preflight",
+        select,
+        [lookup.value]
+      )
+      if (!rows[0] || !invitationIsOpen(rows[0], now))
+        return yield* Effect.fail(new Error(INVITATION_UNAVAILABLE))
+    })
+  )
+  const [context, { wakeAuthorizationDelivery }] = await Promise.all([
+    auth.$context,
+    import("@/lib/authorization-delivery"),
+  ])
+  const password = await context.password.hash(input.password)
+  const result = await runAppEffect(
+    "account.invitation.redeem",
+    Effect.gen(function* () {
+      const database = yield* Database
+      return yield* database.transaction(
+        "account.invitation.redeem",
+        (transaction) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const candidates = yield* transaction.queryRows<InvitedAccountRow>(
+              select,
+              [lookup.value]
+            )
+            if (!candidates[0])
+              return yield* Effect.fail(new Error(INVITATION_UNAVAILABLE))
+            const users = yield* transaction.queryRows<
+              ClaimUser & AccountPolicy
+            >(
+              `SELECT id, email, emailVerifiedAt, manuallyVerifiedAt, legacyVerificationRecordedAt
+                 FROM ${databaseTable("user")} WHERE id = ? FOR UPDATE`,
+              [candidates[0].user_id]
+            )
+            const invitations = yield* transaction.queryRows<InvitedAccountRow>(
+              `${select} FOR UPDATE`,
+              [lookup.value]
+            )
+            const user = users[0]
+            const invitation = invitations[0]
+            if (
+              !user ||
+              !invitation ||
+              invitation.user_id !== user.id ||
+              !invitationIsOpen(invitation, now)
+            )
+              return yield* Effect.fail(new Error(INVITATION_UNAVAILABLE))
+            if (yield* hasCredentials(transaction, user.id))
+              return yield* Effect.fail(
+                new Error(
+                  "This account is already set up. Sign in to accept the invitation."
+                )
+              )
+            const nowDate = new Date(now)
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("account")} (id, accountId, providerId, userId, password, createdAt, updatedAt)
+         VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
+              [randomUUID(), user.id, user.id, password, nowDate, nowDate]
+            )
+            // An inviter's vouching adds nothing to evidence the account
+            // already has.
+            const vouched =
+              lookup.proof === "manual" && !isAccountVerified(user)
+            yield* transaction.execute(
+              lookup.proof === "email"
+                ? `UPDATE ${databaseTable("user")} SET name = ?, emailVerified = TRUE, emailVerifiedAt = ?, updatedAt = ? WHERE id = ?`
+                : vouched
+                  ? `UPDATE ${databaseTable("user")} SET name = ?, manuallyVerifiedAt = ?, manuallyVerifiedBy = ?, updatedAt = ? WHERE id = ?`
+                  : `UPDATE ${databaseTable("user")} SET name = ?, updatedAt = ? WHERE id = ?`,
+              lookup.proof === "email"
+                ? [name, nowDate, nowDate, user.id]
+                : vouched
+                  ? [name, nowDate, invitation.invited_by, nowDate, user.id]
+                  : [name, nowDate, user.id]
+            )
+            // Any setup link already sent for this account is spent too.
+            yield* transaction.execute(
+              `UPDATE ${databaseTable("account_claim")} SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL`,
+              [now, user.id]
+            )
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.invitation.redeemed', ?, ?)`,
+              [
+                user.id,
+                JSON.stringify({
+                  actorId: user.id,
+                  invitationId: invitation.id,
+                  inviterId: invitation.invited_by,
+                  method: lookup.proof,
                 }),
                 now,
               ]

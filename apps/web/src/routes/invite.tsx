@@ -9,39 +9,69 @@ import { z } from "zod"
 import { InvitationPage } from "@/components/invitation-page"
 import { recoverPromise } from "@/effect/promise"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { invitePath } from "@/lib/invitation-auth"
+import {
+  invitationReferencePath,
+  invitePath,
+  type InvitationReference,
+} from "@/lib/invitation-auth"
 import { pageTitle } from "@/lib/page-title"
 import { invitationPreviewQueryOptions } from "@/lib/query-options"
-import { getInvitationPreview } from "@/server/access"
 import { getAuthState } from "@/server/auth"
+
+// Drops a malformed secret rather than failing the whole page.
+const secret = (min: number, max: number) =>
+  z.preprocess(
+    (value) =>
+      typeof value === "string" && value.length >= min && value.length <= max
+        ? value
+        : undefined,
+    z.string().min(min).max(max).optional()
+  )
 
 const invitationSearchSchema = z.object({
   id: z.uuid().optional(),
-  token: z.preprocess(
-    (value) =>
-      typeof value === "string" && value.length >= 32 && value.length <= 256
-        ? value
-        : undefined,
-    z.string().min(32).max(256).optional()
-  ),
+  key: secret(32, 128),
+  token: secret(32, 256),
 })
 
 export const Route = createFileRoute("/invite")({
   validateSearch: invitationSearchSchema,
-  loaderDeps: ({ search }) => ({ token: search.token }),
-  beforeLoad: async ({ search }) => {
+  loaderDeps: ({ search }) => ({
+    id: search.id,
+    key: search.key,
+    token: search.token,
+  }),
+  beforeLoad: async ({ context, search }) => {
     const state = await getAuthState()
     const token = search.token
     if (search.id) {
-      if (!state.user)
+      const returnPath = search.key
+        ? invitationReferencePath({ id: search.id, key: search.key })
+        : `/invite?id=${encodeURIComponent(search.id)}`
+      if (!state.user) {
+        const preview = search.key
+          ? await recoverPromise(
+              () =>
+                context.queryClient.ensureQueryData(
+                  invitationPreviewQueryOptions({
+                    id: search.id!,
+                    key: search.key!,
+                  })
+                ),
+              () => null
+            )
+          : null
+        // A new person sets up their account right here.
+        if (preview && !preview.accountExists) return state
         throw redirect({
           to: "/",
-          search: { redirect: `/invite?id=${encodeURIComponent(search.id)}` },
+          search: { email: preview?.email, redirect: returnPath },
         })
+      }
       if (!isAccountEnabled(state.user) || !isAccountVerified(state.user))
         throw redirect({
           to: "/account-status",
-          search: { redirect: `/invite?id=${encodeURIComponent(search.id)}` },
+          search: { redirect: returnPath },
         })
       const invitation = await recoverPromise(
         () => getResourceInvitation({ data: { id: search.id! } }),
@@ -77,10 +107,14 @@ export const Route = createFileRoute("/invite")({
       return state
     }
     const preview = await recoverPromise(
-      () => getInvitationPreview({ data: { token } }),
+      () =>
+        context.queryClient.ensureQueryData(
+          invitationPreviewQueryOptions({ token })
+        ),
       () => null
     )
-    if (!preview) return state
+    // A new person sets up their account right here.
+    if (!preview || !preview.accountExists) return state
     throw redirect({
       to: "/",
       search: {
@@ -89,42 +123,62 @@ export const Route = createFileRoute("/invite")({
       },
     })
   },
-  loader: ({ context, deps }) =>
-    deps.token
+  loader: ({ context, deps }) => {
+    const reference = pageReference(deps, context.user)
+    return reference
       ? context.queryClient.ensureQueryData(
-          invitationPreviewQueryOptions(deps.token)
+          invitationPreviewQueryOptions(reference)
         )
-      : null,
-  head: () => ({ meta: [{ title: pageTitle("Invitation") }] }),
+      : null
+  },
+  head: () => ({
+    meta: [
+      { title: pageTitle("Invitation") },
+      { name: "referrer", content: "no-referrer" },
+    ],
+  }),
+  headers: () => ({ "Cache-Control": "no-store" }),
   component: InviteRoute,
 })
 
+// The invitation this page shows itself, rather than the resource dialog a
+// signed-in recipient gets for an emailed link.
+function pageReference(
+  search: { id?: string; key?: string; token?: string },
+  user: AuthenticatedUser | null
+): InvitationReference | null {
+  if (search.id)
+    return search.key && !user ? { id: search.id, key: search.key } : null
+  return search.token ? { token: search.token } : null
+}
+
 function InviteRoute() {
-  const { token, id } = Route.useSearch()
+  const search = Route.useSearch()
   const { user } = Route.useRouteContext()
   const navigate = useNavigate()
-  if (id && user)
+  if (search.id && user)
     return (
       <ResourceInvitationDialog
-        invitationId={id}
+        invitationId={search.id}
         onClose={() => void navigate({ to: "/" })}
       />
     )
-  if (!token) {
-    return <InvitationPage preview={null} token="" user={user} />
+  const reference = pageReference(search, user)
+  if (!reference) {
+    return <InvitationPage preview={null} reference={null} user={user} />
   }
-  return <InvitationWithToken token={token} user={user} />
+  return <InvitationWithReference reference={reference} user={user} />
 }
 
-function InvitationWithToken({
-  token,
+function InvitationWithReference({
+  reference,
   user,
 }: {
-  token: string
+  reference: InvitationReference
   user: AuthenticatedUser | null
 }) {
   const { data: preview } = useSuspenseQuery(
-    invitationPreviewQueryOptions(token)
+    invitationPreviewQueryOptions(reference)
   )
-  return <InvitationPage preview={preview} token={token} user={user} />
+  return <InvitationPage preview={preview} reference={reference} user={user} />
 }

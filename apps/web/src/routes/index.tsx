@@ -45,12 +45,7 @@ export const Route = createFileRoute("/")({
     }
     if (state.user && search.addAccount && !state.user.isDevelopmentBypass) {
       await rememberActiveBrowserAccountSession()
-      return {
-        ...state,
-        addingAccount: true,
-        invitationEmail: undefined,
-        invitationSignup: false,
-      }
+      return { ...state, addingAccount: true, invitationEmail: undefined }
     }
     if (!state.user) {
       const reference = invitationReferenceFromRedirect(search.redirect)
@@ -60,12 +55,13 @@ export const Route = createFileRoute("/")({
             () => null
           )
         : null
-      const invitationSignup = Boolean(invitation && !invitation.accountExists)
+      // A new person sets up their account on the invitation itself.
+      if (invitation && !invitation.accountExists && search.redirect)
+        throw redirect({ href: search.redirect })
       return {
         ...state,
         addingAccount: false,
         invitationEmail: invitation?.email,
-        invitationSignup,
       }
     }
     if (!isAccountEnabled(state.user) || !isAccountVerified(state.user)) {
@@ -134,11 +130,7 @@ export const Route = createFileRoute("/")({
     meta: [
       {
         title: pageTitle(
-          match.context.invitationSignup
-            ? "Create Account"
-            : match.context.addingAccount
-              ? "Add Account"
-              : "Sign In"
+          match.context.addingAccount ? "Add Account" : "Sign In"
         ),
       },
     ],
@@ -153,7 +145,6 @@ function LoginRoute() {
     developmentBypassEnabled,
     emailDeliveryEnabled,
     invitationEmail,
-    invitationSignup,
     setupRequired,
     setupTokenRequired,
     signupEnabled,
@@ -161,18 +152,17 @@ function LoginRoute() {
   return (
     <AuthPage
       addingAccount={addingAccount}
-      key={`${invitationEmail ?? ""}:${invitationSignup ? "signup" : "signin"}:${search.forgot ? "forgot" : ""}`}
+      key={`${invitationEmail ?? ""}:${search.forgot ? "forgot" : ""}`}
       developmentBypassEnabled={developmentBypassEnabled && !addingAccount}
       emailDeliveryEnabled={emailDeliveryEnabled}
       initialEmail={invitationEmail ?? search.email}
-      lockedEmail={invitationSignup ? invitationEmail : undefined}
-      initialMode={invitationSignup ? "claim" : undefined}
+      lockedEmail={invitationEmail}
       forgotPassword={Boolean(search.forgot)}
       redirectPath={search.redirect}
       setupRequired={setupRequired}
       setupToken={search.setup}
       setupTokenRequired={setupTokenRequired}
-      signupEnabled={signupEnabled || invitationSignup}
+      signupEnabled={signupEnabled}
       verified={Boolean(search.verified)}
     />
   )

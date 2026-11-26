@@ -21,6 +21,8 @@ const publicServerFunctions: Record<string, string> = {
   "users.ts:prepareAccountSignup": "Signed-out sign-up check, rate limited",
   "users.ts:getAccountClaimPreview": "Authorized by the emailed claim token",
   "users.ts:claimAccount": "Authorized by the emailed claim token",
+  "users.ts:claimInvitedAccount":
+    "Authorized by the invitation link's token or emailed key, rate limited",
   "browser-accounts.ts:getBrowserAccounts":
     "Lists only accounts this browser holds signed session cookies for",
   "browser-accounts.ts:switchBrowserAccountSession":
