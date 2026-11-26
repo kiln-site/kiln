@@ -10,7 +10,7 @@ import {
   redeemInvitedAccount,
   requestEmailAccountClaim,
 } from "@/lib/account-claims"
-import { invitationEmailKey } from "@/lib/invitation-email-key"
+import { invitationLinkKey } from "@/lib/invitation-link-key"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -202,7 +202,7 @@ describeMysql("setting up an invited account from its invitation", () => {
 
           const emailed = {
             id: invitationId,
-            key: invitationEmailKey(invitationId),
+            key: invitationLinkKey(invitationId, "email"),
           }
           expect(yield* redeemInvitation(emailed)).toEqual({ email })
           expect(yield* recipient).toEqual({
@@ -240,6 +240,27 @@ describeMysql("setting up an invited account from its invitation", () => {
         })
     )
 
+    it.effect(
+      "takes the shared link as the inviter's vouching, never mailbox proof",
+      () =>
+        Effect.gen(function* () {
+          yield* seedInvitation()
+
+          yield* redeemInvitation({
+            id: invitationId,
+            key: invitationLinkKey(invitationId, "share"),
+          })
+
+          expect(yield* recipient).toEqual({
+            name: "Recipient",
+            emailVerified: false,
+            emailVerifiedAt: false,
+            manuallyVerifiedAt: true,
+            manuallyVerifiedBy: "admin",
+          })
+        })
+    )
+
     it.effect("refuses an invitation that is no longer open", () =>
       Effect.gen(function* () {
         yield* seedInvitation({ cancelled_at: Date.now() })
@@ -249,7 +270,7 @@ describeMysql("setting up an invited account from its invitation", () => {
         yield* Effect.flip(
           redeemInvitation({
             id: invitationId,
-            key: invitationEmailKey(invitationId),
+            key: invitationLinkKey(invitationId, "email"),
           })
         )
 

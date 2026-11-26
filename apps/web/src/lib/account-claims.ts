@@ -20,7 +20,7 @@ import { databaseTable } from "@/lib/database-config"
 import { parseDisplayName } from "@/lib/display-name"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
 import type { InvitationReference } from "@/lib/invitation-auth"
-import { isInvitationEmailKey } from "@/lib/invitation-email-key"
+import { invitationLinkPurpose } from "@/lib/invitation-link-key"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 interface ClaimUser extends RowDataPacket {
@@ -379,11 +379,11 @@ const INVITATION_UNAVAILABLE =
   "This invitation is invalid, expired, or already used"
 
 // The invitation link is the authority to set up the account it names, as a
-// claim's link is. The emailed link's key proves the mailbox. A token link
-// the inviter shared proves only that the inviter vouched for whoever opens
-// it, so it's recorded as their manual verification. Either way, it works
-// once: the account has a password afterwards, and accepting ends the
-// invitation.
+// claim's link is. The emailed link's key proves the mailbox. A link the
+// inviter shared (their token, or the access table's share key) proves only
+// that the inviter vouched for whoever opens it, so it's recorded as their
+// manual verification. Either way, it works once: the account has a password
+// afterwards, and accepting ends the invitation.
 function invitationLookup(reference: InvitationReference) {
   if ("token" in reference)
     return {
@@ -391,8 +391,13 @@ function invitationLookup(reference: InvitationReference) {
       value: tokenHash(reference.token),
       proof: "manual" as const,
     }
-  if (!isInvitationEmailKey(reference.id, reference.key)) return null
-  return { column: "id", value: reference.id, proof: "email" as const }
+  const purpose = invitationLinkPurpose(reference.id, reference.key)
+  if (!purpose) return null
+  return {
+    column: "id",
+    value: reference.id,
+    proof: purpose === "email" ? ("email" as const) : ("manual" as const),
+  }
 }
 
 function invitationIsOpen(row: InvitedAccountRow, now: number) {

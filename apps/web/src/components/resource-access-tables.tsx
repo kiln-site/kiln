@@ -91,7 +91,6 @@ type PersonHandlers = Pick<
   "access" | "onEdit" | "onTransfer" | "onRevoke" | "onAccept"
 > & { onView: (person: Person) => void }
 
-
 export const ResourcePeopleTable = memo(function ResourcePeopleTable({
   access,
   source,
@@ -231,24 +230,24 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
       }
     >
       <DataTable
-          definition={definition}
-          source={source}
-          emptyState={
-            <DataTableEmptyState
-              icon={
-                <Users className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
-              }
-              title={
-                search ? "No users match your search" : "No additional users"
-              }
-              description={
-                search
-                  ? "Try a name or email address."
-                  : "Invite someone to share access to this resource."
-              }
-            />
-          }
-        />
+        definition={definition}
+        source={source}
+        emptyState={
+          <DataTableEmptyState
+            icon={
+              <Users className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+            }
+            title={
+              search ? "No users match your search" : "No additional users"
+            }
+            description={
+              search
+                ? "Try a name or email address."
+                : "Invite someone to share access to this resource."
+            }
+          />
+        }
+      />
       {viewing ? (
         <PersonPermissionsDialog
           person={viewing}
@@ -383,10 +382,13 @@ const PersonActions = memo(function PersonActions({
           {person.invitationId ? (
             <CopyIdentifierMenuItem
               label="Invitation Link"
-              value={new URL(
-                `/invite?id=${encodeURIComponent(person.invitationId)}`,
-                window.location.origin
-              ).toString()}
+              value={
+                person.invitationUrl ??
+                new URL(
+                  `/invite?id=${encodeURIComponent(person.invitationId)}`,
+                  window.location.origin
+                ).toString()
+              }
             />
           ) : null}
           <CopyIdentifierMenuItem label="Email" value={person.email} />

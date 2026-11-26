@@ -28,7 +28,7 @@ import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
 import { invitationDestination } from "@/lib/invitation-auth"
-import { isInvitationEmailKey } from "@/lib/invitation-email-key"
+import { invitationLinkPurpose } from "@/lib/invitation-link-key"
 import { grantHasPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -479,12 +479,12 @@ export const getInvitationPreview = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const invitation = await readInvitation(data.token, data.id)
     if (!invitation || !isInvitationPending(invitation)) return null
-    // A token, or the key only the invitation's email carries, proves the
-    // link came from the inviter. A bare ID does not, so only the recipient
-    // or an administrator may resolve it to an address.
+    // A token or a link key proves the link came from the invitation's
+    // email or its inviter. A bare ID does not, so only the recipient or an
+    // administrator may resolve it to an address.
     if (
       !data.token &&
-      !(data.key && isInvitationEmailKey(invitation.id, data.key))
+      !(data.key && invitationLinkPurpose(invitation.id, data.key))
     ) {
       const viewer = await getCurrentUser()
       if (

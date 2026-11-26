@@ -8,13 +8,13 @@ import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
-import { invitationEmailKey } from "@/lib/invitation-email-key"
+import { invitationLinkKey } from "@/lib/invitation-link-key"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
 
 // Emails an invitation to a game server, database, or Relay, as an operation
 // on the invitation: sent once, tried again while it fails, and dropped once
 // the invitation is answered, revoked, or expired. Its link names the
-// invitation and carries a key derived from its ID (`invitation-email-key.ts`),
+// invitation and carries a key derived from its ID (`invitation-link-key.ts`),
 // never its token, so trying again later needs no stored secret.
 // Platform invitations link by token, which Hearth keeps only hashed, so
 // they're sent once as they're made (`server/access.ts`).
@@ -154,7 +154,7 @@ const sendInvitation = (
     }
     const inviteUrl = new URL("/invite", kilnPublicUrl())
     inviteUrl.searchParams.set("id", id)
-    inviteUrl.searchParams.set("key", invitationEmailKey(id))
+    inviteUrl.searchParams.set("key", invitationLinkKey(id, "email"))
     const sent = yield* Effect.tryPromise(async () => {
       const { error } = await new Resend(delivery.apiKey).emails.send(
         {

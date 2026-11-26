@@ -57,10 +57,15 @@ form, and **Create account & join** sets the password, signs them in, and
 accepts the invitation. Either link works:
 
 - The emailed link carries a key derived from the invitation's ID and
-  `BETTER_AUTH_SECRETS` (`invitation-email-key.ts`). Only that email has it,
+  `BETTER_AUTH_SECRETS` (`invitation-link-key.ts`). Only that email has it,
   so setting up from it records email verification.
-- The token link the inviter copies records manual verification by the
-  inviter, who vouched for whoever they gave it to.
+- A link the inviter shares records manual verification by the inviter, who
+  vouched for whoever they gave it to. That's the token link returned when
+  the invitation is made, or the access table's **Invitation Link**, which
+  carries a separate share key for viewers with `access.invite` there.
+  Whoever opens a shared link first sets up that email's Kiln account, with
+  any other invitations waiting for it, so it's as sensitive as a password
+  setup link.
 
 The link sets up the account once. Afterwards the account has a password and
 the link only leads to sign-in. A person whose account already has a password

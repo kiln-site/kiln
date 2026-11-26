@@ -35,6 +35,7 @@ import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
 import { resourceOwnerQuery } from "@/lib/resource-owners"
 import { kilnPublicUrl } from "@/lib/environment"
+import { invitationLinkKey } from "@/lib/invitation-link-key"
 import { requireEligibleResourceUser, requireVerifiedUser } from "@/server/auth"
 import {
   loadResourceGrantsEffect,
@@ -1170,6 +1171,7 @@ export const getResourceAccess = createServerFn({ method: "GET" })
     )
     if (!owners.length) throw new Error("Resource not found")
     const canReadPeople = permissions.includes("access.read")
+    const canInvite = permissions.includes("access.invite")
     const peopleSearch = data.search
       ? `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
       : null
@@ -1285,6 +1287,8 @@ export const getResourceAccess = createServerFn({ method: "GET" })
         const invitation = attempts.find(
           (attempt) => attempt.access_id === person.id
         )
+        const inherited =
+          person.resource_type === "relay" && data.resourceType !== "relay"
         return {
           id: person.id,
           userId: person.user_id,
@@ -1294,8 +1298,7 @@ export const getResourceAccess = createServerFn({ method: "GET" })
           state: person.state,
           revision: Number(person.revision),
           scope: scopeFromRow(person),
-          inherited:
-            person.resource_type === "relay" && data.resourceType !== "relay",
+          inherited,
           selections,
           presetIds,
           builtinKeys,
@@ -1304,6 +1307,13 @@ export const getResourceAccess = createServerFn({ method: "GET" })
             person.resource_type
           ),
           invitationId: invitation?.id ?? null,
+          // A link that lets the invited person set up their account, for
+          // someone who could have invited them here. A bare ID link only
+          // works once they can sign in.
+          invitationUrl:
+            invitation && canInvite && !inherited
+              ? invitationShareUrl(invitation.id)
+              : null,
           invitationExpiresAt: iso(invitation?.expires_at ?? null),
           createdAt: new Date(person.created_at).toISOString(),
           updatedAt: new Date(person.updated_at).toISOString(),
@@ -1438,3 +1448,10 @@ export const getAccessResources = createServerFn({ method: "GET" })
       hasMore: resources.length > data.limit,
     }
   })
+
+function invitationShareUrl(invitationId: string): string {
+  const url = new URL("/invite", kilnPublicUrl())
+  url.searchParams.set("id", invitationId)
+  url.searchParams.set("key", invitationLinkKey(invitationId, "share"))
+  return url.toString()
+}
