@@ -31,6 +31,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertInstance,
   insertRelay,
+  insertRows,
   insertUser,
   selectRows,
 } from "@/test/seed"
@@ -674,6 +675,46 @@ const seedApp = Effect.gen(function* () {
   ])
 })
 
+// A schedule that restarts an App of the old Relay.
+const scheduled = Effect.fnUntraced(function* (id: string) {
+  const schedule = "14bb1e12-fab9-45f3-8f85-ae22d2f074e5"
+  yield* insertRows("schedule", {
+    created_at: at,
+    created_by: mover.id,
+    cron_expression: "0 4 * * *",
+    id: schedule,
+    name: "Nightly",
+    revision: 1,
+    updated_at: at,
+  })
+  const action = "22222222-2222-4222-8222-222222222222"
+  yield* insertRows("schedule_action", {
+    action_config: JSON.stringify({
+      action: "restart",
+      authorizedTargets: 2,
+      id: action,
+      type: "power",
+    }),
+    action_type: "power",
+    created_at: at,
+    id: action,
+    position: 0,
+    schedule_id: schedule,
+  })
+  yield* insertRows("schedule_target", {
+    created_at: at,
+    relay_id: oldRelay,
+    schedule_id: schedule,
+    target_id: id,
+    target_kind: "app",
+    target_name: "Website",
+  })
+})
+
+const runsOn = selectRows<{ target_id: string }>("schedule_target").pipe(
+  Effect.map((rows) => rows.map((row) => row.target_id))
+)
+
 const appOn = (relayId: string, id: string) => {
   const app = relay.apps.get(serverKey(relayId, id))
   return app ? (app.running ? "running" : "stopped") : "gone"
@@ -1130,6 +1171,7 @@ describeMysql("Server migrations", () => {
         Effect.gen(function* () {
           const { service, startHearth } = yield* hearths
           yield* seedApp
+          yield* scheduled(website)
           const first = yield* startHearth
 
           const id = yield* moveApp(service)
@@ -1142,6 +1184,7 @@ describeMysql("Server migrations", () => {
           )
           const copy = deploying.destination_id
           // Still its old one's, and still followed after a restart.
+          assert.deepStrictEqual(yield* runsOn, [website])
           assert.deepStrictEqual(hostnamesOn(oldRelay, website), [
             "example.test",
           ])
@@ -1162,6 +1205,7 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(appOn(oldRelay, website), "stopped")
           assert.deepStrictEqual(hostnamesOn(newRelay, copy), ["example.test"])
           assert.deepStrictEqual(hostnamesOn(oldRelay, website), [])
+          assert.deepStrictEqual(yield* runsOn, [copy])
           // The very image the old one ran, sent once.
           assert.strictEqual(
             relay.apps.get(serverKey(newRelay, copy))?.deployed?.digest,

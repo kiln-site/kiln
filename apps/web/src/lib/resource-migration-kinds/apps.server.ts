@@ -37,6 +37,7 @@ import {
   relay,
   relayRequest,
   relays,
+  schedulesHandOver,
   warns,
   webRouteHostnames,
   webRoutesServed,
@@ -379,6 +380,7 @@ export const apps: MigratedKind = {
   },
   handOver: {
     owner: ownerHandOver("app"),
+    schedules: schedulesHandOver("app"),
     routes: (migration, actor) =>
       moveWebRoutes("app", migration, actor).pipe(
         Effect.andThen(

@@ -258,6 +258,35 @@ export function insertScheduleParts(
   })
 }
 
+/** Marks each Relay a saved schedule reaches, or did, as owed it. */
+export const oweSchedule = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  owed: {
+    readonly now: number
+    readonly relayIds: Iterable<string>
+    readonly revision: number
+    readonly scheduleId: string
+  }
+) {
+  for (const relayId of owed.relayIds) {
+    yield* transaction.execute(
+      `INSERT INTO ${databaseTable("schedule_deployment")}
+         (schedule_id, relay_id, desired_revision, status, created_at,
+          updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?)
+       ON DUPLICATE KEY UPDATE
+         status = IF(VALUES(desired_revision) >= desired_revision,
+           'pending', status),
+         last_error = IF(VALUES(desired_revision) >= desired_revision,
+           NULL, last_error),
+         desired_revision = GREATEST(desired_revision,
+           VALUES(desired_revision)),
+         updated_at = VALUES(updated_at)`,
+      [owed.scheduleId, relayId, owed.revision, owed.now, owed.now]
+    )
+  }
+})
+
 export function groupRows<TRow>(
   rows: ReadonlyArray<TRow>,
   key: (row: TRow) => string

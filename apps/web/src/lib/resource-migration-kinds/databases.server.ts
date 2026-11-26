@@ -26,6 +26,7 @@ import {
   ownerHandOver,
   recordedIn,
   relays,
+  schedulesHandOver,
   warns,
   type MigratedKind,
 } from "@/lib/resource-migration-kinds/kind.server"
@@ -190,6 +191,7 @@ export const databases: MigratedKind = {
   }),
   handOver: {
     owner: ownerHandOver("database"),
+    schedules: schedulesHandOver("database"),
     access: accessHandOver("database"),
   },
   handOverCounts: async (relay, id) => ({

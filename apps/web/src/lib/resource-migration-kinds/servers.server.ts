@@ -37,6 +37,7 @@ import {
   relay,
   relayRequest,
   relays,
+  schedulesHandOver,
   webRouteHostnames,
   type MigratedKind,
   type MigrationSide,
@@ -241,6 +242,7 @@ export const servers: MigratedKind = {
   }),
   handOver: {
     owner: ownerHandOver("instance"),
+    schedules: schedulesHandOver("instance"),
     access: accessHandOver("instance"),
     backups: (migration, actor) =>
       linkInstanceBackupsEffect({

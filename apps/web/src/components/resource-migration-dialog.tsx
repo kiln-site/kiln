@@ -10,6 +10,7 @@ import {
   Archive,
   ArrowRight,
   ArrowRightLeft,
+  CalendarClock,
   ChevronsUpDown,
   Copy,
   Globe2,
@@ -101,14 +102,36 @@ const undeployedNote: MigrationNote = {
   warns: true,
 }
 
-// They name the old one, which stays where it is, stopped.
-const schedulesNote = (schedules: ReadonlyArray<string>): MigrationNote => ({
-  text:
-    schedules.length === 1
-      ? `The schedule “${schedules[0]}” still runs on the old one. Point it at the copy.`
-      : `${schedules.length} schedules still run on the old one: ${schedules.join(", ")}. Point them at the copy.`,
-  warns: true,
-})
+// Those the person can't save for the copy go on naming the old one.
+function schedulesNote(
+  staying: ReadonlyArray<string | null>
+): ReadonlyArray<MigrationNote> {
+  const [one] = staying
+  if (one === undefined) return []
+  const seen = staying.filter((name) => name !== null)
+  return [
+    {
+      text:
+        staying.length > 1
+          ? `${staying.length} schedules still run on the old one, since you can't edit them for the copy${seen.length > 0 ? `: ${seen.join(", ")}` : ""}.`
+          : one === null
+            ? "A schedule you can't see still runs on the old one."
+            : `The schedule “${one}” still runs on the old one, since you can't edit it for the copy.`,
+      warns: true,
+    },
+  ]
+}
+
+// What it says of the schedules that go to the copy; null when none does.
+function schedulesMoved(
+  schedules: ReadonlyArray<string | null>,
+  staying: number
+): string | null {
+  const moved = schedules.length - staying
+  if (moved <= 0) return null
+  if (staying > 0) return `${moved} of ${schedules.length} schedules`
+  return moved === 1 ? (schedules[0] ?? "1 schedule") : `${moved} schedules`
+}
 
 // "a game server", "an App".
 function aNoun(noun: string) {
@@ -339,9 +362,7 @@ function MigrationForm({
   const [deployCopy, setDeployCopy] = React.useState(preview.source.deploys)
   const notes: ReadonlyArray<MigrationNote> = [
     ...(offersDeploy && !deployCopy ? [undeployedNote] : []),
-    ...(moving && preview.schedules.length > 0
-      ? [schedulesNote(preview.schedules)]
-      : []),
+    ...(moving ? schedulesNote(selected?.schedulesStaying ?? []) : []),
     ...preview.warnings[mode],
   ]
 
@@ -577,6 +598,14 @@ function MigrationForm({
         left={left}
         moving={moving}
         pending={pending}
+        schedules={
+          moving
+            ? schedulesMoved(
+                preview.schedules,
+                selected?.schedulesStaying.length ?? 0
+              )
+            : null
+        }
         usedBytes={usedBytes}
         onToggle={toggle}
       />
@@ -1244,6 +1273,7 @@ function CarriedList({
   moving,
   onToggle,
   pending,
+  schedules,
   usedBytes,
 }: {
   domains: ReadonlyArray<DomainFate>
@@ -1252,6 +1282,8 @@ function CarriedList({
   moving: boolean
   onToggle: (key: CarriedKey, taken: boolean) => void
   pending: boolean
+  /** What to say of those that go to the copy; null when none does. */
+  schedules: string | null
   usedBytes: number | null
 }) {
   return (
@@ -1267,6 +1299,15 @@ function CarriedList({
         >
           <span className="type-meta text-muted-foreground">Always</span>
         </CarriedRow>
+        {schedules === null ? null : (
+          <CarriedRow
+            detail={schedules}
+            icon={<CalendarClock />}
+            label="Schedules"
+          >
+            <span className="type-meta text-muted-foreground">Always</span>
+          </CarriedRow>
+        )}
         {items.map((item) => (
           <React.Fragment key={item.key}>
             <CarriedRow

@@ -180,6 +180,25 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
   }
 )
 
+/** What whoever owns a game server, database or App holds on it. */
+export function ownerGrant(resource: {
+  /** A database's, which decides what can be held on it. */
+  readonly engine: string | null
+  readonly relayId: string
+  readonly resourceId: string
+  readonly resourceType: "app" | "database" | "instance"
+}): ResolvedAccessGrant {
+  const { engine, relayId, resourceId, resourceType } = resource
+  return {
+    id: `owner:${resourceType}:${resourceId}`,
+    permissions: ownerPermissions({ engine, resource_type: resourceType }),
+    relayId,
+    resourceId,
+    resourceType,
+    source: "owner",
+  }
+}
+
 // What an owner holds on what they own: everything on a Relay or a database,
 // the list above on an App, and everything but its terminal on a game
 // server. Whoever may create game servers gets no shell in the ones they

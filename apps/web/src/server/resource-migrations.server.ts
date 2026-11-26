@@ -1,7 +1,6 @@
 // The migration server functions in ./resource-migrations authenticate the
 // caller and hand the signed-in user to these handlers.
 import type { ResourceLimits } from "@workspace/contracts"
-import type { RowDataPacket } from "mysql2/promise"
 import type { z } from "zod"
 
 import { listResourceAddressesEffect } from "@/effect/addresses"
@@ -9,7 +8,6 @@ import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
-import { databaseTable } from "@/lib/database-config"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import {
   activeRelay,
@@ -52,6 +50,7 @@ import {
   startResourceMigrationEffect,
 } from "@/lib/resource-migrations.server"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
+import { schedulesToMove } from "@/server/schedule-moves.server"
 import {
   relayWebServing,
   type RelayWebServing,
@@ -70,6 +69,8 @@ export interface ResourceMigrationDestination {
   readonly problems: ReadonlyArray<RelayTransferProblem>
   /** What it can give the copy; null when it couldn't say. */
   readonly room: MigrationRelayRoom | null
+  /** The schedules a move there leaves on the old one, as `schedules`. */
+  readonly schedulesStaying: ReadonlyArray<string | null>
   /** Names of its kind there already, which a copy can't take. */
   readonly takenNames: ReadonlyArray<string>
 }
@@ -117,8 +118,11 @@ export interface ResourceMigrationPreview extends MigrationHandOverCounts {
   } | null
   /** Its hostnames whose DNS Kiln doesn't keep. */
   readonly manualDns: ReadonlyArray<string>
-  /** The schedules that name it, which go on naming the old one. */
-  readonly schedules: ReadonlyArray<string>
+  /**
+   * The schedules a move takes to the copy, or would: each by its name, or
+   * null for one the person can't see.
+   */
+  readonly schedules: ReadonlyArray<string | null>
   /** What to know before each way of copying it. */
   readonly warnings: MigrationWarnings
   readonly source: {
@@ -164,6 +168,8 @@ export async function previewResourceMigrationHandler(
       () => null
     ),
   ])
+  const reference = { id: data.id, kind: kind.kind, relayId: relay.id }
+  const schedules = await schedulesOf(user, kind, reference)
   const destinations = await Promise.all(
     relays.map(async (candidate) => {
       const there = await resolveScopeAuthorization({
@@ -175,7 +181,7 @@ export async function previewResourceMigrationHandler(
         user,
       })
       if (!(await creates).every(there.allows)) return null
-      const [problems, takenNames, space] = await Promise.all([
+      const [problems, takenNames, space, staying] = await Promise.all([
         transferProblems(relay, candidate, roots),
         kind.takenNames(candidate, user.id),
         candidate.id === relay.id
@@ -184,6 +190,7 @@ export async function previewResourceMigrationHandler(
               () => loadRelayRoom(candidate, { subject: user.id }),
               () => null
             ),
+        candidate.id === relay.id ? [] : schedules.staying(candidate.id),
       ])
       return {
         current: candidate.id === relay.id,
@@ -192,6 +199,7 @@ export async function previewResourceMigrationHandler(
         nodeArch: candidate.nodeArch,
         problems,
         room: space?.room ?? null,
+        schedulesStaying: staying,
         takenNames,
       } satisfies ResourceMigrationDestination
     })
@@ -210,19 +218,17 @@ export async function previewResourceMigrationHandler(
       authorization.allows("instance.power.start"),
     stop: authorization.allows("instance.power.stop"),
   }
-  const reference = { id: data.id, kind: kind.kind, relayId: relay.id }
-  const [counts, manualDns, schedules] = await Promise.all([
+  const [counts, manualDns] = await Promise.all([
     kind.handOverCounts(relay, data.id, user, {
       backups: authorization.allows("backup.read"),
       network: allowed.network,
     }),
     allowed.network ? manualHostnames(reference) : [],
-    authorization.allows("schedule.read") ? schedulesNaming(reference) : [],
   ])
   return {
     ...counts,
     manualDns,
-    schedules,
+    schedules: schedules.names,
     allowed,
     destinations: destinations.filter((item) => item !== null),
     kind: kind.kind,
@@ -430,26 +436,15 @@ async function manualHostnames(reference: {
     .map((row) => row.hostname)
 }
 
-async function schedulesNaming(reference: {
-  readonly id: string
-  readonly kind: MigratedKindName
-  readonly relayId: string
-}): Promise<Array<string>> {
-  const { databasePool } = await import("@/lib/database")
-  const [rows] = await databasePool.query<
-    Array<RowDataPacket & { name: string }>
-  >(
-    `SELECT DISTINCT schedule.name
-       FROM ${databaseTable("schedule_target")} target
-       JOIN ${databaseTable("schedule")} schedule
-         ON schedule.id = target.schedule_id
-      WHERE target.relay_id = ? AND target.target_kind = ?
-        AND target.target_id = ? AND schedule.deleted_at IS NULL
-      ORDER BY schedule.name
-      LIMIT 20`,
-    [reference.relayId, reference.kind, reference.id]
-  )
-  return rows.map((row) => row.name)
+// A volume's stay with it: nothing that uses it moves to its copy.
+async function schedulesOf(
+  user: AuthenticatedUser,
+  kind: MigratedKind,
+  reference: { readonly id: string; readonly relayId: string }
+): ReturnType<typeof schedulesToMove> {
+  return kind.kind === "volume" || !kind.handOver.schedules
+    ? { names: [], staying: async () => [] }
+    : schedulesToMove(user, { ...reference, kind: kind.kind })
 }
 
 export function listResourceMigrationsHandler(user: AuthenticatedUser) {

@@ -107,6 +107,7 @@ export interface MigrationPart {
 
 /** What a finished copy can be handed of the old one's. */
 export const migrationHandOvers = [
+  "schedules",
   "owner",
   "access",
   "backups",
@@ -476,6 +477,21 @@ export const ownerHandOver =
       yield* promiseEffect(() =>
         publishResourceAccessChange([actor.id, ownerId], [destination.relayId])
       )
+    })
+
+/** What runs on the old one by schedule runs on the copy. */
+export const schedulesHandOver =
+  (kind: "app" | "database" | "instance"): HandOverEffect =>
+  (migration, actor) =>
+    Effect.gen(function* () {
+      const { moveSchedulesEffect } = yield* promiseEffect(
+        () => import("@/server/schedule-moves.server")
+      )
+      yield* moveSchedulesEffect({
+        copy: { ...migration.destination, kind },
+        from: { ...migration.source, kind },
+        user: actor,
+      })
     })
 
 /** The old one's people get the same access to the copy. */
