@@ -21,8 +21,10 @@ import { useDatabaseWorkspace } from "@/components/database/database-workspace-c
 import { deploymentsQueryOptions } from "@/lib/query-options"
 import type { DeploymentView } from "@/server/app-deployments.server"
 
-// A database has one container.
+// A database has one container, and while it's public, its gate's: each
+// connection from outside, and each refusal, with the client's address.
 const CONTAINER = "database"
+const GATE = "public-gate"
 
 function listedDeployments(data: {
   pages: ReadonlyArray<{ items: ReadonlyArray<DeploymentView> }>
@@ -70,7 +72,11 @@ export function DatabaseLogsPage() {
       }),
       deployment: (id) => linkOptions({ ...here, search: { deployment: id } }),
       latest: linkOptions({ ...here, search: { stream: DEPLOYMENT_STREAM } }),
-      source: () => linkOptions({ ...here, search: {} }),
+      source: (id) =>
+        linkOptions({
+          ...here,
+          search: id === GATE ? { stream: GATE } : {},
+        }),
     }
   }, [database.id, database.relayId])
   const running =
@@ -89,8 +95,24 @@ export function DatabaseLogsPage() {
         },
         title: database.name,
       },
+      ...(database.public
+        ? [
+            {
+              heading: { meta: database.public.hostname, title: "Public gate" },
+              id: GATE,
+              meta: database.public.hostname,
+              status:
+                database.public.state === "open"
+                  ? { label: "Open", tone: "success" as const }
+                  : database.public.state === "failed"
+                    ? { label: "Failed", tone: "danger" as const }
+                    : { label: "Opening", tone: "neutral" as const },
+              title: "db-public-gate",
+            },
+          ]
+        : []),
     ],
-    [database.name, product, running]
+    [database.name, database.public, product, running]
   )
   const latest = records[0]
   return (
@@ -115,15 +137,16 @@ export function DatabaseLogsPage() {
           shareLink={links.deployment}
         />
       )}
-      renderSource={(_id, header) => (
+      renderSource={(id, header) => (
         <ResourceLogsSession
-          key={`${database.relayId}:${database.id}`}
+          key={`${database.relayId}:${database.id}:${id}`}
           header={header}
           id={database.id}
           kind="database"
-          logName={database.name}
+          logName={id === GATE ? `${database.name} public gate` : database.name}
           relayAvailable={databaseRelayAvailable(database)}
           relayId={database.relayId}
+          {...(id === GATE && { stream: GATE })}
         />
       )}
       showing={
@@ -131,7 +154,9 @@ export function DatabaseLogsPage() {
           ? { id: requested, kind: "deployment" }
           : stream === DEPLOYMENT_STREAM
             ? { id: null, kind: "deployment" }
-            : { id: CONTAINER, kind: "source" }
+            : stream === GATE && database.public
+              ? { id: GATE, kind: "source" }
+              : { id: CONTAINER, kind: "source" }
       }
       sources={sources}
     />

@@ -596,8 +596,12 @@ from a tag or an image name today.
    the Compose file or Dockerfile its App runs, as Beszel's hub and agent
    do. An App or group Brick is installed from any catalog its installer
    sees, and a Brick goes by its ID after whose it is. Done.
-9. Domains for every kind. Done for game servers and Apps; a database's
-   address is still to come.
+9. Domains for every kind. Done: a database opened to the internet has a
+   public name and port, its certificate's TLS required by a gate that
+   holds the port ([Public databases](relay-runtime.md#public-databases)).
+   Its name is generated under a vanity domain and can't be renamed yet;
+   one that's open can't be moved, only closed first. An IP allowlist comes
+   as a feature of every instance.
 10. One instance page, with each kind's own tabs.
 11. Tunnels as their own kind, each one instance reaching Relays through
     its gateways, and one primary address per instance. Done but for its

@@ -24,6 +24,7 @@ import { useDatabaseWorkspace } from "@/components/database/database-workspace-c
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
+import { DatabasePublicAccess } from "@/components/database/database-public-access"
 import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
 
 export function DatabaseNetworkPage() {
@@ -38,10 +39,9 @@ export function DatabaseNetworkPage() {
         <InfoCard>
           <InfoCardHeader icon={<Network />} title="Private network" />
           <p className="border-b px-4 py-3 text-sm text-muted-foreground">
-            {database.name} has no public port. Game servers, Apps, and other
-            databases on {database.relayName} reach it at this address once they
-            are connected to its network. There, each answers to the name listed
-            with it.
+            Game servers, Apps, and other databases on {database.relayName}{" "}
+            reach {database.name} at this address once they are connected to its
+            network. There, each answers to the name listed with it.
           </p>
           <CopyMetaRow
             label="Internal address"
@@ -61,6 +61,8 @@ export function DatabaseNetworkPage() {
           />
           <ConnectedMembers canWrite={canWrite} database={database} />
         </InfoCard>
+
+        <DatabasePublicAccess database={database} />
 
         <DatabaseTunnels database={database} />
       </div>
