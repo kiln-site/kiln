@@ -79,6 +79,7 @@ const ask = (chosen: { mode: "duplicate" | "migrate"; routes?: boolean }) =>
         backup: null,
         copyAccess: false,
         deleteSource: null,
+        deployCopy: false,
         keepActivity: false,
         limits: null,
         linkBackups: false,

@@ -548,6 +548,7 @@ export function controlRequestLocks(
     case "instance.logs.share":
     case "instance.deployment.read":
     case "instance.network.routes.read":
+    case "instance.network.routes.check":
     case "instance.network.primaries.carried":
     // Port leases are their own reservation, with their own lock.
     case "instance.network.ports.reserve":
@@ -659,6 +660,9 @@ export function controlRequestLocks(
     // May write the bundled Traefik's routes again.
     case "relay.certificates.check":
       return [exclusive(laneKeys.routes)]
+    // Only says what to ask for next; the loop that asks takes the routes.
+    case "relay.certificates.release":
+      return []
     case "relay.volumes.create":
     case "relay.volumes.rename":
     case "relay.volumes.delete": {

@@ -89,6 +89,9 @@ const liveRisk: Record<MigratedKindName, string> = {
   volume: "What's written while it's copied can be missed.",
 }
 
+const undeployedWarning =
+  "The copy isn't deployed: deploy it once you've checked its settings. Domains that move with it don't answer until then."
+
 // "a game server", "an App".
 function aNoun(noun: string) {
   return `${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}`
@@ -301,6 +304,15 @@ function MigrationForm({
     preview.source.running && preview.allowed.power
   )
 
+  // A move deploys the copy first, so what's handed over goes to one that
+  // runs. One that isn't running isn't deployed.
+  const offersDeploy = moving && offers.deploy
+  const [deployCopy, setDeployCopy] = React.useState(preview.source.deploys)
+  const warnings =
+    offersDeploy && !deployCopy
+      ? [undeployedWarning, ...preview.warnings[mode]]
+      : preview.warnings[mode]
+
   const start = useMutation({
     mutationFn: () => {
       if (!selected) throw new Error("Choose a Relay")
@@ -316,6 +328,7 @@ function MigrationForm({
             backup: null,
             copyAccess: copies("access"),
             deleteSource: null,
+            deployCopy: offersDeploy && deployCopy,
             keepActivity: copies("activity"),
             limits: limitsChanged ? limits : null,
             linkBackups: copies("backups"),
@@ -554,10 +567,23 @@ function MigrationForm({
               onCheckedChange={setStopSource}
             />
           )}
+          {offersDeploy ? (
+            <SwitchRow
+              checked={deployCopy}
+              disabled={pending || !preview.source.running}
+              label="Deploy the copy"
+              title={
+                preview.source.running
+                  ? `It runs on the new Relay before anything is handed to it. If it doesn't start, this ${noun} starts again and nothing moves.`
+                  : "It isn't running."
+              }
+              onCheckedChange={setDeployCopy}
+            />
+          ) : null}
         </div>
       ) : null}
 
-      <MigrationWarnings warnings={preview.warnings[mode]} />
+      <MigrationWarnings warnings={warnings} />
 
       <DialogFooter className="items-center">
         <div className="min-w-0 sm:mr-auto">

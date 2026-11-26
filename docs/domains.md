@@ -161,8 +161,13 @@ serve Traefik's default certificate until some other route changed. So:
   every certificate it lacks, not just that one; the Relay does this at most
   four times an hour in all. Other route changes, and restarts, also have
   Traefik ask again, so this keeps Kiln's own asks down without promising
-  to stay within Let's Encrypt's limits. Retrying on its own is left for
-  later.
+  to stay within Let's Encrypt's limits.
+- A name moved here resolves already, to where it's moved from, so Traefik
+  asks only once its record has changed (`holdCertificates`). A changed
+  record takes a while to reach everyone, so the Relay gives it 15 seconds
+  first, then has Traefik ask again after 45 seconds, 2 minutes and 10
+  minutes while there's no certificate. Those count toward the four.
+  Retrying anything else on its own is left for later.
 
 The Relay reports the hostnames still waiting in its snapshot. Hearth shows
 them on the Domains page and beside each web route: **Verifying** while it

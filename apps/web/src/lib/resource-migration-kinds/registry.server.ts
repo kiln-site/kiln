@@ -82,6 +82,13 @@ export async function requireMigrationPermissions(
     source.require(kind.permissions.delete)
     if (kind.finalBackup !== false) source.require("backup.create")
   }
+  if (options.deployCopy && kind.deploy && kind.permissions.deploy) {
+    if (!destination.allows(kind.permissions.deploy)) {
+      throw PermissionDeniedError.make({
+        message: `Deploying the copied ${kind.noun} takes permission to deploy on the Relay it moves to`,
+      })
+    }
+  }
   if (
     kind.permissions.network &&
     ((options.moveDomain && kind.handOver.domains) ||

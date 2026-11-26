@@ -128,6 +128,51 @@ describe("bundled Traefik certificates", () => {
     expect(routerTls()).toEqual({ certResolver: "kiln" })
   })
 
+  // A name being moved here resolves to where it's moved from, and Let's
+  // Encrypt would check that. Traefik asks once, and not again when it fails,
+  // as it does while the changed record is still on its way round.
+  it("asks for a moved hostname's certificate once it points here, and again while it's missing", async () => {
+    answers.set("shop.example.com", "found")
+    certificates.hold(["shop.example.com"])
+    await certificates.track([route])
+    await certificates.check()
+    expect(routerTls()).toEqual({})
+
+    certificates.release(["shop.example.com"])
+    await certificates.check()
+    expect(routerTls()).toEqual({})
+    vi.setSystemTime(Date.now() + 15_000)
+    await certificates.check()
+    expect(routerTls()).toEqual({ certResolver: "kiln" })
+
+    // Never issued, it's asked for a few more times, then left to someone.
+    const configurations = new Set([traefik()])
+    for (let passed = 0; passed < 30; passed += 1) {
+      vi.setSystemTime(Date.now() + minute)
+      await certificates.check()
+      configurations.add(traefik())
+    }
+    expect(configurations.size).toBe(4)
+  })
+
+  // A record that only changes later, as once its Relay can serve, is asked
+  // for then, whatever was asked while it pointed elsewhere.
+  it("asks again for a hostname refused while its record pointed elsewhere", async () => {
+    answers.set("shop.example.com", "found")
+    await certificates.track([route])
+    await certificates.check()
+    const refused = traefik()
+    vi.setSystemTime(Date.now() + 3 * 60 * minute)
+    await certificates.check()
+    expect(certificates.pending()).toMatchObject([{ failed: true }])
+
+    certificates.release(["shop.example.com"])
+    expect(certificates.pending()).toMatchObject([{ failed: false }])
+    vi.setSystemTime(Date.now() + minute)
+    await certificates.check()
+    expect(traefik()).not.toEqual(refused)
+  })
+
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {
     const other: RelayStoredWebRoute = {
       ...route,

@@ -16,7 +16,7 @@
  */
 import { randomUUID } from "node:crypto"
 
-import { Cause, Clock, Duration, Effect, Schema } from "effect"
+import { Cause, Clock, Duration, Effect, Result, Schema } from "effect"
 import { Activity } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
 
@@ -84,6 +84,8 @@ const WATCH_WINDOW = Duration.minutes(5)
 // finish: 30 minutes. The old server gets 10 minutes to stop.
 const PROVISION_WINDOWS = 6
 const STOP_WINDOWS = 2
+// How long the copy's Relay may take to serve it, which is near at once.
+const SERVE_WITHIN = Duration.seconds(20)
 // Progress is published to the person at most this often while files copy.
 const PROGRESS_INTERVAL_MS = 1_000
 
@@ -103,6 +105,7 @@ type MigrationStep =
   | "backup"
   | "stop"
   | "copy"
+  | "deploy"
   | "finish"
 
 interface MigrationRow extends RowDataPacket {
@@ -480,6 +483,11 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
       )
     }
     if (stops && kind.copiedRunning && input.mode === "migrate") yield* stop
+    const deploy =
+      options.deployCopy && input.mode === "migrate" ? kind.deploy : undefined
+    const deployed = deploy
+      ? yield* deployCopy(input, operationId, kind.noun, deploy)
+      : false
     // From here what's handed over stays handed over. A cancel accepted
     // meanwhile stops it before its next part.
     yield* checkpoint(input, "finish")
@@ -499,6 +507,7 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
     yield* handOver("domains", moved && options.moveDomain)
     yield* handOver("routes", moved && options.moveWebRoutes)
     yield* handOver("deploys", moved)
+    if (deploy && deployed) yield* deploy.after(operationId, deployStep)
     if (input.mode === "duplicate" && kind.powered) {
       yield* step(input, "finish/restart", (actor) =>
         restartSource(input.migrationId, actor)
@@ -524,6 +533,91 @@ const migrationSteps = (input: ResourceMigrationInput, operationId: string) =>
     }
     yield* endStep(input.migrationId, "completed", null)
   })
+
+// Runs the copy as the old one ran, and waits until it's ready, before
+// anything is handed to it: one that never is ends the move with the old one
+// started again and everything still its own. One that wasn't running isn't
+// run. Says whether it was.
+const deployCopy = (
+  input: ResourceMigrationInput,
+  // What its deployment is known by too, so nothing else follows it.
+  operationId: string,
+  noun: string,
+  deploy: NonNullable<MigratedKind["deploy"]>
+) =>
+  Effect.gen(function* () {
+    const ran = yield* Activity.make({
+      name: "deploy/needed",
+      success: Schema.Boolean,
+      execute: loadMigration(input.migrationId).pipe(
+        Effect.map((row) => row?.source_was_running === 1),
+        untilMySqlAnswers
+      ),
+    })
+    if (!ran) return false
+    yield* checkpoint(input, "deploy")
+    // As the person, while they may still do what they asked.
+    yield* step(input, "deploy/allowed", () => Effect.void)
+    yield* deploy
+      .start(input, input.requestedBy, operationId, deployStep)
+      .pipe(Effect.mapError(asMigrationError))
+    yield* watch(input, "deploy/follow", null, "the copy to start", () =>
+      deploy
+        .state(operationId)
+        .pipe(
+          Effect.flatMap((state) =>
+            typeof state === "object"
+              ? fail(`The copied ${noun} didn't start: ${state.failed}`)
+              : Effect.succeed(state === "ready")
+          )
+        )
+    )
+    if (optionsOf(input).moveWebRoutes) {
+      yield* step(input, "deploy/serve", (actor) => deploy.serve(input, actor))
+      yield* copyServed(input, noun, deploy)
+    }
+    return true
+  })
+
+// Waits until the copy's Relay serves what it's about to be sent visitors
+// for, all of it while there's time, and some of it after that: a route that
+// never worked stops no move. One whose Relay can't say, as where another
+// proxy serves it, isn't waited for, nor one that only ever answers as
+// Traefik does with no route: an App may answer just the same. A Relay that
+// can't be reached just now is asked again, and what it last said holds.
+const copyServed = (
+  input: ResourceMigrationInput,
+  noun: string,
+  deploy: NonNullable<MigratedKind["deploy"]>
+) => {
+  let until: number | null = null
+  let last: Effect.Success<ReturnType<typeof deploy.served>> | null = null
+  return watch(input, "deploy/served", null, "it to be served", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      until ??= now + Duration.toMillis(SERVE_WITHIN)
+      if (now < until || last === null) {
+        const answer = yield* deploy
+          .served(input)
+          .pipe(
+            Effect.timeout(Duration.millis(Math.max(until - now, 1_000))),
+            Effect.result
+          )
+        if (Result.isSuccess(answer)) last = answer.success
+      }
+      if (last === "served" || last === "unknown") return true
+      if ((yield* Clock.currentTimeMillis) < until) return false
+      if (last === "partly" || last === "unrouted") return true
+      return yield* fail(
+        last === "down"
+          ? `The copied ${noun} runs, but its new Relay's proxy can't reach it`
+          : `The copied ${noun} runs, but its new Relay couldn't be asked whether it serves it`
+      )
+    })
+  )
+}
+
+const deployStep = (name: string) => `deploy/${name}`
 
 // One step that changes something, run once, its failure kept for the
 // person. Unless the migration was cancelled meanwhile, it runs as the

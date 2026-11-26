@@ -8,6 +8,7 @@ import { afterAll, vi } from "vite-plus/test"
 
 import { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
+import { createAppRecordEffect } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { encryptPrivateKey } from "@/lib/relay-registry"
@@ -35,12 +36,13 @@ import {
 } from "@/test/seed"
 import { testBrick, testBrickSource } from "@/test/bricks"
 
-// The Relays are the only fake (`relay` below): the game servers each has,
-// what the old one packed and the new one pulled for a copy, and requests
-// held as they arrive. Each test runs Hearth's engine, on the test clock,
+// The Relays are the only fake (`relay` below): the game servers and Apps
+// each has, the web routes it keeps, what the old one packed and the new one
+// pulled for a copy, and requests held as they arrive. Each test runs Hearth's engine, on the test clock,
 // one Hearth after another for a restart.
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayConnected: () => true,
   relayConnectionState: () => ({ status: "authenticated" }),
   relayJournal: async () => ({
     clientId: "hearth-one",
@@ -78,6 +80,8 @@ const oldRelay = "01".repeat(6)
 const newRelay = "02".repeat(6)
 const survival = "a1".repeat(6)
 const creative = "c3".repeat(6)
+const website = "e5".repeat(6)
+const websiteDigest = `sha256:${"7".repeat(64)}`
 
 const mover = {
   email: "mover@example.test",
@@ -101,30 +105,54 @@ interface FakeServer {
   state: "running" | "stopped"
 }
 
+interface FakeApp {
+  deployed: {
+    digest: string | null
+    error: string | null
+    state: string
+  } | null
+  running: boolean
+}
+
 const relay = {
+  apps: new Map<string, FakeApp>(),
   // What the old Relay packed, by transfer: packed once it's looked at.
   artifacts: new Map<string, "packing" | "ready">(),
   // Pulls that keep pulling until released.
   copyHeld: false,
+  // How the next deployment ends, once it's looked at; it runs until set.
+  deployment: null as { error: string | null; state: string } | null,
   // The next request of each operation, answered once released.
   held: new Map<string, ReturnType<typeof hold>>(),
   journal: new Map<string, unknown>(),
   // New servers by name that stay provisioning until released.
   provisioningHeld: new Set<string>(),
   // What the new Relay pulled, by transfer.
+  // What the new Relay's proxy answers for a copy's routes; null when it
+  // can't be asked.
+  proxy: null as "served" | "unrouted" | "down" | null,
+  // How many times it answers before it can't be reached.
+  proxyAnswers: Infinity,
   pulls: new Map<string, "pulling" | "cancelled">(),
+  // What each Relay routes, by the instance it's for.
+  routes: new Map<string, Array<Record<string, unknown>>>(),
   servers: new Map<string, FakeServer>(),
 }
 
 const serverKey = (relayId: string, id: string) => `${relayId}/${id}`
 
 function resetRelay() {
+  relay.apps.clear()
   relay.artifacts.clear()
   relay.copyHeld = false
+  relay.deployment = null
   relay.held.clear()
   relay.journal.clear()
   relay.provisioningHeld.clear()
+  relay.proxy = null
+  relay.proxyAnswers = Infinity
   relay.pulls.clear()
+  relay.routes.clear()
   relay.servers.clear()
 }
 
@@ -177,6 +205,68 @@ function instanceOf(relayId: string, id: string) {
   }
 }
 
+function appOf(relayId: string, id: string) {
+  const app = relay.apps.get(serverKey(relayId, id))
+  if (!app) return null
+  if (app.deployed?.state === "running" && relay.deployment) {
+    Object.assign(app.deployed, relay.deployment)
+    app.running = relay.deployment.state === "succeeded"
+  }
+  const time = new Date(at).toISOString()
+  const limits = { cpuMillis: null, memoryBytes: null }
+  return {
+    connectedDatabaseIds: [],
+    containers: app.deployed
+      ? [
+          {
+            createdAt: time,
+            exitCode: null,
+            id: `container-${relayId}`,
+            image: "nginx",
+            labels: {
+              "kiln.app.image": "nginx:alpine",
+              ...(app.deployed.digest
+                ? { "kiln.app.image.digest": app.deployed.digest }
+                : {}),
+            },
+            limits,
+            mounts: [],
+            name: `app-${id}`,
+            networks: [],
+            ports: [],
+            running: app.running,
+            service: "app",
+            startedAt: time,
+            state: app.running ? "running" : "exited",
+            status: "",
+          },
+        ]
+      : [],
+    dataDirectory: `/data/apps/${id}`,
+    deployment: app.deployed
+      ? {
+          commit: null,
+          error: app.deployed.error,
+          finishedAt: app.deployed.state === "running" ? null : time,
+          id: `deployment-${relayId}`,
+          rolling: null,
+          sourceType: "image",
+          startedAt: time,
+          state: app.deployed.state,
+        }
+      : null,
+    hostname: `app-${id}`,
+    id,
+    network: `app-${id}`,
+    observedState: app.running ? "running" : "stopped",
+    savedDatabaseIds: [],
+    status: app.running ? "Running" : "Stopped",
+  }
+}
+
+const routesOf = (relayId: string, id: string) =>
+  relay.routes.get(serverKey(relayId, id)) ?? []
+
 // Answered once acted on, after the request is released if it's held.
 async function fakeRelayRpc(
   relayId: string,
@@ -200,7 +290,9 @@ function answer(
   payload: Record<string, unknown>,
   frame: { operationId?: string }
 ): unknown {
-  const id = String(payload.instanceId ?? payload.id ?? payload.rootId ?? "")
+  const id = String(
+    payload.instanceId ?? payload.id ?? payload.appId ?? payload.rootId ?? ""
+  )
   const transferId = String(payload.transferId)
   switch (operation) {
     case "operation.get":
@@ -227,8 +319,23 @@ function answer(
       }
     // Neither Relay has databases or Apps holding its room.
     case "database.list":
-    case "app.list":
       return []
+    case "app.list":
+      return (
+        (payload.requests ?? []) as ReadonlyArray<{ id: string; view: string }>
+      ).flatMap((request) => {
+        const app = appOf(relayId, request.id)
+        return app ? [{ app, id: request.id, view: request.view }] : []
+      })
+    case "relay.volumes.read":
+      return {
+        filesAvailable: true,
+        measuring: false,
+        missing: [],
+        protection: { ready: true, reason: null },
+        uncovered: [],
+        volumes: [],
+      }
     case "brick.recipe":
       return testBrick
     case "tunnel.state":
@@ -246,13 +353,33 @@ function answer(
     case "backup.task.enqueue":
       // Followed by Hearth's own records here.
       throw new Error("The Relay's backup queue is busy")
+    case "instance.network.routes.check":
+      relay.proxyAnswers -= 1
+      if (relay.proxyAnswers < 0) throw new Error("The Relay is away")
+      return {
+        answers:
+          relay.proxy &&
+          routesOf(relayId, id).map((route) => ({
+            hostname: String(route.hostname),
+            state: relay.proxy!,
+          })),
+      }
     case "instance.network.routes.read":
+    case "instance.network.routes.write":
+      if (operation.endsWith("write")) {
+        relay.routes.set(
+          serverKey(relayId, id),
+          (payload.routes as Array<Record<string, unknown>>).map(
+            (route, index) => ({ ...route, id: `0000000${index}` })
+          )
+        )
+      }
       return {
         edgeConnected: true,
         message: "Ready",
         proxyConnected: true,
         requiresRestart: false,
-        routes: [],
+        routes: routesOf(relayId, id),
         status: "ready",
       }
     case "transfer.pull.get": {
@@ -310,7 +437,41 @@ function answer(
       result = instanceOf(relayId, id)
       break
     }
+    case "app.provision.prepare":
+    case "app.provision.claim":
+      if (!relay.apps.has(key)) {
+        relay.apps.set(key, { deployed: null, running: false })
+      }
+      result = appOf(relayId, id)
+      break
+    case "instance.deploy": {
+      const app = relay.apps.get(key)
+      if (!app) throw new Error("App not found")
+      app.deployed = {
+        digest: (payload.imageDigest as string | undefined) ?? null,
+        error: null,
+        state: "running",
+      }
+      result = appOf(relayId, id)
+      break
+    }
+    case "instance.image.check":
+      result = []
+      break
+    case "app.deployment.abort":
+      break
+    case "app.delete":
+      relay.apps.delete(key)
+      relay.routes.delete(key)
+      result = { appId: id, deleted: true }
+      break
     case "instance.action": {
+      const app = relay.apps.get(key)
+      if (app) {
+        app.running = payload.action === "start"
+        result = appOf(relayId, id)
+        break
+      }
       const server = relay.servers.get(key)
       if (!server) throw new Error("Server not found")
       server.state = payload.action === "stop" ? "stopped" : "running"
@@ -468,6 +629,44 @@ const seed = Effect.gen(function* () {
   }
 })
 
+// And an App that runs an image and serves a domain.
+const seedApp = Effect.gen(function* () {
+  yield* seed
+  yield* createAppRecordEffect({
+    appId: website,
+    createdBy: mover.id,
+    deploys: { image: "nginx:alpine", sourceType: "image" },
+    name: "Website",
+    relayId: oldRelay,
+  })
+  relay.apps.set(serverKey(oldRelay, website), {
+    deployed: { digest: websiteDigest, error: null, state: "succeeded" },
+    running: true,
+  })
+  relay.routes.set(serverKey(oldRelay, website), [
+    {
+      hostname: "example.test",
+      httpsRedirect: true,
+      id: "aaaaaaaa",
+      name: "",
+      path: null,
+      redirect: null,
+      service: "app",
+      stripPrefix: true,
+      targetPort: 80,
+      www: "none",
+    },
+  ])
+})
+
+const appOn = (relayId: string, id: string) => {
+  const app = relay.apps.get(serverKey(relayId, id))
+  return app ? (app.running ? "running" : "stopped") : "gone"
+}
+
+const hostnamesOn = (relayId: string, id: string) =>
+  routesOf(relayId, id).map((route) => route.hostname)
+
 const options = (
   mode: "duplicate" | "migrate",
   chosen: Partial<ResourceMigrationOptions> = {}
@@ -475,6 +674,7 @@ const options = (
   backup: null,
   copyAccess: false,
   deleteSource: null,
+  deployCopy: false,
   keepActivity: false,
   limits: null,
   linkBackups: false,
@@ -488,6 +688,7 @@ const start = (
   service: OperationsEngineService["Service"],
   input: {
     readonly chosen?: Partial<ResourceMigrationOptions>
+    readonly kind?: "app" | "instance"
     readonly mode: "duplicate" | "migrate"
     readonly name: string
     readonly source?: string
@@ -499,12 +700,12 @@ const start = (
     backupStorageIds: chosen.backup ? [null] : [],
     destinationName: input.name,
     destinationRelayId: newRelay,
-    kind: "instance",
+    kind: input.kind ?? "instance",
     mode: input.mode,
     options: chosen,
     source: {
       id: input.source ?? survival,
-      name: "Survival",
+      name: input.kind === "app" ? "Website" : "Survival",
       relayId: oldRelay,
     },
   }).pipe(Effect.provideService(OperationsEngineService, service), driven)
@@ -894,6 +1095,164 @@ describeMysql("Server migrations", () => {
             serverKey(newRelay, keptRow.destination_id),
           ])
           assert.strictEqual(serverState(oldRelay, creative), "running")
+        }),
+      180_000
+    )
+
+    const moveApp = (service: OperationsEngineService["Service"]) =>
+      start(service, {
+        chosen: { deployCopy: true, moveWebRoutes: true },
+        kind: "app",
+        mode: "migrate",
+        name: "Website",
+        source: website,
+      })
+
+    // Its domain goes to a copy that runs, or stays where it is.
+    it.effect(
+      "runs a moved App's copy before its domains go to it",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          yield* seedApp
+          const first = yield* startHearth
+
+          const id = yield* moveApp(service)
+          const deploying = yield* migrationUntil(
+            id,
+            (row) =>
+              row.step === "deploy" &&
+              relay.apps.get(serverKey(newRelay, row.destination_id))
+                ?.deployed !== null
+          )
+          const copy = deploying.destination_id
+          // Still its old one's, and still followed after a restart.
+          assert.deepStrictEqual(hostnamesOn(oldRelay, website), [
+            "example.test",
+          ])
+          assert.deepStrictEqual(hostnamesOn(newRelay, copy), [])
+          yield* stopHearth(first)
+          const second = yield* startHearth
+          relay.deployment = { error: null, state: "succeeded" }
+          const row = yield* migrationUntil(id, ended)
+          yield* operationsEnded
+          yield* stopHearth(second)
+
+          assert.strictEqual(row.error, null)
+          assert.strictEqual(row.state, "completed")
+          assert.strictEqual(appOn(newRelay, copy), "running")
+          assert.strictEqual(appOn(oldRelay, website), "stopped")
+          assert.deepStrictEqual(hostnamesOn(newRelay, copy), ["example.test"])
+          assert.deepStrictEqual(hostnamesOn(oldRelay, website), [])
+          // The very image the old one ran, sent once.
+          assert.strictEqual(
+            relay.apps.get(serverKey(newRelay, copy))?.deployed?.digest,
+            websiteDigest
+          )
+        }),
+      180_000
+    )
+
+    it.effect(
+      "leaves an App where it was when its copy doesn't start or can't be reached, or its move is cancelled as it starts",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          yield* seedApp
+          const hearth = yield* startHearth
+          const asItWas = (copy: string) => {
+            assert.strictEqual(appOn(oldRelay, website), "running")
+            assert.deepStrictEqual(hostnamesOn(oldRelay, website), [
+              "example.test",
+            ])
+            assert.deepStrictEqual(hostnamesOn(newRelay, copy), [])
+          }
+
+          relay.deployment = { error: "It kept crashing", state: "failed" }
+          const failing = yield* moveApp(service)
+          const failed = yield* migrationUntil(failing, ended)
+          yield* deletionUntil(failed.destination_id, ["completed"])
+          yield* operationsEnded
+          assert.strictEqual(failed.state, "failed")
+          assert.match(failed.error ?? "", /It kept crashing/u)
+          assert.strictEqual(appOn(newRelay, failed.destination_id), "gone")
+          asItWas(failed.destination_id)
+
+          // Running, but nothing sent to its Relay would reach it.
+          relay.deployment = { error: null, state: "succeeded" }
+          relay.proxy = "down"
+          const reaching = yield* moveApp(service)
+          const unreached = yield* migrationUntil(reaching, ended)
+          yield* deletionUntil(unreached.destination_id, ["completed"])
+          yield* operationsEnded
+          assert.strictEqual(unreached.state, "failed")
+          assert.match(unreached.error ?? "", /proxy can't reach it/u)
+          asItWas(unreached.destination_id)
+
+          relay.proxy = null
+          relay.deployment = null
+          const cancelling = yield* moveApp(service)
+          yield* migrationUntil(
+            cancelling,
+            (row) =>
+              row.step === "deploy" &&
+              relay.apps.get(serverKey(newRelay, row.destination_id))
+                ?.deployed !== null
+          )
+          yield* cancelResourceMigrationEffect(mover.id, cancelling)
+          const cancelled = yield* migrationUntil(cancelling, ended)
+          yield* deletionUntil(cancelled.destination_id, ["completed"])
+          yield* operationsEnded
+          yield* stopHearth(hearth)
+          assert.strictEqual(cancelled.state, "cancelled")
+          assert.strictEqual(appOn(newRelay, cancelled.destination_id), "gone")
+          asItWas(cancelled.destination_id)
+        }),
+      180_000
+    )
+
+    it.effect(
+      "goes by what the new Relay last said of a moved App's routes",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          yield* seedApp
+          const hearth = yield* startHearth
+          relay.deployment = { error: null, state: "succeeded" }
+          relay.proxy = "unrouted"
+          relay.proxyAnswers = 1
+          const id = yield* moveApp(service)
+          const row = yield* migrationUntil(id, ended)
+          yield* operationsEnded
+          yield* stopHearth(hearth)
+          assert.strictEqual(row.error, null)
+          assert.strictEqual(row.state, "completed")
+          assert.deepStrictEqual(hostnamesOn(newRelay, row.destination_id), [
+            "example.test",
+          ])
+        }),
+      180_000
+    )
+
+    it.effect(
+      "doesn't run the copy of an App that wasn't running",
+      () =>
+        Effect.gen(function* () {
+          const { service, startHearth } = yield* hearths
+          yield* seedApp
+          relay.apps.get(serverKey(oldRelay, website))!.running = false
+          const hearth = yield* startHearth
+          const row = yield* migrationUntil(yield* moveApp(service), ended)
+          yield* operationsEnded
+          yield* stopHearth(hearth)
+
+          assert.strictEqual(row.state, "completed")
+          assert.isNull(
+            relay.apps.get(serverKey(newRelay, row.destination_id))?.deployed
+          )
+          assert.deepStrictEqual(hostnamesOn(newRelay, row.destination_id), [
+            "example.test",
+          ])
         }),
       180_000
     )

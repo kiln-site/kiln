@@ -1151,8 +1151,101 @@ const redeployGone = (input: DeployInput, config: AppConfig) =>
 // ended, every step stored so a restart carries on where it was.
 const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
   Effect.gen(function* () {
+    const record = yield* sendPlanned(input, plan, (step) => step)
+    if (!record) return
+    const started = Date.parse(record.startedAt)
+    for (let window = 0; ; window++) {
+      const ended = yield* Activity.make({
+        name: `follow/${window}`,
+        success: Schema.Boolean,
+        // An unreachable Relay is asked again next time.
+        execute: watchFor(
+          checkAppDeploymentEffect(record).pipe(
+            Effect.catch(() => Effect.succeed(false))
+          ),
+          (ended) => ended,
+          () =>
+            Date.now() - started < Duration.toMillis(followQuickly)
+              ? followInterval
+              : followIntervalLater
+        ),
+      })
+      if (ended) break
+    }
+    yield* afterDeployment(record, (step) => step)
+  })
+
+/**
+ * Deploys an App as part of durable work that holds it whole, as a move of
+ * it does: as the steps of that work, since a deployment of its own would
+ * wait behind what it holds. It's sent, and followed with
+ * `heldAppDeploymentEffect`. Asked again under its ID, it's sent once.
+ */
+export const deployHeldApp = (
+  ask: {
+    readonly appId: string
+    /** The commit to build, and the repository it was of. */
+    readonly commit?: { readonly sha: string; readonly source: string }
+    readonly id: string
+    /** The digest to run, and the image it was of. */
+    readonly image?: { readonly digest: string; readonly source: string }
+    readonly relayId: string
+    readonly userId: string
+  },
+  named: (step: string) => string
+) =>
+  Effect.gen(function* () {
+    const input: DeployInput = {
+      appId: ask.appId,
+      relayId: ask.relayId,
+      requestedBy: ask.userId,
+      ...(ask.commit && {
+        commit: { source: ask.commit.source, value: ask.commit.sha },
+      }),
+      ...(ask.image && {
+        image: { source: ask.image.source, value: ask.image.digest },
+      }),
+      trigger: ask.commit || ask.image ? "redeploy" : "manual",
+    }
+    const plan = yield* Activity.make({
+      name: named("plan"),
+      success: Schema.NullOr(DeployPlan),
+      execute: takeTurn(input, ask.id, null),
+    })
+    if (plan) yield* sendPlanned(input, plan, named)
+  })
+
+/** How a deployment made with `deployHeldApp` stands, as its Relay says. */
+export const heldAppDeploymentEffect = Effect.fn("Apps.deployment.held")(
+  function* (id: string) {
+    const record = yield* loadAppDeploymentEffect(id)
+    if (!record || record.status !== "running") return record
+    // An unreachable Relay is asked again next time.
+    yield* checkAppDeploymentEffect(record).pipe(Effect.ignore)
+    return yield* loadAppDeploymentEffect(id)
+  }
+)
+
+/** What follows any deployment, once one made with `deployHeldApp` ends. */
+export const afterHeldAppDeployment = (
+  id: string,
+  named: (step: string) => string
+) =>
+  Effect.gen(function* () {
+    const record = yield* loadAppDeploymentEffect(id).pipe(Effect.orDie)
+    if (record) yield* afterDeployment(record, named)
+  })
+
+// Records a planned deployment and sends it, as steps, answering with its
+// record once its Relay has taken it.
+const sendPlanned = (
+  input: DeployInput,
+  plan: DeployPlan,
+  named: (step: string) => string
+) =>
+  Effect.gen(function* () {
     yield* Activity.make({
-      name: "record",
+      name: named("record"),
       execute: insertAppDeploymentEffect(runningRecord(plan, null)).pipe(
         Effect.retry({ schedule: whileMySqlIsAway }),
         Effect.tap(() =>
@@ -1162,7 +1255,7 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
       ),
     })
     const sent = yield* relayCommand({
-      name: "send",
+      name: named("send"),
       operation: "instance.deploy",
       payload: deployRequest(plan.payload),
       recover: currentDeployment(input),
@@ -1172,16 +1265,16 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
     }).pipe(Effect.result)
     if (Result.isFailure(sent)) {
       yield* Activity.make({
-        name: "refused",
+        name: named("refused"),
         execute: finishPlanned(plan, {
           error: sent.failure.message,
           status: "failed",
         }),
       })
-      return
+      return null
     }
     const relayDeploymentId = yield* Activity.make({
-      name: "accepted",
+      name: named("accepted"),
       success: Schema.NullOr(Schema.String),
       execute: Effect.gen(function* () {
         const parsed = relayAppSchema.safeParse(sent.success)
@@ -1204,31 +1297,20 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
         return deploymentId
       }),
     })
-    if (relayDeploymentId === null) return
-    const record = runningRecord(plan, relayDeploymentId)
-    const started = Date.parse(record.startedAt)
-    for (let window = 0; ; window++) {
-      const ended = yield* Activity.make({
-        name: `follow/${window}`,
-        success: Schema.Boolean,
-        // An unreachable Relay is asked again next time.
-        execute: watchFor(
-          checkAppDeploymentEffect(record).pipe(
-            Effect.catch(() => Effect.succeed(false))
-          ),
-          (ended) => ended,
-          () =>
-            Date.now() - started < Duration.toMillis(followQuickly)
-              ? followInterval
-              : followIntervalLater
-        ),
-      })
-      if (ended) break
-    }
+    return relayDeploymentId === null
+      ? null
+      : runningRecord(plan, relayDeploymentId)
+  })
+
+const afterDeployment = (
+  record: AppDeploymentRecord,
+  named: (step: string) => string
+) =>
+  Effect.gen(function* () {
     // An app's updates follow what it runs now, by its current config.
     // Imported here, since image updates deploy through this module.
     yield* Activity.make({
-      name: "recheck",
+      name: named("recheck"),
       execute: Effect.promise(
         () => import("@/lib/instance-updates.server")
       ).pipe(
@@ -1245,7 +1327,7 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
     // What it runs now is checked for vulnerabilities at once, so a fix
     // shows without waiting for the next sweep.
     yield* Activity.make({
-      name: "scanSecurity",
+      name: named("scanSecurity"),
       execute: Effect.promise(() => import("@/lib/security-scans.server")).pipe(
         Effect.map(({ scanRelaySoon }) => scanRelaySoon(record.relayId))
       ),

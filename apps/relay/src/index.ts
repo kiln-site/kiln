@@ -51,6 +51,7 @@ import {
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
   relayInstanceWebRouteStateSchema,
+  relayInstanceWebRoutesCheckSchema,
   relayInstanceWebRoutesReadSchema,
   relayCarriedPrimaryRoutesSchema,
   relayForgetCarriedPrimaryRoutesSchema,
@@ -97,6 +98,7 @@ import {
   relayProxyReadInputSchema,
   relayCertificateCheckInputSchema,
   relayCertificateCheckResultSchema,
+  relayCertificateReleaseInputSchema,
   relayProxyConfigurationSchema,
   RELAY_PROXY_TRIAL_PATH,
   relayProxySettingsSchema,
@@ -2789,6 +2791,11 @@ async function executeControlRequest(
             .find((pending) => pending.hostname === name) ?? null,
       })
     }
+    case "relay.certificates.release":
+      lifecycle.certificates.release(
+        relayCertificateReleaseInputSchema.parse(request.payload).hostnames
+      )
+      return {}
     case "relay.volumes.read":
       return {
         ...(await runRelayEffect("relay.volumes.read", volumes.list())),
@@ -4012,6 +4019,18 @@ async function executeControlRequest(
     }
     case "instance.network.routes.read":
       return webRouteState(relayInstanceWebRoutesReadSchema.parse(payload))
+    case "instance.network.routes.check": {
+      const input = relayInstanceWebRoutesReadSchema.parse(payload)
+      const owner = await webRouteOwner(input)
+      return relayInstanceWebRoutesCheckSchema.parse({
+        answers: await lifecycle.checkWebRoutes(
+          await runRelayEffect(
+            "relay.network.routes.check",
+            startup.state.listInstanceRoutes(owner)
+          )
+        ),
+      })
+    }
     case "instance.network.primaries.carried": {
       const carried = await runRelayEffect(
         "relay.routes.primaries.carried",
@@ -4078,6 +4097,7 @@ async function executeControlRequest(
         "relay.network.routes.replace",
         startup.state.replaceInstanceRoutes(owner, routes)
       )
+      lifecycle.certificates.hold(input.holdCertificates ?? [])
       await Effect.runPromise(
         relayOperation(async () => {
           await lifecycle.configureWebRoutes(

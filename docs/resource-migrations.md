@@ -76,8 +76,9 @@ to hand over; its connections stay with the old one.
 ### Apps
 
 The copy is made with the old one's whole configuration, and the Brick it
-follows if any, and is never deployed: someone deploys it once they've
-checked its settings. It's filled from the old one's folder and from each
+follows if any. A duplicate is never deployed: someone deploys it once
+they've checked its settings. A move deploys it ([below](#deploying-a-moved-app))
+unless it's asked not to. It's filled from the old one's folder and from each
 volume it keeps data on, each its own part of the copy:
 
 - Each volume its settings mount is copied into a new volume of the
@@ -109,8 +110,40 @@ settings takes, and its `app.manage` for published ports or a Compose
 file or Dockerfile, as installing one from a Brick takes. It has an owner
 and web routes to hand over. Handing its routes over takes
 `instance.network.write` on the Relay the copy goes to as well as on the old
-one, since owning an App doesn't carry it. They move before the copy is
-deployed, and don't answer until it is, as the dialog says.
+one, since owning an App doesn't carry it. Deploying the copy takes
+`instance.deploy` there.
+
+#### Deploying a moved App
+
+A move of a running App deploys the copy once it's filled, and hands
+nothing over until it's ready, as any deployment is
+([App deployments](app-deployments.md#rolling-deployments)). It runs what the
+old one ran: the commit it was last built from, or the digest its image is
+run by. One whose source changed since, or that has no version of its own,
+deploys as any deployment of it would.
+
+Once it's ready its Relay is given its routes, and asked whether its own
+Traefik serves them, before any name points there. A copy that doesn't start,
+or none of whose routes Traefik reaches, ends the move: it's removed, the old one is
+started again, and its domains, owner and deploying on a push never left it.
+It's the same when the move is cancelled while the copy starts. It waits up to
+20 seconds for every route, then goes on if any is reached: one may have led to
+nothing all along. A Relay whose
+websites another proxy serves can't be asked, and isn't.
+
+The old one stays stopped until then, so it's away for as long as its data
+takes to copy and the copy takes to build and start. One that wasn't running
+isn't deployed, nor is one whose move was asked not to, whose domains don't
+answer until someone deploys it. The dialog starts with that for an App
+connected to a database, which would start without it.
+
+Bundled Traefik serves the domains it's handed at once. An external one reads
+them from the copy's containers, so the copy is deployed once more after the
+move, with the same version, to carry them.
+
+It's steps of the move itself, not a deployment queued beside it, which
+would wait behind the copy the move holds. It's recorded among the copy's
+deployments.
 
 A copy keeps the parts it settled on (`part_roots`), so undoing it
 discards exactly the transfers it started, though an App's settings and
@@ -133,6 +166,14 @@ Copying one takes what backing it up and restoring it do, on the Relay:
 `relay.configure` and `backup.restore` where the copy goes.
 
 ### Web routes
+
+A copy's Relay has its routes before its names point there, and the old one's
+are taken from it before they do. Until then bundled Traefik asks for no
+certificate for them (`holdCertificates`): the names resolve, to the old Relay,
+so Let's Encrypt would check there and fail, and Traefik doesn't ask again. Once
+they point at the copy's Relay, it's told so (`relay.certificates.release`) and
+asks ([Certificates](domains.md#certificates)); a name whose record can't change
+yet is released when it does, by the DNS worker.
 
 A kind with web routes hands them over whole: each keeps its hostname, path,
 options and, for an App, the service it reaches, and is given an ID of its
@@ -211,7 +252,9 @@ Its steps:
    time, Relay to Relay ([Relay transfers](relay-transfers.md#between-relays)),
    under transfer IDs named after the copy. Once the new Relay has unpacked
    a part, both archives are deleted. The toast says which part it's on.
-6. **finish**: hands over ownership, access, domains, routes, and backups
+6. **deploy**: for a moved App that ran, deploys the copy and waits until
+   it's ready.
+7. **finish**: hands over ownership, access, domains, routes, and backups
    as chosen, each its own step, starts a duplicated original again, and
    last asks for a moved one's final backup and deletion if chosen, queued
    to run once the move ends.

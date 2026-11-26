@@ -1,13 +1,18 @@
 import {
   relayControlDeadlineMs,
+  relayInstanceWebRoutesCheckSchema,
   relayInstanceWebRouteStateSchema,
+  webRouteHostnames as routeHostnames,
   type AccessPermission,
   type RelayInstanceWebRouteInput,
   type ResourceLimits,
 } from "@workspace/contracts"
+import { logException } from "@workspace/telemetry"
 import { Effect } from "effect"
+import type { WorkflowEngine } from "effect/workflow"
 import type { RowDataPacket } from "mysql2/promise"
 
+import { listResourceAddressesEffect } from "@/effect/addresses"
 import type { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
 import {
@@ -29,6 +34,7 @@ import type {
   ResourceMigrationOptions,
 } from "@/lib/resource-migration-input"
 import type { ResourceScope } from "@/lib/resource-permissions"
+import { releaseWebCertificatesEffect } from "@/lib/web-certificates.server"
 import { moveResourceWebHostnamesEffect } from "@/server/addresses.server"
 
 // Moving and duplicating is one operation for every kind of resource
@@ -79,6 +85,11 @@ export interface MigratedDescription {
   readonly unbuildable: string | null
   /** The limits its copy takes unless it's given others; null without any. */
   readonly limits: ResourceLimits | null
+  /**
+   * Whether its copy is deployed unless it's asked not to be, for a kind
+   * whose copy can be: not when it would start without what it runs on.
+   */
+  readonly deploys?: boolean
   /**
    * How much it holds when its Relay can't measure it: a running one's
    * live figure, else its disk limit.
@@ -135,6 +146,8 @@ export interface MigratedKind {
     /** On the Relay its copy goes to, to make it there and fill it. */
     readonly create: ReadonlyArray<AccessPermission>
     readonly delete: AccessPermission
+    /** To run a move's copy, on the Relay it goes to. */
+    readonly deploy?: AccessPermission
     /** To hand its domains and web routes over, for a kind with either. */
     readonly network?: AccessPermission
     /**
@@ -240,6 +253,55 @@ export interface MigratedKind {
     migration: Migration,
     actor: AuthenticatedUser
   ) => Effect.Effect<ReadonlyArray<string>, unknown, Database>
+  /**
+   * Runs a move's copy once it's filled, as the old one ran, before anything
+   * is handed to it: for a kind whose copy is made without running. Its
+   * steps are its own, named by `named`, under an ID chosen for it.
+   */
+  readonly deploy?: {
+    readonly start: (
+      migration: Migration,
+      actorId: string,
+      id: string,
+      named: (step: string) => string
+    ) => Effect.Effect<
+      void,
+      unknown,
+      Database | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+    >
+    /** Whether it's still under way, or why it failed, if it did. */
+    readonly state: (
+      id: string
+    ) => Effect.Effect<
+      "running" | "ready" | { readonly failed: string },
+      unknown,
+      Database
+    >
+    /**
+     * Gives it what it serves on its own Relay, once it's ready, and whether
+     * that Relay serves it yet, before anyone is sent there.
+     */
+    readonly serve: (
+      migration: Migration,
+      actor: AuthenticatedUser
+    ) => Effect.Effect<unknown, unknown, Database>
+    readonly served: (
+      migration: Migration
+    ) => Effect.Effect<
+      "down" | "partly" | "served" | "unknown" | "unrouted",
+      unknown,
+      Database
+    >
+    /** What follows one that's ready. */
+    readonly after: (
+      id: string,
+      named: (step: string) => string
+    ) => Effect.Effect<
+      void,
+      never,
+      Database | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+    >
+  }
   /** What one that was started again needs besides, of its own. */
   readonly started?: (
     relay: PersistedRelay,
@@ -433,6 +495,7 @@ export function relayRequest(
   relay: PersistedRelay,
   operation:
     | "instance.action"
+    | "instance.network.routes.check"
     | "instance.network.routes.read"
     | "instance.network.routes.write"
     | "relay.snapshot"
@@ -462,6 +525,7 @@ const webRoutes = (
   operation: "instance.network.routes.read" | "instance.network.routes.write",
   subject: string,
   payload: {
+    readonly holdCertificates?: ReadonlyArray<string>
     readonly id: string
     readonly kind: "app" | "instance"
     readonly routes?: ReadonlyArray<RelayInstanceWebRouteInput>
@@ -478,9 +542,87 @@ const webRoutes = (
   )
 
 /**
+ * Gives a move's copy the old one's web routes on its own Relay, while the
+ * old one keeps serving them: nothing sends anyone there until their names
+ * move too (`moveWebRoutes`), so no certificate is asked for until then.
+ * Asked again, the copy keeps those it was given.
+ */
+export const copyWebRoutes = Effect.fnUntraced(function* (
+  kind: "app" | "instance",
+  migration: Migration,
+  actor: AuthenticatedUser
+) {
+  const [source, destination] = yield* relays(migration)
+  const read = "instance.network.routes.read"
+  const old = yield* webRoutes(source, read, actor.id, {
+    id: migration.source.id,
+    kind,
+  })
+  const copy = yield* webRoutes(destination, read, actor.id, {
+    id: migration.destination.id,
+    kind,
+  })
+  if (old.length === 0 || copy.length > 0) return { copy, old }
+  // One Kiln has yet to make a record for points nowhere, and its certificate
+  // is asked for once it's made, as any new name's is.
+  const addresses = yield* listResourceAddressesEffect({
+    relayId: source.id,
+    resourceId: migration.source.id,
+    resourceType: kind,
+  })
+  const unmade = new Set(
+    addresses.flatMap((row) =>
+      row.connectionId !== null && row.recordId === null ? [row.hostname] : []
+    )
+  )
+  return {
+    copy: yield* webRoutes(
+      destination,
+      "instance.network.routes.write",
+      actor.id,
+      {
+        holdCertificates: [...new Set(old.flatMap(routeHostnames))].filter(
+          (name) => !unmade.has(name)
+        ),
+        id: migration.destination.id,
+        kind,
+        routes: old.map(({ id: _id, ...route }) => route),
+      }
+    ),
+    old,
+  }
+})
+
+/**
+ * Whether a copy's Relay serves its routes yet: `unknown` where another proxy
+ * does, which can't be asked, `down` when none of them reaches it, and
+ * `partly` when some do: the rest may not have started, or never did.
+ */
+export const webRoutesServed = Effect.fnUntraced(function* (
+  kind: "app" | "instance",
+  migration: Migration
+) {
+  const [, destination] = yield* relays(migration)
+  const { answers } = relayInstanceWebRoutesCheckSchema.parse(
+    yield* relayRequest(
+      destination,
+      "instance.network.routes.check",
+      undefined,
+      { id: migration.destination.id, kind }
+    )
+  )
+  if (answers === null || answers.length === 0) return "unknown" as const
+  const is = (wanted: string) => answers.some(({ state }) => state === wanted)
+  if (is("down")) return is("served") ? ("partly" as const) : ("down" as const)
+  return is("served") ? ("served" as const) : ("unrouted" as const)
+})
+
+/**
  * A move's copy takes the old one's web routes and their hostnames, for a
  * kind whose routes its Relay keeps under its own name. The one that is the
- * old one's primary address is the copy's.
+ * old one's primary address is the copy's. The names point at the copy's
+ * Relay only once it has the routes, and their certificates are asked for
+ * only once they point there.
  */
 export function moveWebRoutes(
   kind: "app" | "instance",
@@ -489,64 +631,73 @@ export function moveWebRoutes(
 ) {
   return Effect.gen(function* () {
     const [source, destination] = yield* relays(migration)
-    const old = { id: migration.source.id, type: kind }
-    const copy = { id: migration.destination.id, type: kind }
-    const moving = yield* webRoutes(
-      source,
-      "instance.network.routes.read",
-      actor.id,
-      { id: old.id, kind }
-    )
-    const primary = yield* loadPrimaryAddressEffect(old)
-    // Run again after the routes moved, it finds none, and still hands the
-    // hostnames over.
-    if (moving.length > 0) {
-      const moved = yield* webRoutes(
-        destination,
-        "instance.network.routes.write",
-        actor.id,
-        {
-          id: copy.id,
-          kind,
-          routes: moving.map(({ id: _id, ...route }) => route),
-        }
-      )
+    const from = { id: migration.source.id, type: kind }
+    const to = { id: migration.destination.id, type: kind }
+    const primary = yield* loadPrimaryAddressEffect(from)
+    // Run again after the old one's were taken from it, it finds none there,
+    // and still hands their names over.
+    const { copy, old } = yield* copyWebRoutes(kind, migration, actor)
+    if (old.length > 0) {
       // Each route has an ID of its own on the new Relay. Named before the
       // old one's go, so a run cut short still finds which it was.
       const was =
         primary?.kind === "route"
-          ? moving.find((route) => route.id === primary.ref)
+          ? old.find((route) => route.id === primary.ref)
           : undefined
       const chosen = was
-        ? moved.find(
+        ? copy.find(
             (route) =>
               route.hostname === was.hostname && route.path === was.path
           )
         : undefined
       if (chosen) {
-        yield* setPrimaryAddressEffect(copy, { kind: "route", ref: chosen.id })
+        yield* setPrimaryAddressEffect(to, { kind: "route", ref: chosen.id })
       }
       yield* webRoutes(source, "instance.network.routes.write", actor.id, {
-        id: old.id,
+        id: from.id,
         kind,
         routes: [],
       })
     }
     // A name in a tunnel stays the old one's: it isn't handed over.
-    if (primary?.kind === "route") yield* forgetPrimaryAddressEffect(old)
+    if (primary?.kind === "route") yield* forgetPrimaryAddressEffect(from)
     // Its hostnames belong to the copy now, and their DNS records point at
     // its Relay.
     yield* moveResourceWebHostnamesEffect(
       {
-        relayId: migration.source.relayId,
-        resourceId: migration.source.id,
+        relayId: source.id,
+        resourceId: from.id,
         resourceType: kind,
       },
       {
         relayId: destination.id,
-        resourceId: migration.destination.id,
+        resourceId: to.id,
         resourceType: kind,
       }
+    )
+    // Their certificates are asked for once they point there, which changing
+    // a record says itself. This is for those Kiln doesn't point, which are
+    // up to whoever does.
+    const addresses = yield* listResourceAddressesEffect({
+      relayId: destination.id,
+      resourceId: to.id,
+      resourceType: kind,
+    })
+    const waiting = new Set(
+      addresses.flatMap((row) =>
+        row.recordId !== null && row.lastError !== null ? [row.hostname] : []
+      )
+    )
+    yield* releaseWebCertificatesEffect(
+      destination.id,
+      copy.flatMap(routeHostnames).filter((name) => !waiting.has(name))
+    ).pipe(
+      Effect.catch((cause) =>
+        logException(cause, {
+          attributes: { "relay.id": destination.id },
+          operation: "resourceMigrations.releaseCertificates",
+        })
+      )
     )
   })
 }

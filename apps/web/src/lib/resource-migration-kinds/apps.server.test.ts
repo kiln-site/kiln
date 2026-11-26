@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import {
+  relayCertificateReleaseInputSchema,
   relayInstanceWebRoutesWriteSchema,
   type RelayInstanceWebRouteInput,
 } from "@workspace/contracts"
@@ -24,9 +25,13 @@ type Route = RelayInstanceWebRouteInput & { id: string }
 // The Relays are the only fake: each keeps the routes it is sent, as a real
 // one checks them, giving each an ID of its own.
 const fake = vi.hoisted(() => ({
+  // The hostnames each isn't to ask for a certificate of yet.
+  held: new Map<string, ReadonlyArray<string>>(),
   ids: 0,
   // What the next request to each Relay to keep routes fails with.
   refuses: new Map<string, string>(),
+  // The hostnames whose certificates may be asked for again.
+  released: new Set<string>(),
   routes: new Map<string, Array<object>>(),
   unreadable: false,
 }))
@@ -37,12 +42,21 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: { id: string }
   ) => {
+    // Neither App is deployed.
+    if (operation === "app.list") return []
+    if (operation === "relay.certificates.release") {
+      const { hostnames } = relayCertificateReleaseInputSchema.parse(payload)
+      for (const hostname of hostnames) fake.released.add(hostname)
+      return {}
+    }
     const key = `${relay.id}/${payload.id}`
     if (operation === "instance.network.routes.write") {
       const refused = fake.refuses.get(relay.id)
       fake.refuses.delete(relay.id)
       if (refused) throw new Error(refused)
-      const { routes } = relayInstanceWebRoutesWriteSchema.parse(payload)
+      const { holdCertificates, routes } =
+        relayInstanceWebRoutesWriteSchema.parse(payload)
+      fake.held.set(key, holdCertificates ?? [])
       fake.routes.set(
         key,
         routes.map((route) => ({
@@ -121,6 +135,8 @@ const routesOf = (relayId: string, appId: string) =>
 // The old App serves two services, and its second domain is its primary.
 const seed = Effect.gen(function* () {
   yield* resetDatabase
+  fake.held.clear()
+  fake.released.clear()
   fake.refuses.clear()
   fake.routes.clear()
   fake.unreadable = false
@@ -157,6 +173,8 @@ const primaryOfCopy = Effect.gen(function* () {
 const handedOver = Effect.gen(function* () {
   assert.deepEqual(routesOf(newRelay, newApp), everyRoute)
   assert.deepEqual(routesOf(oldRelay, oldApp), [])
+  // Its names point at its Relay now, so their certificates are asked for.
+  assert.sameMembers([...fake.released], ["example.test", "www.example.test"])
   assert.strictEqual(yield* primaryOfCopy, "example.test/api")
   assert.isNull(yield* loadPrimaryAddressEffect({ id: oldApp, type: "app" }))
 })
@@ -213,6 +231,11 @@ describeMysql("handing an App's domains to the one it moved to", () => {
         fake.refuses.set(oldRelay, "Connection lost")
         assert.match(String(yield* Effect.flip(handOver)), /Connection lost/u)
         assert.deepEqual(routesOf(oldRelay, oldApp), everyRoute)
+        assert.sameMembers(
+          [...(fake.held.get(`${newRelay}/${newApp}`) ?? [])],
+          ["example.test", "www.example.test"]
+        )
+        assert.strictEqual(fake.released.size, 0)
         yield* handOver
         yield* handedOver
       })

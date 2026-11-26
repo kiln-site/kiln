@@ -6,7 +6,10 @@
  * and doesn't ask again. So Traefik asks for a hostname only once its name
  * resolves at its zone's own nameservers, and someone can have it ask again
  * by hand; that reaches every certificate it lacks, so it's limited per
- * Relay.
+ * Relay. A name being moved here resolves already, to where it's moved from,
+ * so it's held until it's said to point here, and asked for a little after:
+ * a changed record takes a while to reach everyone, and a proxied one's proxy
+ * longer, so it's asked for again a few times while it's missing.
  */
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
@@ -82,6 +85,10 @@ const issueTime = 2 * minute
 // Let's Encrypt allows five failed validations per hostname an hour, and the
 // first ask was one. Asks by hand reach every hostname, so this is per Relay.
 const asksPerHour = 4
+// How long a record just changed is given before its certificate is asked
+// for, then how long each ask is given before the next.
+const settleTime = 15 * second
+const movedRetries = [45 * second, 2 * minute, 10 * minute]
 
 // Traefik's acme.json; only the certificates' names matter.
 const acmeStoreSchema = z.record(
@@ -108,6 +115,11 @@ export class WebCertificates {
   readonly #storePath: string
   // Names with a certificate; null (all count) until acme.json reads.
   #issued: ReadonlySet<string> | null = null
+  // Names that resolve, but not here yet.
+  readonly #held = new Set<string>()
+  // Names whose records were just pointed here, and how often each has been
+  // asked for again.
+  readonly #moved = new Map<string, number>()
   // Asks by hand within the last hour.
   #asks: Array<number> = []
   #retry = 0
@@ -144,6 +156,12 @@ export class WebCertificates {
     for (const hostname of this.#pending.keys()) {
       if (!served.has(hostname)) this.#pending.delete(hostname)
     }
+    for (const hostname of this.#held) {
+      if (!served.has(hostname)) this.#held.delete(hostname)
+    }
+    for (const hostname of this.#moved.keys()) {
+      if (!served.has(hostname)) this.#moved.delete(hostname)
+    }
     if (served.size === 0) return
     await this.#readStore()
     let added = false
@@ -165,6 +183,30 @@ export class WebCertificates {
       }
     }
     if (added) this.#wake?.()
+  }
+
+  /** Asks for no certificate naming these until they're released. */
+  hold(hostnames: Iterable<string>): void {
+    for (const hostname of hostnames) this.#held.add(hostname.toLowerCase())
+  }
+
+  /**
+   * Asks for these soon, held or not, now that their records point here. One
+   * asked for already, as by a Relay that restarted meanwhile, failed while
+   * they pointed elsewhere.
+   */
+  release(hostnames: Iterable<string>): void {
+    const now = Date.now()
+    for (const hostname of hostnames) {
+      const name = hostname.toLowerCase()
+      this.#held.delete(name)
+      const pending = this.#pending.get(name)
+      if (!pending) continue
+      this.#moved.set(name, 0)
+      pending.failed = false
+      if (pending.waitingFor === "dns") pending.nextCheckAt = now + settleTime
+      else pending.since = now
+    }
   }
 
   /** For writing Traefik's routes as things stand now. */
@@ -215,7 +257,9 @@ export class WebCertificates {
     for (const [name, pending] of this.#pending) {
       const wanted =
         hostname === undefined
-          ? pending.waitingFor === "dns" && pending.nextCheckAt <= now
+          ? pending.waitingFor === "dns" &&
+            pending.nextCheckAt <= now &&
+            !this.#held.has(name)
           : name === hostname
       if (wanted) answers.set(name, await this.#resolve(name))
     }
@@ -229,6 +273,9 @@ export class WebCertificates {
           pending.waitingFor === "certificate" &&
           !pending.failed &&
           now - pending.since >= issueTime
+      ) ||
+      [...this.#pending].some(([name, pending]) =>
+        this.#askAgain(name, pending, now)
       ) ||
       (this.#pending.size > 0 && (await this.#storeChanged()))
     return { answers, due }
@@ -262,15 +309,56 @@ export class WebCertificates {
     return hostname
   }
 
+  // Whether a moved name is due to be asked for again.
+  #askAgain(name: string, pending: Pending, now: number): boolean {
+    const retry = movedRetries[this.#moved.get(name) ?? movedRetries.length]
+    return (
+      retry !== undefined &&
+      pending.waitingFor === "certificate" &&
+      now - pending.since >= retry
+    )
+  }
+
+  // Whether the Relay may ask Let's Encrypt again for what it lacks.
+  #mayAsk(now: number): boolean {
+    this.#asks = this.#asks.filter((ask) => ask > now - hour)
+    return this.#asks.length < asksPerHour
+  }
+
+  // Has Traefik ask again, for every certificate it lacks, so each starts
+  // over.
+  #ask(now: number): void {
+    this.#asks.push(now)
+    for (const other of this.#pending.values()) {
+      if (other.waitingFor !== "certificate") continue
+      other.failed = false
+      other.since = now
+    }
+    this.#retry += 1
+    this.#version += 1
+  }
+
   #applyLookups(
     result: { asked: boolean; changed: boolean },
     answers: ReadonlyMap<string, NameAnswer>,
     hostname: string | undefined
   ): void {
     const now = Date.now()
+    const again = [...this.#pending].filter(
+      ([name, pending]) =>
+        !this.#hasCertificate(name) && this.#askAgain(name, pending, now)
+    )
+    if (again.length > 0 && this.#mayAsk(now)) {
+      for (const [name] of again) {
+        this.#moved.set(name, (this.#moved.get(name) ?? 0) + 1)
+      }
+      this.#ask(now)
+      result.changed = true
+    }
     for (const [name, pending] of this.#pending) {
       if (this.#hasCertificate(name)) {
         this.#pending.delete(name)
+        this.#moved.delete(name)
         result.changed = true
         if (pending.waitingFor === "dns") this.#version += 1
         continue
@@ -307,21 +395,12 @@ export class WebCertificates {
         this.#version += 1
         continue
       }
-      // Asked again by hand: Traefik asks for every certificate it lacks, so
-      // each starts over.
+      // Asked again by hand.
       if (name !== hostname) continue
-      this.#asks = this.#asks.filter((ask) => ask > now - hour)
-      if (this.#asks.length >= asksPerHour) continue
-      this.#asks.push(now)
-      for (const other of this.#pending.values()) {
-        if (other.waitingFor !== "certificate") continue
-        other.failed = false
-        other.since = now
-      }
-      this.#retry += 1
+      if (!this.#mayAsk(now)) continue
+      this.#ask(now)
       result.asked = true
       result.changed = true
-      this.#version += 1
     }
   }
 

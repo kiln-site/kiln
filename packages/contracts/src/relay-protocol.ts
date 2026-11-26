@@ -71,6 +71,7 @@ export const relayControlOperations = [
   "relay.proxy.write",
   "relay.proxy.trial",
   "relay.certificates.check",
+  "relay.certificates.release",
   "relay.volumes.read",
   "relay.docker.storage",
   "relay.docker.cleanup",
@@ -174,6 +175,7 @@ export const relayControlOperations = [
   "instance.network.ports.release",
   "instance.network.ports.write",
   "instance.network.routes.read",
+  "instance.network.routes.check",
   "instance.network.routes.write",
   "instance.network.primaries.carried",
   "instance.network.primaries.forget",
@@ -333,6 +335,7 @@ export function relayControlOperationChanges(
     case "instance.console.history":
     case "instance.deployment.read":
     case "instance.network.routes.read":
+    case "instance.network.routes.check":
     case "instance.network.primaries.carried":
     case "terminal.attach":
     case "terminal.heartbeat":
@@ -363,6 +366,7 @@ export function relayControlOperationChanges(
     case "relay.proxy.write":
     case "relay.proxy.trial":
     case "relay.certificates.check":
+    case "relay.certificates.release":
     case "relay.volumes.create":
     case "relay.volumes.rename":
     case "relay.volumes.delete":
