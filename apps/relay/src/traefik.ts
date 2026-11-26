@@ -328,7 +328,9 @@ export function traefikDynamicConfiguration(
   config: RelayConfig,
   routes: ReadonlyArray<RelayStoredWebRoute>,
   settings: RelayProxySettings,
-  certificates: TraefikCertificateGate
+  certificates: TraefikCertificateGate,
+  // Public databases' names, which need a certificate and serve nothing.
+  databaseNames: ReadonlyArray<string> = []
 ): string {
   const resources = relayResourceNames(config)
   // Only a Relay in Traefik mode is itself reached through Traefik, and only
@@ -386,6 +388,22 @@ export function traefikDynamicConfiguration(
   }
   const routeConfiguration = traefikFileRoutes(resources, served, certificates)
   lines.push(...routeConfiguration.routers)
+  // A router of its own is how Traefik asks for a name's certificate; the
+  // database's gate serves it, with the database's own TLS.
+  if (config.proxyMode === "traefik") {
+    for (const hostname of databaseNames) {
+      if (!certificates.requests(hostname)) continue
+      lines.push(
+        `    kiln-database-${hostname.replaceAll(".", "-")}:`,
+        `      rule: ${JSON.stringify(`Host(\`${hostname}\`)`)}`,
+        "      entryPoints:",
+        "        - websecure",
+        `      service: ${NOOP_SERVICE}`,
+        "      tls:",
+        "        certResolver: kiln"
+      )
+    }
+  }
 
   lines.push("  services:")
   if (edge) {

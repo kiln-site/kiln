@@ -41,6 +41,18 @@ export interface TraefikCertificateGate {
   readonly version: number
 }
 
+/** A public database's name, which needs a certificate as a route does. */
+export interface DatabaseCertificateName {
+  readonly databaseId: string
+  readonly hostname: string
+}
+
+/** A certificate Traefik holds, as PEM: its chain, leaf first, and key. */
+export interface HeldCertificate {
+  readonly chain: string
+  readonly key: string
+}
+
 /** A hostname checked by hand, and the resource Hearth authorized. */
 export interface ByHand {
   readonly hostname: string
@@ -109,6 +121,28 @@ const acmeStoreSchema = z.record(
     .nullable()
 )
 
+// The same, with each certificate's chain and key, base64 PEM as Traefik
+// keeps them, read only for a public database's name.
+const acmeCertificatesSchema = z.record(
+  z.string(),
+  z
+    .object({
+      Certificates: z
+        .array(
+          z.object({
+            certificate: z.string(),
+            domain: z.object({
+              main: z.string(),
+              sans: z.array(z.string()).nullish(),
+            }),
+            key: z.string(),
+          })
+        )
+        .nullish(),
+    })
+    .nullable()
+)
+
 export class WebCertificates {
   readonly #pending = new Map<string, Pending>()
   readonly #resolve: (hostname: string) => Promise<NameAnswer>
@@ -140,9 +174,18 @@ export class WebCertificates {
     this.#storePath = options.storePath
   }
 
-  /** Follows the routes the bundled Traefik serves; none without it. */
-  async track(routes: ReadonlyArray<RelayStoredWebRoute>): Promise<void> {
+  /**
+   * Follows the routes the bundled Traefik serves, and public databases'
+   * names; none without it.
+   */
+  async track(
+    routes: ReadonlyArray<RelayStoredWebRoute>,
+    databases: ReadonlyArray<DatabaseCertificateName> = []
+  ): Promise<void> {
     const served = new Map<string, Pending["owner"]>()
+    for (const { databaseId, hostname } of databases) {
+      served.set(hostname.toLowerCase(), { id: databaseId, kind: "database" })
+    }
     for (const route of routes) {
       const appId = appIdFromRouteOwner(route.instanceId)
       const owner = appId
@@ -303,7 +346,9 @@ export class WebCertificates {
     const owner = this.#served.get(hostname)
     if (owner?.kind !== byHand.owner.kind || owner.id !== byHand.owner.id) {
       throw new Error(
-        `No route of this ${byHand.owner.kind === "app" ? "App" : "game server"} serves ${hostname}`
+        byHand.owner.kind === "database"
+          ? `This database isn't public at ${hostname}`
+          : `No route of this ${byHand.owner.kind === "app" ? "App" : "game server"} serves ${hostname}`
       )
     }
     return hostname
@@ -412,6 +457,40 @@ export class WebCertificates {
         resolve()
       }
     })
+  }
+
+  /**
+   * The certificate Traefik holds for `hostname` itself, read afresh, or
+   * null. A database is given its own name's, never a wildcard's.
+   */
+  async certificate(hostname: string): Promise<HeldCertificate | null> {
+    const text = await recoverPromise(
+      () => readFile(this.#storePath, "utf8"),
+      () => null
+    )
+    if (!text?.trim()) return null
+    const parsed = acmeCertificatesSchema.safeParse(
+      Result.getOrNull(Result.try(() => JSON.parse(text) as unknown))
+    )
+    if (!parsed.success) return null
+    const name = hostname.toLowerCase()
+    for (const resolver of Object.values(parsed.data)) {
+      for (const held of resolver?.Certificates ?? []) {
+        const names = [held.domain.main, ...(held.domain.sans ?? [])]
+        if (!names.some((candidate) => candidate.toLowerCase() === name)) {
+          continue
+        }
+        const chain = Buffer.from(held.certificate, "base64").toString("utf8")
+        const key = Buffer.from(held.key, "base64").toString("utf8")
+        if (
+          chain.includes("BEGIN CERTIFICATE") &&
+          key.includes("PRIVATE KEY")
+        ) {
+          return { chain, key }
+        }
+      }
+    }
+    return null
   }
 
   #hasCertificate(hostname: string): boolean {

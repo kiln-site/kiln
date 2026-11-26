@@ -32,6 +32,7 @@ export const relayActions = [
   "database.delete",
   "database.credentials.rotate",
   "database.network.write",
+  "database.network.public-port.write",
   "database.dump.export",
   "database.dump.import",
   "app.read",

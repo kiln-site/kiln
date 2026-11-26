@@ -143,7 +143,10 @@ import {
   type TraefikLabelProfile,
 } from "./traefik.js"
 
-import type { TraefikCertificateGate } from "./web-certificates.js"
+import type {
+  DatabaseCertificateName,
+  TraefikCertificateGate,
+} from "./web-certificates.js"
 
 // Containers Relay runs for its own infrastructure, named when created.
 type InfrastructureContainer = Omit<ContainerSpec, "name">
@@ -450,6 +453,7 @@ export class LifecycleDriver {
   #tailscaleConfigsDiscovered = false
   readonly #tailscaleFirewallGenerations = new Map<string, string>()
   #webRoutes: ReadonlyArray<RelayStoredWebRoute> = []
+  #databaseNames: ReadonlyArray<DatabaseCertificateName> = []
   /** Certificates for the routes the bundled Traefik serves. */
   readonly certificates: WebCertificates
   /** The ports published on the host, for every kind that publishes one. */
@@ -1521,7 +1525,8 @@ export class LifecycleDriver {
     const settings = configuredSettings ?? (await this.proxySettings())
     this.#webRoutes = routes
     await this.certificates.track(
-      this.#config.proxyMode === "traefik" ? routes : []
+      this.#config.proxyMode === "traefik" ? routes : [],
+      this.#config.proxyMode === "traefik" ? this.#databaseNames : []
     )
     await this.#writeTraefikRoutes(routes, settings)
     if (settings.mode === "none" || settings.mode === "coolify") {
@@ -1537,6 +1542,32 @@ export class LifecycleDriver {
         await this.#connectTraefikToApps(routes)
       }
     }
+  }
+
+  /**
+   * Has the bundled Traefik ask for public databases' certificates. The
+   * caller holds the routes lock.
+   */
+  async configureDatabaseCertificates(
+    names: ReadonlyArray<DatabaseCertificateName>
+  ): Promise<void> {
+    this.#databaseNames = names
+    if (this.#config.proxyMode !== "traefik") return
+    await this.certificates.track(this.#webRoutes, names)
+    await this.#writeTraefikRoutes(this.#webRoutes, await this.proxySettings())
+  }
+
+  /**
+   * The public databases' names, as the Relay starts, for the first time it
+   * writes Traefik's routes: nothing is written now.
+   */
+  useDatabaseCertificates(names: ReadonlyArray<DatabaseCertificateName>) {
+    this.#databaseNames = names
+  }
+
+  /** Whether this Relay runs its own Traefik, which public databases need. */
+  get runsTraefik(): boolean {
+    return this.#config.proxyMode === "traefik"
   }
 
   /** Rewrites the bundled Traefik's routes. The caller holds the routes lock. */
@@ -1576,7 +1607,13 @@ export class LifecycleDriver {
   ): string {
     return this.#proxyTrial
       ? traefikTrialConfiguration(this.#config, settings, this.#proxyTrial)
-      : traefikDynamicConfiguration(this.#config, routes, settings, gate)
+      : traefikDynamicConfiguration(
+          this.#config,
+          routes,
+          settings,
+          gate,
+          this.#databaseNames.map(({ hostname }) => hostname)
+        )
   }
 
   // Bundled Traefik reaches routed apps on their own networks.

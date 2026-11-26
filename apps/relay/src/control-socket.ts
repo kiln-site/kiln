@@ -1793,9 +1793,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // route takes. Hearth checks the person may.
     case "relay.certificates.check": {
       const kind = objectString(objectRecord(request.payload, "owner"), "kind")
+      // A database's one name is its public address.
       return kind === "app" || kind === "server"
         ? "instance.network.write"
-        : null
+        : kind === "database"
+          ? "database.network.public-port.write"
+          : null
     }
     case "relay.certificates.release":
       return "relay.configure"
@@ -1866,6 +1869,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // Hearth hands over the connections it kept for Apps.
     case "database.network.import":
       return "database.network.write"
+    // Opening one to the internet is never part of changing its networks.
+    case "database.public.write":
+      return "database.network.public-port.write"
     case "database.dump.export":
       return "database.dump.export"
     case "database.dump.import":

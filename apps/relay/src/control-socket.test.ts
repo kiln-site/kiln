@@ -499,7 +499,30 @@ describe("Relay control socket", () => {
     }
 
     expect(await allowed(["instance.network.write"])).toEqual(["server", "app"])
-    expect(await allowed(["app.manage"])).toEqual([])
+    expect(await allowed(["database.network.public-port.write"])).toEqual([
+      "database",
+    ])
+    expect(await allowed(["app.manage", "database.network.write"])).toEqual([])
+  })
+
+  it("opens a database to the internet only for a client given that action", async () => {
+    const relay = await startRelay({
+      execute: async () => ({ databaseId: "d".repeat(12), public: null }),
+    })
+    const opens = async (actions: ReadonlyArray<RelayAction>) => {
+      const { inbox, socket } = await relay.connect(
+        await relay.pair({ role: "custom", actions })
+      )
+      sendRequest(socket, "database.public.write", {
+        databaseId: "d".repeat(12),
+        public: { hostname: "db.example.com", port: 5432 },
+      })
+      const reply = (await inbox.next()) as { code?: string }
+      return reply.code !== "forbidden"
+    }
+
+    expect(await opens(["database.network.write"])).toBe(false)
+    expect(await opens(["database.network.public-port.write"])).toBe(true)
   })
 
   it("takes a database's network permission to create an App connected to it", async () => {

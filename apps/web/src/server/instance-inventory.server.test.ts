@@ -176,6 +176,7 @@ describeMysql("scoped instance inventory", () => {
                       createdAt: new Date(0).toISOString(),
                       databaseName: "kiln_main",
                       diskUsedBytes: null,
+                      public: null,
                       engine: "postgres",
                       hostname: `database-${id}`,
                       id,

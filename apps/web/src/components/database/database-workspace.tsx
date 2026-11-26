@@ -184,6 +184,7 @@ function useDatabaseWorkspaceQuery(
           diskUsedBytes: null,
           limits: NO_RESOURCE_LIMITS,
           members: [],
+          public: null,
           variables: {},
           observedState: "failed" as const,
           startedAt: null,

@@ -194,6 +194,8 @@ export interface RelayConfig {
   /** restic, as its helpers find it too. */
   resticPath: string
   syftPath: string
+  /** The gate a public database's port goes through, in the Relay's image. */
+  databaseGatePath: string
   serverIdLabel: string
   nodeId: string
   nodeName: string
@@ -372,6 +374,9 @@ export function loadConfig(
     selfContainer: environment.KILN_RELAY_CONTAINER?.trim() || null,
     resticPath: environment.KILN_RELAY_RESTIC_PATH?.trim() || "restic",
     syftPath: environment.KILN_RELAY_SYFT_PATH?.trim() || "/usr/local/bin/syft",
+    databaseGatePath:
+      environment.KILN_RELAY_DATABASE_GATE_PATH?.trim() ||
+      "/usr/local/bin/kiln-database-gate",
     nodeId: "kiln-relay",
     nodeName: environment.KILN_RELAY_NAME?.trim() || "",
     port,
