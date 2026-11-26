@@ -275,6 +275,19 @@ export async function startResourceMigrationHandler(
     options,
     source: { id: data.id, relayId: relay.id },
   })
+  // Read now, before anything is made or stopped: a move that couldn't hand
+  // them over would stop the old one first and fail at its end.
+  if (options.moveWebRoutes) {
+    const { webRoutes } = await kind.handOverCounts(relay, data.id, user, {
+      backups: false,
+      network: true,
+    })
+    if (webRoutes === null) {
+      throw new Error(
+        `${relay.name} couldn't say which domains ${description.name} has`
+      )
+    }
+  }
   // A backup first goes where they chose: the copy holds that while it runs.
   const backupStorageIds = options.backup ? [options.backup.storageId] : []
   if (kind.kind !== "app") {

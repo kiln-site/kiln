@@ -69,28 +69,31 @@ const nodePath: AppMount = {
   target: "/var/run/docker.sock",
 }
 
-const copyIt = Effect.promise(() =>
-  requireMigrationPermissions(mover, {
-    destination: { relayId: newRelay },
-    kind: "app",
-    mode: "duplicate",
-    options: {
-      backup: null,
-      copyAccess: false,
-      deleteSource: null,
-      keepActivity: false,
-      limits: null,
-      linkBackups: false,
-      moveDomain: false,
-      moveWebRoutes: false,
-      stopSource: false,
-    },
-    source: { id: appId, relayId: oldRelay },
-  }).then(
-    () => null,
-    (error: unknown) => error
+const ask = (chosen: { mode: "duplicate" | "migrate"; routes?: boolean }) =>
+  Effect.promise(() =>
+    requireMigrationPermissions(mover, {
+      destination: { relayId: newRelay },
+      kind: "app",
+      mode: chosen.mode,
+      options: {
+        backup: null,
+        copyAccess: false,
+        deleteSource: null,
+        keepActivity: false,
+        limits: null,
+        linkBackups: false,
+        moveDomain: false,
+        moveWebRoutes: chosen.routes ?? false,
+        stopSource: chosen.mode === "migrate",
+      },
+      source: { id: appId, relayId: oldRelay },
+    }).then(
+      () => null,
+      (error: unknown) => error
+    )
   )
-)
+
+const copyIt = ask({ mode: "duplicate" })
 
 describeMysql("moving and duplicating an App", () => {
   layer(TestDatabase)((it) => {
@@ -154,6 +157,42 @@ describeMysql("moving and duplicating an App", () => {
             mounts: [nodePath],
           }))
           assert.isNull(yield* copyIt)
+        })
+    )
+
+    // Owning an App carries no say over its network, so a move that takes
+    // its domains would stop it, then fail to serve them on the new Relay.
+    it.effect(
+      "takes changing networks on both Relays to move its domains",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser(mover.id)
+          yield* insertUser("owner")
+          yield* insertRelay(oldRelay, { created_by: "owner" })
+          yield* insertRelay(newRelay, { created_by: "owner" })
+          yield* grant(oldRelay, [
+            "app.read",
+            "app.manage",
+            "instance.files.read",
+            "instance.network.write",
+            "instance.power.stop",
+          ])
+          const there = yield* grant(newRelay, ["app.read", "app.create"])
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: mover.id,
+            name: "Website",
+            relayId: oldRelay,
+          })
+
+          assert.isNull(yield* ask({ mode: "migrate" }))
+          assert.match(
+            String(yield* ask({ mode: "migrate", routes: true })),
+            /PermissionDeniedError|permission/u
+          )
+          yield* allow(there, ["instance.network.write"])
+          assert.isNull(yield* ask({ mode: "migrate", routes: true }))
         })
     )
   })

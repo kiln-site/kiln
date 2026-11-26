@@ -290,6 +290,13 @@ function MigrationForm({
   const copies = (key: MetadataKey) =>
     copyMetadata && metadata.find((item) => item.key === key)?.reason === null
 
+  // Not the same as having none: a move now would leave its domains behind.
+  const routesUnread =
+    moving &&
+    copyMetadata &&
+    offers.handOvers.includes("routes") &&
+    preview.webRoutes === null
+
   const [stopSource, setStopSource] = React.useState(
     preview.source.running && preview.allowed.power
   )
@@ -346,6 +353,7 @@ function MigrationForm({
     roomProblems.length > 0 ||
     !trimmedName ||
     nameTaken ||
+    routesUnread ||
     preview.source.provisioning ||
     (moving && offers.power && !preview.allowed.stop)
 
@@ -393,19 +401,24 @@ function MigrationForm({
                         text: `A move stops this ${noun}, and you can't stop it.`,
                         tone: "error",
                       }
-                    : destinations.length === 0
+                    : routesUnread
                       ? {
-                          text: moving
-                            ? `No other Relay can take ${aNoun(noun)} from you.`
-                            : `No Relay can take ${aNoun(noun)} from you.`,
-                          tone: "warning",
+                          text: `${preview.source.relayName} couldn't say which domains it has. Try again.`,
+                          tone: "error",
                         }
-                      : archMismatch && selected && resource.kind !== "volume"
+                      : destinations.length === 0
                         ? {
-                            text: `${selected.name} runs ${selected.nodeArch}; its image must support it.`,
+                            text: moving
+                              ? `No other Relay can take ${aNoun(noun)} from you.`
+                              : `No Relay can take ${aNoun(noun)} from you.`,
                             tone: "warning",
                           }
-                        : null
+                        : archMismatch && selected && resource.kind !== "volume"
+                          ? {
+                              text: `${selected.name} runs ${selected.nodeArch}; its image must support it.`,
+                              tone: "warning",
+                            }
+                          : null
 
   return (
     <form
@@ -1008,16 +1021,18 @@ function metadataItems({
               : null,
     },
     {
-      detail: `${webRoutes.join(", ")}, once DNS reaches ${relay?.name ?? "the new Relay"}`,
+      detail: `${webRoutes?.join(", ") ?? ""}, once DNS reaches ${relay?.name ?? "the new Relay"}`,
       key: "routes",
       label: "Web routes",
       reason: !moving
         ? "Only a move takes its web routes"
-        : !webRoutes.length
-          ? "It has no web routes"
-          : !allowed.network
-            ? "Needs permission to change its network"
-            : null,
+        : webRoutes === null
+          ? "They couldn't be read"
+          : !webRoutes.length
+            ? "It has no web routes"
+            : !allowed.network
+              ? "Needs permission to change its network"
+              : null,
     },
   ]
   return items.filter((item) =>

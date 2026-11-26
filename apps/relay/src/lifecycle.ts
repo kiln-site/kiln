@@ -62,6 +62,7 @@ import {
   tunnelConfigSchema,
   tunnelDnsSchema,
   tunnelSchema,
+  webRouteService,
 } from "@workspace/contracts"
 import type { BrickCatalog, GameServerBrick } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -102,7 +103,6 @@ import {
 } from "./operation-lanes.js"
 import { operation, runOperation } from "./operations/operation.js"
 import {
-  APP_SERVICE,
   appIdFromRouteOwner,
   relayOwnerLabels,
   relayOwnsLabels,
@@ -1602,9 +1602,7 @@ export class LifecycleDriver {
   // The Traefik labels each of an app's services needs for its routes, and
   // the edge network Traefik reaches them on. Only an external Traefik reads
   // labels; bundled Traefik routes from its file configuration.
-  async appRoutePlan(
-    routes: ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>
-  ): Promise<{
+  async appRoutePlan(routes: ReadonlyArray<RelayInstanceWebRoute>): Promise<{
     labels: (service: string) => Record<string, string>
     network: string | null
   }> {
@@ -1632,9 +1630,7 @@ export class LifecycleDriver {
   // as they're saved; an external one once a deploy puts their labels on
   // the app's containers.
   async appWebRouteState(
-    routes: ReadonlyArray<
-      RelayInstanceWebRoute & { readonly service?: string }
-    >,
+    routes: ReadonlyArray<RelayInstanceWebRoute>,
     containers: ReadonlyArray<{
       readonly labels: Readonly<Record<string, string>>
       readonly networks: ReadonlyArray<string>
@@ -4876,11 +4872,12 @@ function isWithin(directory: string, path: string): boolean {
 // The routes whose Traefik labels an app's service carries. A redirect
 // reaches no service, so every service carries it: one that's running is
 // enough for Traefik to serve it.
-function appServiceRoutes<
-  Route extends RelayInstanceWebRoute & { readonly service?: string },
->(routes: ReadonlyArray<Route>, service: string): Array<Route> {
+function appServiceRoutes<Route extends RelayInstanceWebRoute>(
+  routes: ReadonlyArray<Route>,
+  service: string
+): Array<Route> {
   return routes.filter(
-    (route) => route.redirect || (route.service ?? APP_SERVICE) === service
+    (route) => route.redirect || webRouteService(route) === service
   )
 }
 

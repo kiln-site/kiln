@@ -5,6 +5,7 @@ import {
   relayInstanceWebRouteInputsSchema,
   webRouteHostnames,
   webRouteHosts,
+  webRouteService,
   webRouteUrl,
 } from "@workspace/contracts"
 import type {
@@ -68,10 +69,8 @@ const ReleaseHostnameDialog = React.lazy(async () => ({
   default: (await import("@/components/domains-dialogs")).ReleaseHostnameDialog,
 }))
 
-// A route as this section edits it: an app's names the service it reaches.
-export type WebRouteRow = RelayInstanceWebRouteInput & {
-  readonly service?: string
-}
+/** A route as this section edits it. */
+export type WebRouteRow = RelayInstanceWebRouteInput
 
 type DisplayedRoute = WebRouteRow & { readonly rowId: string }
 
@@ -141,9 +140,7 @@ export function WebRoutesSection({
   primaryElsewhere?: boolean
   // The route its instance's primary address names, if one does.
   primaryRouteId?: string | null
-  routes:
-    | ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>
-    | undefined
+  routes: ReadonlyArray<RelayInstanceWebRoute> | undefined
   // An app's services, which routes choose between; none for a game server.
   services?: ReadonlyArray<WebRouteServiceOption>
   status: IdentityStatusPresentation | null
@@ -188,10 +185,7 @@ export function WebRoutesSection({
       proxy?: WebRouteProxyChange
       routes: Array<WebRouteRow>
     }) => {
-      // The checks every route list gets; an app's also names services.
-      const parsed = relayInstanceWebRouteInputsSchema.safeParse(
-        routes.map(({ service: _service, ...route }) => route)
-      )
+      const parsed = relayInstanceWebRouteInputsSchema.safeParse(routes)
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? "Routes are invalid")
       }
@@ -1039,7 +1033,7 @@ function routeDestination(
 ): string {
   if (route.redirect) return `→ ${route.redirect.to.replace(/\/$/u, "")}`
   return services
-    ? `${route.service ?? "app"}:${route.targetPort ?? ""}`
+    ? `${webRouteService(route)}:${route.targetPort ?? ""}`
     : `Port ${route.targetPort ?? ""}`
 }
 

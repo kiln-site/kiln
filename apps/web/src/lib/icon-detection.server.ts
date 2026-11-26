@@ -2,8 +2,8 @@ import {
   appFileRootId,
   type IconImageContentType,
   primaryWebRoute,
-  relayAppWebRouteStateSchema,
   relayIconMaxBytes,
+  relayInstanceWebRouteStateSchema,
   relayIconReadResultSchema,
   sniffIconImage,
 } from "@workspace/contracts"
@@ -239,7 +239,7 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
     relayId: relay.id,
     id: appId,
   }
-  const state = relayAppWebRouteStateSchema.parse(
+  const state = relayInstanceWebRouteStateSchema.parse(
     yield* promiseEffect(() =>
       relayRpc(
         relay,

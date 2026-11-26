@@ -50,7 +50,7 @@ import {
   appTailscaleMember,
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
-  relayAppWebRouteStateSchema,
+  relayInstanceWebRouteStateSchema,
   relayInstanceWebRoutesReadSchema,
   relayCarriedPrimaryRoutesSchema,
   relayForgetCarriedPrimaryRoutesSchema,
@@ -140,6 +140,7 @@ import {
   relayPlatformActionInputSchema,
   type RelayPlatformActionInput,
   RelayTunnelOpenSchema,
+  webRouteService,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 import type {
@@ -195,11 +196,7 @@ import {
   type PushTerminalOutput,
 } from "./container-terminal.js"
 import { AppDriver } from "./apps.js"
-import {
-  APP_SERVICE,
-  appIdFromRouteOwner,
-  appRouteOwner,
-} from "./relay-resources.js"
+import { appIdFromRouteOwner, appRouteOwner } from "./relay-resources.js"
 import {
   traefikDynamicConfiguration,
   traefikRouteUpstream,
@@ -2740,7 +2737,7 @@ async function executeControlRequest(
               ? {
                   id: appId,
                   kind: "app",
-                  service: route.service ?? APP_SERVICE,
+                  service: webRouteService(route),
                 }
               : { id: route.instanceId, kind: "server", service: null },
             path: route.path,
@@ -4756,11 +4753,11 @@ async function appWebRouteState(appId: string) {
       startup.state.listInstanceRoutes(appRouteOwner(appId))
     ),
   ])
-  return relayAppWebRouteStateSchema.parse({
+  return relayInstanceWebRouteStateSchema.parse({
     ...(await lifecycle.appWebRouteState(routes, app.containers)),
     routes: routes.map((route) => ({
       ...route,
-      service: route.service ?? APP_SERVICE,
+      service: webRouteService(route),
     })),
   })
 }

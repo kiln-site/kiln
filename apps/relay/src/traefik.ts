@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto"
 import { isIP } from "node:net"
 
-import { RELAY_PROXY_TRIAL_PATH, webRouteHosts } from "@workspace/contracts"
+import {
+  RELAY_PROXY_TRIAL_PATH,
+  webRouteHosts,
+  webRouteService,
+} from "@workspace/contracts"
 import type {
   RelayInstanceWebRoute,
   RelayProxySettings,
@@ -13,11 +17,7 @@ import type { RelayConfig } from "./config.js"
 import { containerName, type DockerEngine } from "./docker-engine.js"
 import { recoverPromise } from "./effect/promise.js"
 import type { RelayStoredWebRoute } from "./effect/state.js"
-import {
-  APP_SERVICE,
-  appIdFromRouteOwner,
-  relayResourceNames,
-} from "./relay-resources.js"
+import { appIdFromRouteOwner, relayResourceNames } from "./relay-resources.js"
 import type { TraefikCertificateGate } from "./web-certificates.js"
 import {
   WEB_ROUTE_LABEL_PREFIX,
@@ -252,7 +252,7 @@ function routeUpstreamHost(
 ): string {
   const appId = appIdFromRouteOwner(route.instanceId)
   return appId
-    ? resources.appAlias(appId, route.service ?? APP_SERVICE)
+    ? resources.appAlias(appId, webRouteService(route))
     : resources.instanceContainer(route.instanceId)
 }
 
