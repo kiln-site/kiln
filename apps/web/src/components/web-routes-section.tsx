@@ -114,12 +114,22 @@ export interface WebRouteTarget {
 }
 
 /**
- * A database's names, which no route serves: each row is one, added,
- * renamed and deleted as one list, all going where `destination` says.
+ * A database's public names, which no route serves: each row is one, added,
+ * renamed and deleted as one list, all reached at one port. Its first opens
+ * it to the internet and deleting its last closes it.
  */
 export interface DomainNames {
+  // Where they all go, as each row says.
   destination: string
-  onSave: (hostnames: Array<string>) => Promise<unknown>
+  // The port they're reached at, or the one its first would open it at.
+  port: number
+  // What that port is on, for the dialog.
+  portHost: string
+  onSave: (change: {
+    generate?: boolean
+    hostnames: Array<string>
+    port: number
+  }) => Promise<unknown>
 }
 
 // An instance's domains, in one table: each name it holds and where Traefik
@@ -423,9 +433,7 @@ export function WebRoutesSection({
         <div className="flex min-w-0 items-center gap-2.5">
           <Globe2 className="size-4 shrink-0 text-primary-ink" />
           <h2 className="truncate text-sm font-semibold">Domains</h2>
-          {status && displayed?.length ? (
-            <StatusIndicator status={status} />
-          ) : null}
+          {status && rows?.length ? <StatusIndicator status={status} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {statusAction}
@@ -505,15 +513,23 @@ export function WebRoutesSection({
             onOpenChange={(open) => {
               if (!open) setNaming(null)
             }}
-            onSubmit={async (hostname) => {
+            port={names.port}
+            portHost={names.portHost}
+            opens={held.length === 0}
+            onSubmit={async ({ hostname, port }) => {
               const current = held.map((name) => name.hostname)
-              await names.onSave(
-                naming.hostname === null
-                  ? [...current, hostname]
-                  : current.map((name) =>
-                      name === naming.hostname ? hostname : name
-                    )
-              )
+              await names.onSave({
+                generate: hostname === null,
+                hostnames:
+                  hostname === null
+                    ? current
+                    : naming.hostname === null
+                      ? [...current, hostname]
+                      : current.map((name) =>
+                          name === naming.hostname ? hostname : name
+                        ),
+                port,
+              })
               await queryClient.invalidateQueries({
                 queryKey: queryKeys.domains.hostnames(
                   dnsResource.relayId,
@@ -786,7 +802,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
           description={
             <span className="block max-w-sm">
               {heldDestination
-                ? "Give it a name to reach it at from the internet."
+                ? "Add a domain to open it to the internet, with TLS required. Its names in tunnels show here too."
                 : "Serve a domain over HTTPS, or redirect one somewhere else."}
             </span>
           }

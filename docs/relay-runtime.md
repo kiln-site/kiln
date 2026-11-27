@@ -270,7 +270,8 @@ database.
   database serves only one certificate. A Relay behind Coolify's proxy, or
   none, can't open one. When an open of a database that wasn't public
   fails, Hearth closes it on the Relay, as the Relay may have saved it
-  before its answer was lost. Its names stay.
+  before its answer was lost, and lets go of the names it claimed: Hearth
+  gives a database names only while it's open.
 - **Opening.** Once the certificate is in Traefik's `acme.json`, the Relay
   writes it into a volume of the database's own (`kiln-db-<id>-tls`, at
   `/kiln-tls`), owned by the user its server runs as, and deploys the
@@ -298,11 +299,10 @@ database.
 - **Closing** removes the gate and its network before the Relay forgets the
   database was public, so a close that fails leaves it public and kept, to
   close again. The database keeps TLS until it's next deployed, and
-  MySQL's and MariaDB's `root` stays local. Its names stay in Hearth, held
-  and pointed at the Relay, for the next time it opens; deleting one,
-  from its Domains table or the Domains page, sends the open database's
-  Relay the rest first, and an open one keeps at least one. Deleting the
-  database closes it first, then removes its certificate's volume once its
+  MySQL's and MariaDB's `root` stays local. Hearth closes it when its last
+  domain is deleted, from its Domains table or the Domains page, and lets
+  its name go once the Relay has; deleting one of several sends the Relay
+  the rest first. Deleting the database closes it first, then removes its certificate's volume once its
   container is gone; one deleted while the Relay was down is forgotten on
   its next pass. Changing the port of an open one reads as opening until
   its gate is made again there.

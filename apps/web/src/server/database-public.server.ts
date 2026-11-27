@@ -27,13 +27,13 @@ import { domainActor } from "@/server/domain-access.server"
 import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 
-// A database's names are rows of its Domains table, as an App's are: added,
-// renamed and deleted there, each held by it alone, with a record that points
-// at its Relay and never goes through Cloudflare's proxy. Opening it to the
-// internet gives it a port; while it's open, its Relay's Traefik gets one
-// certificate for all its names, and its gate holds the port. Its names stay
-// when it's closed. The Relay keeps the port and the names it was given, and
-// says how opening it stands in the database's listing.
+// A database's public names are rows of its Domains table, as an App's are:
+// added, renamed and deleted there, each held by it alone, with a record that
+// points at its Relay and never goes through Cloudflare's proxy. One with a
+// name is open to the internet at a port, the same for each; one without is
+// closed. Its Relay's Traefik gets one certificate for all its names, and its
+// gate holds the port. The Relay keeps the port and the names it was given,
+// and says how opening it stands in the database's listing.
 
 interface DatabasePublicScope {
   databaseId: string
@@ -151,60 +151,115 @@ const namesOf = (resource: WebHostnameResource) =>
     )
   )
 
+/** What a database's Domains table saves. */
+export interface DatabaseNamesChange {
+  // Also a name generated under its owner's default vanity domain, or
+  // Kiln's, as an App's first address is.
+  generate?: boolean
+  hostnames: ReadonlyArray<string>
+  // The port all its names are reached at; the one it has when left out.
+  port?: number
+}
+
 /**
- * Gives a database these names, as its Domains table saves them: each new
- * one is claimed as a web route's is, and refused the same way; one it no
- * longer lists is let go, its record deleted. While it's open its Relay
- * gets them first, for a certificate for them all, and it keeps at least
- * one. The caller holds `databasePublicLocks`.
+ * Gives a database these names, as its Domains table saves them, and the
+ * port they're reached at. A database with a name is open to the internet
+ * and one without is closed: its first name opens it, and deleting its last
+ * closes it. Each new name is claimed as a web route's is, and refused the
+ * same way; one it no longer lists is let go, its record deleted. Its Relay
+ * gets them first, for one certificate for them all. A change its Relay
+ * refuses leaves it as it was. The caller holds `databasePublicLocks`.
  */
 export const saveDatabaseNamesEffect = Effect.fn("databases.names.save")(
   function* (
     scope: DatabasePublicScope,
-    hostnames: ReadonlyArray<string>,
+    change: DatabaseNamesChange,
     person: AuthenticatedUser
   ) {
     const resource = databaseResource(scope)
-    const wanted = [...new Set(hostnames.map(canonicalHostname))]
     const relay = yield* promiseEffect(() => requiredRelay(scope.relayId))
     const open = yield* promiseEffect(() =>
       publicNow(relay, scope.databaseId, person.id)
     )
-    if (open && wanted.length === 0) {
-      return yield* DomainConfigurationError.make({
-        message:
-          "A database open to the internet keeps at least one name. Close it to delete its last.",
-      })
-    }
-    yield* saveWebRouteHostnamesEffect(
-      { actor: domainActor(person), hostnames: wanted, resource },
-      Effect.gen(function* () {
-        // Only a name it holds: its certificate is asked for at each one.
-        const held = new Set(
-          (yield* listResourceAddressesEffect(resource)).map(
-            (row) => row.hostname
-          )
+    const before = new Set(yield* namesOf(resource))
+    const wanted = [...new Set(change.hostnames.map(canonicalHostname))]
+    const write = (value: { hostnames: Array<string>; port: number } | null) =>
+      writePublic(relay, scope.databaseId, person.id, value)
+    const save = <R>(
+      hostnames: ReadonlyArray<string>,
+      relayChange: Effect.Effect<unknown, unknown, R>
+    ) =>
+      saveWebRouteHostnamesEffect(
+        { actor: domainActor(person), hostnames, resource },
+        relayChange
+      ).pipe(
+        Effect.catchIf(
+          (error): error is HostnameInUseError =>
+            error instanceof HostnameInUseError,
+          (error) => explainHostnameInUseEffect(person, error)
         )
-        const loose = wanted.find((hostname) => !held.has(hostname))
-        if (loose) {
-          return yield* DomainConfigurationError.make({
-            message: `${loose} isn't under a domain on the Domains page. Connect its Cloudflare zone, or add it as managed elsewhere.`,
-          })
-        }
-        if (open) {
-          yield* writePublic(relay, scope.databaseId, person.id, {
-            hostnames: wanted,
-            port: open.port,
-          })
-        }
-      })
-    ).pipe(
-      Effect.catchIf(
-        (error): error is HostnameInUseError =>
-          error instanceof HostnameInUseError,
-        (error) => explainHostnameInUseEffect(person, error)
       )
-    )
+
+    if (wanted.length === 0 && !change.generate) {
+      // Closed: its Relay removes its gate before its names go, so nothing
+      // reaches it at a name another instance may take next.
+      yield* save([], open ? write(null) : Effect.void)
+    } else {
+      const port = change.port ?? open?.port
+      if (port === undefined) {
+        return yield* DomainConfigurationError.make({
+          message: "Choose the port it's reached at",
+        })
+      }
+      yield* Effect.gen(function* () {
+        if (change.generate) {
+          const generated = yield* generateAppHostnameEffect(resource)
+          if (!generated) {
+            return yield* DomainConfigurationError.make({
+              message:
+                "Kiln has no vanity domain to name it under. Add one on the Domains page, or enter a domain.",
+            })
+          }
+          if (!wanted.includes(generated)) wanted.push(generated)
+        }
+        yield* save(
+          wanted,
+          Effect.gen(function* () {
+            // Only a name it holds: its certificate is asked for at each.
+            const held = new Set(
+              (yield* listResourceAddressesEffect(resource)).map(
+                (row) => row.hostname
+              )
+            )
+            const loose = wanted.find((hostname) => !held.has(hostname))
+            if (loose) {
+              return yield* DomainConfigurationError.make({
+                message: `${loose} isn't under a domain on the Domains page. Connect its Cloudflare zone, or add it as managed elsewhere.`,
+              })
+            }
+            yield* write({ hostnames: wanted, port })
+          })
+        )
+      }).pipe(
+        // Refused, it stays as it was: one that wasn't open is closed on its
+        // Relay again, in case its Relay saved it before failing, and the
+        // names this claimed go.
+        Effect.tapError(() =>
+          Effect.gen(function* () {
+            if (!open) yield* write(null)
+            yield* markAddressesRemovingEffect(
+              (yield* listResourceAddressesEffect(resource))
+                .filter(
+                  (row) =>
+                    row.status !== "removing" && !before.has(row.hostname)
+                )
+                .map((row) => row.id)
+            )
+            yield* reconcileResourceAddressesEffect(resource)
+          }).pipe(Effect.ignore)
+        )
+      )
+    }
     // A generated name goes too once it's no longer listed, as a web
     // route's doesn't.
     const set = new Set(wanted)
@@ -223,99 +278,24 @@ export const saveDatabaseNamesEffect = Effect.fn("databases.names.save")(
   }
 )
 
-/** Saves the names in a database's Domains table. */
+/**
+ * Saves the names in a database's Domains table, and the port they're
+ * reached at: opening it to the internet, changing it, or closing it.
+ */
 export const saveDatabaseNames = operation<
-  DatabasePublicScope & { hostnames: Array<string> }
+  DatabasePublicScope & DatabaseNamesChange
 >()({
   name: "database.names.save",
   doing: "Changing this database's domains",
   authorize: authorizePublic,
   locks: ({ input }) => databasePublicLocks(input),
   run: ({ context: person, input }) =>
-    saveDatabaseNamesEffect(input, input.hostnames, person),
+    saveDatabaseNamesEffect(input, input, person),
   audit: ({ input }) => ({
     id: input.databaseId,
     kind: "database",
     relayId: input.relayId,
   }),
-  // A failed save can still have claimed a name.
-  publish: ({ input }) => publishDatabasePublicChange(input),
-})
-
-/**
- * Opens a database to the internet at its names and `port` on its Relay,
- * or moves an open one to another port. One with no name yet gets one
- * generated under its owner's default vanity domain, or Kiln's, as an
- * App's first address is. It opens once its names resolve and their
- * certificate comes; until then its listing says what it waits for.
- */
-export const openDatabasePublic = operation<
-  DatabasePublicScope & { port: number }
->()({
-  name: "database.public.open",
-  doing: "Opening this database to the internet",
-  authorize: authorizePublic,
-  locks: ({ input }) => databasePublicLocks(input),
-  run: ({ context: person, input }) =>
-    Effect.gen(function* () {
-      const resource = databaseResource(input)
-      const relay = yield* promiseEffect(() => requiredRelay(input.relayId))
-      // Whether it was open before, as its Relay says: a failed change to an
-      // open one leaves it as it was.
-      const wasOpen = yield* promiseEffect(() =>
-        publicNow(relay, input.databaseId, person.id)
-      )
-      let hostnames = yield* namesOf(resource)
-      if (hostnames.length === 0) {
-        const generated = yield* generateAppHostnameEffect(resource)
-        if (!generated) {
-          return yield* DomainConfigurationError.make({
-            message:
-              "A public database needs a name. Add one to its Domains table, or a vanity domain on the Domains page.",
-          })
-        }
-        hostnames = [generated]
-      }
-      const write = (
-        value: { hostnames: Array<string>; port: number } | null
-      ) => writePublic(relay, input.databaseId, person.id, value)
-      yield* write({ hostnames, port: input.port }).pipe(
-        // The Relay may have saved it before failing, as one without Kiln's
-        // Traefik or with the port taken, or its answer may have been lost,
-        // so one that wasn't open is closed there again. Its names stay.
-        Effect.tapError(() =>
-          wasOpen ? Effect.void : write(null).pipe(Effect.ignore)
-        )
-      )
-      return { hostnames, port: input.port }
-    }),
-  audit: ({ input }) => ({
-    id: input.databaseId,
-    kind: "database",
-    relayId: input.relayId,
-  }),
-  publish: ({ input }) => publishDatabasePublicChange(input),
-})
-
-/**
- * Closes a public database: its Relay removes its gate, so nothing reaches
- * it. Its names stay in its Domains table, for the next time it opens.
- */
-export const closeDatabasePublic = operation<DatabasePublicScope>()({
-  name: "database.public.close",
-  doing: "Closing this database to the internet",
-  authorize: authorizePublic,
-  locks: ({ input }) => databasePublicLocks(input),
-  run: ({ context: person, input }) =>
-    Effect.gen(function* () {
-      const relay = yield* promiseEffect(() => requiredRelay(input.relayId))
-      yield* writePublic(relay, input.databaseId, person.id, null)
-      return { closed: true }
-    }),
-  audit: ({ input }) => ({
-    id: input.databaseId,
-    kind: "database",
-    relayId: input.relayId,
-  }),
+  // A failed save can still have changed a name.
   publish: ({ input }) => publishDatabasePublicChange(input),
 })

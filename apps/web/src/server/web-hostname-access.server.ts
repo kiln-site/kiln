@@ -226,7 +226,11 @@ const releaseHostname = operation<ReleaseWebHostnameInput>()({
         const rest = (yield* listResourceWebHostnamesEffect(row))
           .filter((name) => name.status !== "removing" && name.id !== row.id)
           .map((name) => name.hostname)
-        yield* saveDatabaseNamesEffect(scope, rest, yield* signedIn(user))
+        yield* saveDatabaseNamesEffect(
+          scope,
+          { hostnames: rest },
+          yield* signedIn(user)
+        )
         yield* publishDatabasePublicChange(scope)
         return
       }
