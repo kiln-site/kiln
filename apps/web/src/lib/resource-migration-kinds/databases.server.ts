@@ -114,6 +114,12 @@ export const databases: MigratedKind = {
     if (!record || !running) {
       return yield* fail(`${migration.source.name} is no longer on its Relay`)
     }
+    // Its public name, certificate and gate are its Relay's.
+    if (migration.mode === "migrate" && running.public) {
+      return yield* fail(
+        `Close ${migration.source.name} to the internet before moving it`
+      )
+    }
     return Effect.gen(function* () {
       // Made already, by this step before it was cut short: its Relay
       // carries on creating it.

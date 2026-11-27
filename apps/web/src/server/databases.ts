@@ -61,6 +61,10 @@ import { partKey, resourceKey, shared } from "@/operations/lanes"
 import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { connectDatabase } from "@/server/database-connections.server"
+import {
+  closeDatabasePublic,
+  openDatabasePublic,
+} from "@/server/database-public.server"
 import { createDatabase } from "@/server/database-create.server"
 import { reserveInstanceId } from "@/effect/instance-ids"
 import { resourceOperation } from "@/server/resource-operation.server"
@@ -98,6 +102,9 @@ const databaseRenameInputSchema = databaseInputSchema.extend({
 const databaseNetworkInputSchema = databaseInputSchema.extend({
   connected: z.boolean(),
   member: databaseConnectionMemberSchema,
+})
+const databasePublicInputSchema = databaseInputSchema.extend({
+  port: z.number().int().min(1).max(65_535),
 })
 const databaseRowsRequestSchema = databaseInputSchema.extend({
   request: databaseRowsInputSchema,
@@ -480,6 +487,22 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
   .validator(databaseNetworkInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(connectDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+export const openManagedDatabasePublic = createServerFn({ method: "POST" })
+  .validator(databasePublicInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(openDatabasePublic, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+export const closeManagedDatabasePublic = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(closeDatabasePublic, data, {
       user: await requireEligibleResourceUser(),
     })
   )

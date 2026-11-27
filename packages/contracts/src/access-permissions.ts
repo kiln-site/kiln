@@ -51,6 +51,7 @@ export const legacyAccessPermissions = [
   "database.delete",
   "database.network.read",
   "database.network.write",
+  "database.network.public-port.write",
   "database.dump.export",
   "database.dump.import",
   "backup.read",
@@ -181,6 +182,7 @@ const implicationEdges: Partial<
   "instance.network.public-port.write": ["instance.network.write"],
   "database.credentials.rotate": ["database.credentials.read"],
   "database.network.write": ["database.network.read"],
+  "database.network.public-port.write": ["database.network.write"],
   "database.data.write": ["database.data.read"],
   "backup.create": ["backup.read"],
   "backup.download": ["backup.read"],
@@ -261,6 +263,7 @@ const permissionPlacement: Record<
   "database.delete": ["resource.deletion", "database"],
   "database.network.read": ["database.network", "database"],
   "database.network.write": ["database.network", "database"],
+  "database.network.public-port.write": ["database.network", "database"],
   "database.dump.export": ["database.dump", "database"],
   "database.dump.import": ["database.dump", "database"],
   "database.data.read": ["database.data", "database"],
@@ -553,6 +556,11 @@ const permissionCopy: Record<
     label: "Manage database network",
     description:
       "Connect or disconnect game servers, Apps, and databases. Also requires each one's own network access: managing a game server's network, managing an App, or managing the other database's network.",
+  },
+  "database.network.public-port.write": {
+    label: "Open database to the internet",
+    description:
+      "Give the database a public address and port that anyone can reach with TLS and its login, or close it again.",
   },
   "database.dump.export": {
     label: "Export database data",

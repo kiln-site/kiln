@@ -41,19 +41,18 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
   "resources.delete.cleanUp"
 )(function* (resource: DeletedResource, subject: string) {
   const { id, kind, relayId } = resource
-  if (kind !== "database") {
-    // Only once it is gone: its names stay held while it might survive.
-    // Deletes Cloudflare refuses are left to the DNS worker.
-    yield* promiseEffect(async () => {
-      const { deleteResourceAddressesBestEffort } =
-        await import("@/server/web-hostname-access.server")
-      await deleteResourceAddressesBestEffort({
-        relayId,
-        resourceId: id,
-        resourceType: kind,
-      })
+  // Only once it is gone: its names stay held while it might survive, a
+  // public database's included. Deletes Cloudflare refuses are left to the
+  // DNS worker.
+  yield* promiseEffect(async () => {
+    const { deleteResourceAddressesBestEffort } =
+      await import("@/server/web-hostname-access.server")
+    await deleteResourceAddressesBestEffort({
+      relayId,
+      resourceId: id,
+      resourceType: kind,
     })
-  }
+  })
   if (kind === "instance") {
     yield* cleanupStep(
       "relay.snapshot.invalidate",

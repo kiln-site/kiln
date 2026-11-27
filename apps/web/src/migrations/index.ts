@@ -100,6 +100,7 @@ import { existingKilnBackups } from "@/migrations/0099_existing_kiln_backups"
 import { backupPasswords } from "@/migrations/0100_backup_passwords"
 import { incrementalDefault } from "./0101_incremental_default"
 import { resourceMigrationDeploy } from "./0102_resource_migration_deploy"
+import { databaseAddresses } from "./0103_database_addresses"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -203,4 +204,5 @@ export const migrations: ReadonlyArray<Migration> = [
   backupPasswords,
   incrementalDefault,
   resourceMigrationDeploy,
+  databaseAddresses,
 ]

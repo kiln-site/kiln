@@ -11,17 +11,18 @@ import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { hasAppPermission } from "@/server/app-access"
 
-/** What a person can do on the game servers and apps they reach. */
+/** What a person can do on the game servers, apps and databases they reach. */
 export async function resourceAccess(user: AuthenticatedUser) {
   if (isPlatformAdmin(user)) {
     return {
       app: (_relayId: string, _appId: string, _manage: boolean) => true,
       instance: (_relayId: string, _instanceId: string, _write: boolean) =>
         true,
+      hostname: (_owner: HostnameOwnerScope, _write: boolean) => true,
     }
   }
   const grants = await listUserGrants(user.id)
-  return {
+  const access = {
     app: (relayId: string, appId: string, manage: boolean) =>
       hasAppPermission(
         user,
@@ -36,7 +37,29 @@ export async function resourceAccess(user: AuthenticatedUser) {
         resourceId: instanceId,
         resourceType: "instance",
       }).has(write ? "instance.network.write" : "instance.network.read"),
+    // A database's one name is its public address, changed by opening it.
+    database: (relayId: string, databaseId: string, write: boolean) =>
+      effectiveScopePermissions(grants, {
+        relayId,
+        resourceId: databaseId,
+        resourceType: "database",
+      }).has(
+        write ? "database.network.public-port.write" : "database.network.read"
+      ),
   }
+  return {
+    app: access.app,
+    instance: access.instance,
+    /** Whether they can see, or change, a hostname its owner's kind gives. */
+    hostname: (owner: HostnameOwnerScope, write: boolean) =>
+      access[owner.resourceType](owner.relayId, owner.resourceId, write),
+  }
+}
+
+interface HostnameOwnerScope {
+  readonly relayId: string
+  readonly resourceId: string
+  readonly resourceType: "app" | "database" | "instance"
 }
 
 /**
@@ -71,7 +94,7 @@ const holderNameEffect = Effect.fnUntraced(function* (
       )?.name ?? null
     )
   }
-  if (!access.instance(holder.relayId, holder.resourceId, false)) return null
+  if (!access.hostname(holder, false)) return null
   const directory = yield* listInstanceDirectoryEffect()
   return (
     directory.find(

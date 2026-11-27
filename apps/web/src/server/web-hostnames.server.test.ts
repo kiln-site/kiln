@@ -34,10 +34,15 @@ import {
   adoptableWebHostnamesEffect,
   adoptExistingWebRecordEffect,
   attachManualHostnamesEffect,
+  generateAppHostnameEffect,
   reconcileResourceAddressesEffect,
   saveWebRouteHostnamesEffect,
 } from "./addresses.server"
-import { getResourceWebHostnamesHandler } from "./web-hostname-access.server"
+import { openDatabasePublic } from "./database-public.server"
+import {
+  getResourceWebHostnamesHandler,
+  releaseWebHostnameHandler,
+} from "./web-hostname-access.server"
 import { serveNewApp } from "./web-routes.server"
 
 // Who's signed in, and what they may change, for the network page's read.
@@ -59,6 +64,11 @@ vi.mock("@/lib/access-control", async (importOriginal) => ({
 // so where it is reached falls back to the address Hearth has for it.
 const relay = vi.hoisted(() => ({
   routes: [] as Array<{ id: string; kind: string; routes: Array<object> }>,
+  // A database's public access as the Relay has it, what it was sent, and
+  // whether it refuses to open one.
+  databasePublic: null as object | null,
+  publicWrites: [] as Array<object | null>,
+  refusesOpen: false,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
@@ -67,6 +77,17 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: { id: string; kind: string; routes: Array<object> }
   ) => {
+    if (operation === "database.list") {
+      return [{ database: { public: relay.databasePublic } }]
+    }
+    if (operation === "database.public.write") {
+      const value = (payload as unknown as { public: object | null }).public
+      relay.publicWrites.push(value)
+      if (value && relay.refusesOpen) {
+        throw new Error("Public port 25432/tcp is already in use")
+      }
+      return { public: null }
+    }
     if (operation !== "instance.network.routes.write")
       throw new Error("Relay is offline")
     relay.routes.push(payload)
@@ -765,6 +786,74 @@ describeMysql("web route hostnames", () => {
             routed: true,
             status: "active",
           })
+        })
+    )
+    it.effect(
+      "keeps a public database's name until the database is closed",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const hostname = yield* generateAppHostnameEffect({
+            relayId,
+            resourceId: "c".repeat(12),
+            resourceType: "database",
+          })
+          const row = yield* loadWebHostnameByNameEffect(String(hostname))
+          assert.isNotNull(row)
+          const records = cloudflare.dns()
+          // Its gate may still hold the port; closing removes that first.
+          const released = yield* Effect.promise(() =>
+            releaseWebHostnameHandler({ id: String(row?.id) }).then(
+              () => "released",
+              (error: Error) => error.message
+            )
+          )
+          assert.match(released, /Close the database to the internet/u)
+          assert.deepStrictEqual(cloudflare.dns(), records)
+          assert.isNotNull(yield* loadWebHostnameByNameEffect(String(hostname)))
+        })
+    )
+    it.effect(
+      "lets go of a name an open left behind once its Relay won't open it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const database = {
+            databaseId: "c".repeat(12),
+            relayId,
+          }
+          // As an earlier open whose Relay was lost before it was undone.
+          const hostname = yield* generateAppHostnameEffect({
+            relayId,
+            resourceId: database.databaseId,
+            resourceType: "database",
+          })
+          relay.databasePublic = null
+          relay.publicWrites.length = 0
+          relay.refusesOpen = true
+
+          const opened = yield* Effect.promise(() =>
+            runOperationPromise(
+              openDatabasePublic,
+              { ...database, port: 25_432 },
+              { user: { id: owner.id, role: "user" } as AuthenticatedUser }
+            ).then(
+              () => "opened",
+              (error: Error) => error.message
+            )
+          )
+
+          assert.match(opened, /already in use/u)
+          // Closed on the Relay, in case it saved it, then the name goes.
+          assert.deepStrictEqual(relay.publicWrites, [
+            { hostname, port: 25_432 },
+            null,
+          ])
+          assert.isNull(yield* loadWebHostnameByNameEffect(String(hostname)))
+          assert.deepStrictEqual(cloudflare.dns(), {})
+          relay.refusesOpen = false
         })
     )
   })
