@@ -40,8 +40,9 @@ const stateLabels: Record<RelayDatabasePublicStatus["state"], string> = {
 }
 
 /**
- * Opening the database to the internet: a name and a port anyone can reach
- * with TLS and its login, through a gate that refuses clients without TLS.
+ * Opening the database to the internet: a port anyone can reach at the
+ * names in its Domains table, with TLS and its login, through a gate that
+ * refuses clients without TLS.
  */
 export function DatabasePublicAccess({
   database,
@@ -103,7 +104,6 @@ export function DatabasePublicAccess({
       />
       {status ? (
         <>
-          <CopyMetaRow label="Address" value={status.hostname} />
           <CopyMetaRow label="Port" value={String(status.port)} />
           <div className="flex min-h-11 items-center justify-between gap-3 border-b px-4 py-2 text-sm">
             <span className="text-muted-foreground">Status</span>
@@ -148,8 +148,8 @@ export function DatabasePublicAccess({
       ) : (
         <p className="px-4 py-3 text-sm text-muted-foreground">
           Only Kiln&apos;s private networks and tunnels reach {database.name}.
-          Opening it gives it a name and a port anyone can reach with TLS and
-          its login.
+          Opening it gives it a port anyone can reach at its domains, with TLS
+          and its login.
         </p>
       )}
       {opening ? (
@@ -187,7 +187,7 @@ function PublicConnectionUrl({
             databasePublicConnectionUrl({
               databaseName: database.databaseName,
               engine: database.engine,
-              host: status.hostname,
+              host: status.hostnames[0] ?? "",
               password: encodeURIComponent(login.password),
               port: status.port,
               username: login.username,
@@ -223,9 +223,9 @@ function OpenPublicDialog({
           relayId: database.relayId,
         },
       }),
-    onSuccess: ({ hostname }) => {
+    onSuccess: ({ hostnames }) => {
       showToast({
-        message: `${database.name} opens at ${hostname} once its certificate comes`,
+        message: `${database.name} opens at ${hostnames.join(", ")} once its certificate comes`,
         type: "success",
       })
       onOpenChange(false)
@@ -239,9 +239,10 @@ function OpenPublicDialog({
         <DialogHeader>
           <DialogTitle>Open {database.name} to the internet?</DialogTitle>
           <DialogDescription>
-            Kiln gives it a name under your default vanity domain, gets its
-            certificate, and restarts it once. Clients must use TLS, and anyone
-            with its login can connect.
+            It opens at the names in its Domains table, or one Kiln gives it
+            under your default vanity domain. Kiln gets one certificate for them
+            and restarts it once. Clients must use TLS, and anyone with its
+            login can connect.
           </DialogDescription>
         </DialogHeader>
         <label className="grid gap-1.5 text-sm">

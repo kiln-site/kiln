@@ -241,12 +241,19 @@ export const relayDatabaseMemberSchema = z
   .strict()
 
 /**
- * A database's public address: the name its certificate is for, and the
- * port its gate publishes on its Relay's host.
+ * A database's public address: the names in its Domains table, which its
+ * one certificate is for, the first as its main name, and the port its gate
+ * publishes on its Relay's host.
  */
 export const relayDatabasePublicSchema = z
   .object({
-    hostname: z.string().max(253).regex(z.regexes.domain),
+    hostnames: z
+      .array(z.string().max(253).regex(z.regexes.domain))
+      .min(1)
+      .max(16)
+      .refine((names) => new Set(names).size === names.length, {
+        message: "Each name is listed once",
+      }),
     port: z.number().int().min(1).max(65_535),
   })
   .strict()
@@ -255,7 +262,7 @@ export type RelayDatabasePublic = z.infer<typeof relayDatabasePublicSchema>
 
 /** Where opening a database to the internet stands. */
 export const relayDatabasePublicStateSchema = z.enum([
-  // Its name doesn't resolve to the Relay yet.
+  // Not all its names resolve to the Relay yet.
   "waiting_for_dns",
   // Traefik is asking Let's Encrypt for its certificate.
   "getting_certificate",

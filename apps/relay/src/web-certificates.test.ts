@@ -173,13 +173,16 @@ describe("bundled Traefik certificates", () => {
     expect(traefik()).not.toEqual(refused)
   })
 
-  it("asks for a public database's name once it resolves, and gives the database only its own name's certificate", async () => {
-    const database = { databaseId: "b".repeat(12), hostname: "db.example.com" }
-    const router = "kiln-database-db-example-com"
+  it("asks for one certificate for a public database's names once they all resolve, and gives the database only that", async () => {
+    const database = {
+      databaseId: "b".repeat(12),
+      hostnames: ["db.example.com", "data.example.com"],
+    }
+    const router = `kiln-database-${database.databaseId}`
     const routers = () =>
       parse(
         traefikDynamicConfiguration(config, [], settings, certificates.gate(), [
-          database.hostname,
+          database,
         ])
       ).http.routers
     await certificates.track([], [database])
@@ -189,59 +192,69 @@ describe("bundled Traefik certificates", () => {
         owner: { id: database.databaseId, kind: "database" },
         waitingFor: "dns",
       },
+      {
+        owner: { id: database.databaseId, kind: "database" },
+        waitingFor: "dns",
+      },
     ])
 
-    answers.set(database.hostname, "found")
+    // One name alone would get a certificate the other isn't on.
+    answers.set("db.example.com", "found")
+    vi.setSystemTime(Date.now() + 15_000)
+    await certificates.check()
+    expect(routers()?.[router]).toBeUndefined()
+
+    answers.set("data.example.com", "found")
     vi.setSystemTime(Date.now() + 15_000)
     await certificates.check()
     expect(routers()?.[router]).toMatchObject({
-      rule: "Host(`db.example.com`)",
-      tls: { certResolver: "kiln" },
+      rule: "Host(`db.example.com`) || Host(`data.example.com`)",
+      tls: {
+        certResolver: "kiln",
+        domains: [{ main: "db.example.com", sans: ["data.example.com"] }],
+      },
     })
 
-    // A wildcard's certificate serves a route, not a database, which is
-    // given its own name's alone.
-    const pem = (body: string) =>
+    // A wildcard's certificate serves a route, not a database, and one
+    // missing a name doesn't do; one for exactly its names wins over one
+    // for more.
+    const pem = (body: string, text = "x") =>
       Buffer.from(
-        `-----BEGIN ${body}-----\nx\n-----END ${body}-----\n`
+        `-----BEGIN ${body}-----\n${text}\n-----END ${body}-----\n`
       ).toString("base64")
-    await writeFile(
-      webCertificateStorePath(config),
-      JSON.stringify({
-        kiln: {
-          Account: null,
-          Certificates: [
-            {
-              certificate: pem("CERTIFICATE"),
-              domain: { main: "*.example.com" },
+    const store = (
+      ...held: Array<{ main: string; sans?: Array<string>; text: string }>
+    ) =>
+      writeFile(
+        webCertificateStorePath(config),
+        JSON.stringify({
+          kiln: {
+            Account: null,
+            Certificates: held.map(({ text, ...domain }) => ({
+              certificate: pem("CERTIFICATE", text),
+              domain,
               key: pem("PRIVATE KEY"),
               Store: "default",
-            },
-          ],
-        },
-      })
+            })),
+          },
+        })
+      )
+    await store(
+      { main: "*.example.com", text: "wildcard" },
+      { main: "DB.example.com", text: "one name" }
     )
-    expect(await certificates.certificate(database.hostname)).toBeNull()
-    await writeFile(
-      webCertificateStorePath(config),
-      JSON.stringify({
-        kiln: {
-          Account: null,
-          Certificates: [
-            {
-              certificate: pem("CERTIFICATE"),
-              domain: { main: "DB.example.com" },
-              key: pem("PRIVATE KEY"),
-              Store: "default",
-            },
-          ],
-        },
-      })
+    expect(await certificates.certificate(database.hostnames)).toBeNull()
+    await store(
+      {
+        main: "db.example.com",
+        sans: ["data.example.com", "old.example.com"],
+        text: "more names",
+      },
+      { main: "data.example.com", sans: ["DB.example.com"], text: "its names" }
     )
-    expect(await certificates.certificate(database.hostname)).toMatchObject({
-      chain: expect.stringContaining("BEGIN CERTIFICATE"),
-      key: expect.stringContaining("PRIVATE KEY"),
-    })
+    expect(
+      (await certificates.certificate(database.hostnames))?.chain
+    ).toContain("its names")
   })
 
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {

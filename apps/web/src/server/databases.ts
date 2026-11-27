@@ -64,6 +64,7 @@ import { connectDatabase } from "@/server/database-connections.server"
 import {
   closeDatabasePublic,
   openDatabasePublic,
+  saveDatabaseNames,
 } from "@/server/database-public.server"
 import { createDatabase } from "@/server/database-create.server"
 import { reserveInstanceId } from "@/effect/instance-ids"
@@ -105,6 +106,9 @@ const databaseNetworkInputSchema = databaseInputSchema.extend({
 })
 const databasePublicInputSchema = databaseInputSchema.extend({
   port: z.number().int().min(1).max(65_535),
+})
+const databaseNamesInputSchema = databaseInputSchema.extend({
+  hostnames: z.array(z.string().trim().min(1).max(253)).max(16),
 })
 const databaseRowsRequestSchema = databaseInputSchema.extend({
   request: databaseRowsInputSchema,
@@ -495,6 +499,14 @@ export const openManagedDatabasePublic = createServerFn({ method: "POST" })
   .validator(databasePublicInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(openDatabasePublic, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+export const saveManagedDatabaseNames = createServerFn({ method: "POST" })
+  .validator(databaseNamesInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(saveDatabaseNames, data, {
       user: await requireEligibleResourceUser(),
     })
   )

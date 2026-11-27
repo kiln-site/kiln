@@ -28,15 +28,19 @@ type, which go straight to its game port and not through the proxy. Each
 shows what to type, its port left out when an SRV record carries it, and
 one is its primary (★).
 
-A database has **Public access** instead: closed until someone who may
-(`database.network.public-port.write`) opens it at a port on its Relay.
-Kiln names it under its owner's default vanity domain, or Kiln's, as an
-App's first address, with a record that points at the Relay and never goes
-through Cloudflare's proxy. The Relay's Traefik gets the name's
-certificate, which the database itself serves; a gate on the port refuses
-clients that don't ask for TLS. The section says where opening it stands
-and copies a connection URL that checks the certificate. It needs a
-Relay running Kiln's Traefik. Closing it removes the gate, then the name.
+A database's Domains table holds its names, which no route serves: someone
+who may (`database.network.public-port.write`) adds, renames and deletes
+them there as an App's, under any domain they may use, each with a record
+that points at the Relay and never goes through Cloudflare's proxy. Below
+it, **Public access** opens it at a port on its Relay; one with no name yet
+is given one under its owner's default vanity domain, or Kiln's, as an
+App's first address. The Relay's Traefik gets one certificate for all its
+names, which the database itself serves; a gate on the port refuses
+clients that don't ask for TLS. A name added while it's open works once
+the new certificate comes; until then it stays open at the others. The
+section says where opening it stands and copies a connection URL that
+checks the certificate. It needs a Relay running Kiln's Traefik. Closing
+it removes the gate; its names stay for the next time it opens.
 
 Either star is the instance's one primary address, which Hearth keeps in
 one row per instance, naming a join address or a web route. Until one is

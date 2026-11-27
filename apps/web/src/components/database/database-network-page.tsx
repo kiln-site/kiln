@@ -5,6 +5,7 @@ import { Cable, LoaderCircle, Network, Unplug } from "lucide-react"
 import {
   databaseTailscaleMemberId,
   type RelayDatabaseMember,
+  type RelayInstanceWebRoute,
 } from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
 
@@ -26,6 +27,8 @@ import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
 import { DatabasePublicAccess } from "@/components/database/database-public-access"
 import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
+import { WebRoutesSection } from "@/components/web-routes-section"
+import { saveManagedDatabaseNames } from "@/server/databases"
 
 export function DatabaseNetworkPage() {
   const { database } = useDatabaseWorkspace()
@@ -62,6 +65,8 @@ export function DatabaseNetworkPage() {
           <ConnectedMembers canWrite={canWrite} database={database} />
         </InfoCard>
 
+        <DatabaseDomains database={database} />
+
         <DatabasePublicAccess database={database} />
 
         <DatabaseTunnels database={database} />
@@ -69,6 +74,51 @@ export function DatabaseNetworkPage() {
     </section>
   )
 }
+
+const noRoutes: ReadonlyArray<RelayInstanceWebRoute> = []
+
+// Its names, in the Domains table every instance has: where it's reached
+// from the internet while it's open, kept while it's closed.
+function DatabaseDomains({ database }: { database: ManagedDatabase }) {
+  const { id, permissions, public: status, relayId, relayName } = database
+  const canWrite =
+    databaseRelayAvailable(database) &&
+    permissions.includes("database.network.public-port.write")
+  const dnsResource = React.useMemo(
+    () => ({ relayId, resourceId: id, resourceType: "database" as const }),
+    [id, relayId]
+  )
+  const port = status?.port ?? null
+  const names = React.useMemo(
+    () => ({
+      destination:
+        port === null
+          ? "Closed to the internet"
+          : `Port ${port} on ${relayName}, with TLS`,
+      onSave: (hostnames: Array<string>) =>
+        saveManagedDatabaseNames({
+          data: { databaseId: id, hostnames, relayId },
+        }),
+    }),
+    [id, port, relayId, relayName]
+  )
+  return (
+    <WebRoutesSection
+      canWrite={canWrite}
+      dnsResource={dnsResource}
+      error={null}
+      kind="database"
+      names={names}
+      routes={noRoutes}
+      status={null}
+      onSave={rejectRoutes}
+    />
+  )
+}
+
+// A database has names, not routes.
+const rejectRoutes = () =>
+  Promise.reject(new Error("A database's domains have no routes"))
 
 // The tunnels the database is connected to, keeping its address there when
 // its container is replaced, and its names in each.

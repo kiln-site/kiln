@@ -15,7 +15,7 @@ import {
 
 const id = "d".repeat(12)
 const gate = `${TEST_NAMESPACE}-kiln-db-${id}-public`
-const opened = { hostname: "db.example.com", port: 25_432 }
+const opened = { hostnames: ["db.example.com"], port: 25_432 }
 
 async function publicDatabases(harness: RelayHarness) {
   const databases = new PublicDatabases({
@@ -82,7 +82,7 @@ describe("a public database", () => {
     await databases.write(id, opened)
 
     await expect(
-      databases.write(other, { hostname: "other.example.com", port: 25_432 })
+      databases.write(other, { hostnames: ["other.example.com"], port: 25_432 })
     ).rejects.toThrow(/port 25432/u)
     expect(databases.ids()).toEqual([id])
   })
@@ -91,7 +91,10 @@ describe("a public database", () => {
     const harness = await withDatabase()
     const databases = await publicDatabases(harness)
     await databases.write(id, opened)
-    await databases.write(id, { hostname: "data.example.com", port: 25_433 })
+    await databases.write(id, {
+      hostnames: ["data.example.com", "db.example.com"],
+      port: 25_433,
+    })
 
     const restarted = await publicDatabases(harness)
     expect(databases.names()).toEqual(restarted.names())

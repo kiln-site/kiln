@@ -23,6 +23,11 @@ import {
   signedIn,
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
+import {
+  databasePublicLocks,
+  publishDatabasePublicChange,
+  saveDatabaseNamesEffect,
+} from "@/server/database-public.server"
 import { domainActor } from "@/server/domain-access.server"
 import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import type {
@@ -114,13 +119,11 @@ export async function getResourceWebHostnamesHandler(
     certificates: pendingWebCertificates(data),
     hostnames: rows.map((row) => ({
       canAdopt: adoptable.has(row.id),
-      // Only an app's generated address no route uses; a database's goes
-      // when it's closed.
+      // An app's generated address no route uses, and any of a database's
+      // names: they're its Domains table's alone.
       canRelease:
         canChange &&
-        row.generated &&
-        !row.routed &&
-        row.resourceType !== "database",
+        (row.resourceType === "database" || (row.generated && !row.routed)),
       // Only to someone who can take it over: what's at the name otherwise
       // isn't this page's to show.
       existingRecord: adoptable.has(row.id) ? row.existingRecord : null,
@@ -204,17 +207,30 @@ const releaseHostname = operation<ReleaseWebHostnameInput>()({
         })
       )
     ),
-  locks: ({ context: row }) => (row ? [exclusive(dnsKey(row))] : []),
-  run: ({ context: row }) =>
-    promiseEffect(async () => {
+  // A database's name is one of the names its Relay may have, which change
+  // as its Domains table changes them.
+  locks: ({ context: row }) =>
+    !row
+      ? []
+      : row.resourceType === "database"
+        ? databasePublicLocks({
+            databaseId: row.resourceId,
+            relayId: row.relayId,
+          })
+        : [exclusive(dnsKey(row))],
+  run: ({ context: row, user }) =>
+    Effect.gen(function* () {
       if (!row) return
-      // Closing it removes its gate before its name, which this can't.
       if (row.resourceType === "database") {
-        throw new Error(
-          `Close the database to the internet to delete ${row.hostname}`
-        )
+        const scope = { databaseId: row.resourceId, relayId: row.relayId }
+        const rest = (yield* listResourceWebHostnamesEffect(row))
+          .filter((name) => name.status !== "removing" && name.id !== row.id)
+          .map((name) => name.hostname)
+        yield* saveDatabaseNamesEffect(scope, rest, yield* signedIn(user))
+        yield* publishDatabasePublicChange(scope)
+        return
       }
-      await runAppEffect("webHostnames.release", releaseWebHostnameEffect(row))
+      yield* releaseWebHostnameEffect(row)
       publishWebHostnameChange([row.relayId])
     }),
   audit: ({ context: row }) =>

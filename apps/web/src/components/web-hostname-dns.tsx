@@ -215,7 +215,7 @@ function dnsPresentation(row: ResourceWebHostname) {
 
 /**
  * The names an instance holds whether or not a route serves them, such as
- * an App's own address; undefined until they load.
+ * an App's own address, or each of a database's; undefined until they load.
  */
 export function useHeldWebHostnames(
   resource: WebHostnameResourceRef
@@ -226,11 +226,16 @@ export function useHeldWebHostnames(
       resource.resourceType,
       resource.resourceId
     ),
-    select: selectHeld,
+    // A database's names are all its own; no route serves them.
+    select: resource.resourceType === "database" ? selectNames : selectHeld,
   })
   return isPending ? undefined : (data ?? noHostnames)
 }
 
 function selectHeld({ hostnames }: ResourceWebHostnames) {
   return hostnames.filter((row) => row.generated && row.status !== "removing")
+}
+
+function selectNames({ hostnames }: ResourceWebHostnames) {
+  return hostnames.filter((row) => row.status !== "removing")
 }

@@ -38,7 +38,11 @@ import {
   reconcileResourceAddressesEffect,
   saveWebRouteHostnamesEffect,
 } from "./addresses.server"
-import { openDatabasePublic } from "./database-public.server"
+import {
+  closeDatabasePublic,
+  openDatabasePublic,
+  saveDatabaseNames,
+} from "./database-public.server"
 import {
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
@@ -789,42 +793,118 @@ describeMysql("web route hostnames", () => {
         })
     )
     it.effect(
-      "keeps a public database's name until the database is closed",
+      "gives an open database's Relay each name its Domains table saves, and keeps them as it closes",
       () =>
         Effect.gen(function* () {
           yield* seed
           const cloudflare = fakeCloudflare([ownerZone, platformZone])
-          const hostname = yield* generateAppHostnameEffect({
-            relayId,
-            resourceId: "c".repeat(12),
-            resourceType: "database",
+          const user = { id: owner.id, role: "user" } as AuthenticatedUser
+          const database = { databaseId: "c".repeat(12), relayId }
+          relay.databasePublic = null
+          relay.publicWrites.length = 0
+          const run = (start: () => Promise<unknown>) =>
+            Effect.promise(() =>
+              start().then(
+                () => "done",
+                (error: Error) => error.message
+              )
+            )
+
+          // With no name yet, it's given one.
+          assert.strictEqual(
+            yield* run(() =>
+              runOperationPromise(
+                openDatabasePublic,
+                { ...database, port: 25_432 },
+                { user }
+              )
+            ),
+            "done"
+          )
+          const [first] = relay.publicWrites as Array<{
+            hostnames: Array<string>
+          }>
+          const generated = String(first?.hostnames[0])
+          assert.match(generated, /\.play\.kiln\.site$/u)
+          relay.databasePublic = {
+            certificateExpiresAt: null,
+            error: null,
+            hostnames: [generated],
+            port: 25_432,
+            state: "open",
+          }
+
+          // A name added while it's open goes to its Relay with the others,
+          // for one certificate, and points at the Relay.
+          assert.strictEqual(
+            yield* run(() =>
+              runOperationPromise(
+                saveDatabaseNames,
+                { ...database, hostnames: [generated, "db.owner.example"] },
+                { user }
+              )
+            ),
+            "done"
+          )
+          assert.deepStrictEqual(relay.publicWrites.at(-1), {
+            hostnames: ["db.owner.example", generated].sort(),
+            port: 25_432,
           })
-          const row = yield* loadWebHostnameByNameEffect(String(hostname))
-          assert.isNotNull(row)
-          const records = cloudflare.dns()
-          // Its gate may still hold the port; closing removes that first.
-          const released = yield* Effect.promise(() =>
-            releaseWebHostnameHandler({ id: String(row?.id) }).then(
+          assert.deepStrictEqual(cloudflare.dns(), {
+            "db.owner.example": "relay-one.relay.test",
+            [generated]: "relay-one.relay.test",
+          })
+
+          // Deleting one on the Domains page takes it off the Relay first.
+          const row = yield* loadWebHostnameByNameEffect(generated)
+          yield* Effect.promise(() =>
+            releaseWebHostnameHandler({ id: String(row?.id) })
+          )
+          assert.deepStrictEqual(relay.publicWrites.at(-1), {
+            hostnames: ["db.owner.example"],
+            port: 25_432,
+          })
+          assert.isNull(yield* loadWebHostnameByNameEffect(generated))
+          assert.deepStrictEqual(cloudflare.dns(), {
+            "db.owner.example": "relay-one.relay.test",
+          })
+
+          // Open, it keeps one.
+          const kept = yield* loadWebHostnameByNameEffect("db.owner.example")
+          const refused = yield* Effect.promise(() =>
+            releaseWebHostnameHandler({ id: String(kept?.id) }).then(
               () => "released",
               (error: Error) => error.message
             )
           )
-          assert.match(released, /Close the database to the internet/u)
-          assert.deepStrictEqual(cloudflare.dns(), records)
-          assert.isNotNull(yield* loadWebHostnameByNameEffect(String(hostname)))
+          assert.match(refused, /keeps at least one name/u)
+
+          // Closed, its names stay for the next time it opens.
+          assert.strictEqual(
+            yield* run(() =>
+              runOperationPromise(closeDatabasePublic, database, { user })
+            ),
+            "done"
+          )
+          assert.isNull(relay.publicWrites.at(-1))
+          assert.isNotNull(
+            yield* loadWebHostnameByNameEffect("db.owner.example")
+          )
+          assert.deepStrictEqual(cloudflare.dns(), {
+            "db.owner.example": "relay-one.relay.test",
+          })
         })
     )
     it.effect(
-      "lets go of a name an open left behind once its Relay won't open it",
+      "closes a database again on its Relay when its Relay won't open it, keeping its names",
       () =>
         Effect.gen(function* () {
           yield* seed
-          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          fakeCloudflare([ownerZone, platformZone])
           const database = {
             databaseId: "c".repeat(12),
             relayId,
           }
-          // As an earlier open whose Relay was lost before it was undone.
           const hostname = yield* generateAppHostnameEffect({
             relayId,
             resourceId: database.databaseId,
@@ -846,13 +926,12 @@ describeMysql("web route hostnames", () => {
           )
 
           assert.match(opened, /already in use/u)
-          // Closed on the Relay, in case it saved it, then the name goes.
+          // Closed on the Relay, in case it saved it; its name stays.
           assert.deepStrictEqual(relay.publicWrites, [
-            { hostname, port: 25_432 },
+            { hostnames: [hostname], port: 25_432 },
             null,
           ])
-          assert.isNull(yield* loadWebHostnameByNameEffect(String(hostname)))
-          assert.deepStrictEqual(cloudflare.dns(), {})
+          assert.isNotNull(yield* loadWebHostnameByNameEffect(String(hostname)))
           relay.refusesOpen = false
         })
     )

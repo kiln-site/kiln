@@ -16,42 +16,29 @@ import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js
 
 describe("Relay state", () => {
   stateTest(
-    "keeps a public database's certificate while its name stays, and forgets it with a new one",
+    "keeps a public database's certificate and root as its names and port change",
     () =>
       Effect.gen(function* () {
         const store = yield* RelayStateStore
         yield* store.setDatabasePublic("aaaaaaaaaaaa", {
-          hostname: "shop.example.com",
+          hostnames: ["shop.example.com"],
           port: 5432,
         })
         yield* store.markDatabasePublic("aaaaaaaaaaaa", {
           certificate: "first",
           rootLocal: true,
         })
-        // A new port keeps what the database was given.
+        // The database serves the certificate it has until one for its new
+        // names comes.
         yield* store.setDatabasePublic("aaaaaaaaaaaa", {
-          hostname: "shop.example.com",
+          hostnames: ["orders.example.com", "shop.example.com"],
           port: 15432,
         })
         assert.deepStrictEqual(yield* store.listDatabasePublic(), [
           {
             certificate: "first",
             databaseId: "aaaaaaaaaaaa",
-            hostname: "shop.example.com",
-            port: 15432,
-            rootLocal: true,
-          },
-        ])
-        // A new name needs its own certificate; root stays local.
-        yield* store.setDatabasePublic("aaaaaaaaaaaa", {
-          hostname: "orders.example.com",
-          port: 15432,
-        })
-        assert.deepStrictEqual(yield* store.listDatabasePublic(), [
-          {
-            certificate: null,
-            databaseId: "aaaaaaaaaaaa",
-            hostname: "orders.example.com",
+            hostnames: ["orders.example.com", "shop.example.com"],
             port: 15432,
             rootLocal: true,
           },
@@ -59,6 +46,56 @@ describe("Relay state", () => {
         yield* store.setDatabasePublic("aaaaaaaaaaaa", null)
         assert.deepStrictEqual(yield* store.listDatabasePublic(), [])
       })
+  )
+
+  it.effect(
+    "keeps a database opened at one name, as that name's list, through the update",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const open = <A, E>(
+            use: Effect.Effect<A, E, SqlClient.SqlClient>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(SqliteClient.layer({ filename })))
+          yield* Effect.void.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          // The table as a Relay before the update had it.
+          yield* open(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`DROP TABLE relay_database_public`
+              yield* sql`CREATE TABLE relay_database_public (
+              database_id TEXT PRIMARY KEY,
+              hostname TEXT NOT NULL,
+              port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+              certificate_sha256 TEXT,
+              root_local INTEGER NOT NULL DEFAULT 0 CHECK (root_local IN (0, 1))
+            ) STRICT`
+              yield* sql`
+              INSERT INTO relay_database_public
+                (database_id, hostname, port, certificate_sha256, root_local)
+              VALUES ('aaaaaaaaaaaa', 'shop.example.com', 25432, 'first', 1)
+            `
+              yield* sql`
+              DELETE FROM effect_sql_migrations WHERE migration_id >= 54
+            `
+            })
+          )
+          const kept = yield* Effect.gen(function* () {
+            const store = yield* RelayStateStore
+            return yield* store.listDatabasePublic()
+          }).pipe(Effect.provide(makeRelayStateLayer(filename)))
+          assert.deepStrictEqual(kept, [
+            {
+              certificate: "first",
+              databaseId: "aaaaaaaaaaaa",
+              hostnames: ["shop.example.com"],
+              port: 25432,
+              rootLocal: true,
+            },
+          ])
+        })
+      )
   )
 
   stateTest("pairs a client exactly once and persists its grant", () =>

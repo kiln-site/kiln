@@ -68,6 +68,9 @@ const AdoptRecordDialog = React.lazy(async () => ({
 const ReleaseHostnameDialog = React.lazy(async () => ({
   default: (await import("@/components/domains-dialogs")).ReleaseHostnameDialog,
 }))
+const DomainNameDialog = React.lazy(async () => ({
+  default: (await import("@/components/domain-name-dialog")).DomainNameDialog,
+}))
 
 /** A route as this section edits it. */
 export type WebRouteRow = RelayInstanceWebRouteInput
@@ -110,6 +113,15 @@ export interface WebRouteTarget {
   service: string
 }
 
+/**
+ * A database's names, which no route serves: each row is one, added,
+ * renamed and deleted as one list, all going where `destination` says.
+ */
+export interface DomainNames {
+  destination: string
+  onSave: (hostnames: Array<string>) => Promise<unknown>
+}
+
 // An instance's domains, in one table: each name it holds and where Traefik
 // sends it. A name no route serves yet, such as a new App's own address, is
 // a row too. Each change saves the whole list of routes, and the table shows
@@ -119,6 +131,7 @@ export function WebRoutesSection({
   dnsResource,
   error,
   kind,
+  names,
   primaryElsewhere = false,
   primaryRouteId,
   routes,
@@ -135,7 +148,9 @@ export function WebRoutesSection({
   // Whose DNS records the domains' badges read.
   dnsResource: WebHostnameResourceRef
   error: Error | null
-  kind: "app" | "server"
+  kind: "app" | "database" | "server"
+  // A database's names, in place of routes.
+  names?: DomainNames
   // Its primary address is none of these routes (a tunnel name).
   primaryElsewhere?: boolean
   // The route its instance's primary address names, if one does.
@@ -173,6 +188,10 @@ export function WebRoutesSection({
   const [releasing, setReleasing] = React.useState<ResourceWebHostname | null>(
     null
   )
+  // A database's name being added (null) or renamed.
+  const [naming, setNaming] = React.useState<{
+    hostname: string | null
+  } | null>(null)
   const held = useHeldWebHostnames(dnsResource)
   const queryClient = useQueryClient()
   const proxiedFor = useWebHostnameProxied(dnsResource)
@@ -384,9 +403,17 @@ export function WebRoutesSection({
     },
     [commit, save.isPending, saved]
   )
-  const point = React.useCallback((hostname: string) => {
-    setEditing({ hostname, mode: "add" })
-  }, [])
+  const point = React.useCallback(
+    (hostname: string) => {
+      if (names) setNaming({ hostname })
+      else setEditing({ hostname, mode: "add" })
+    },
+    [names]
+  )
+  const add = React.useCallback(() => {
+    if (names) setNaming({ hostname: null })
+    else setEditing({ mode: "add" })
+  }, [names])
 
   const busy = !canWrite || !saved || save.isPending
 
@@ -404,10 +431,12 @@ export function WebRoutesSection({
           {statusAction}
           {canWrite ? (
             <Button
-              disabled={busy || saved.length >= 16}
+              disabled={
+                busy || (names ? (held?.length ?? 0) : saved.length) >= 16
+              }
               size="sm"
               type="button"
-              onClick={() => setEditing({ mode: "add" })}
+              onClick={add}
             >
               <Plus />
               Add domain
@@ -421,13 +450,14 @@ export function WebRoutesSection({
         disabled={busy}
         dnsResource={dnsResource}
         error={error}
+        heldDestination={names?.destination}
         pending={save.isPending}
         primaryRowId={primary?.rowId}
         rows={rows}
         services={services}
         showPrimary={showPrimary}
         targets={targets}
-        onAdd={canWrite ? () => setEditing({ mode: "add" }) : undefined}
+        onAdd={canWrite ? add : undefined}
         onMakeTunnelPrimary={onMakeTunnelPrimary}
         onAdopt={setAdopting}
         onEdit={edit}
@@ -468,6 +498,34 @@ export function WebRoutesSection({
           }}
         />
       ) : null}
+      {naming && names && held ? (
+        <React.Suspense fallback={null}>
+          <DomainNameDialog
+            hostname={naming.hostname}
+            onOpenChange={(open) => {
+              if (!open) setNaming(null)
+            }}
+            onSubmit={async (hostname) => {
+              const current = held.map((name) => name.hostname)
+              await names.onSave(
+                naming.hostname === null
+                  ? [...current, hostname]
+                  : current.map((name) =>
+                      name === naming.hostname ? hostname : name
+                    )
+              )
+              await queryClient.invalidateQueries({
+                queryKey: queryKeys.domains.hostnames(
+                  dnsResource.relayId,
+                  dnsResource.resourceType,
+                  dnsResource.resourceId
+                ),
+              })
+              setNaming(null)
+            }}
+          />
+        </React.Suspense>
+      ) : null}
       {adopting ? (
         <React.Suspense fallback={null}>
           <AdoptRecordDialog
@@ -505,6 +563,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   disabled,
   dnsResource,
   error,
+  heldDestination,
   pending,
   primaryRowId,
   rows,
@@ -526,6 +585,8 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   disabled: boolean
   dnsResource: WebHostnameResourceRef
   error: Error | null
+  // Where every name nothing routes goes, for a database's.
+  heldDestination: string | undefined
   pending: boolean
   primaryRowId: string | undefined
   rows: ReadonlyArray<DomainRow> | undefined
@@ -604,6 +665,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
                 />
               ) : (
                 <HeldDomainCell
+                  destination={heldDestination}
                   dnsResource={dnsResource}
                   hostname={row.original.held.hostname}
                 />
@@ -627,6 +689,10 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
                   route={row.original.route}
                   services={services}
                 />
+              ) : heldDestination ? (
+                <span className="type-meta truncate text-muted-foreground">
+                  {heldDestination}
+                </span>
               ) : (
                 <HeldDestinationCell
                   disabled={disabled}
@@ -664,6 +730,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
                   canWrite={canWrite}
                   disabled={disabled}
                   held={row.original.held}
+                  renames={heldDestination !== undefined}
                   onPoint={onPoint}
                   onRelease={onRelease}
                 />
@@ -686,6 +753,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
       canWrite,
       disabled,
       dnsResource,
+      heldDestination,
       onAdopt,
       onEdit,
       onMakePrimary,
@@ -717,7 +785,9 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
           }
           description={
             <span className="block max-w-sm">
-              Serve a domain over HTTPS, or redirect one somewhere else.
+              {heldDestination
+                ? "Give it a name to reach it at from the internet."
+                : "Serve a domain over HTTPS, or redirect one somewhere else."}
             </span>
           }
           icon={
@@ -836,9 +906,11 @@ const RouteKindCell = React.memo(function RouteKindCell({
 
 // A name the instance holds that no route serves.
 const HeldDomainCell = React.memo(function HeldDomainCell({
+  destination,
   dnsResource,
   hostname,
 }: {
+  destination: string | undefined
   dnsResource: WebHostnameResourceRef
   hostname: string
 }) {
@@ -847,9 +919,12 @@ const HeldDomainCell = React.memo(function HeldDomainCell({
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate text-sm font-medium">{hostname}</span>
         <WebHostnameDnsStatus hostname={hostname} resource={dnsResource} />
+        {destination ? (
+          <WebCertificateStatus hostnames={[hostname]} resource={dnsResource} />
+        ) : null}
       </span>
       <span className="type-meta block truncate text-muted-foreground sm:hidden">
-        Not pointed anywhere
+        {destination ?? "Not pointed anywhere"}
       </span>
     </div>
   )
@@ -897,12 +972,15 @@ const HeldActions = React.memo(function HeldActions({
   canWrite,
   disabled,
   held,
+  renames,
   onPoint,
   onRelease,
 }: {
   canWrite: boolean
   disabled: boolean
   held: ResourceWebHostname
+  // A database's name is renamed; an App's is pointed somewhere.
+  renames: boolean
   onPoint: (hostname: string) => void
   onRelease: (hostname: ResourceWebHostname) => void
 }) {
@@ -912,7 +990,11 @@ const HeldActions = React.memo(function HeldActions({
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
-            aria-label={`Choose where ${held.hostname} goes`}
+            aria-label={
+              renames
+                ? `Rename ${held.hostname}`
+                : `Choose where ${held.hostname} goes`
+            }
             disabled={disabled}
             size="icon-sm"
             type="button"
@@ -922,7 +1004,9 @@ const HeldActions = React.memo(function HeldActions({
             <Pencil />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Choose where it goes</TooltipContent>
+        <TooltipContent>
+          {renames ? "Rename" : "Choose where it goes"}
+        </TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>

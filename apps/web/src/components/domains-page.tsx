@@ -1285,9 +1285,12 @@ function deleteDisabledReason(row: DomainRow): string | null {
       ? null
       : "Needs network access to this game server"
   }
-  // A database's name goes when it's closed to the internet, gate first.
+  // A database's names are its own, deleted as its Domains table deletes
+  // them.
   if (row.hostname.resource.kind === "database") {
-    return "Close the database to the internet to delete it"
+    return row.hostname.canManage
+      ? null
+      : "Needs access to change this database's domains"
   }
   // A route's record follows the route; deleting it alone would come back.
   if (!row.hostname.generated || row.hostname.routed) {
