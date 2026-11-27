@@ -16,6 +16,7 @@ import type {
   RelayDatabaseExport,
   RelayDatabaseImport,
   RelayDatabaseLimits,
+  RelayDatabasePublicStatus,
   RelayDatabaseNetwork,
   RelayDatabaseContainer,
   RelayDatabaseWipe,
@@ -280,6 +281,29 @@ export class DatabaseDriver {
   async containerOf(databaseId: string): Promise<string | null> {
     const [container] = await this.#discover([databaseId])
     return container?.Id ?? null
+  }
+
+  // What a public database's container needs for TLS: the volume its
+  // certificate is kept in, and filling it before the container starts.
+  // Null while it's private.
+  #publicTls: (databaseId: string) => Promise<DatabaseTls | null> = async () =>
+    null
+
+  usePublicTls(take: (databaseId: string) => Promise<DatabaseTls | null>) {
+    this.#publicTls = take
+  }
+
+  // Where opening a public database stands, which its listing carries.
+  #publicStatus: (
+    database: Pick<RelayManagedDatabase, "id">
+  ) => RelayDatabasePublicStatus | null = () => null
+
+  usePublicStatus(
+    status: (
+      database: Pick<RelayManagedDatabase, "id">
+    ) => RelayDatabasePublicStatus | null
+  ) {
+    this.#publicStatus = status
   }
 
   // Puts a database's container at its addresses on its tailnets:
@@ -697,6 +721,99 @@ export class DatabaseDriver {
     return this.#required(databaseId)
   }
 
+  /**
+   * Deploys the database again with what its public address needs, or
+   * without it once it's private: one restart. The caller holds its lane.
+   */
+  async redeployForPublic(databaseId: string): Promise<void> {
+    const container = await this.#container(databaseId)
+    const { limits } = await this.#toManagedDatabase(
+      container,
+      await this.#diskLimits()
+    )
+    await traceRelayPromise(
+      "relay.databases.replaceContainer",
+      () => this.#replaceContainer(container, limits),
+      { "relay.database_id": databaseId }
+    )
+  }
+
+  /** Whether the database's container runs with its public TLS. */
+  /** Whether the database's container is there, for work kept beside it. */
+  async exists(databaseId: string): Promise<boolean> {
+    return (await this.#discover([databaseId])).length > 0
+  }
+
+  /**
+   * The private network its clients join, as its container names it: the
+   * oldest databases' have shorter names than databaseNetworkName gives.
+   */
+  async network(databaseId: string): Promise<string> {
+    return requiredLabel(
+      await this.#labels(databaseId),
+      "kiln.database.network"
+    )
+  }
+
+  async hasPublicTls(databaseId: string): Promise<boolean> {
+    return (await this.#labels(databaseId))[TLS_LABEL] === "public"
+  }
+
+  /**
+   * Has a running database take the certificate just written over its old
+   * one. Postgres, MySQL and MariaDB reload it in place; Redis and Valkey
+   * can't without a login the Relay doesn't keep, so they restart, which
+   * takes a second.
+   */
+  async reloadPublicTls(databaseId: string): Promise<void> {
+    const database = await this.#required(databaseId)
+    if (database.observedState !== "running") return
+    const container = requiredContainerId(database)
+    const command = tlsReloadCommand(database.engine)
+    if (command === null) {
+      await Effect.runPromise(
+        this.#engine.restartContainer(container, {
+          seconds: 30,
+          timeout: 60_000,
+        })
+      )
+      await waitUntilReady(this.#engine, container)
+      return
+    }
+    await Effect.runPromise(
+      this.#engine.execWithInput(container, ["sh", "-ec", command], {
+        maxOutputBytes: MAX_CLIENT_OUTPUT_BYTES,
+        overflow: "The database client printed more than expected",
+        timeout: 60_000,
+      })
+    )
+  }
+
+  /**
+   * Keeps MySQL's and MariaDB's root login to their own container, as Kiln
+   * uses it, before the database is open to the internet. Answers whether
+   * that's so: false while the database isn't running to be asked.
+   */
+  async keepRootLocal(databaseId: string): Promise<boolean> {
+    const database = await this.#required(databaseId)
+    const statement = rootLocalStatement(database.engine)
+    if (statement === null) return true
+    if (database.observedState !== "running") return false
+    await Effect.runPromise(
+      this.#engine.execWithInput(
+        requiredContainerId(database),
+        ["sh", "-ec", statement.client],
+        {
+          input: statement.input,
+          maxOutputBytes: MAX_CLIENT_OUTPUT_BYTES,
+          overflow: "The database client printed more than expected",
+          timeout: 60_000,
+        }
+      )
+    )
+    return true
+  }
+
   // A new container over the old one's volume and network, with the same
   // environment. The old one is set aside until the new one is ready, and
   // put back if it never is.
@@ -716,6 +833,8 @@ export class DatabaseDriver {
     const spec = recordedSpec(labels, engine)
     const name = container.Name.replace(/^\//u, "")
     const running = container.State.Running
+    // A public database runs with TLS, which only its gate requires.
+    const tls = await this.#publicTls(id)
     // The name says whether it was running, for recovery after a restart.
     const aside = `${name}${REPLACED_MARKER}${running ? RUNNING_MARKER : STOPPED_MARKER}${randomBytes(4).toString("hex")}`
     const docker = this.#engine
@@ -732,7 +851,9 @@ export class DatabaseDriver {
       }
       await Effect.runPromise(
         createContainer(docker, {
-          command: [...(spec.command ?? [])],
+          command: tls
+            ? withTls(engine, spec.command)
+            : [...(spec.command ?? [])],
           env: revision?.environment ?? containerEnvironment(container),
           healthcheck: databaseHealthcheck(
             engine,
@@ -741,11 +862,15 @@ export class DatabaseDriver {
           hostname: databaseHostname(id),
           image: revision?.image ?? databaseImage(container),
           // What the old container's label said of it, not this one.
-          labels: Object.fromEntries(
-            Object.entries(stringLabels(labels)).filter(
-              ([label]) => label !== WORKLOAD_SLICE_LABEL
-            )
-          ),
+          labels: {
+            ...Object.fromEntries(
+              Object.entries(stringLabels(labels)).filter(
+                ([label]) =>
+                  label !== WORKLOAD_SLICE_LABEL && label !== TLS_LABEL
+              )
+            ),
+            ...(tls && { [TLS_LABEL]: "public" }),
+          },
           ...this.#docker.allocations.workloadSpec(),
           mounts: [
             {
@@ -753,6 +878,15 @@ export class DatabaseDriver {
               target: spec.dataMount,
               type: "volume",
             },
+            ...(tls
+              ? [
+                  {
+                    source: tls.volume,
+                    target: TLS_FOLDER,
+                    type: "volume" as const,
+                  },
+                ]
+              : []),
           ],
           name,
           network: {
@@ -764,6 +898,8 @@ export class DatabaseDriver {
         })
       )
       created = true
+      // Its certificate is in place before it starts, which Redis needs.
+      await tls?.fill(name)
       // The databases it's connected to, which it reached on the old one.
       await this.connections.reconcile({ id, kind: "database" }, [
         { container: name },
@@ -1432,6 +1568,7 @@ export class DatabaseDriver {
           requiredLabel(labels, "kiln.database.volume")
         ) ?? null,
       name: requiredLabel(labels, "kiln.database.name"),
+      public: this.#publicStatus({ id }),
       observedState,
       startedAt:
         container.State.Running && container.State.StartedAt
@@ -1618,6 +1755,106 @@ export function databaseNetworkName(
   id: string
 ): string {
   return databaseResourceName(config, physicalKey(id), "network")
+}
+
+// What a public database's container is given for TLS.
+export interface DatabaseTls {
+  /** The volume its certificate, chain and key are kept in. */
+  readonly volume: string
+  /** Writes them into the container, made but not yet started. */
+  readonly fill: (container: string) => Promise<void>
+}
+
+/** Where a public database's certificate is, in its container. */
+export const TLS_FOLDER = "/kiln-tls"
+// A container made to run with it.
+const TLS_LABEL = "kiln.database.tls"
+
+/**
+ * The port a database takes TLS on: its own, but for Redis and Valkey, which
+ * take it on another, so their own stays as their clients know it.
+ */
+export function databaseTlsPort(engine: DatabaseEngine, port: number): number {
+  return engine === "redis" || engine === "valkey" ? 6380 : port
+}
+
+// Its command with TLS turned on, from the files in TLS_FOLDER. Clients
+// choose TLS or not on its own port; only its gate requires it.
+function withTls(
+  engine: DatabaseEngine,
+  command: ReadonlyArray<string> | undefined
+): Array<string> {
+  const certificate = `${TLS_FOLDER}/server.crt`
+  const key = `${TLS_FOLDER}/server.key`
+  const chain = `${TLS_FOLDER}/ca.crt`
+  switch (engine) {
+    case "postgres":
+      return [
+        ...(command?.length ? command : ["postgres"]),
+        "-c",
+        "ssl=on",
+        "-c",
+        `ssl_cert_file=${certificate}`,
+        "-c",
+        `ssl_key_file=${key}`,
+      ]
+    // The images' entrypoints run the server with arguments that start
+    // with a dash.
+    case "mysql":
+    case "mariadb":
+      return [
+        ...(command ?? []),
+        `--ssl-cert=${certificate}`,
+        `--ssl-key=${key}`,
+        `--ssl-ca=${chain}`,
+      ]
+    case "redis":
+    case "valkey":
+      return [
+        ...(command ?? []),
+        "--tls-port",
+        String(databaseTlsPort(engine, 0)),
+        "--tls-cert-file",
+        certificate,
+        "--tls-key-file",
+        key,
+        "--tls-ca-cert-file",
+        chain,
+        "--tls-auth-clients",
+        "no",
+      ]
+  }
+}
+
+// How a running database takes a new certificate, through its own client
+// on its local socket; null when it has to restart. MySQL checks the chain
+// in ssl_ca against the certificate, which is why it holds the issuer's.
+function tlsReloadCommand(engine: DatabaseEngine): string | null {
+  switch (engine) {
+    case "postgres":
+      return 'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT pg_reload_conf()"'
+    case "mysql":
+      return 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root -e "ALTER INSTANCE RELOAD TLS"'
+    case "mariadb":
+      return 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb --user=root -e "FLUSH SSL"'
+    case "redis":
+    case "valkey":
+      return null
+  }
+}
+
+// The images let root in from anywhere; Kiln only uses it on the local
+// socket. Null for engines without such a login.
+function rootLocalStatement(
+  engine: DatabaseEngine
+): { readonly client: string; readonly input: string } | null {
+  if (engine !== "mysql" && engine !== "mariadb") return null
+  const password =
+    engine === "mysql" ? "MYSQL_ROOT_PASSWORD" : "MARIADB_ROOT_PASSWORD"
+  return {
+    client: `MYSQL_PWD="$${password}" exec ${engine} --user=root`,
+    input: "DROP USER IF EXISTS 'root'@'%';\n",
+  }
 }
 
 function databaseHostname(id: string): string {

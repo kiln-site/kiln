@@ -173,6 +173,77 @@ describe("bundled Traefik certificates", () => {
     expect(traefik()).not.toEqual(refused)
   })
 
+  it("asks for a public database's name once it resolves, and gives the database only its own name's certificate", async () => {
+    const database = { databaseId: "b".repeat(12), hostname: "db.example.com" }
+    const router = "kiln-database-db-example-com"
+    const routers = () =>
+      parse(
+        traefikDynamicConfiguration(config, [], settings, certificates.gate(), [
+          database.hostname,
+        ])
+      ).http.routers
+    await certificates.track([], [database])
+    expect(routers()?.[router]).toBeUndefined()
+    expect(certificates.pending()).toMatchObject([
+      {
+        owner: { id: database.databaseId, kind: "database" },
+        waitingFor: "dns",
+      },
+    ])
+
+    answers.set(database.hostname, "found")
+    vi.setSystemTime(Date.now() + 15_000)
+    await certificates.check()
+    expect(routers()?.[router]).toMatchObject({
+      rule: "Host(`db.example.com`)",
+      tls: { certResolver: "kiln" },
+    })
+
+    // A wildcard's certificate serves a route, not a database, which is
+    // given its own name's alone.
+    const pem = (body: string) =>
+      Buffer.from(
+        `-----BEGIN ${body}-----\nx\n-----END ${body}-----\n`
+      ).toString("base64")
+    await writeFile(
+      webCertificateStorePath(config),
+      JSON.stringify({
+        kiln: {
+          Account: null,
+          Certificates: [
+            {
+              certificate: pem("CERTIFICATE"),
+              domain: { main: "*.example.com" },
+              key: pem("PRIVATE KEY"),
+              Store: "default",
+            },
+          ],
+        },
+      })
+    )
+    expect(await certificates.certificate(database.hostname)).toBeNull()
+    await writeFile(
+      webCertificateStorePath(config),
+      JSON.stringify({
+        kiln: {
+          Account: null,
+          Certificates: [
+            {
+              certificate: pem("CERTIFICATE"),
+              domain: { main: "DB.example.com" },
+              key: pem("PRIVATE KEY"),
+              Store: "default",
+            },
+          ],
+        },
+      })
+    )
+    expect(await certificates.certificate(database.hostname)).toMatchObject({
+      chain: expect.stringContaining("BEGIN CERTIFICATE"),
+      key: expect.stringContaining("PRIVATE KEY"),
+    })
+  })
+
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {
     const other: RelayStoredWebRoute = {
       ...route,

@@ -80,6 +80,7 @@ import {
   relayDatabaseWipeSchema,
   relayDatabaseNetworkImportSchema,
   relayDatabaseNetworkSchema,
+  relayDatabasePublicWriteSchema,
   relayDeleteDatabaseSchema,
   relayResourceFreezeSchema,
   type RelayResourceFreeze,
@@ -188,6 +189,7 @@ import { openControlTunnel } from "./control-tunnel.js"
 import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
+import { PublicDatabases } from "./database-public.js"
 import {
   browseManagedDatabase,
   type BrowsableDatabase,
@@ -294,6 +296,7 @@ import {
 import { operation, runOperation } from "./operations/operation.js"
 import {
   controlRequestLocks,
+  databaseLocks,
   databaseReadLocks,
   appReadLocks,
   instanceReadLocks,
@@ -731,8 +734,24 @@ runtimeRecovery.useTailscaleAddresses((instanceId) =>
 databases.useTailscaleAddresses((databaseId) =>
   lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
 )
+// Databases opened to the internet (database-public.ts), before anything
+// deploys a database again, which gives a public one its certificate.
+const publicDatabases = new PublicDatabases({
+  certificates: lifecycle.certificates,
+  config,
+  databases,
+  engine: new DockerEngine(config.dockerSocket),
+  hostPorts: lifecycle.hostPorts,
+  proxy: lifecycle,
+  state: startupCore.state,
+})
+await publicDatabases.load()
+lifecycle.useDatabaseCertificates(publicDatabases.names())
+databases.usePublicTls((databaseId) => publicDatabases.tls(databaseId))
+databases.usePublicStatus((database) => publicDatabases.status(database))
 // Before anything reads the databases, so none shows twice.
 await databases.recoverReplacements()
+await publicDatabases.removeStrayGates()
 // What each queued change to a Tailscale stack planned its locks from, so it
 // can tell, once it runs, whether the stack changed meanwhile.
 const tunnelPlans = new WeakMap<object, string>()
@@ -1733,7 +1752,8 @@ const browserSocket = attachBrowserSocket({
           )
         )?.Id ?? null,
     },
-    (id, component) => lifecycle.tunnelContainerName(id, component)
+    (id, component) => lifecycle.tunnelContainerName(id, component),
+    (databaseId) => publicDatabases.gateContainer(databaseId)
   ),
   docker,
   filesystem,
@@ -1946,7 +1966,37 @@ const repairPlatformEdge = operation<void>()({
     ),
 })
 
+// Keeps each public database where it should be: open once its name has its
+// certificate, given the certificate again once it's renewed. Each in its
+// own turn on the database's lane; Traefik's routes follow which names are
+// public in theirs.
+const reconcilePublicDatabase = operation<string>()({
+  name: "relay.database.public",
+  locks: ({ input }) => databaseLocks(input),
+  run: ({ input }) =>
+    Effect.tryPromise(() => publicDatabases.reconcile(input)).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("A public database couldn't open", cause)
+      )
+    ),
+})
+let publicDatabaseNames = ""
+const followPublicDatabaseNames = operation<void>()({
+  name: "relay.database.public.names",
+  locks: () => [exclusive(laneKeys.routes)],
+  run: () =>
+    Effect.tryPromise(async () => {
+      const names = publicDatabases.names()
+      await lifecycle.configureDatabaseCertificates(names)
+      publicDatabaseNames = JSON.stringify(names)
+    }),
+})
+
 const platformFiber = forkRelayEffect("relay.platform", platformLoop())
+const publicDatabaseFiber = forkRelayEffect(
+  "relay.databases.public",
+  publicDatabaseLoop()
+)
 // See web-certificates.ts.
 const certificateFiber = forkRelayEffect(
   "relay.certificates",
@@ -2181,6 +2231,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         tlsRefreshFiber.interruptUnsafe()
         joinFiber?.interruptUnsafe()
         platformFiber.interruptUnsafe()
+        publicDatabaseFiber.interruptUnsafe()
         certificateFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         transferSweepFiber.interruptUnsafe()
@@ -3127,6 +3178,7 @@ async function executeControlRequest(
         // One that never finished has no container for its delete to find,
         // and an App created with it may be connected to it.
         await databases.connections.forgetDatabase(input.databaseId)
+        await publicDatabases.forget(input.databaseId)
         await resourceFreezes.forget("database", input.databaseId)
         await deploymentLogs.remove({ id: input.databaseId, kind: "database" })
         return { databaseId: input.databaseId, deleted: true }
@@ -3136,6 +3188,9 @@ async function executeControlRequest(
       const member = databaseTailscaleMemberId(input.databaseId)
       const leaveTailscale = () =>
         lifecycle.removeFromTailscale((memberId) => memberId === member)
+      // Closed to the internet first, so nothing reaches it as it goes, and
+      // a delete cut short after its container leaves nothing public.
+      await publicDatabases.forget(input.databaseId)
       const deleted = await recoverPromise(
         () => databases.delete(input),
         async (cause) => {
@@ -3144,11 +3199,14 @@ async function executeControlRequest(
             cause.message === "Database not found"
           ) {
             await leaveTailscale()
+            await publicDatabases.forget(input.databaseId)
           }
           throw cause
         }
       )
       await leaveTailscale()
+      // Again, for its certificate's volume, which its container held.
+      await publicDatabases.forget(input.databaseId)
       await resourceFreezes.forget("database", input.databaseId)
       await deploymentLogs.remove({ id: input.databaseId, kind: "database" })
       return deleted
@@ -3170,6 +3228,24 @@ async function executeControlRequest(
           )
         )
       )
+    }
+    // It opens once its name has its certificate, on the next pass.
+    case "database.public.write": {
+      const input = relayDatabasePublicWriteSchema.parse(request.payload)
+      await publicDatabases.write(input.databaseId, input.public)
+      // Done once it's saved; a snapshot that doesn't refresh now does on
+      // the loop's next pass, and mustn't make Hearth think it failed.
+      await recoverPromise(
+        () => snapshotHub.refresh(),
+        (cause) =>
+          Effect.runPromise(
+            Effect.logWarning("The Relay's snapshot didn't refresh", cause)
+          )
+      )
+      return {
+        databaseId: input.databaseId,
+        public: publicDatabases.status({ id: input.databaseId }),
+      }
     }
     case "database.network.import":
       return {
@@ -4519,6 +4595,53 @@ function platformLoop() {
     )
 }
 
+// Every minute, when one is opened, closed or deleted, or when a waiting
+// certificate comes.
+function publicDatabaseLoop() {
+  // Each step on its own: one database turned away, as one frozen for its
+  // deletion, or Traefik failing, leaves the others to go on.
+  const step = (label: string, run: Effect.Effect<unknown, unknown>) =>
+    run.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Cause.squash(cause) instanceof LaneRejectedError
+            ? Effect.void
+            : Effect.logWarning(label, cause)
+      )
+    )
+  return Effect.gen(function* () {
+    if (JSON.stringify(publicDatabases.names()) !== publicDatabaseNames) {
+      yield* step(
+        "Traefik couldn't follow public databases' names",
+        runOperation(lanes, followPublicDatabaseNames, undefined, {
+          kind: "timer",
+        })
+      )
+    }
+    for (const id of publicDatabases.ids()) {
+      yield* step(
+        "Keeping a public database open failed",
+        runOperation(lanes, reconcilePublicDatabase, id, { kind: "timer" })
+      )
+    }
+    if (publicDatabases.ids().length > 0) {
+      yield* step(
+        "The Relay's snapshot didn't refresh",
+        promiseEffect(() => snapshotHub.refresh())
+      )
+    }
+  }).pipe(
+    Effect.andThen(
+      Effect.raceFirst(
+        Effect.sleep("1 minute"),
+        Effect.promise(() => publicDatabases.woken())
+      )
+    ),
+    Effect.forever
+  )
+}
+
 // Every 15 seconds, or when a route newly waits: lookups outside the lane,
 // changes inside it.
 function certificateLoop() {
@@ -4560,6 +4683,8 @@ async function applyCertificateCheck(result: CertificateCheck): Promise<void> {
     )
   }
   if (result.changed || result.rewrite) await snapshotHub.refresh()
+  // A public database's certificate may have just come.
+  if (result.changed) publicDatabases.nudge()
 }
 
 /**

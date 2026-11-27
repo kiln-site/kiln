@@ -36,6 +36,9 @@ export type ConsoleSources = (
   stream?: string
 ) => ConsoleSource
 
+/** A database's stream that is its public gate's output. */
+export const DATABASE_GATE_STREAM = "public-gate"
+
 export function consoleSources(
   docker: Pick<DockerDriver, "consoleSession" | "containerConsoleSession">,
   databases: Pick<DatabaseDriver, "target">,
@@ -51,7 +54,9 @@ export function consoleSources(
     ) => Promise<string | null>
   },
   // A tunnel's container: its Tailscale one, or `coredns` for its DNS.
-  tunnelContainer: (id: string, component: "coredns" | "tailscale") => string
+  tunnelContainer: (id: string, component: "coredns" | "tailscale") => string,
+  // A public database's gate's container, or null while it's private.
+  publicGate: (databaseId: string) => string | null
 ): ConsoleSources {
   return (kind, id, stream) => {
     switch (kind) {
@@ -67,6 +72,12 @@ export function consoleSources(
         return {
           readAction: relayConsoleReadActions.database,
           session: async (signal) => {
+            // Its public gate's output: each connection and refusal.
+            if (stream === DATABASE_GATE_STREAM) {
+              const gate = publicGate(id)
+              if (!gate) throw new Error("This database isn't public")
+              return docker.containerConsoleSession(id, gate, signal)
+            }
             const database = await databases.target(id)
             if (!database.containerId) {
               throw new Error("Database container ID is missing")

@@ -39,6 +39,7 @@ services:
       # In a volume, so the helpers this stock image starts share them.
       KILN_RELAY_RESTIC_PATH: /opt/kiln-tools/restic
       KILN_RELAY_SYFT_PATH: /opt/kiln-tools/syft
+      KILN_RELAY_DATABASE_GATE_PATH: /opt/kiln-tools/kiln-database-gate
       KILN_RELAY_PROXY: ${KILN_RELAY_PROXY:-none}
       KILN_RELAY_TRAEFIK_IMAGE: ${KILN_RELAY_TRAEFIK_IMAGE:-traefik:v3.7.13}
       KILN_RELAY_ACME_EMAIL: ${KILN_RELAY_ACME_EMAIL:-}
@@ -175,10 +176,34 @@ services:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - relay-dev-tools:/opt/kiln-tools
+    depends_on:
+      database-gate:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${KILN_DEV_SFTP_PORT:-2022}:2022"
     labels:
       io.kiln.installation: ${KILN_INSTALLATION_ID:-}
+
+  # Builds the gate public databases' ports go through, as
+  # apps/relay/Dockerfile does, into the tools volume the Relay's helpers
+  # share.
+  database-gate:
+    image: golang:1.27.2-alpine
+    restart: "no"
+    working_dir: /workspace/apps/relay/database-gate
+    environment:
+      CGO_ENABLED: "0"
+      GOCACHE: /opt/kiln-tools/go-cache
+    command:
+      - go
+      - build
+      - -trimpath
+      - -o
+      - /opt/kiln-tools/kiln-database-gate
+      - .
+    volumes:
+      - .:/workspace:ro
+      - relay-dev-tools:/opt/kiln-tools
 
   hearth:
     image: node:24-alpine

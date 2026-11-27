@@ -240,6 +240,44 @@ export const relayDatabaseMemberSchema = z
   })
   .strict()
 
+/**
+ * A database's public address: the name its certificate is for, and the
+ * port its gate publishes on its Relay's host.
+ */
+export const relayDatabasePublicSchema = z
+  .object({
+    hostname: z.string().max(253).regex(z.regexes.domain),
+    port: z.number().int().min(1).max(65_535),
+  })
+  .strict()
+
+export type RelayDatabasePublic = z.infer<typeof relayDatabasePublicSchema>
+
+/** Where opening a database to the internet stands. */
+export const relayDatabasePublicStateSchema = z.enum([
+  // Its name doesn't resolve to the Relay yet.
+  "waiting_for_dns",
+  // Traefik is asking Let's Encrypt for its certificate.
+  "getting_certificate",
+  // The database is taking its certificate and its gate is starting.
+  "opening",
+  "open",
+  // It can't open; `error` says why.
+  "failed",
+])
+
+export const relayDatabasePublicStatusSchema = relayDatabasePublicSchema
+  .extend({
+    certificateExpiresAt: z.string().datetime().nullable(),
+    error: z.string().max(280).nullable(),
+    state: relayDatabasePublicStateSchema,
+  })
+  .strict()
+
+export type RelayDatabasePublicStatus = z.infer<
+  typeof relayDatabasePublicStatusSchema
+>
+
 export const relayManagedDatabaseSchema = z
   .object({
     containerId: z.string().nullable(),
@@ -255,6 +293,8 @@ export const relayManagedDatabaseSchema = z
     /** The data volume's size when the Relay last measured it. */
     diskUsedBytes: z.number().int().nonnegative().nullable().default(null),
     name: relayDatabaseNameSchema,
+    /** Its public address and where opening it stands; null while private. */
+    public: relayDatabasePublicStatusSchema.nullable().default(null),
     observedState: z.enum([
       "provisioning",
       "starting",
@@ -376,6 +416,16 @@ export const relayDatabaseNetworkSchema = z
       input.member.kind !== "database" || input.member.id !== input.databaseId,
     "A database can't connect to itself"
   )
+
+// Opens a database to the internet at a name and port, or closes it with
+// null. The Relay gets the name's certificate, gives it to the database, and
+// starts the gate that holds the port, refusing clients without TLS.
+export const relayDatabasePublicWriteSchema = z
+  .object({
+    databaseId: databaseIdSchema,
+    public: relayDatabasePublicSchema.nullable(),
+  })
+  .strict()
 
 // Hands the Relay the database connections Hearth kept in Apps' configs,
 // once per Relay. Repeating it changes nothing more: the Relay adds what it
@@ -2014,7 +2064,7 @@ export const relayPendingCertificateSchema = z.object({
   /** The game server or App whose route serves it. */
   owner: z.object({
     id: z.string().min(1),
-    kind: z.enum(["app", "server"]),
+    kind: z.enum(["app", "database", "server"]),
   }),
   /** `dns`: its name doesn't resolve yet, so Traefik doesn't ask. */
   waitingFor: z.enum(["certificate", "dns"]),

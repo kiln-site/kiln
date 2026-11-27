@@ -249,6 +249,62 @@ static Go binary built from `apps/relay/healthcheck`. It requests
 The development stack has no native checker. Its Compose health check probes
 the same loopback listener with BusyBox `wget`.
 
+## Public databases
+
+A database opened to the internet keeps its private network and the clients
+on it. Its public port is held by a gate (`kiln-db-<id>-public`), a container
+the Relay starts from its own image running `kiln-database-gate`, a small
+static Go binary built from `apps/relay/database-gate`. The gate reads the
+start of each connection, refuses a client that doesn't ask for TLS, and
+passes everything else through untouched. It holds no key: TLS ends in the
+database.
+
+- **Certificate.** Hearth sends `database.public.write` with the name and
+  port, which takes the client action
+  `database.network.public-port.write`, never part of changing its
+  networks. The Relay saves it, the one change that request makes; a port
+  another container or public database has is refused first. Its loop then
+  has the Relay's own Traefik ask Let's Encrypt for the name, as it does for
+  a web route, once the name resolves. A Relay behind Coolify's proxy, or
+  none, can't open one. When an open of a database that wasn't public
+  fails, Hearth closes it on the Relay, as the Relay may have saved it
+  before its answer was lost, and only then releases its name, even one an
+  earlier failed open left.
+- **Opening.** Once the certificate is in Traefik's `acme.json`, the Relay
+  writes it into a volume of the database's own (`kiln-db-<id>-tls`, at
+  `/kiln-tls`), owned by the user its server runs as, and deploys the
+  database again with TLS turned on: one restart. MySQL's and MariaDB's
+  `root` login is then limited to the database's own container, as Kiln uses
+  it. The gate starts last.
+- **Renewal.** A new certificate is written over the old one and reloaded in
+  place: `pg_reload_conf()`, `ALTER INSTANCE RELOAD TLS`, `FLUSH SSL`. Redis
+  and Valkey restart for a second, as reloading theirs needs a login the
+  Relay doesn't keep. MySQL's CA file holds the issuers up to a root from
+  Node's store: it refuses to reload a certificate whose chain doesn't end at
+  a root in that file, and only warns about it when it starts.
+- **The gate's networks.** It's made on a network of its own, with IPv6, that
+  publishes the port, then joins the database's private network, where it
+  reaches the database by name for each connection, so it carries on while
+  the database is deployed again. It logs each connection with the client's
+  address, which is the only place that address is seen: the database sees
+  the gate's. Its log is kept to a few megabytes. Clients over a Tailscale
+  subnet route arrive from the network's gateway. A gate not on both
+  networks, as one a stopped Relay made partway, is made again. Postgres
+  clients that send a cancel request without TLS, as libpq before 17 does,
+  can't cancel a query through it.
+- **Closing** removes the gate and its network before the Relay forgets the
+  database was public, so a close that fails leaves it public and kept, to
+  close again. The database keeps TLS until it's next deployed, and
+  MySQL's and MariaDB's `root` stays local. Hearth's name for it goes only
+  by closing it, never on its own from the Domains page. Deleting the
+  database closes it first, then removes its certificate's volume once its
+  container is gone; one deleted while the Relay was down is forgotten on
+  its next pass. Changing the port of an open one reads as opening until
+  its gate is made again there.
+
+The development stack builds the gate into the tools volume with its
+`database-gate` Compose service.
+
 ## Memory reporting
 
 Each snapshot includes the Relay's own memory, separate from the host totals.

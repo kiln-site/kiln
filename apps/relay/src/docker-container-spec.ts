@@ -102,6 +102,11 @@ export interface ContainerSpec {
   readonly volumesFrom?: ReadonlyArray<string>
   /** Docker removes the container once it exits. */
   readonly autoRemove?: boolean
+  /** How Docker keeps its output, such as `json-file` with `max-size`. */
+  readonly logConfig?: {
+    readonly type: string
+    readonly config?: Readonly<Record<string, string>>
+  }
 }
 
 /**
@@ -176,6 +181,12 @@ function containerCreateBody(spec: ContainerSpec): unknown {
           PathInContainer: path,
           PathOnHost: path,
         })),
+      }),
+      ...(spec.logConfig && {
+        LogConfig: {
+          Config: { ...spec.logConfig.config },
+          Type: spec.logConfig.type,
+        },
       }),
       ...(spec.memory && { Memory: ramInBytes(spec.memory) }),
       ...(spec.memoryReservation && {

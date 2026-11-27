@@ -717,6 +717,10 @@ export function controlRequestLocks(
       return database(databaseLocks)
     case "database.dump.export":
       return database(databaseReadLocks)
+    // Opening or closing one saves it and removes its gate; Traefik's
+    // routes follow in a turn of their own.
+    case "database.public.write":
+      return database(databaseLocks)
     // A connection changes the database and what joins it: a game server's
     // or App's running containers, or another database's.
     case "database.network.write": {

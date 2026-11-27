@@ -112,6 +112,7 @@ export const relayControlOperations = [
   "database.delete",
   "database.credentials.rotate",
   "database.network.write",
+  "database.public.write",
   "database.network.import",
   "database.dump.export",
   "database.dump.import",
@@ -245,6 +246,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.wipe",
   "database.credentials.rotate",
   "database.network.write",
+  "database.public.write",
   "database.network.import",
   "database.dump.export",
   "database.dump.import",
@@ -390,6 +392,7 @@ export function relayControlOperationChanges(
     case "database.delete":
     case "database.credentials.rotate":
     case "database.network.write":
+    case "database.public.write":
     case "database.network.import":
     case "database.dump.import":
     case "database.data.write":

@@ -15,6 +15,52 @@ import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
 
 describe("Relay state", () => {
+  stateTest(
+    "keeps a public database's certificate while its name stays, and forgets it with a new one",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        yield* store.setDatabasePublic("aaaaaaaaaaaa", {
+          hostname: "shop.example.com",
+          port: 5432,
+        })
+        yield* store.markDatabasePublic("aaaaaaaaaaaa", {
+          certificate: "first",
+          rootLocal: true,
+        })
+        // A new port keeps what the database was given.
+        yield* store.setDatabasePublic("aaaaaaaaaaaa", {
+          hostname: "shop.example.com",
+          port: 15432,
+        })
+        assert.deepStrictEqual(yield* store.listDatabasePublic(), [
+          {
+            certificate: "first",
+            databaseId: "aaaaaaaaaaaa",
+            hostname: "shop.example.com",
+            port: 15432,
+            rootLocal: true,
+          },
+        ])
+        // A new name needs its own certificate; root stays local.
+        yield* store.setDatabasePublic("aaaaaaaaaaaa", {
+          hostname: "orders.example.com",
+          port: 15432,
+        })
+        assert.deepStrictEqual(yield* store.listDatabasePublic(), [
+          {
+            certificate: null,
+            databaseId: "aaaaaaaaaaaa",
+            hostname: "orders.example.com",
+            port: 15432,
+            rootLocal: true,
+          },
+        ])
+        yield* store.setDatabasePublic("aaaaaaaaaaaa", null)
+        assert.deepStrictEqual(yield* store.listDatabasePublic(), [])
+      })
+  )
+
   stateTest("pairs a client exactly once and persists its grant", () =>
     Effect.gen(function* () {
       const store = yield* RelayStateStore

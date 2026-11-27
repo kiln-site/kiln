@@ -1198,9 +1198,12 @@ export class DockerEngine {
     readonly internal?: boolean
     readonly labels?: Readonly<Record<string, string>>
     readonly subnet?: string
+    /** Docker picks an IPv6 subnet for it too. */
+    readonly ipv6?: boolean
   }): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
     return this.#json({
       body: {
+        ...(options.ipv6 && { EnableIPv6: true }),
         Internal: options.internal ?? false,
         Labels: { ...options.labels },
         Name: options.name,
