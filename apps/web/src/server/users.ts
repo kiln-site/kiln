@@ -326,6 +326,26 @@ export const claimAccount = createServerFn({ method: "POST" })
     return redeemAccountClaim(data)
   })
 
+// An invitation link names one account, and setting it up from that link is
+// the invitation's own authority (see `redeemInvitedAccount`).
+export const claimInvitedAccount = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      invitation: z.union([
+        z.object({ token: z.string().min(32).max(256) }),
+        z.object({ id: z.uuid(), key: z.string().min(32).max(128) }),
+      ]),
+      password: z.string().min(12).max(128),
+      displayName: z.string().trim().min(1).max(16),
+    })
+  )
+  .handler(async ({ data }) => {
+    const address = await requestClientAddress()
+    assertRequestRateLimit(`account.invitation:${address}`, 10, 10 * 60_000)
+    const { redeemInvitedAccount } = await import("@/lib/account-claims")
+    return redeemInvitedAccount(data)
+  })
+
 async function publishUserChange(
   userId: string,
   relayIds: ReadonlyArray<string>

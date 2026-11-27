@@ -5,6 +5,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { isDeadlock } from "@/effect/database-deadlocks"
 import { AccountClaimEmail } from "@/emails/account-claim-email"
 import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { runAppEffect } from "@/effect/runtime"
@@ -19,6 +20,8 @@ import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-rev
 import { databaseTable } from "@/lib/database-config"
 import { parseDisplayName } from "@/lib/display-name"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
+import type { InvitationReference } from "@/lib/invitation-auth"
+import { invitationLinkPurpose } from "@/lib/invitation-link-key"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 interface ClaimUser extends RowDataPacket {
@@ -35,6 +38,9 @@ interface ClaimRow extends RowDataPacket {
   consumed_at: number | null
 }
 const CLAIM_LIFETIME_MS = 30 * 60 * 1000
+// The credential checks lock the gap where a password would go, so two
+// accounts set up at once can deadlock on it; the loser starts over.
+const retryDeadlock = Effect.retry({ times: 3, while: isDeadlock })
 
 export async function issueManualAccountClaim(input: {
   userId: string
@@ -225,7 +231,7 @@ async function issueClaim(input: {
           return user
         })
       )
-    })
+    }).pipe(retryDeadlock)
   )
   if (!subject) return null
   const url = new URL("/claim", kilnPublicUrl())
@@ -351,7 +357,7 @@ export async function redeemAccountClaim(input: {
             return { ...revision, userId: user.id, email: user.email }
           })
       )
-    })
+    }).pipe(retryDeadlock)
   )
   for (const relayId of result.relayIds) wakeAuthorizationDelivery(relayId)
   publishRealtimeChange({
@@ -362,14 +368,200 @@ export async function redeemAccountClaim(input: {
   return { email: result.email }
 }
 
+interface InvitedAccountRow extends RowDataPacket {
+  id: string
+  user_id: string
+  invited_by: string | null
+  expires_at: number
+  accepted_at: number | null
+  declined_at: number | null
+  revoked_at: number | null
+  cancelled_at: number | null
+}
+
+const INVITATION_UNAVAILABLE =
+  "This invitation is invalid, expired, or already used"
+
+// The invitation link is the authority to set up the account it names, as a
+// claim's link is. The emailed link's key proves the mailbox. A link the
+// inviter shared (their token, or the access table's share key) proves only
+// that the inviter vouched for whoever opens it, so it's recorded as their
+// manual verification. Either way, it works once: the account has a password
+// afterwards, and accepting ends the invitation.
+function invitationLookup(reference: InvitationReference) {
+  if ("token" in reference)
+    return {
+      column: "token_hash",
+      value: tokenHash(reference.token),
+      proof: "manual" as const,
+    }
+  const purpose = invitationLinkPurpose(reference.id, reference.key)
+  if (!purpose) return null
+  return {
+    column: "id",
+    value: reference.id,
+    proof: purpose === "email" ? ("email" as const) : ("manual" as const),
+  }
+}
+
+function invitationIsOpen(row: InvitedAccountRow, now: number) {
+  return (
+    !row.accepted_at &&
+    !row.declined_at &&
+    !row.revoked_at &&
+    !row.cancelled_at &&
+    Number(row.expires_at) > now
+  )
+}
+
+export async function redeemInvitedAccount(input: {
+  invitation: InvitationReference
+  password: string
+  displayName: string
+}) {
+  const name = parseDisplayName(input.displayName)
+  if (input.password.length < 12 || input.password.length > 128)
+    throw new Error("Password must contain 12–128 characters")
+  const lookup = invitationLookup(input.invitation)
+  if (!lookup) throw new Error(INVITATION_UNAVAILABLE)
+  const select = `SELECT id, user_id, invited_by, expires_at, accepted_at, declined_at, revoked_at, cancelled_at
+    FROM ${databaseTable("invitation")} WHERE ${lookup.column} = ? LIMIT 1`
+  // Reject a dead link or a set-up account before hashing the password.
+  await runAppEffect(
+    "account.invitation.preflight",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
+      const rows = yield* database.queryRows<InvitedAccountRow>(
+        "account.invitation.preflight",
+        select,
+        [lookup.value]
+      )
+      if (!rows[0] || !invitationIsOpen(rows[0], now))
+        return yield* Effect.fail(new Error(INVITATION_UNAVAILABLE))
+    })
+  )
+  const [context, { wakeAuthorizationDelivery }] = await Promise.all([
+    auth.$context,
+    import("@/lib/authorization-delivery"),
+  ])
+  const password = await context.password.hash(input.password)
+  const result = await runAppEffect(
+    "account.invitation.redeem",
+    Effect.gen(function* () {
+      const database = yield* Database
+      return yield* database.transaction(
+        "account.invitation.redeem",
+        (transaction) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const candidates = yield* transaction.queryRows<InvitedAccountRow>(
+              select,
+              [lookup.value]
+            )
+            if (!candidates[0])
+              return yield* Effect.fail(new Error(INVITATION_UNAVAILABLE))
+            const users = yield* transaction.queryRows<
+              ClaimUser & AccountPolicy
+            >(
+              `SELECT id, email, emailVerifiedAt, manuallyVerifiedAt, legacyVerificationRecordedAt
+                 FROM ${databaseTable("user")} WHERE id = ? FOR UPDATE`,
+              [candidates[0].user_id]
+            )
+            const invitations = yield* transaction.queryRows<InvitedAccountRow>(
+              `${select} FOR UPDATE`,
+              [lookup.value]
+            )
+            const user = users[0]
+            const invitation = invitations[0]
+            if (
+              !user ||
+              !invitation ||
+              invitation.user_id !== user.id ||
+              !invitationIsOpen(invitation, now)
+            )
+              return yield* Effect.fail(new Error(INVITATION_UNAVAILABLE))
+            if (yield* hasCredentials(transaction, user.id))
+              return yield* Effect.fail(
+                new Error(
+                  "This account is already set up. Sign in to accept the invitation."
+                )
+              )
+            const nowDate = new Date(now)
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("account")} (id, accountId, providerId, userId, password, createdAt, updatedAt)
+         VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
+              [randomUUID(), user.id, user.id, password, nowDate, nowDate]
+            )
+            // An inviter's vouching adds nothing to evidence the account
+            // already has.
+            const vouched =
+              lookup.proof === "manual" && !isAccountVerified(user)
+            yield* transaction.execute(
+              lookup.proof === "email"
+                ? `UPDATE ${databaseTable("user")} SET name = ?, emailVerified = TRUE, emailVerifiedAt = ?, updatedAt = ? WHERE id = ?`
+                : vouched
+                  ? `UPDATE ${databaseTable("user")} SET name = ?, manuallyVerifiedAt = ?, manuallyVerifiedBy = ?, updatedAt = ? WHERE id = ?`
+                  : `UPDATE ${databaseTable("user")} SET name = ?, updatedAt = ? WHERE id = ?`,
+              lookup.proof === "email"
+                ? [name, nowDate, nowDate, user.id]
+                : vouched
+                  ? [name, nowDate, invitation.invited_by, nowDate, user.id]
+                  : [name, nowDate, user.id]
+            )
+            // Any setup link already sent for this account is spent too.
+            yield* transaction.execute(
+              `UPDATE ${databaseTable("account_claim")} SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL`,
+              [now, user.id]
+            )
+            yield* transaction.execute(
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.invitation.redeemed', ?, ?)`,
+              [
+                user.id,
+                JSON.stringify({
+                  actorId: user.id,
+                  invitationId: invitation.id,
+                  inviterId: invitation.invited_by,
+                  method: lookup.proof,
+                }),
+                now,
+              ]
+            )
+            const revision = yield* advanceSubjectAcrossEnabledRelaysEffect(
+              transaction,
+              user.id,
+              [{ kind: "subject_relay" }]
+            )
+            return { ...revision, userId: user.id, email: user.email }
+          })
+      )
+    }).pipe(retryDeadlock)
+  )
+  for (const relayId of result.relayIds) wakeAuthorizationDelivery(relayId)
+  publishRealtimeChange({
+    type: "access.changed",
+    reauthenticate: true,
+    userIds: [result.userId],
+  })
+  return { email: result.email }
+}
+
+// A locking read, so it sees a credential another transaction committed
+// after this one's snapshot was taken, rather than setting up the account
+// twice.
 function hasCredentials(transaction: DatabaseTransaction, userId: string) {
-  return transaction
-    .queryRows<RowDataPacket>(
-      `SELECT id FROM ${databaseTable("account")} WHERE userId = ?
-       UNION ALL SELECT id FROM ${databaseTable("passkey")} WHERE userId = ? LIMIT 1`,
-      [userId, userId]
-    )
-    .pipe(Effect.map((rows) => rows.length > 0))
+  return Effect.all([
+    transaction.queryRows<RowDataPacket>(
+      `SELECT id FROM ${databaseTable("account")} WHERE userId = ? LIMIT 1 LOCK IN SHARE MODE`,
+      [userId]
+    ),
+    transaction.queryRows<RowDataPacket>(
+      `SELECT id FROM ${databaseTable("passkey")} WHERE userId = ? LIMIT 1 LOCK IN SHARE MODE`,
+      [userId]
+    ),
+  ]).pipe(
+    Effect.map(([accounts, passkeys]) => accounts.length + passkeys.length > 0)
+  )
 }
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex")

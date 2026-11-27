@@ -28,6 +28,7 @@ import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
 import { invitationDestination } from "@/lib/invitation-auth"
+import { invitationLinkPurpose } from "@/lib/invitation-link-key"
 import { grantHasPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -462,21 +463,33 @@ export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
     }
   })
 
-export const getInvitationPreview = createServerFn({ method: "GET" })
+// POST, so the token or key that sets up the invited account stays out of
+// request URLs and caches.
+export const getInvitationPreview = createServerFn({ method: "POST" })
   .validator(
     z
-      .object({ token: z.string().min(32).optional(), id: z.uuid().optional() })
+      .object({
+        token: z.string().min(32).optional(),
+        id: z.uuid().optional(),
+        key: z.string().max(128).optional(),
+      })
       .refine(
         (value) => Boolean(value.token || value.id),
         "An invitation is required"
       )
   )
   .handler(async ({ data }) => {
+    const { setResponseHeader } = await import("@tanstack/react-start/server")
+    setResponseHeader("Cache-Control", "no-store")
     const invitation = await readInvitation(data.token, data.id)
     if (!invitation || !isInvitationPending(invitation)) return null
-    // A token proves receipt of the email. A bare ID does not, so only the
-    // recipient or an administrator may resolve it to an address.
-    if (!data.token) {
+    // A token or a link key proves the link came from the invitation's
+    // email or its inviter. A bare ID does not, so only the recipient or an
+    // administrator may resolve it to an address.
+    if (
+      !data.token &&
+      !(data.key && invitationLinkPurpose(invitation.id, data.key))
+    ) {
       const viewer = await getCurrentUser()
       if (
         !viewer ||

@@ -21,6 +21,8 @@ const publicServerFunctions: Record<string, string> = {
   "users.ts:prepareAccountSignup": "Signed-out sign-up check, rate limited",
   "users.ts:getAccountClaimPreview": "Authorized by the emailed claim token",
   "users.ts:claimAccount": "Authorized by the emailed claim token",
+  "users.ts:claimInvitedAccount":
+    "Authorized by the invitation link's token or emailed key, rate limited",
   "browser-accounts.ts:getBrowserAccounts":
     "Lists only accounts this browser holds signed session cookies for",
   "browser-accounts.ts:switchBrowserAccountSession":
@@ -57,6 +59,8 @@ const confirmedCliDeletions = ["deleteCliServerEffect"]
 // Reads that stay POST, for an input too large or too secret for a URL,
 // where it would land in proxy logs and request-line limits.
 const readsOverPost: Record<string, string> = {
+  "access.ts:getInvitationPreview":
+    "Its token or key can set up the invited account, kept out of URLs",
   "bricks.ts:loadBrickRecipe": "Its source URL may be signed, kept out of URLs",
   "databases.ts:getManagedDatabaseRows":
     "Its filters carry row values, kept out of URLs",
