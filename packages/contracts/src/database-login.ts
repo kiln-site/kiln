@@ -49,6 +49,29 @@ export function databaseConnectionUrl(database: {
   return `${scheme}://${encodeURIComponent(database.username)}:${database.password}@${database.host}:${database.port}${path}`
 }
 
+/**
+ * A public database's connection URL, with TLS required and its certificate
+ * checked against the system's roots, which some clients skip unless told:
+ * Postgres's `verify-full`, MySQL's `VERIFY_IDENTITY`, `rediss://`.
+ */
+export function databasePublicConnectionUrl(database: {
+  databaseName: string
+  engine: DatabaseEngine
+  host: string
+  password: string
+  port: number
+  username: string
+}): string {
+  const url = databaseConnectionUrl(database)
+  if (database.engine === "postgres") {
+    return `${url}?sslmode=verify-full&sslrootcert=system`
+  }
+  if (databaseEngineHasNamedDatabase(database.engine)) {
+    return `${url}?ssl-mode=VERIFY_IDENTITY`
+  }
+  return url.replace(/^redis:/u, "rediss:")
+}
+
 // Names the engine keeps for itself, or that Kiln's own work depends on: a
 // wipe drops and recreates the database from `postgres`.
 const reservedDatabaseNames: Record<DatabaseEngine, ReadonlySet<string>> = {

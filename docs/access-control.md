@@ -193,7 +193,9 @@ reveals those kinds there.
   server's are read with its network (`instance.network.read`), and where
   an App is served is read with the App (`app.read`), since its pages show
   it. A database has no web routes, and its connections keep
-  `database.network.*`.
+  `database.network.*`. Opening a database to the internet, or closing it,
+  takes `database.network.public-port.write`, which includes changing its
+  connections.
 
 Only what one kind alone has keeps that kind's name. `database.all` covers a
 database's power, since power can be granted on one database; selected on a
