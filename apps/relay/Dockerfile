@@ -63,6 +63,20 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
   && GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/kiln-relay-healthcheck .
 
+# Holds a public database's port, refusing clients that don't ask for TLS.
+# The Relay starts it from its own image, one per public database.
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS database-gate
+
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0
+WORKDIR /src
+COPY apps/relay/database-gate ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+  go test ./... \
+  && GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/kiln-database-gate .
+
 # The standalone Compose and buildx binaries the Relay runs for app
 # deployments (Compose v5.5.1 and buildx v0.37.2, as docker:29.8.2-cli
 # bundled them), pinned by checksum for each architecture.
@@ -105,6 +119,7 @@ COPY --from=compose /docker-buildx /usr/local/libexec/docker/cli-plugins/docker-
 COPY --from=restic /usr/bin/restic /usr/bin/restic
 COPY --from=syft /syft /usr/local/bin/syft
 COPY --from=healthcheck /out/kiln-relay-healthcheck /usr/local/bin/kiln-relay-healthcheck
+COPY --from=database-gate /out/kiln-database-gate /usr/local/bin/kiln-database-gate
 COPY --from=runtime-deps /runtime/node_modules ./node_modules
 COPY apps/relay/package.runtime.json ./package.json
 RUN ["/nodejs/bin/node", "--input-type=module", "-e", "await import('reflect-metadata'); const manifest = await import('./package.json', { with: { type: 'json' } }); await Promise.all(Object.keys(manifest.default.dependencies).map((name) => import(name)))"]
