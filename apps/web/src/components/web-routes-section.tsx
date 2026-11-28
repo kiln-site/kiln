@@ -425,7 +425,8 @@ export function WebRoutesSection({
     else setEditing({ mode: "add" })
   }, [names])
 
-  const busy = !canWrite || !saved || save.isPending
+  const busy =
+    !canWrite || !saved || save.isPending || (names !== undefined && !held)
 
   return (
     <section className="overflow-hidden border border-border/80 bg-card/55">

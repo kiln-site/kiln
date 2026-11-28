@@ -97,7 +97,7 @@ async function publicNow(
   relay: Awaited<ReturnType<typeof requiredRelay>>,
   databaseId: string,
   userId: string
-): Promise<{ port: number } | null> {
+): Promise<{ hostnames: ReadonlyArray<string>; port: number } | null> {
   const [item] = z
     .array(
       z
@@ -241,12 +241,14 @@ export const saveDatabaseNamesEffect = Effect.fn("databases.names.save")(
           })
         )
       }).pipe(
-        // Refused, it stays as it was: one that wasn't open is closed on its
-        // Relay again, in case its Relay saved it before failing, and the
-        // names this claimed go.
+        // Refused, it stays as it was: its Relay is given back what it had,
+        // in case it saved the change before its answer was lost, and only
+        // then do the names this claimed go. Unsure, they stay claimed.
         Effect.tapError(() =>
           Effect.gen(function* () {
-            if (!open) yield* write(null)
+            yield* write(
+              open ? { hostnames: [...open.hostnames], port: open.port } : null
+            )
             yield* markAddressesRemovingEffect(
               (yield* listResourceAddressesEffect(resource))
                 .filter(

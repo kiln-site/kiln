@@ -220,7 +220,7 @@ function dnsPresentation(row: ResourceWebHostname) {
 export function useHeldWebHostnames(
   resource: WebHostnameResourceRef
 ): ReadonlyArray<ResourceWebHostname> | undefined {
-  const { data, isPending } = useQuery({
+  const { data, isError, isPending } = useQuery({
     ...resourceWebHostnamesQueryOptions(
       resource.relayId,
       resource.resourceType,
@@ -229,7 +229,11 @@ export function useHeldWebHostnames(
     // A database's names are all its own; no route serves them.
     select: resource.resourceType === "database" ? selectNames : selectHeld,
   })
-  return isPending ? undefined : (data ?? noHostnames)
+  if (isPending) return undefined
+  // A database's Domains table saves its whole list, so names that didn't
+  // load aren't none.
+  if (isError && !data && resource.resourceType === "database") return undefined
+  return data ?? noHostnames
 }
 
 function selectHeld({ hostnames }: ResourceWebHostnames) {

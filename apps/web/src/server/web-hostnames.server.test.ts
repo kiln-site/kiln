@@ -64,8 +64,10 @@ vi.mock("@/lib/access-control", async (importOriginal) => ({
 const relay = vi.hoisted(() => ({
   routes: [] as Array<{ id: string; kind: string; routes: Array<object> }>,
   // A database's public access as the Relay has it, what it was sent, and
-  // whether it refuses to open one.
+  // whether it refuses to open one, or saves the next change and loses its
+  // answer.
   databasePublic: null as object | null,
+  losesAnswer: false,
   publicWrites: [] as Array<object | null>,
   refusesOpen: false,
 }))
@@ -84,6 +86,10 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       relay.publicWrites.push(value)
       if (value && relay.refusesOpen) {
         throw new Error("Public port 25432/tcp is already in use")
+      }
+      if (relay.losesAnswer) {
+        relay.losesAnswer = false
+        throw new Error("The Relay didn't answer in time")
       }
       return { public: null }
     }
@@ -914,6 +920,58 @@ describeMysql("web route hostnames", () => {
           assert.isNull(yield* loadWebHostnameByNameEffect("db.owner.example"))
           assert.deepStrictEqual(cloudflare.dns(), {})
           relay.refusesOpen = false
+        })
+    )
+    it.effect(
+      "gives an open database's Relay back its names before letting go of one it may have saved without answering",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const database = { databaseId: "c".repeat(12), relayId }
+          const user = { id: owner.id, role: "user" } as AuthenticatedUser
+          relay.databasePublic = null
+          relay.publicWrites.length = 0
+          const save = (hostnames: Array<string>) =>
+            Effect.promise(() =>
+              runOperationPromise(
+                saveDatabaseNames,
+                { ...database, hostnames, port: 25_432 },
+                { user }
+              ).then(
+                () => "done",
+                (error: Error) => error.message
+              )
+            )
+          assert.strictEqual(yield* save(["db.owner.example"]), "done")
+          relay.databasePublic = {
+            certificateExpiresAt: null,
+            error: null,
+            hostnames: ["db.owner.example"],
+            port: 25_432,
+            state: "open",
+          }
+
+          relay.losesAnswer = true
+          assert.match(
+            yield* save(["db.owner.example", "orders.owner.example"]),
+            /didn't answer/u
+          )
+          // It may have saved both, so it's told it has only the one it had
+          // before the new name goes.
+          assert.deepStrictEqual(relay.publicWrites.slice(-2), [
+            {
+              hostnames: ["db.owner.example", "orders.owner.example"],
+              port: 25_432,
+            },
+            { hostnames: ["db.owner.example"], port: 25_432 },
+          ])
+          assert.isNull(
+            yield* loadWebHostnameByNameEffect("orders.owner.example")
+          )
+          assert.deepStrictEqual(cloudflare.dns(), {
+            "db.owner.example": "relay-one.relay.test",
+          })
         })
     )
   })
