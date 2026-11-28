@@ -1,3 +1,14 @@
+import "reflect-metadata"
+
+import { webcrypto } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import { hostname } from "node:os"
+import { dirname } from "node:path"
+
+import {
+  SubjectAlternativeNameExtension,
+  X509CertificateGenerator,
+} from "@peculiar/x509"
 import { relayCreateDatabaseSchema } from "@workspace/contracts"
 import { describe, expect, it, vi } from "vite-plus/test"
 
@@ -12,10 +23,61 @@ import {
   TEST_NAMESPACE,
   type RelayHarness,
 } from "./test/relay.js"
+import { webCertificateStorePath } from "./web-certificates.js"
 
 const id = "d".repeat(12)
 const gate = `${TEST_NAMESPACE}-kiln-db-${id}-public`
 const opened = { hostnames: ["db.example.com"], port: 25_432 }
+
+// Traefik's store, holding a certificate for each of these names.
+async function traefikHolds(
+  harness: RelayHarness,
+  names: ReadonlyArray<string>
+): Promise<Map<string, string>> {
+  const keys = (await webcrypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"]
+  )) as webcrypto.CryptoKeyPair
+  const key = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(
+    await webcrypto.subtle.exportKey("pkcs8", keys.privateKey)
+  ).toString("base64")}\n-----END PRIVATE KEY-----\n`
+  const chains = new Map<string, string>()
+  for (const name of names) {
+    const certificate = await X509CertificateGenerator.createSelfSigned(
+      {
+        extensions: [
+          new SubjectAlternativeNameExtension([{ type: "dns", value: name }]),
+        ],
+        keys,
+        name: `CN=${name}`,
+        notAfter: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        notBefore: new Date(Date.now() - 60_000),
+        serialNumber: "01",
+        signingAlgorithm: { hash: "SHA-256", name: "ECDSA" },
+      },
+      webcrypto
+    )
+    chains.set(name, certificate.toString("pem"))
+  }
+  const path = webCertificateStorePath(harness.config)
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(
+    path,
+    JSON.stringify({
+      kiln: {
+        Account: null,
+        Certificates: [...chains].map(([main, chain]) => ({
+          certificate: Buffer.from(chain).toString("base64"),
+          domain: { main },
+          key: Buffer.from(key).toString("base64"),
+          Store: "default",
+        })),
+      },
+    })
+  )
+  return chains
+}
 
 async function publicDatabases(harness: RelayHarness) {
   const databases = new PublicDatabases({
@@ -47,6 +109,60 @@ async function withDatabase() {
 }
 
 describe("a public database", () => {
+  it("opens once a name has its certificate, and its gate gets each name's as it comes, the database never", async () => {
+    const harness = await withDatabase()
+    fakeDocker.addContainer({
+      image: "kiln/relay:test",
+      name: harness.config.selfContainer ?? hostname(),
+      running: true,
+    })
+    const databases = await publicDatabases(harness)
+    const gateFile = () =>
+      fakeDocker.volumes
+        .get(`${TEST_NAMESPACE}-kiln-db-${id}-certificates`)
+        ?.files.get("certificates.pem")
+    await databases.write(id, {
+      hostnames: ["data.example.com", "db.example.com"],
+      port: 25_432,
+    })
+
+    // No certificate yet: no gate.
+    await databases.reconcile(id)
+    expect(fakeDocker.container(gate)).toBeUndefined()
+
+    // One name's: open there, while the other's comes.
+    const first = await traefikHolds(harness, ["db.example.com"])
+    await databases.reconcile(id)
+    expect(fakeDocker.container(gate)?.state.running).toBe(true)
+    expect(gateFile()).toContain(first.get("db.example.com")?.trim())
+    expect(gateFile()).toContain("PRIVATE KEY")
+    expect(databases.status({ id })).toMatchObject({ state: "open" })
+
+    // Both: each its own, the first name's first, for a client that names
+    // none.
+    const both = await traefikHolds(harness, [
+      "data.example.com",
+      "db.example.com",
+    ])
+    await databases.reconcile(id)
+    const file = String(gateFile())
+    expect(file.indexOf(String(both.get("data.example.com")?.trim()))).toBe(0)
+    expect(file).toContain(both.get("db.example.com")?.trim())
+    expect(file).not.toContain(first.get("db.example.com")?.trim())
+
+    // Postgres reaches its gate in the clear on its own network: it runs
+    // as it did, with no certificate of its own.
+    const database = await harness.databases.target(id)
+    const container = fakeDocker.container(String(database.containerId))
+    expect(container?.labels["kiln.database.tls"]).toBeUndefined()
+    expect(container?.cmd.join(" ")).not.toContain("ssl")
+
+    // Closed, its gate and its keys go.
+    await databases.write(id, null)
+    expect(fakeDocker.container(gate)).toBeUndefined()
+    expect(gateFile()).toBeUndefined()
+  })
+
   it("stays public, and kept, when its gate can't be removed as it closes", async () => {
     const harness = await withDatabase()
     const databases = await publicDatabases(harness)

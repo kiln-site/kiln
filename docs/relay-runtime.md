@@ -255,41 +255,47 @@ A database opened to the internet keeps its private network and the clients
 on it. Its public port is held by a gate (`kiln-db-<id>-public`), a container
 the Relay starts from its own image running `kiln-database-gate`, a small
 static Go binary built from `apps/relay/database-gate`. The gate reads the
-start of each connection, refuses a client that doesn't ask for TLS, and
-passes everything else through untouched. It holds no key: TLS ends in the
-database.
+start of each connection and refuses a client that doesn't ask for TLS. TLS
+ends in the gate, with the certificate for the name the client asked for
+(its SNI), each of the database's names having its own; a client that names
+none gets the first name's. The gate then passes the connection to the
+database on its private network: in the clear to Postgres, Redis and
+Valkey, as the database's other clients there reach it, and over TLS of its
+own to MySQL and MariaDB, whose logins won't take a password on a
+connection they don't see as secure. Connections over the database's
+private network or a tunnel don't go through the gate.
 
-- **Certificate.** Hearth sends `database.public.write` with the names in
+- **Certificates.** Hearth sends `database.public.write` with the names in
   the database's Domains table and the port, which takes the client action
   `database.network.public-port.write`, never part of changing its
   networks. The Relay saves them, the one change that request makes; a port
   another container or public database has is refused first. Its loop then
-  has the Relay's own Traefik ask Let's Encrypt for one certificate for all
-  the names, the first as its main name and the others as alternative
-  names, from one router per database: the database serves only one
-  certificate. A name that doesn't resolve yet is left out until it does, as
-  a route's is, so one never set up can't stop the others' certificate
-  renewing. A Relay behind Coolify's proxy, or
-  none, can't open one. When an open of a database that wasn't public
-  fails, Hearth closes it on the Relay, as the Relay may have saved it
-  before its answer was lost, and lets go of the names it claimed: Hearth
-  gives a database names only while it's open.
-- **Opening.** Once the certificate is in Traefik's `acme.json`, the Relay
-  writes it into a volume of the database's own (`kiln-db-<id>-tls`, at
-  `/kiln-tls`), owned by the user its server runs as, and deploys the
-  database again with TLS turned on: one restart. MySQL's and MariaDB's
-  `root` login is then limited to the database's own container, as Kiln uses
-  it. The gate starts last.
-- **Renewal and new names.** A new certificate, renewed or for names added
-  or removed since, is written over the old one and reloaded in place: one
-  for exactly its names, else the one for the most of them. A database is
-  never given a certificate naming anything that isn't its own, as its key
-  goes into the database's container. Until one for new names comes,
-  the database keeps the one it has, and stays open at the names on it: `pg_reload_conf()`, `ALTER INSTANCE RELOAD TLS`, `FLUSH SSL`. Redis
-  and Valkey restart for a second, as reloading theirs needs a login the
-  Relay doesn't keep. MySQL's CA file holds the issuers up to a root from
-  Node's store: it refuses to reload a certificate whose chain doesn't end at
-  a root in that file, and only warns about it when it starts.
+  has the Relay's own Traefik ask Let's Encrypt for a certificate for each
+  name, from one router per database listing each as a domain of its own,
+  as a route's names are. A name that doesn't resolve yet is left out until
+  it does. A name a certificate Traefik already holds covers, a wildcard's
+  say, is served by that one. A Relay behind Coolify's proxy, or none, can't
+  open one. When an open of a database that wasn't public fails, Hearth
+  closes it on the Relay, as the Relay may have saved it before its answer
+  was lost, and lets go of the names it claimed: Hearth gives a database
+  names only while it's open.
+- **Opening.** Once one of its names has a certificate in Traefik's
+  `acme.json`, the Relay starts the gate. MySQL and MariaDB are first
+  deployed again with TLS turned on, from a certificate the Relay makes for
+  the database and writes into a volume of its own (`kiln-db-<id>-tls`, at
+  `/kiln-tls`): one restart. The gate checks no name on it, as it reaches
+  the database on its private network. Their `root` login is then limited
+  to the database's own container, as Kiln uses it. Postgres, Redis and
+  Valkey run as they were.
+- **Renewal and new names.** The Relay writes each name's certificate,
+  chain then key, into one file in a volume of the gate's own
+  (`kiln-db-<id>-certificates`), readable only by the user the gate runs
+  as; the gate reads it again when it changes, keeping the last good one
+  while it's being written. The keys stay with the gate: the database never
+  has them, so whoever can read the database's files can't take them, and a
+  certificate that names more, or a wildcard's, serves a name as it would a
+  route. A renewed certificate, or one for a name added since, is in use at
+  the gate's next connection, with no restart.
 - **The gate's networks.** It's made on a network of its own, with IPv6, that
   publishes the port, then joins the database's private network, where it
   reaches the database by name for each connection, so it carries on while
@@ -299,15 +305,19 @@ database.
   subnet route arrive from the network's gateway. A gate not on both
   networks, as one a stopped Relay made partway, is made again. Postgres
   clients that send a cancel request without TLS, as libpq before 17 does,
-  can't cancel a query through it.
-- **Closing** removes the gate and its network before the Relay forgets the
-  database was public, so a close that fails leaves it public and kept, to
-  close again. The database keeps TLS until it's next deployed, and
+  can't cancel a query through it, and a client that requires channel
+  binding (`channel_binding=require`) can't connect, as its TLS ends at the
+  gate. A MySQL client that doesn't send the name it connects to gets the
+  first name's certificate.
+- **Closing** removes the gate, its certificates and its network before the
+  Relay forgets the database was public, so a close that fails leaves it
+  public and kept, to close again. MySQL and MariaDB keep TLS until they're
+  next deployed, and
   MySQL's and MariaDB's `root` stays local. Hearth closes it when its last
   domain is deleted, from its Domains table or the Domains page, and lets
   its name go once the Relay has; deleting one of several sends the Relay
-  the rest first. Deleting the database closes it first, then removes its certificate's volume once its
-  container is gone; one deleted while the Relay was down is forgotten on
+  the rest first. Deleting the database closes it first, then removes its
+  TLS volume once its container is gone; one deleted while the Relay was down is forgotten on
   its next pass. Changing the port of an open one reads as opening until
   its gate is made again there.
 

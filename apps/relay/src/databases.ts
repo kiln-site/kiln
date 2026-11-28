@@ -283,9 +283,9 @@ export class DatabaseDriver {
     return container?.Id ?? null
   }
 
-  // What a public database's container needs for TLS: the volume its
-  // certificate is kept in, and filling it before the container starts.
-  // Null while it's private.
+  // What a public MySQL or MariaDB database's container needs for TLS: the
+  // volume its certificate is kept in, and filling it before the container
+  // starts. Null while it's private, and for other engines.
   #publicTls: (databaseId: string) => Promise<DatabaseTls | null> = async () =>
     null
 
@@ -722,7 +722,7 @@ export class DatabaseDriver {
   }
 
   /**
-   * Deploys the database again with what its public address needs, or
+   * Deploys a MySQL or MariaDB database again with TLS for its gate, or
    * without it once it's private: one restart. The caller holds its lane.
    */
   async redeployForPublic(databaseId: string): Promise<void> {
@@ -738,7 +738,6 @@ export class DatabaseDriver {
     )
   }
 
-  /** Whether the database's container runs with its public TLS. */
   /** Whether the database's container is there, for work kept beside it. */
   async exists(databaseId: string): Promise<boolean> {
     return (await this.#discover([databaseId])).length > 0
@@ -755,38 +754,9 @@ export class DatabaseDriver {
     )
   }
 
+  /** Whether the database's container runs with TLS for its gate. */
   async hasPublicTls(databaseId: string): Promise<boolean> {
     return (await this.#labels(databaseId))[TLS_LABEL] === "public"
-  }
-
-  /**
-   * Has a running database take the certificate just written over its old
-   * one. Postgres, MySQL and MariaDB reload it in place; Redis and Valkey
-   * can't without a login the Relay doesn't keep, so they restart, which
-   * takes a second.
-   */
-  async reloadPublicTls(databaseId: string): Promise<void> {
-    const database = await this.#required(databaseId)
-    if (database.observedState !== "running") return
-    const container = requiredContainerId(database)
-    const command = tlsReloadCommand(database.engine)
-    if (command === null) {
-      await Effect.runPromise(
-        this.#engine.restartContainer(container, {
-          seconds: 30,
-          timeout: 60_000,
-        })
-      )
-      await waitUntilReady(this.#engine, container)
-      return
-    }
-    await Effect.runPromise(
-      this.#engine.execWithInput(container, ["sh", "-ec", command], {
-        maxOutputBytes: MAX_CLIENT_OUTPUT_BYTES,
-        overflow: "The database client printed more than expected",
-        timeout: 60_000,
-      })
-    )
   }
 
   /**
@@ -833,7 +803,8 @@ export class DatabaseDriver {
     const spec = recordedSpec(labels, engine)
     const name = container.Name.replace(/^\//u, "")
     const running = container.State.Running
-    // A public database runs with TLS, which only its gate requires.
+    // A public MySQL or MariaDB database runs with TLS, which only its
+    // gate uses.
     const tls = await this.#publicTls(id)
     // The name says whether it was running, for recovery after a restart.
     const aside = `${name}${REPLACED_MARKER}${running ? RUNNING_MARKER : STOPPED_MARKER}${randomBytes(4).toString("hex")}`
@@ -1757,9 +1728,12 @@ export function databaseNetworkName(
   return databaseResourceName(config, physicalKey(id), "network")
 }
 
-// What a public database's container is given for TLS.
+// What a public MySQL or MariaDB database's container is given for TLS:
+// its gate's login passes a password only on a connection MySQL sees as
+// secure. The certificate is the Relay's own, made for the database; the
+// gate reaches it on its private network and checks no name.
 export interface DatabaseTls {
-  /** The volume its certificate, chain and key are kept in. */
+  /** The volume its certificate and key are kept in. */
   readonly volume: string
   /** Writes them into the container, made but not yet started. */
   readonly fill: (container: string) => Promise<void>
@@ -1770,77 +1744,22 @@ export const TLS_FOLDER = "/kiln-tls"
 // A container made to run with it.
 const TLS_LABEL = "kiln.database.tls"
 
-/**
- * The port a database takes TLS on: its own, but for Redis and Valkey, which
- * take it on another, so their own stays as their clients know it.
- */
-export function databaseTlsPort(engine: DatabaseEngine, port: number): number {
-  return engine === "redis" || engine === "valkey" ? 6380 : port
-}
-
 // Its command with TLS turned on, from the files in TLS_FOLDER. Clients
-// choose TLS or not on its own port; only its gate requires it.
+// choose TLS or not; only its gate uses it.
 function withTls(
   engine: DatabaseEngine,
   command: ReadonlyArray<string> | undefined
 ): Array<string> {
-  const certificate = `${TLS_FOLDER}/server.crt`
-  const key = `${TLS_FOLDER}/server.key`
-  const chain = `${TLS_FOLDER}/ca.crt`
-  switch (engine) {
-    case "postgres":
-      return [
-        ...(command?.length ? command : ["postgres"]),
-        "-c",
-        "ssl=on",
-        "-c",
-        `ssl_cert_file=${certificate}`,
-        "-c",
-        `ssl_key_file=${key}`,
-      ]
-    // The images' entrypoints run the server with arguments that start
-    // with a dash.
-    case "mysql":
-    case "mariadb":
-      return [
-        ...(command ?? []),
-        `--ssl-cert=${certificate}`,
-        `--ssl-key=${key}`,
-        `--ssl-ca=${chain}`,
-      ]
-    case "redis":
-    case "valkey":
-      return [
-        ...(command ?? []),
-        "--tls-port",
-        String(databaseTlsPort(engine, 0)),
-        "--tls-cert-file",
-        certificate,
-        "--tls-key-file",
-        key,
-        "--tls-ca-cert-file",
-        chain,
-        "--tls-auth-clients",
-        "no",
-      ]
+  // The images' entrypoints run the server with arguments that start with
+  // a dash.
+  if (engine === "mysql" || engine === "mariadb") {
+    return [
+      ...(command ?? []),
+      `--ssl-cert=${TLS_FOLDER}/server.crt`,
+      `--ssl-key=${TLS_FOLDER}/server.key`,
+    ]
   }
-}
-
-// How a running database takes a new certificate, through its own client
-// on its local socket; null when it has to restart. MySQL checks the chain
-// in ssl_ca against the certificate, which is why it holds the issuer's.
-function tlsReloadCommand(engine: DatabaseEngine): string | null {
-  switch (engine) {
-    case "postgres":
-      return 'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT pg_reload_conf()"'
-    case "mysql":
-      return 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root -e "ALTER INSTANCE RELOAD TLS"'
-    case "mariadb":
-      return 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb --user=root -e "FLUSH SSL"'
-    case "redis":
-    case "valkey":
-      return null
-  }
+  return [...(command ?? [])]
 }
 
 // The images let root in from anywhere; Kiln only uses it on the local

@@ -82,8 +82,8 @@ export function DomainNameDialog({
             </DialogTitle>
             <DialogDescription>
               {opens
-                ? "Its first domain opens it to the internet. Kiln gets a certificate for it and restarts the database once. Clients must use TLS, and anyone with its login can connect."
-                : "Under one of your vanity domains, a Cloudflare zone, or a domain managed elsewhere. Kiln gets a new certificate for all its domains."}
+                ? "Its first domain opens it to the internet once Kiln has its certificate. MySQL and MariaDB restart once. Clients must use TLS, and anyone with its login can connect."
+                : "Under one of your vanity domains, a Cloudflare zone, or a domain managed elsewhere. Kiln gets a certificate for it."}
             </DialogDescription>
           </DialogHeader>
           <label className="grid gap-1.5 text-sm">

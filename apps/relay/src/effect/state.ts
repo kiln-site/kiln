@@ -267,12 +267,10 @@ export interface RelayVolumeReferenceImport {
 export type RelayDiskLimitKind = "app" | "database"
 
 /**
- * A database opened to the internet: its names and port, and the
- * certificate it was last given, by its chain's SHA-256, or null before it
- * has one. Whether its root login is local only yet.
+ * A database opened to the internet: its names and port, and whether its
+ * root login is local only yet.
  */
 export interface RelayStoredDatabasePublic {
-  readonly certificate: string | null
   readonly databaseId: string
   readonly hostnames: ReadonlyArray<string>
   readonly port: number
@@ -965,10 +963,9 @@ export class RelayStateStore extends Context.Service<
       databaseId: string,
       value: RelayDatabasePublic | null
     ) => Effect.Effect<void, RelayStateError>
-    /** Records what an open database was given. */
-    readonly markDatabasePublic: (
-      databaseId: string,
-      given: { readonly certificate?: string; readonly rootLocal?: boolean }
+    /** Records that an open database's root login is local only. */
+    readonly markDatabaseRootLocal: (
+      databaseId: string
     ) => Effect.Effect<void, RelayStateError>
     /** Game servers' limits saved until their next restart, by ID. */
     readonly listPendingLimits: () => Effect.Effect<
@@ -2162,6 +2159,16 @@ const migrations = SqliteMigrator.fromRecord({
       ADD COLUMN hostnames TEXT NOT NULL DEFAULT '[]'`
     yield* sql`UPDATE relay_database_public SET hostnames = json_array(hostname)`
     yield* sql`ALTER TABLE relay_database_public DROP COLUMN hostname`
+  }),
+  // Each of its names has a certificate of its own, which its gate serves,
+  // so the database no longer keeps one to remember.
+  "55_database_public_gate_certificates": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{
+      name: string
+    }>`PRAGMA table_info(relay_database_public)`
+    if (!columns.some(({ name }) => name === "certificate_sha256")) return
+    yield* sql`ALTER TABLE relay_database_public DROP COLUMN certificate_sha256`
   }),
 })
 
@@ -4746,14 +4753,13 @@ const makeRelayStateStore = Effect.gen(function* () {
       run(
         "list_database_public",
         sql<{
-          certificate: string | null
           databaseId: string
           hostnames: string
           port: number
           rootLocal: number
         }>`
           SELECT database_id AS databaseId, hostnames, port,
-            certificate_sha256 AS certificate, root_local AS rootLocal
+            root_local AS rootLocal
           FROM relay_database_public
         `.pipe(
           Effect.map((rows) =>
@@ -4773,9 +4779,7 @@ const makeRelayStateStore = Effect.gen(function* () {
               DELETE FROM relay_database_public
               WHERE database_id = ${databaseId}
             `
-          : // The certificate it has stays named: its database serves it
-            // until one for new names comes.
-            sql`
+          : sql`
               INSERT INTO relay_database_public (database_id, hostnames, port)
               VALUES (
                 ${databaseId}, ${JSON.stringify(value.hostnames)}, ${value.port}
@@ -4786,28 +4790,13 @@ const makeRelayStateStore = Effect.gen(function* () {
             `
         ).pipe(Effect.asVoid)
       ),
-    markDatabasePublic: (databaseId, given) =>
+    markDatabaseRootLocal: (databaseId) =>
       run(
-        "mark_database_public",
-        Effect.all(
-          [
-            given.certificate === undefined
-              ? Effect.void
-              : sql`
-                  UPDATE relay_database_public
-                  SET certificate_sha256 = ${given.certificate}
-                  WHERE database_id = ${databaseId}
-                `,
-            given.rootLocal === undefined
-              ? Effect.void
-              : sql`
-                  UPDATE relay_database_public
-                  SET root_local = ${given.rootLocal ? 1 : 0}
-                  WHERE database_id = ${databaseId}
-                `,
-          ],
-          { discard: true }
-        )
+        "mark_database_root_local",
+        sql`
+          UPDATE relay_database_public SET root_local = 1
+          WHERE database_id = ${databaseId}
+        `.pipe(Effect.asVoid)
       ),
     listPendingLimits: () =>
       run(

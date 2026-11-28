@@ -6,7 +6,10 @@ import { tmpdir } from "node:os"
 import { promises as dnsCodes } from "node:dns"
 import { dirname, join } from "node:path"
 
-import { X509CertificateGenerator } from "@peculiar/x509"
+import {
+  SubjectAlternativeNameExtension,
+  X509CertificateGenerator,
+} from "@peculiar/x509"
 import type { RelayProxySettings } from "@workspace/contracts"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { parse } from "yaml"
@@ -177,7 +180,7 @@ describe("bundled Traefik certificates", () => {
     expect(traefik()).not.toEqual(refused)
   })
 
-  it("asks for one certificate for a public database's names that resolve, and gives the database only its own", async () => {
+  it("asks for a certificate for each of a public database's names once it resolves, and finds each by its leaf", async () => {
     const database = {
       databaseId: "b".repeat(12),
       hostnames: ["db.example.com", "data.example.com"],
@@ -202,8 +205,7 @@ describe("bundled Traefik certificates", () => {
       },
     ])
 
-    // A name never set up doesn't hold back the others' certificate, or
-    // its renewal.
+    // A name never set up doesn't hold back the others'.
     answers.set("db.example.com", "found")
     vi.setSystemTime(Date.now() + 15_000)
     await certificates.check()
@@ -219,14 +221,14 @@ describe("bundled Traefik certificates", () => {
       rule: "Host(`db.example.com`) || Host(`data.example.com`)",
       tls: {
         certResolver: "kiln",
-        domains: [{ main: "db.example.com", sans: ["data.example.com"] }],
+        domains: [{ main: "db.example.com" }, { main: "data.example.com" }],
       },
     })
 
-    // Its key goes into the database's container, so one naming anything
-    // else never does: a wildcard's, or one with another's name on it.
-    // One for exactly its names wins, else the one for most of them, and
-    // one that's run out never does.
+    // Each name gets the certificate whose leaf names it that runs out
+    // last, whatever Traefik's store says it's for: it can list fewer names
+    // than the certificate has. A wildcard's serves, and one that's run out
+    // never does.
     const keys = (await webcrypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
@@ -237,13 +239,9 @@ describe("bundled Traefik certificates", () => {
         await webcrypto.subtle.exportKey("pkcs8", keys.privateKey)
       ).toString("base64")}\n-----END PRIVATE KEY-----\n`
     ).toString("base64")
+    const day = 24 * 60 * minute
     const store = async (
-      ...held: Array<{
-        expired?: boolean
-        main: string
-        sans?: Array<string>
-        text: string
-      }>
+      ...held: Array<{ days: number; listed: string; names: Array<string> }>
     ) =>
       writeFile(
         webCertificateStorePath(config),
@@ -251,17 +249,20 @@ describe("bundled Traefik certificates", () => {
           kiln: {
             Account: null,
             Certificates: await Promise.all(
-              held.map(async ({ expired, text, ...domain }) => ({
+              held.map(async ({ days, listed, names }) => ({
                 certificate: Buffer.from(
                   (
                     await X509CertificateGenerator.createSelfSigned(
                       {
+                        extensions: [
+                          new SubjectAlternativeNameExtension(
+                            names.map((value) => ({ type: "dns", value }))
+                          ),
+                        ],
                         keys,
-                        name: `CN=${text}`,
-                        notAfter: new Date(
-                          Date.now() + (expired ? -1 : 30) * 24 * 60 * minute
-                        ),
-                        notBefore: new Date(Date.now() - 60 * 24 * 60 * minute),
+                        name: `CN=${names.join(" ")} for ${days}`,
+                        notAfter: new Date(Date.now() + days * day),
+                        notBefore: new Date(Date.now() - 60 * day),
                         serialNumber: "01",
                         signingAlgorithm: { hash: "SHA-256", name: "ECDSA" },
                       },
@@ -269,7 +270,7 @@ describe("bundled Traefik certificates", () => {
                     )
                   ).toString("pem")
                 ).toString("base64"),
-                domain,
+                domain: { main: listed },
                 key,
                 Store: "default",
               }))
@@ -277,30 +278,25 @@ describe("bundled Traefik certificates", () => {
           },
         })
       )
-    const given = async () => {
-      const held = await certificates.certificate(database.hostnames)
-      return held ? new NodeX509Certificate(held.chain).subject : null
-    }
     await store(
-      { main: "*.example.com", text: "wildcard" },
-      { main: "db.example.com", sans: ["shop.example.com"], text: "another's" }
-    )
-    expect(await given()).toBeNull()
-    await store(
-      { main: "data.example.com", text: "one name" },
+      { days: 20, listed: "*.example.com", names: ["*.example.com"] },
       {
-        expired: true,
-        main: "db.example.com",
-        sans: ["data.example.com"],
-        text: "run out",
-      }
+        days: 60,
+        listed: "shop.example.com",
+        names: ["shop.example.com", "db.example.com"],
+      },
+      { days: -1, listed: "data.example.com", names: ["data.example.com"] }
     )
-    expect(await given()).toBe("CN=one name")
-    await store(
-      { main: "DB.example.com", text: "one name" },
-      { main: "data.example.com", sans: ["DB.example.com"], text: "its names" }
-    )
-    expect(await given()).toBe("CN=its names")
+    const given = await certificates.certificates(database.hostnames)
+    expect(
+      given.map((held) =>
+        held ? new NodeX509Certificate(held.chain).subject : null
+      )
+    ).toEqual([
+      "CN=shop.example.com db.example.com for 60",
+      "CN=*.example.com for 20",
+    ])
+    expect(await certificates.certificates(["db.example.org"])).toEqual([null])
   })
 
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {
