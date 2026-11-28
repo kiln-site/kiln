@@ -8,13 +8,19 @@ import {
 import {
   CalendarClock,
   ChevronsUpDown,
+  CloudDownload,
   ListTodo,
   LoaderCircle,
   LogOut,
   Settings,
   UserRoundCog,
 } from "lucide-react"
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
+import {
+  Link,
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
 import { forkPromise } from "@/effect/promise"
 
 import {
@@ -31,7 +37,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
@@ -72,7 +77,6 @@ import {
   DatabaseKindIcon,
   RelayKindIcon,
   ServerKindIcon,
-  TunnelKindIcon,
 } from "@/components/instance-kind-icon"
 import {
   DrawerPopover,
@@ -93,8 +97,17 @@ import {
   tunnelsQueryOptions,
   relaysQueryOptions,
   serverDirectoryQueryOptions,
+  updateOverviewQueryOptions,
 } from "@/lib/query-options"
-import { kilnReleaseLabel } from "@/lib/release-version"
+import {
+  compareLatestReleaseVersion,
+  kilnReleaseLabel,
+} from "@/lib/release-version"
+import type { UpdateOverview } from "@/server/updates"
+import {
+  useInfraUpdateDialogStore,
+  usePrefetchInfraUpdates,
+} from "@/components/infra-update-dialog-provider"
 import type { KilnPlatformHost } from "@/server/platform"
 import { disableDevelopmentBypass } from "@/server/auth"
 import { engineLabel } from "@/components/database/database-presentation"
@@ -134,6 +147,7 @@ import {
   canAccessActivity,
   canAccessAutomations,
   canAccessBackups,
+  firstAccessibleAppHref,
   kilnDestinations,
   relayDestinations,
   serverDestinations,
@@ -154,6 +168,7 @@ import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 export type InstanceTab = ServerDestinationId
 
 interface AppSidebarViewProps {
+  canUpdateRelays: boolean
   capabilities: NavigationAccessCapabilities
   user: AuthenticatedUser
   initialSelectedInstance: string | null
@@ -172,6 +187,7 @@ export const AppSidebar = React.memo(function AppSidebar({
 
   return (
     <AppSidebarView
+      canUpdateRelays={capabilities.canUpdateRelays}
       capabilities={capabilities}
       initialSelectedInstance={initialSelectedInstance}
       relayConfigured={relayConfigured}
@@ -181,6 +197,7 @@ export const AppSidebar = React.memo(function AppSidebar({
 })
 
 const AppSidebarView = React.memo(function AppSidebarView({
+  canUpdateRelays,
   capabilities,
   user,
   initialSelectedInstance,
@@ -197,15 +214,25 @@ const AppSidebarView = React.memo(function AppSidebarView({
           <SidebarMenu>
             <SidebarMenuItem className="flex items-center gap-1">
               <SidebarMenuButton
+                asChild
                 size="lg"
                 className="h-11 min-w-0 flex-1 hover:bg-transparent active:bg-transparent data-[state=open]:bg-transparent"
                 tooltip="Kiln"
               >
-                <HearthMark className="group-data-[collapsible=icon]:size-[40px]!" />
-                <span className="min-w-0 flex-1 truncate font-heading text-2xl font-semibold tracking-[0.04em]">
-                  KILN
-                </span>
+                <Link
+                  aria-label="Kiln home"
+                  preload="intent"
+                  to={firstAccessibleAppHref(capabilities)}
+                >
+                  <HearthMark className="group-data-[collapsible=icon]:size-[40px]!" />
+                  <span className="min-w-0 flex-1 truncate font-heading text-2xl font-semibold tracking-[0.04em]">
+                    KILN
+                  </span>
+                </Link>
               </SidebarMenuButton>
+              {canUpdateRelays ? (
+                <HeaderUpdateButton capabilities={capabilities} />
+              ) : null}
               <HeaderNotificationsBell />
             </SidebarMenuItem>
           </SidebarMenu>
@@ -245,6 +272,100 @@ function HeaderNotificationsBell() {
   return <NotificationsBell className="mr-1" tooltipHidden={isMobile} />
 }
 
+// Shows only while a release is out that Hearth or a Relay this person can
+// update hasn't taken, and opens the updater over the infrastructure pages.
+// It reads the updater's own overview, so the dialog then opens on it.
+function HeaderUpdateButton({
+  capabilities,
+}: {
+  capabilities: NavigationAccessCapabilities
+}) {
+  const { isMobile, state } = useSidebar()
+  const { data: available = false } = useQuery({
+    ...updateOverviewQueryOptions(),
+    // The overview only changes with a release or an update, and both
+    // refresh it; the updater keeps it fresher while open.
+    staleTime: 5 * 60_000,
+    select: selectUpdateAvailable,
+  })
+  if (!available || (state === "collapsed" && !isMobile)) return null
+  return (
+    <UpdateAvailableButton
+      capabilities={capabilities}
+      tooltipHidden={isMobile}
+    />
+  )
+}
+
+// Hearth is behind exactly when Relays wait for it, which only a release
+// build of Hearth ever is. Relays that aren't on a release, like development
+// builds, never are.
+function selectUpdateAvailable(overview: UpdateOverview): boolean {
+  return (
+    (overview.canUpdateHearth && overview.relaysWaitForHearth) ||
+    overview.relays.some(
+      (relay) =>
+        relay.reachable &&
+        compareLatestReleaseVersion(relay.currentVersion, overview.releases) ===
+          1
+    )
+  )
+}
+
+const UpdateAvailableButton = React.memo(function UpdateAvailableButton({
+  capabilities,
+  tooltipHidden,
+}: {
+  capabilities: NavigationAccessCapabilities
+  tooltipHidden: boolean
+}) {
+  const router = useRouter()
+  const store = useInfraUpdateDialogStore()
+  const prefetch = usePrefetchInfraUpdates()
+  const openUpdater = React.useCallback(() => {
+    // The updater closes away from the infrastructure pages, so it opens
+    // over the one someone is on, or else over the first.
+    if (router.state.location.pathname.startsWith("/infra/")) {
+      store.open()
+      return
+    }
+    const to =
+      accessibleInfrastructureDestinations(capabilities)[0]?.to ??
+      "/infra/relays"
+    void router.navigate({ to }).then(() => {
+      store.open()
+    })
+  }, [capabilities, router, store])
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Update available"
+          className="relative grid size-8 shrink-0 place-items-center text-primary-ink transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
+          onClick={openUpdater}
+          onFocus={prefetch}
+          onPointerEnter={prefetch}
+        >
+          <CloudDownload className="size-4" />
+          <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary ring-2 ring-sidebar" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        sideOffset={6}
+        align="center"
+        hidden={tooltipHidden}
+      >
+        Update available
+      </TooltipContent>
+    </Tooltip>
+  )
+})
+
+// One row of tiles, each a kind's icon and how many there are, so the
+// section stays a line tall. Their names show on hover; collapsed, the tiles
+// stack like the rest of the sidebar's icons.
 function InfrastructureNavigation({
   capabilities,
   initialSelectedInstance,
@@ -267,42 +388,53 @@ function InfrastructureNavigation({
   const showApps = destinations.some(
     (destination) => destination.to === "/infra/apps"
   )
-  const showTunnels = destinations.some(
-    (destination) => destination.to === "/infra/tunnels"
-  )
-  if (
-    !showRelays &&
-    !showServers &&
-    !showDatabases &&
-    !showApps &&
-    !showTunnels
-  )
-    return null
+  if (!showRelays && !showServers && !showDatabases && !showApps) return null
 
   return (
-    <SidebarGroup className="pt-2">
-      <SidebarGroupLabel className="type-technical-label">
-        Infrastructure
-      </SidebarGroupLabel>
+    <SidebarGroup className="py-2">
       <SidebarGroupContent>
-        <SidebarMenu>
+        <SidebarMenu
+          aria-label="Infrastructure"
+          className="grid auto-cols-fr grid-flow-col gap-1 group-data-[collapsible=icon]:grid-flow-row group-data-[collapsible=icon]:justify-items-center"
+        >
           {showRelays ? (
-            <RelaysNavigationItem relayConfigured={relayConfigured} />
+            <InfrastructureTile
+              icon={<RelayKindIcon />}
+              label="Relays"
+              to="/infra/relays"
+            >
+              <RelayCount relayConfigured={relayConfigured} />
+            </InfrastructureTile>
           ) : null}
           {showServers ? (
-            <ServersNavigationItem
-              initialSelectedInstance={initialSelectedInstance}
-              relayConfigured={relayConfigured}
-            />
+            <InfrastructureTile
+              icon={<ServerKindIcon />}
+              label="Game Servers"
+              to="/infra/servers"
+            >
+              <InfrastructureInstanceCount
+                initialSelectedInstance={initialSelectedInstance}
+                relayConfigured={relayConfigured}
+              />
+            </InfrastructureTile>
           ) : null}
           {showDatabases ? (
-            <DatabasesNavigationItem relayConfigured={relayConfigured} />
+            <InfrastructureTile
+              icon={<DatabaseKindIcon />}
+              label="Databases"
+              to="/infra/databases"
+            >
+              <DatabaseCount relayConfigured={relayConfigured} />
+            </InfrastructureTile>
           ) : null}
           {showApps ? (
-            <AppsNavigationItem relayConfigured={relayConfigured} />
-          ) : null}
-          {showTunnels ? (
-            <TunnelsNavigationItem relayConfigured={relayConfigured} />
+            <InfrastructureTile
+              icon={<AppKindIcon />}
+              label="Apps"
+              to="/infra/apps"
+            >
+              <AppCount relayConfigured={relayConfigured} />
+            </InfrastructureTile>
           ) : null}
         </SidebarMenu>
       </SidebarGroupContent>
@@ -310,27 +442,49 @@ function InfrastructureNavigation({
   )
 }
 
-function RelaysNavigationItem({
-  relayConfigured,
+function InfrastructureTile({
+  children,
+  icon,
+  label,
+  to,
 }: {
-  relayConfigured: boolean
+  children: React.ReactNode
+  icon: React.ReactNode
+  label: string
+  to: "/infra/apps" | "/infra/databases" | "/infra/relays" | "/infra/servers"
 }) {
+  const { isMobile, state } = useSidebar()
+  const collapsed = state === "collapsed" && !isMobile
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Relays">
+    <SidebarMenuItem className="min-w-0">
+      <SidebarMenuButton
+        asChild
+        className="h-9 justify-center gap-1.5 px-1 before:hidden group-data-[collapsible=icon]:before:block data-active:bg-sidebar-accent group-data-[collapsible=icon]:data-active:bg-transparent"
+        // Tiles show no name, so their tooltip shows open or collapsed.
+        tooltip={
+          isMobile
+            ? undefined
+            : {
+                children: label,
+                hidden: false,
+                side: collapsed ? "right" : "bottom",
+                sideOffset: 6,
+              }
+        }
+      >
         <Link
-          to="/infra/relays"
+          aria-label={label}
+          to={to}
           activeOptions={{ exact: true, includeSearch: false }}
           activeProps={{ "data-active": true }}
           preload="intent"
         >
-          <RelayKindIcon />
-          <span>Relays</span>
+          {icon}
+          <span className="type-label text-sidebar-muted-foreground tabular-nums group-data-[active=true]/menu-button:text-primary-ink group-data-[collapsible=icon]:hidden">
+            {children}
+          </span>
         </Link>
       </SidebarMenuButton>
-      <SidebarMenuBadge className="text-sidebar-muted-foreground">
-        <RelayCount relayConfigured={relayConfigured} />
-      </SidebarMenuBadge>
     </SidebarMenuItem>
   )
 }
@@ -349,31 +503,6 @@ const RelayCount = React.memo(function RelayCount({
   return count
 })
 
-function DatabasesNavigationItem({
-  relayConfigured,
-}: {
-  relayConfigured: boolean
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Databases">
-        <Link
-          to="/infra/databases"
-          activeOptions={{ exact: true, includeSearch: false }}
-          activeProps={{ "data-active": true }}
-          preload="intent"
-        >
-          <DatabaseKindIcon />
-          <span>Databases</span>
-        </Link>
-      </SidebarMenuButton>
-      <SidebarMenuBadge className="text-sidebar-muted-foreground">
-        <DatabaseCount relayConfigured={relayConfigured} />
-      </SidebarMenuBadge>
-    </SidebarMenuItem>
-  )
-}
-
 const DatabaseCount = React.memo(function DatabaseCount({
   relayConfigured,
 }: {
@@ -388,70 +517,6 @@ const DatabaseCount = React.memo(function DatabaseCount({
   return count
 })
 
-function TunnelsNavigationItem({
-  relayConfigured,
-}: {
-  relayConfigured: boolean
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Tunnels">
-        <Link
-          to="/infra/tunnels"
-          activeOptions={{ exact: true, includeSearch: false }}
-          activeProps={{ "data-active": true }}
-          preload="intent"
-        >
-          <TunnelKindIcon />
-          <span>Tunnels</span>
-        </Link>
-      </SidebarMenuButton>
-      <SidebarMenuBadge className="text-sidebar-muted-foreground">
-        <TunnelCount relayConfigured={relayConfigured} />
-      </SidebarMenuBadge>
-    </SidebarMenuItem>
-  )
-}
-
-const TunnelCount = React.memo(function TunnelCount({
-  relayConfigured,
-}: {
-  relayConfigured: boolean
-}) {
-  const { data: count = 0 } = useQuery({
-    ...tunnelsQueryOptions(),
-    enabled: relayConfigured,
-    select: selectTunnelCount,
-  })
-
-  return count
-})
-
-function selectTunnelCount(result: TunnelsResult) {
-  return result.tunnels.length
-}
-
-function AppsNavigationItem({ relayConfigured }: { relayConfigured: boolean }) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Apps">
-        <Link
-          to="/infra/apps"
-          activeOptions={{ exact: true, includeSearch: false }}
-          activeProps={{ "data-active": true }}
-          preload="intent"
-        >
-          <AppKindIcon />
-          <span>Apps</span>
-        </Link>
-      </SidebarMenuButton>
-      <SidebarMenuBadge className="text-sidebar-muted-foreground">
-        <AppCount relayConfigured={relayConfigured} />
-      </SidebarMenuBadge>
-    </SidebarMenuItem>
-  )
-}
-
 const AppCount = React.memo(function AppCount({
   relayConfigured,
 }: {
@@ -465,36 +530,6 @@ const AppCount = React.memo(function AppCount({
 
   return count
 })
-
-function ServersNavigationItem({
-  initialSelectedInstance,
-  relayConfigured,
-}: {
-  initialSelectedInstance: string | null
-  relayConfigured: boolean
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Game Servers">
-        <Link
-          to="/infra/servers"
-          activeOptions={{ exact: true, includeSearch: false }}
-          activeProps={{ "data-active": true }}
-          preload="intent"
-        >
-          <ServerKindIcon />
-          <span>Game Servers</span>
-        </Link>
-      </SidebarMenuButton>
-      <SidebarMenuBadge className="text-sidebar-muted-foreground">
-        <InfrastructureInstanceCount
-          initialSelectedInstance={initialSelectedInstance}
-          relayConfigured={relayConfigured}
-        />
-      </SidebarMenuBadge>
-    </SidebarMenuItem>
-  )
-}
 
 const InfrastructureInstanceCount = React.memo(
   function InfrastructureInstanceCount({
