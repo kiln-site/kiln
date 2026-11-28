@@ -1612,7 +1612,7 @@ export class LifecycleDriver {
           routes,
           settings,
           gate,
-          this.#databaseNames.map(({ hostname }) => hostname)
+          this.#databaseNames
         )
   }
 

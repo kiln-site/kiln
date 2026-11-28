@@ -215,22 +215,31 @@ function dnsPresentation(row: ResourceWebHostname) {
 
 /**
  * The names an instance holds whether or not a route serves them, such as
- * an App's own address; undefined until they load.
+ * an App's own address, or each of a database's; undefined until they load.
  */
 export function useHeldWebHostnames(
   resource: WebHostnameResourceRef
 ): ReadonlyArray<ResourceWebHostname> | undefined {
-  const { data, isPending } = useQuery({
+  const { data, isError, isPending } = useQuery({
     ...resourceWebHostnamesQueryOptions(
       resource.relayId,
       resource.resourceType,
       resource.resourceId
     ),
-    select: selectHeld,
+    // A database's names are all its own; no route serves them.
+    select: resource.resourceType === "database" ? selectNames : selectHeld,
   })
-  return isPending ? undefined : (data ?? noHostnames)
+  if (isPending) return undefined
+  // A database's Domains table saves its whole list, so names that didn't
+  // load aren't none.
+  if (isError && !data && resource.resourceType === "database") return undefined
+  return data ?? noHostnames
 }
 
 function selectHeld({ hostnames }: ResourceWebHostnames) {
   return hostnames.filter((row) => row.generated && row.status !== "removing")
+}
+
+function selectNames({ hostnames }: ResourceWebHostnames) {
+  return hostnames.filter((row) => row.status !== "removing")
 }

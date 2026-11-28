@@ -11,6 +11,7 @@
  * a changed record takes a while to reach everyone, and a proxied one's proxy
  * longer, so it's asked for again a few times while it's missing.
  */
+import { createHash, X509Certificate } from "node:crypto"
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
 import { isIP } from "node:net"
@@ -41,10 +42,13 @@ export interface TraefikCertificateGate {
   readonly version: number
 }
 
-/** A public database's name, which needs a certificate as a route does. */
+/**
+ * A public database's names, which need one certificate for them all, as a
+ * route's do: the database serves only one.
+ */
 export interface DatabaseCertificateName {
   readonly databaseId: string
-  readonly hostname: string
+  readonly hostnames: ReadonlyArray<string>
 }
 
 /** A certificate Traefik holds, as PEM: its chain, leaf first, and key. */
@@ -183,8 +187,10 @@ export class WebCertificates {
     databases: ReadonlyArray<DatabaseCertificateName> = []
   ): Promise<void> {
     const served = new Map<string, Pending["owner"]>()
-    for (const { databaseId, hostname } of databases) {
-      served.set(hostname.toLowerCase(), { id: databaseId, kind: "database" })
+    for (const { databaseId, hostnames } of databases) {
+      for (const hostname of hostnames) {
+        served.set(hostname.toLowerCase(), { id: databaseId, kind: "database" })
+      }
     }
     for (const route of routes) {
       const appId = appIdFromRouteOwner(route.instanceId)
@@ -460,37 +466,81 @@ export class WebCertificates {
   }
 
   /**
-   * The certificate Traefik holds for `hostname` itself, read afresh, or
-   * null. A database is given its own name's, never a wildcard's.
+   * The certificate Traefik holds for a database's names, read afresh, or
+   * null: one for exactly `hostnames`, else the one for the most of them.
+   * Never one naming anything else, as its key goes into the database's
+   * container, nor a wildcard's or one that's run out.
    */
-  async certificate(hostname: string): Promise<HeldCertificate | null> {
+  async certificate(
+    hostnames: ReadonlyArray<string>
+  ): Promise<HeldCertificate | null> {
+    const wanted = new Set(hostnames.map((hostname) => hostname.toLowerCase()))
+    const now = Date.now()
+    const best = (await this.#heldCertificates())
+      .filter(
+        ({ expiresAt, names }) =>
+          expiresAt > now && [...names].every((name) => wanted.has(name))
+      )
+      .sort(
+        (left, right) =>
+          right.names.size - left.names.size || right.expiresAt - left.expiresAt
+      )[0]
+    return best?.held ?? null
+  }
+
+  /**
+   * The certificate Traefik holds whose chain has this SHA-256, read
+   * afresh, or null once it's gone.
+   */
+  async certificateWithFingerprint(
+    fingerprint: string
+  ): Promise<HeldCertificate | null> {
+    const found = (await this.#heldCertificates()).find(
+      ({ held }) =>
+        createHash("sha256").update(held.chain).digest("hex") === fingerprint
+    )
+    return found?.held ?? null
+  }
+
+  // Each certificate in Traefik's store, as PEM, with the names it's for.
+  async #heldCertificates(): Promise<
+    Array<{
+      expiresAt: number
+      held: HeldCertificate
+      names: ReadonlySet<string>
+    }>
+  > {
     const text = await recoverPromise(
       () => readFile(this.#storePath, "utf8"),
       () => null
     )
-    if (!text?.trim()) return null
+    if (!text?.trim()) return []
     const parsed = acmeCertificatesSchema.safeParse(
       Result.getOrNull(Result.try(() => JSON.parse(text) as unknown))
     )
-    if (!parsed.success) return null
-    const name = hostname.toLowerCase()
-    for (const resolver of Object.values(parsed.data)) {
-      for (const held of resolver?.Certificates ?? []) {
-        const names = [held.domain.main, ...(held.domain.sans ?? [])]
-        if (!names.some((candidate) => candidate.toLowerCase() === name)) {
-          continue
-        }
-        const chain = Buffer.from(held.certificate, "base64").toString("utf8")
-        const key = Buffer.from(held.key, "base64").toString("utf8")
+    if (!parsed.success) return []
+    return Object.values(parsed.data).flatMap((resolver) =>
+      (resolver?.Certificates ?? []).flatMap((stored) => {
+        const chain = Buffer.from(stored.certificate, "base64").toString("utf8")
+        const key = Buffer.from(stored.key, "base64").toString("utf8")
         if (
-          chain.includes("BEGIN CERTIFICATE") &&
-          key.includes("PRIVATE KEY")
+          !chain.includes("BEGIN CERTIFICATE") ||
+          !key.includes("PRIVATE KEY")
         ) {
-          return { chain, key }
+          return []
         }
-      }
-    }
-    return null
+        const expiresAt = Result.getOrNull(
+          Result.try(() => Date.parse(new X509Certificate(chain).validTo))
+        )
+        if (expiresAt === null || Number.isNaN(expiresAt)) return []
+        const names = new Set(
+          [stored.domain.main, ...(stored.domain.sans ?? [])].map((name) =>
+            name.toLowerCase()
+          )
+        )
+        return [{ expiresAt, held: { chain, key }, names }]
+      })
+    )
   }
 
   #hasCertificate(hostname: string): boolean {

@@ -27,6 +27,7 @@ import type {
   RelayInstancePortProtocol,
   RelayInstanceWebRoute,
   RelayBrowserAuthorizationRevision,
+  RelayDatabasePublic,
 } from "@workspace/contracts"
 import {
   BACKUP_EXPORT_TTL_MIN_MS,
@@ -266,14 +267,14 @@ export interface RelayVolumeReferenceImport {
 export type RelayDiskLimitKind = "app" | "database"
 
 /**
- * A database opened to the internet: its name and port, and the
+ * A database opened to the internet: its names and port, and the
  * certificate it was last given, by its chain's SHA-256, or null before it
  * has one. Whether its root login is local only yet.
  */
 export interface RelayStoredDatabasePublic {
   readonly certificate: string | null
   readonly databaseId: string
-  readonly hostname: string
+  readonly hostnames: ReadonlyArray<string>
   readonly port: number
   readonly rootLocal: boolean
 }
@@ -779,7 +780,10 @@ export class RelayStateStore extends Context.Service<
       {
         readonly changed: ReadonlyArray<RelayBackupTask>
         readonly current: ReadonlyArray<RelayBackupTask>
-        readonly next: { readonly taskId: string; readonly updatedAt: number } | null
+        readonly next: {
+          readonly taskId: string
+          readonly updatedAt: number
+        } | null
       },
       RelayStateError
     >
@@ -959,7 +963,7 @@ export class RelayStateStore extends Context.Service<
      */
     readonly setDatabasePublic: (
       databaseId: string,
-      value: { readonly hostname: string; readonly port: number } | null
+      value: RelayDatabasePublic | null
     ) => Effect.Effect<void, RelayStateError>
     /** Records what an open database was given. */
     readonly markDatabasePublic: (
@@ -2146,7 +2150,30 @@ const migrations = SqliteMigrator.fromRecord({
       root_local INTEGER NOT NULL DEFAULT 0 CHECK (root_local IN (0, 1))
     ) STRICT`
   }),
+  // A public database has the names in its Domains table, one certificate
+  // for them all, as a JSON array, the first its certificate's main name.
+  "54_database_public_hostnames": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{
+      name: string
+    }>`PRAGMA table_info(relay_database_public)`
+    if (columns.some(({ name }) => name === "hostnames")) return
+    yield* sql`ALTER TABLE relay_database_public
+      ADD COLUMN hostnames TEXT NOT NULL DEFAULT '[]'`
+    yield* sql`UPDATE relay_database_public SET hostnames = json_array(hostname)`
+    yield* sql`ALTER TABLE relay_database_public DROP COLUMN hostname`
+  }),
 })
+
+// A public database's names, as saved; none when unreadable, which no
+// certificate matches.
+function storedHostnames(json: string): ReadonlyArray<string> {
+  const stored = Result.getOrElse(
+    Result.try(() => JSON.parse(json) as unknown),
+    () => null
+  )
+  return Array.isArray(stored) ? stored.filter(Predicate.isString) : []
+}
 
 // Stored JSON with each restic repository in a bucket as its ID alone, which
 // ends its folder in the bucket; or null when it holds none.
@@ -2554,7 +2581,10 @@ const makeRelayStateStore = Effect.gen(function* () {
     filter:
       | { readonly taskId: string }
       | {
-          readonly after: { readonly taskId: string; readonly updatedAt: number }
+          readonly after: {
+            readonly taskId: string
+            readonly updatedAt: number
+          }
           readonly limit: number
         }
       | { readonly current: ReadonlyArray<string> }
@@ -2674,13 +2704,13 @@ const makeRelayStateStore = Effect.gen(function* () {
         `
   })
 
-  const backupTasks = Effect.fn("RelayStateStore.backupTasks")(function* (
-    filter: { readonly taskId: string }
-  ) {
-    const rows = yield* backupTaskRows(filter)
-    const decoded = yield* decodeBackupTaskRows(rows)
-    return yield* Effect.forEach(decoded, backupTaskFromRow)
-  })
+  const backupTasks = Effect.fn("RelayStateStore.backupTasks")(
+    function* (filter: { readonly taskId: string }) {
+      const rows = yield* backupTaskRows(filter)
+      const decoded = yield* decodeBackupTaskRows(rows)
+      return yield* Effect.forEach(decoded, backupTaskFromRow)
+    }
+  )
 
   const provisioningJobs = Effect.fn("RelayStateStore.provisioningJobs")(
     function* (
@@ -2833,8 +2863,7 @@ const makeRelayStateStore = Effect.gen(function* () {
           RelayBackupTaskRowSchema
         )(row).pipe(Effect.result)
         if (Result.isFailure(decodedRow)) {
-          const taskId =
-            typeof row.taskId === "string" ? row.taskId : undefined
+          const taskId = typeof row.taskId === "string" ? row.taskId : undefined
           if (taskId && !warnedUnparseableTaskIds.has(taskId)) {
             warnedUnparseableTaskIds.add(taskId)
             yield* Effect.logWarning("Skipped unparseable backup journal row", {
@@ -4719,16 +4748,20 @@ const makeRelayStateStore = Effect.gen(function* () {
         sql<{
           certificate: string | null
           databaseId: string
-          hostname: string
+          hostnames: string
           port: number
           rootLocal: number
         }>`
-          SELECT database_id AS databaseId, hostname, port,
+          SELECT database_id AS databaseId, hostnames, port,
             certificate_sha256 AS certificate, root_local AS rootLocal
           FROM relay_database_public
         `.pipe(
           Effect.map((rows) =>
-            rows.map((row) => ({ ...row, rootLocal: row.rootLocal === 1 }))
+            rows.map((row) => ({
+              ...row,
+              hostnames: storedHostnames(row.hostnames),
+              rootLocal: row.rootLocal === 1,
+            }))
           )
         )
       ),
@@ -4740,15 +4773,15 @@ const makeRelayStateStore = Effect.gen(function* () {
               DELETE FROM relay_database_public
               WHERE database_id = ${databaseId}
             `
-          : // A new name needs its own certificate.
+          : // The certificate it has stays named: its database serves it
+            // until one for new names comes.
             sql`
-              INSERT INTO relay_database_public (database_id, hostname, port)
-              VALUES (${databaseId}, ${value.hostname}, ${value.port})
+              INSERT INTO relay_database_public (database_id, hostnames, port)
+              VALUES (
+                ${databaseId}, ${JSON.stringify(value.hostnames)}, ${value.port}
+              )
               ON CONFLICT (database_id) DO UPDATE
-              SET certificate_sha256 = CASE
-                    WHEN hostname = excluded.hostname THEN certificate_sha256
-                  END,
-                  hostname = excluded.hostname,
+              SET hostnames = excluded.hostnames,
                   port = excluded.port
             `
         ).pipe(Effect.asVoid)

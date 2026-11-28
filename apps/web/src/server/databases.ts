@@ -61,10 +61,7 @@ import { partKey, resourceKey, shared } from "@/operations/lanes"
 import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { connectDatabase } from "@/server/database-connections.server"
-import {
-  closeDatabasePublic,
-  openDatabasePublic,
-} from "@/server/database-public.server"
+import { saveDatabaseNames } from "@/server/database-public.server"
 import { createDatabase } from "@/server/database-create.server"
 import { reserveInstanceId } from "@/effect/instance-ids"
 import { resourceOperation } from "@/server/resource-operation.server"
@@ -103,8 +100,10 @@ const databaseNetworkInputSchema = databaseInputSchema.extend({
   connected: z.boolean(),
   member: databaseConnectionMemberSchema,
 })
-const databasePublicInputSchema = databaseInputSchema.extend({
-  port: z.number().int().min(1).max(65_535),
+const databaseNamesInputSchema = databaseInputSchema.extend({
+  generate: z.boolean().optional(),
+  hostnames: z.array(z.string().trim().min(1).max(253)).max(16),
+  port: z.number().int().min(1).max(65_535).optional(),
 })
 const databaseRowsRequestSchema = databaseInputSchema.extend({
   request: databaseRowsInputSchema,
@@ -491,18 +490,10 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
     })
   )
 
-export const openManagedDatabasePublic = createServerFn({ method: "POST" })
-  .validator(databasePublicInputSchema)
+export const saveManagedDatabaseNames = createServerFn({ method: "POST" })
+  .validator(databaseNamesInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(openDatabasePublic, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-export const closeManagedDatabasePublic = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(closeDatabasePublic, data, {
+    runOperationPromise(saveDatabaseNames, data, {
       user: await requireEligibleResourceUser(),
     })
   )

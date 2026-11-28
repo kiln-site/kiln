@@ -6,12 +6,14 @@
  * image (database-gate/), on that network and one of its own that publishes
  * the port. The gate refuses a client that doesn't ask for TLS and passes
  * everything else through untouched: TLS ends in the database, which runs
- * with the certificate the Relay's Traefik got for its public name.
+ * with the certificate the Relay's Traefik got for its public names.
  *
- * Opening one waits for its name's certificate, then deploys the database
- * again with it (one restart), keeps MySQL's and MariaDB's root login to
- * their own container, and starts the gate last. A renewed certificate is
- * written over the old one and reloaded. Closing one removes its gate, then
+ * Opening one waits for one certificate for the names that resolve, then
+ * deploys the
+ * database again with it (one restart), keeps MySQL's and MariaDB's root
+ * login to their own container, and starts the gate last. A renewed
+ * certificate, or one for names added since, is written over the old one
+ * and reloaded; until it comes, the old one keeps the database open. Closing one removes its gate, then
  * forgets it; the database keeps TLS on until it's next deployed.
  */
 import { createHash, X509Certificate } from "node:crypto"
@@ -128,9 +130,9 @@ export class PublicDatabases {
 
   /** Public names, for Traefik to ask for their certificates. */
   names(): ReadonlyArray<DatabaseCertificateName> {
-    return [...this.#saved.values()].map(({ databaseId, hostname }) => ({
+    return [...this.#saved.values()].map(({ databaseId, hostnames }) => ({
       databaseId,
-      hostname,
+      hostnames,
     }))
   }
 
@@ -150,10 +152,10 @@ export class PublicDatabases {
   }
 
   /**
-   * Opens a database at a name and port, or closes it. The caller holds the
-   * database's lane. Saving it is the one change made here, so a write
-   * that fails changed nothing; the loop then has Traefik ask for its
-   * name's certificate, and opens it once that comes. Closing removes its
+   * Opens a database at its names and a port, changes them, or closes it.
+   * The caller holds the database's lane. Saving it is the one change made
+   * here, so a write that fails changed nothing; the loop then has Traefik
+   * ask for a certificate for its names, and opens it once that comes. Closing removes its
    * gate before it forgets it, so a close that fails leaves it public and
    * still kept, never reachable while forgotten.
    */
@@ -219,9 +221,9 @@ export class PublicDatabases {
   }
 
   async #bringOpen(saved: RelayStoredDatabasePublic): Promise<void> {
-    const { certificates, databases, state } = this.#options
+    const { databases, state } = this.#options
     const id = saved.databaseId
-    const held = await certificates.certificate(saved.hostname)
+    const held = await this.#held(saved)
     // Never open without TLS: the gate waits for the certificate.
     if (!held) {
       await this.#removeGate(id)
@@ -259,7 +261,7 @@ export class PublicDatabases {
   async tls(databaseId: string): Promise<DatabaseTls | null> {
     const saved = this.#saved.get(databaseId)
     if (!saved || !this.#options.proxy.runsTraefik) return null
-    const held = await this.#options.certificates.certificate(saved.hostname)
+    const held = await this.#held(saved)
     if (!held) return null
     const { engine } = await this.#options.databases.target(databaseId)
     return {
@@ -276,7 +278,7 @@ export class PublicDatabases {
     if (!saved) return null
     const base = {
       certificateExpiresAt: this.#expires.get(database.id) ?? null,
-      hostname: saved.hostname,
+      hostnames: [...saved.hostnames],
       port: saved.port,
     }
     if (!this.#options.proxy.runsTraefik) {
@@ -289,9 +291,21 @@ export class PublicDatabases {
     }
     const error = this.#errors.get(database.id)
     if (error) return { ...base, error, state: "failed" }
+    // Open at the names its certificate has while one for a new name comes;
+    // each name's row says where its own stands.
+    if (this.#open.has(database.id)) {
+      return { ...base, error: null, state: "open" }
+    }
+    const names = new Set(saved.hostnames)
     const pending = this.#options.certificates
       .pending()
-      .find(({ hostname }) => hostname === saved.hostname)
+      .filter(({ hostname }) => names.has(hostname))
+      .sort(
+        (left, right) =>
+          Number(right.waitingFor === "dns") -
+            Number(left.waitingFor === "dns") ||
+          Number(right.failed) - Number(left.failed)
+      )[0]
     if (pending?.waitingFor === "dns") {
       return { ...base, error: null, state: "waiting_for_dns" }
     }
@@ -307,7 +321,7 @@ export class PublicDatabases {
     return {
       ...base,
       error: null,
-      state: this.#open.has(database.id) ? "open" : "opening",
+      state: "opening",
     }
   }
 
@@ -355,7 +369,8 @@ export class PublicDatabases {
 
   // What was just saved, as setDatabasePublic saves it, without reading it
   // back: nothing that can fail comes between saving a port and others
-  // seeing it taken. A new name keeps nothing of its old certificate.
+  // seeing it taken. The certificate it has stays named, as the one its
+  // database serves until one for its new names comes.
   #remember(databaseId: string, value: RelayDatabasePublic | null): void {
     const saved = new Map(this.#saved)
     if (value === null) {
@@ -363,15 +378,29 @@ export class PublicDatabases {
     } else {
       const before = saved.get(databaseId)
       saved.set(databaseId, {
-        certificate:
-          before?.hostname === value.hostname ? before.certificate : null,
+        certificate: before?.certificate ?? null,
         databaseId,
-        hostname: value.hostname,
+        hostnames: value.hostnames,
         port: value.port,
         rootLocal: before?.rootLocal ?? false,
       })
     }
     this.#saved = saved
+  }
+
+  // The certificate for its names, or the most of them, or, until one
+  // comes, the one it was last given, so a name changed on an open database
+  // keeps it open at the others.
+  async #held(
+    saved: RelayStoredDatabasePublic
+  ): Promise<HeldCertificate | null> {
+    const { certificates } = this.#options
+    return (
+      (await certificates.certificate(saved.hostnames)) ??
+      (saved.certificate
+        ? await certificates.certificateWithFingerprint(saved.certificate)
+        : null)
+    )
   }
 
   #portUnclaimed(databaseId: string, port: number): void {

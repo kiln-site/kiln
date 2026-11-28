@@ -98,9 +98,12 @@ export function DatabaseLogsPage() {
       ...(database.public
         ? [
             {
-              heading: { meta: database.public.hostname, title: "Public gate" },
+              heading: {
+                meta: database.public.hostnames[0],
+                title: "Public gate",
+              },
               id: GATE,
-              meta: database.public.hostname,
+              meta: database.public.hostnames[0],
               status:
                 database.public.state === "open"
                   ? { label: "Open", tone: "success" as const }

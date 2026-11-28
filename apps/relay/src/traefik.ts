@@ -18,7 +18,10 @@ import { containerName, type DockerEngine } from "./docker-engine.js"
 import { recoverPromise } from "./effect/promise.js"
 import type { RelayStoredWebRoute } from "./effect/state.js"
 import { appIdFromRouteOwner, relayResourceNames } from "./relay-resources.js"
-import type { TraefikCertificateGate } from "./web-certificates.js"
+import type {
+  DatabaseCertificateName,
+  TraefikCertificateGate,
+} from "./web-certificates.js"
 import {
   WEB_ROUTE_LABEL_PREFIX,
   WEB_ROUTE_REVISION_LABEL,
@@ -330,7 +333,7 @@ export function traefikDynamicConfiguration(
   settings: RelayProxySettings,
   certificates: TraefikCertificateGate,
   // Public databases' names, which need a certificate and serve nothing.
-  databaseNames: ReadonlyArray<string> = []
+  databaseNames: ReadonlyArray<DatabaseCertificateName> = []
 ): string {
   const resources = relayResourceNames(config)
   // Only a Relay in Traefik mode is itself reached through Traefik, and only
@@ -388,19 +391,34 @@ export function traefikDynamicConfiguration(
   }
   const routeConfiguration = traefikFileRoutes(resources, served, certificates)
   lines.push(...routeConfiguration.routers)
-  // A router of its own is how Traefik asks for a name's certificate; the
-  // database's gate serves it, with the database's own TLS.
+  // A router of its own is how Traefik asks for a database's certificate,
+  // one for its names, as the database serves only one; its gate serves it,
+  // with the database's own TLS. A name that doesn't resolve yet is left
+  // out, as a route's is, so one never set up can't stop the others'
+  // certificate renewing.
   if (config.proxyMode === "traefik") {
-    for (const hostname of databaseNames) {
-      if (!certificates.requests(hostname)) continue
+    for (const { databaseId, hostnames } of databaseNames) {
+      const requested = hostnames.filter((name) => certificates.requests(name))
+      const [main, ...sans] = requested
+      if (!main) continue
       lines.push(
-        `    kiln-database-${hostname.replaceAll(".", "-")}:`,
-        `      rule: ${JSON.stringify(`Host(\`${hostname}\`)`)}`,
+        `    kiln-database-${databaseId}:`,
+        `      rule: ${JSON.stringify(
+          requested.map((name) => `Host(\`${name}\`)`).join(" || ")
+        )}`,
         "      entryPoints:",
         "        - websecure",
         `      service: ${NOOP_SERVICE}`,
         "      tls:",
-        "        certResolver: kiln"
+        "        certResolver: kiln",
+        "        domains:",
+        `          - main: ${JSON.stringify(main)}`,
+        ...(sans.length > 0
+          ? [
+              "            sans:",
+              ...sans.map((name) => `              - ${JSON.stringify(name)}`),
+            ]
+          : [])
       )
     }
   }

@@ -1,12 +1,18 @@
 import * as React from "react"
 import { Link } from "@tanstack/react-router"
-import { Cable, LoaderCircle, Network, Unplug } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
+import { Cable, Copy, LoaderCircle, Network, Unplug } from "lucide-react"
 
 import {
+  databaseEngineRuntimes,
+  databasePublicConnectionUrl,
   databaseTailscaleMemberId,
   type RelayDatabaseMember,
+  type RelayDatabasePublicStatus,
+  type RelayInstanceWebRoute,
 } from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 
 import {
   DatabaseNetworkPicker,
@@ -24,8 +30,13 @@ import { useDatabaseWorkspace } from "@/components/database/database-workspace-c
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
-import { DatabasePublicAccess } from "@/components/database/database-public-access"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { useInstanceTunnelNames } from "@/components/tunnel/tunnel-data"
+import { forkPromise } from "@/effect/promise"
+import { managedDatabaseCredentialQueryOptions } from "@/lib/query-options"
 import { InstanceTunnelsSection } from "@/components/tunnel/instance-tunnels-section"
+import { WebRoutesSection } from "@/components/web-routes-section"
+import { saveManagedDatabaseNames } from "@/server/databases"
 
 export function DatabaseNetworkPage() {
   const { database } = useDatabaseWorkspace()
@@ -62,13 +73,158 @@ export function DatabaseNetworkPage() {
           <ConnectedMembers canWrite={canWrite} database={database} />
         </InfoCard>
 
-        <DatabasePublicAccess database={database} />
+        <DatabaseDomains database={database} />
 
         <DatabaseTunnels database={database} />
       </div>
     </section>
   )
 }
+
+const noRoutes: ReadonlyArray<RelayInstanceWebRoute> = []
+
+// Where opening it stands, as its Relay says.
+const publicStatuses: Record<
+  RelayDatabasePublicStatus["state"],
+  Pick<IdentityStatusPresentation, "label" | "pulse" | "tone">
+> = {
+  failed: { label: "Can't open", tone: "danger" },
+  getting_certificate: {
+    label: "Getting its certificate",
+    pulse: true,
+    tone: "info",
+  },
+  open: { label: "Open", tone: "success" },
+  opening: { label: "Opening", pulse: true, tone: "info" },
+  waiting_for_dns: {
+    label: "Waiting for its names to resolve",
+    pulse: true,
+    tone: "warning",
+  },
+}
+
+// Its names, in the Domains table every instance has: each public domain,
+// reached at one port with TLS, and its names in tunnels. One with a public
+// domain is open to the internet; adding its first opens it and deleting its
+// last closes it.
+function DatabaseDomains({ database }: { database: ManagedDatabase }) {
+  const { engine, id, permissions, public: open, relayId, relayName } = database
+  const canWrite =
+    databaseRelayAvailable(database) &&
+    permissions.includes("database.network.public-port.write")
+  const dnsResource = React.useMemo(
+    () => ({ relayId, resourceId: id, resourceType: "database" as const }),
+    [id, relayId]
+  )
+  const memberId = databaseTailscaleMemberId(id)
+  const isMember = React.useCallback(
+    (candidate: string) => candidate === memberId,
+    [memberId]
+  )
+  const tunnelNames = useInstanceTunnelNames(isMember)
+  const port = open?.port ?? databaseEngineRuntimes[engine].port
+  const names = React.useMemo(
+    () => ({
+      destination: `Port ${port} on ${relayName}, TLS required`,
+      port,
+      portHost: relayName,
+      onSave: (change: {
+        generate?: boolean
+        hostnames: Array<string>
+        port: number
+      }) =>
+        saveManagedDatabaseNames({
+          data: { ...change, databaseId: id, relayId },
+        }),
+    }),
+    [id, port, relayId, relayName]
+  )
+  const status = React.useMemo((): IdentityStatusPresentation | null => {
+    if (!open) return null
+    return {
+      ...publicStatuses[open.state],
+      ...(open.error ? { detail: open.error } : {}),
+    }
+  }, [open])
+  return (
+    <WebRoutesSection
+      canWrite={canWrite}
+      dnsResource={dnsResource}
+      error={null}
+      kind="database"
+      names={names}
+      routes={noRoutes}
+      status={status}
+      statusAction={
+        open ? <CopyConnectionUrl database={database} open={open} /> : null
+      }
+      tunnelNames={tunnelNames}
+      onSave={rejectRoutes}
+    />
+  )
+}
+
+// Copies a connection URL that checks the database's certificate, as many
+// clients don't unless they're told to; its password is read as it's
+// copied.
+function CopyConnectionUrl({
+  database,
+  open,
+}: {
+  database: ManagedDatabase
+  open: RelayDatabasePublicStatus
+}) {
+  const queryClient = useQueryClient()
+  const [copied, setCopied] = React.useState(false)
+  if (!database.permissions.includes("database.credentials.read")) return null
+  const host = open.hostnames[0]
+  if (!host) return null
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={() =>
+        forkPromise(
+          async () => {
+            const login = await queryClient.fetchQuery(
+              managedDatabaseCredentialQueryOptions(
+                database.relayId,
+                database.id
+              )
+            )
+            await navigator.clipboard.writeText(
+              databasePublicConnectionUrl({
+                databaseName: database.databaseName,
+                engine: database.engine,
+                host,
+                password: encodeURIComponent(login.password),
+                port: open.port,
+                username: login.username,
+              })
+            )
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1_800)
+          },
+          (cause) =>
+            showToast({
+              description:
+                cause instanceof Error ? cause.message : String(cause),
+              message: "Could not copy the connection URL",
+              type: "error",
+            })
+        )
+      }
+    >
+      <Copy />
+      {copied ? "Copied" : "Connection URL"}
+    </Button>
+  )
+}
+
+// A database has names, not routes.
+const rejectRoutes = () =>
+  Promise.reject(new Error("A database's domains have no routes"))
 
 // The tunnels the database is connected to, keeping its address there when
 // its container is replaced, and its names in each.

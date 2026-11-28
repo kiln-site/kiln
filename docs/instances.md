@@ -33,7 +33,7 @@ Every kind gets these from the platform.
 | Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                                             |
 | Deployments | One redeploy for every kind                     | Done for game servers, databases, Apps and tunnels: one Relay request and one permission                                                             |
 | Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                                                      |
-| Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps, tunnel names included; a database has only its tunnel names   |
+| Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers, Apps and databases, tunnel names included                              |
 | Terminal    | A shell in every kind, on one path              | Done for game servers, databases, Apps and tunnels: one set of Relay requests, one stream and one permission                                         |
 | Logs        | One Logs page, one log store and one permission | Done for game servers, databases, Apps and tunnels                                                                                                   |
 | Ports       | One list of taken ports and one Ports section   | Done for game servers and Apps: one list on the Relay and one Ports section. Each kind still saves its ports its own way                             |
@@ -596,12 +596,12 @@ from a tag or an image name today.
    the Compose file or Dockerfile its App runs, as Beszel's hub and agent
    do. An App or group Brick is installed from any catalog its installer
    sees, and a Brick goes by its ID after whose it is. Done.
-9. Domains for every kind. Done: a database opened to the internet has a
-   public name and port, its certificate's TLS required by a gate that
-   holds the port ([Public databases](relay-runtime.md#public-databases)).
-   Its name is generated under a vanity domain and can't be renamed yet;
-   one that's open can't be moved, only closed first. An IP allowlist comes
-   as a feature of every instance.
+9. Domains for every kind. Done: a database's public domains are rows of
+   its Domains table, beside its tunnel names. Its first opens it to the
+   internet at a port, one certificate's TLS required by a gate that holds
+   the port ([Public databases](relay-runtime.md#public-databases)), and
+   deleting its last closes it. One that's open can't be moved, only closed
+   first. An IP allowlist comes as a feature of every instance.
 10. One instance page, with each kind's own tabs.
 11. Tunnels as their own kind, each one instance reaching Relays through
     its gateways, and one primary address per instance. Done but for its
