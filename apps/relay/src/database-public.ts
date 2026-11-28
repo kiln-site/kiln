@@ -31,7 +31,7 @@ import type {
   RelayDatabasePublicStatus,
   RelayManagedDatabase,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { pack as tarPack } from "tar-stream"
 
 import { helpersInDevelopment, relayContainer } from "./backups/tar-archives.js"
@@ -242,8 +242,13 @@ export class PublicDatabases {
     const { databases, state } = this.#options
     const id = saved.databaseId
     const served = await this.#served(saved)
-    // Traefik's store couldn't be read: nothing has changed.
-    if (served === null) return
+    // Traefik's store couldn't be read, which says nothing of its
+    // certificates: its gate keeps those it has, unless it's at a port, or
+    // serves a name, the database no longer has.
+    if (served === null) {
+      if (!(await this.#gateFits(saved))) await this.#removeGate(id)
+      return
+    }
     // Never open without TLS: the gate waits for a certificate.
     if (served.length === 0) {
       await this.#removeGate(id)
@@ -460,6 +465,46 @@ export class PublicDatabases {
         Readable.from(archive)
       )
     )
+  }
+
+  // Whether its gate, if it has one, is at its port and serves only its
+  // names, as its file in the gate says, which outlasts a Relay restart.
+  async #gateFits(saved: RelayStoredDatabasePublic): Promise<boolean> {
+    const { engine } = this.#options
+    const name = this.#name(saved.databaseId, "public")
+    const existing = await Effect.runPromise(
+      engine
+        .inspectContainer<{
+          Config: { Labels: Record<string, string> | null }
+        }>(name)
+        .pipe(Effect.catchIf(isDockerNotFound, () => Effect.succeed(null)))
+    )
+    if (!existing) return true
+    if (existing.Config.Labels?.[GATE_PORT_LABEL] !== String(saved.port)) {
+      return false
+    }
+    const file = await Effect.runPromise(
+      engine
+        .readContainerFile(
+          name,
+          `${GATE_CERTIFICATES}/${GATE_CERTIFICATES_FILE}`,
+          1024 * 1024
+        )
+        .pipe(Effect.orElseSucceed(() => null))
+    )
+    const names = Result.getOrNull(
+      Result.try(
+        () =>
+          (
+            JSON.parse(file?.bytes.toString("utf8") ?? "") as {
+              names: Array<{ name: string }>
+            }
+          ).names
+      )
+    )
+    if (!Array.isArray(names)) return false
+    const kept = new Set(saved.hostnames)
+    return names.every(({ name: served }) => kept.has(served))
   }
 
   // Writes its names and their certificates into its gate, which reads

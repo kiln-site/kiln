@@ -297,7 +297,9 @@ private network or a tunnel don't go through the gate.
   while it's being written. It serves each name its own, and never gives a
   name that isn't the database's a certificate that would pass for it, as a
   wildcard's could: that name may be another database's, at another port.
-  Traefik's store caught partway through being written changes nothing. The keys stay with the gate: the database never
+  Traefik's store caught partway through being written leaves the gate as
+  it is, unless it's at a port, or serves a name, the database no longer
+  has: then it's removed until the store reads again. The keys stay with the gate: the database never
   has them, so whoever can read the database's files can't take them, and a
   certificate that names more, or a wildcard's, serves a name as it would a
   route. A renewed certificate, or one for a name added since, is in use at

@@ -1853,6 +1853,42 @@ export class FakeDocker {
         Name: volume.name,
       })
     }
+    // A file's stat under a volume a container mounts, as Docker answers
+    // before archiving a path.
+    if (
+      method === "HEAD" &&
+      (parameters = route(/^\/containers\/([^/]+)\/archive$/u))
+    ) {
+      const target = this.#requiredContainer(parameters[0] ?? "")
+      const path = url.searchParams.get("path") ?? ""
+      const under = target.mounts.find(
+        (entry) =>
+          entry.type === "volume" && path.startsWith(`${entry.destination}/`)
+      )
+      if (!under) return this.#unsupported(`HEAD archive ${path}`)
+      const file = this.volumes
+        .get(under.source)
+        ?.files.get(path.slice(under.destination.length + 1))
+      if (file === undefined) {
+        throw new DockerFailure(`Could not find the file ${path}`, 404)
+      }
+      const stat = Buffer.from(
+        JSON.stringify({
+          linkTarget: "",
+          mode: 0o644,
+          mtime: new Date(0).toISOString(),
+          name: posix.basename(path),
+          size: Buffer.byteLength(file),
+        })
+      ).toString("base64")
+      return {
+        kind: "stream",
+        write: (response) => {
+          response.writeHead(200, { "X-Docker-Container-Path-Stat": stat })
+          response.end()
+        },
+      }
+    }
     if (
       (method === "GET" || method === "PUT") &&
       (parameters = route(/^\/containers\/([^/]+)\/archive$/u))

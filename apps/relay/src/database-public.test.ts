@@ -175,6 +175,15 @@ describe("a public database", () => {
     expect(fakeDocker.container(gate)?.state.running).toBe(true)
     expect(gateFile()).toHaveLength(2)
 
+    // Unless a name it serves is gone: then it closes until the store reads
+    // again, as one at a port it no longer has would.
+    await databases.write(id, { hostnames: ["db.example.com"], port: 25_432 })
+    await databases.reconcile(id)
+    expect(fakeDocker.container(gate)).toBeUndefined()
+    await traefikHolds(harness, ["db.example.com"])
+    await databases.reconcile(id)
+    expect(gateFile()?.map(({ name }) => name)).toEqual(["db.example.com"])
+
     // Postgres reaches its gate in the clear on its own network: it runs
     // as it did, with no certificate of its own.
     const database = await harness.databases.target(id)
