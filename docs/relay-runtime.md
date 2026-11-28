@@ -304,11 +304,13 @@ private network or a tunnel don't go through the gate.
   the gate's. Its log is kept to a few megabytes. Clients over a Tailscale
   subnet route arrive from the network's gateway. A gate not on both
   networks, as one a stopped Relay made partway, is made again. Postgres
-  clients that send a cancel request without TLS, as libpq before 17 does,
-  can't cancel a query through it, and a client that requires channel
-  binding (`channel_binding=require`) can't connect, as its TLS ends at the
-  gate. A MySQL client that doesn't send the name it connects to gets the
-  first name's certificate.
+  clients that send a cancel request without TLS, as psql's Ctrl-C and
+  libpq before 17 do, can't cancel a query through it, and a client that
+  requires channel binding (`channel_binding=require`) can't connect, as
+  its TLS ends at the gate. A client that doesn't send the name it connects
+  to gets the first name's certificate: `mysql` and `redis-cli` send it
+  only with `--tls-sni-servername` and `--sni`, while `psql` and `mariadb`
+  always do.
 - **Closing** removes the gate, its certificates and its network before the
   Relay forgets the database was public, so a close that fails leaves it
   public and kept, to close again. MySQL and MariaDB keep TLS until they're

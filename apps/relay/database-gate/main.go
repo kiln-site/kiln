@@ -542,7 +542,12 @@ func (c *certificates) current() ([]tls.Certificate, error) {
 		}
 		return nil, err
 	}
+	// Docker keeps the time its archive gives, to the second, and a renewed
+	// certificate can be the same size; each write is a new file, though.
 	stamp := fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
+	if file, ok := info.Sys().(*syscall.Stat_t); ok {
+		stamp += fmt.Sprintf(":%d", file.Ino)
+	}
 	if stamp == c.stamp {
 		return c.held, nil
 	}

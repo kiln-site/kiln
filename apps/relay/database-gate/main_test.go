@@ -289,11 +289,19 @@ func TestReadsItsCertificatesAgainWhenTheyChange(t *testing.T) {
 	}
 	secure(t, h.connect(t), "db.example.com", before.trust)
 
+	// Renewed, as Docker writes it: a new file, with the same time and,
+	// as often as not, the same size.
 	renewed := issue(t, "db.example.com")
-	writeCertificates(t, h.certificates, renewed)
-	// A file's time can be coarse; its size differs too, but not always.
-	future := time.Now().Add(time.Minute)
-	os.Chtimes(h.certificates, future, future)
+	stale, err := os.Stat(h.certificates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := h.certificates + ".next"
+	writeCertificates(t, next, renewed)
+	os.Chtimes(next, stale.ModTime(), stale.ModTime())
+	if err := os.Rename(next, h.certificates); err != nil {
+		t.Fatal(err)
+	}
 	secure(t, h.connect(t), "db.example.com", renewed.trust)
 }
 
