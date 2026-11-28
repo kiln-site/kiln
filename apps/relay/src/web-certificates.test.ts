@@ -1,8 +1,12 @@
+import "reflect-metadata"
+
+import { X509Certificate as NodeX509Certificate, webcrypto } from "node:crypto"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { promises as dnsCodes } from "node:dns"
 import { dirname, join } from "node:path"
 
+import { X509CertificateGenerator } from "@peculiar/x509"
 import type { RelayProxySettings } from "@workspace/contracts"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { parse } from "yaml"
@@ -173,7 +177,7 @@ describe("bundled Traefik certificates", () => {
     expect(traefik()).not.toEqual(refused)
   })
 
-  it("asks for one certificate for a public database's names once they all resolve, and gives the database only that", async () => {
+  it("asks for one certificate for a public database's names that resolve, and gives the database only its own", async () => {
     const database = {
       databaseId: "b".repeat(12),
       hostnames: ["db.example.com", "data.example.com"],
@@ -198,11 +202,15 @@ describe("bundled Traefik certificates", () => {
       },
     ])
 
-    // One name alone would get a certificate the other isn't on.
+    // A name never set up doesn't hold back the others' certificate, or
+    // its renewal.
     answers.set("db.example.com", "found")
     vi.setSystemTime(Date.now() + 15_000)
     await certificates.check()
-    expect(routers()?.[router]).toBeUndefined()
+    expect(routers()?.[router]).toMatchObject({
+      rule: "Host(`db.example.com`)",
+      tls: { certResolver: "kiln", domains: [{ main: "db.example.com" }] },
+    })
 
     answers.set("data.example.com", "found")
     vi.setSystemTime(Date.now() + 15_000)
@@ -215,46 +223,84 @@ describe("bundled Traefik certificates", () => {
       },
     })
 
-    // A wildcard's certificate serves a route, not a database, and one
-    // missing a name doesn't do; one for exactly its names wins over one
-    // for more.
-    const pem = (body: string, text = "x") =>
-      Buffer.from(
-        `-----BEGIN ${body}-----\n${text}\n-----END ${body}-----\n`
-      ).toString("base64")
-    const store = (
-      ...held: Array<{ main: string; sans?: Array<string>; text: string }>
+    // Its key goes into the database's container, so one naming anything
+    // else never does: a wildcard's, or one with another's name on it.
+    // One for exactly its names wins, else the one for most of them, and
+    // one that's run out never does.
+    const keys = (await webcrypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as webcrypto.CryptoKeyPair
+    const key = Buffer.from(
+      `-----BEGIN PRIVATE KEY-----\n${Buffer.from(
+        await webcrypto.subtle.exportKey("pkcs8", keys.privateKey)
+      ).toString("base64")}\n-----END PRIVATE KEY-----\n`
+    ).toString("base64")
+    const store = async (
+      ...held: Array<{
+        expired?: boolean
+        main: string
+        sans?: Array<string>
+        text: string
+      }>
     ) =>
       writeFile(
         webCertificateStorePath(config),
         JSON.stringify({
           kiln: {
             Account: null,
-            Certificates: held.map(({ text, ...domain }) => ({
-              certificate: pem("CERTIFICATE", text),
-              domain,
-              key: pem("PRIVATE KEY"),
-              Store: "default",
-            })),
+            Certificates: await Promise.all(
+              held.map(async ({ expired, text, ...domain }) => ({
+                certificate: Buffer.from(
+                  (
+                    await X509CertificateGenerator.createSelfSigned(
+                      {
+                        keys,
+                        name: `CN=${text}`,
+                        notAfter: new Date(
+                          Date.now() + (expired ? -1 : 30) * 24 * 60 * minute
+                        ),
+                        notBefore: new Date(Date.now() - 60 * 24 * 60 * minute),
+                        serialNumber: "01",
+                        signingAlgorithm: { hash: "SHA-256", name: "ECDSA" },
+                      },
+                      webcrypto
+                    )
+                  ).toString("pem")
+                ).toString("base64"),
+                domain,
+                key,
+                Store: "default",
+              }))
+            ),
           },
         })
       )
+    const given = async () => {
+      const held = await certificates.certificate(database.hostnames)
+      return held ? new NodeX509Certificate(held.chain).subject : null
+    }
     await store(
       { main: "*.example.com", text: "wildcard" },
-      { main: "DB.example.com", text: "one name" }
+      { main: "db.example.com", sans: ["shop.example.com"], text: "another's" }
     )
-    expect(await certificates.certificate(database.hostnames)).toBeNull()
+    expect(await given()).toBeNull()
     await store(
+      { main: "data.example.com", text: "one name" },
       {
+        expired: true,
         main: "db.example.com",
-        sans: ["data.example.com", "old.example.com"],
-        text: "more names",
-      },
+        sans: ["data.example.com"],
+        text: "run out",
+      }
+    )
+    expect(await given()).toBe("CN=one name")
+    await store(
+      { main: "DB.example.com", text: "one name" },
       { main: "data.example.com", sans: ["DB.example.com"], text: "its names" }
     )
-    expect(
-      (await certificates.certificate(database.hostnames))?.chain
-    ).toContain("its names")
+    expect(await given()).toBe("CN=its names")
   })
 
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {

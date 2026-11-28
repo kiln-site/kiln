@@ -266,8 +266,10 @@ database.
   another container or public database has is refused first. Its loop then
   has the Relay's own Traefik ask Let's Encrypt for one certificate for all
   the names, the first as its main name and the others as alternative
-  names, from one router per database, once every name resolves: the
-  database serves only one certificate. A Relay behind Coolify's proxy, or
+  names, from one router per database: the database serves only one
+  certificate. A name that doesn't resolve yet is left out until it does, as
+  a route's is, so one never set up can't stop the others' certificate
+  renewing. A Relay behind Coolify's proxy, or
   none, can't open one. When an open of a database that wasn't public
   fails, Hearth closes it on the Relay, as the Relay may have saved it
   before its answer was lost, and lets go of the names it claimed: Hearth
@@ -279,8 +281,10 @@ database.
   `root` login is then limited to the database's own container, as Kiln uses
   it. The gate starts last.
 - **Renewal and new names.** A new certificate, renewed or for names added
-  or removed since, is written over the old one and reloaded in place, one
-  for exactly its names before one for more. Until one for new names comes,
+  or removed since, is written over the old one and reloaded in place: one
+  for exactly its names, else the one for the most of them. A database is
+  never given a certificate naming anything that isn't its own, as its key
+  goes into the database's container. Until one for new names comes,
   the database keeps the one it has, and stays open at the names on it: `pg_reload_conf()`, `ALTER INSTANCE RELOAD TLS`, `FLUSH SSL`. Redis
   and Valkey restart for a second, as reloading theirs needs a login the
   Relay doesn't keep. MySQL's CA file holds the issuers up to a root from

@@ -11,7 +11,7 @@
  * a changed record takes a while to reach everyone, and a proxied one's proxy
  * longer, so it's asked for again a few times while it's missing.
  */
-import { createHash } from "node:crypto"
+import { createHash, X509Certificate } from "node:crypto"
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
 import { isIP } from "node:net"
@@ -466,21 +466,26 @@ export class WebCertificates {
   }
 
   /**
-   * The certificate Traefik holds for every one of `hostnames` itself, read
-   * afresh, or null; one for exactly those names before one for more. A
-   * database is given its own names', never a wildcard's.
+   * The certificate Traefik holds for a database's names, read afresh, or
+   * null: one for exactly `hostnames`, else the one for the most of them.
+   * Never one naming anything else, as its key goes into the database's
+   * container, nor a wildcard's or one that's run out.
    */
   async certificate(
     hostnames: ReadonlyArray<string>
   ): Promise<HeldCertificate | null> {
-    const wanted = hostnames.map((hostname) => hostname.toLowerCase())
-    const covering = (await this.#heldCertificates()).filter(({ names }) =>
-      wanted.every((name) => names.has(name))
-    )
-    const found =
-      covering.find(({ names }) => names.size === new Set(wanted).size) ??
-      covering[0]
-    return found?.held ?? null
+    const wanted = new Set(hostnames.map((hostname) => hostname.toLowerCase()))
+    const now = Date.now()
+    const best = (await this.#heldCertificates())
+      .filter(
+        ({ expiresAt, names }) =>
+          expiresAt > now && [...names].every((name) => wanted.has(name))
+      )
+      .sort(
+        (left, right) =>
+          right.names.size - left.names.size || right.expiresAt - left.expiresAt
+      )[0]
+    return best?.held ?? null
   }
 
   /**
@@ -499,7 +504,11 @@ export class WebCertificates {
 
   // Each certificate in Traefik's store, as PEM, with the names it's for.
   async #heldCertificates(): Promise<
-    Array<{ held: HeldCertificate; names: ReadonlySet<string> }>
+    Array<{
+      expiresAt: number
+      held: HeldCertificate
+      names: ReadonlySet<string>
+    }>
   > {
     const text = await recoverPromise(
       () => readFile(this.#storePath, "utf8"),
@@ -520,12 +529,16 @@ export class WebCertificates {
         ) {
           return []
         }
+        const expiresAt = Result.getOrNull(
+          Result.try(() => Date.parse(new X509Certificate(chain).validTo))
+        )
+        if (expiresAt === null || Number.isNaN(expiresAt)) return []
         const names = new Set(
           [stored.domain.main, ...(stored.domain.sans ?? [])].map((name) =>
             name.toLowerCase()
           )
         )
-        return [{ held: { chain, key }, names }]
+        return [{ expiresAt, held: { chain, key }, names }]
       })
     )
   }

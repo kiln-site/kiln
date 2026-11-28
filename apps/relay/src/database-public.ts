@@ -8,7 +8,8 @@
  * everything else through untouched: TLS ends in the database, which runs
  * with the certificate the Relay's Traefik got for its public names.
  *
- * Opening one waits for one certificate for all its names, then deploys the
+ * Opening one waits for one certificate for the names that resolve, then
+ * deploys the
  * database again with it (one restart), keeps MySQL's and MariaDB's root
  * login to their own container, and starts the gate last. A renewed
  * certificate, or one for names added since, is written over the old one
@@ -387,9 +388,9 @@ export class PublicDatabases {
     this.#saved = saved
   }
 
-  // The certificate for all its names, or, until that comes, the one it
-  // was last given, so a name added to an open database keeps it open at
-  // the others.
+  // The certificate for its names, or the most of them, or, until one
+  // comes, the one it was last given, so a name changed on an open database
+  // keeps it open at the others.
   async #held(
     saved: RelayStoredDatabasePublic
   ): Promise<HeldCertificate | null> {
