@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"log"
@@ -23,8 +24,9 @@ import (
 )
 
 // A certificate for some names, as PEM, chain then key, the way the Relay
-// writes each one, and a pool that trusts it.
+// writes each one, and a pool that trusts it. It's served for its first.
 type issued struct {
+	name  string
 	pem   []byte
 	trust *x509.CertPool
 }
@@ -57,6 +59,7 @@ func issue(t *testing.T, names ...string) issued {
 	trust := x509.NewCertPool()
 	trust.AddCert(leaf)
 	return issued{
+		name: names[0],
 		pem: append(
 			pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encodedKey})...,
@@ -65,13 +68,27 @@ func issue(t *testing.T, names ...string) issued {
 	}
 }
 
+// The Relay's file: each name and the certificate it's served.
+func certificatesFile(t *testing.T, held ...issued) []byte {
+	t.Helper()
+	type entry struct {
+		Name        string `json:"name"`
+		Certificate string `json:"certificate"`
+	}
+	var names []entry
+	for _, one := range held {
+		names = append(names, entry{Name: one.name, Certificate: string(one.pem)})
+	}
+	file, err := json.Marshal(map[string]any{"names": names})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
 func writeCertificates(t *testing.T, path string, held ...issued) {
 	t.Helper()
-	var file []byte
-	for _, one := range held {
-		file = append(file, one.pem...)
-	}
-	if err := os.WriteFile(path, file, 0o600); err != nil {
+	if err := os.WriteFile(path, certificatesFile(t, held...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -278,16 +295,39 @@ func TestGivesEachNameItsOwnCertificate(t *testing.T) {
 	}
 }
 
+func TestNeverPassesForANameThatIsntTheDatabases(t *testing.T) {
+	wildcard := issue(t, "*.example.com")
+	wildcard.name = "db.example.com"
+	h := start(t, protocolTLS, 8, 5*time.Second, wildcard)
+	secure(t, h.connect(t), "db.example.com", wildcard.trust)
+
+	// Another database's name, at this one's port: no certificate that
+	// would pass for it.
+	other := tls.Client(h.connect(t), &tls.Config{RootCAs: wildcard.trust, ServerName: "shop.example.com"})
+	if err := other.Handshake(); err == nil {
+		t.Fatal("the gate passed for another name")
+	}
+	// A name of the client's own, as a CNAME's, gets the first name's.
+	alias := secure(t, h.connect(t), "", nil)
+	if got := alias.ConnectionState().PeerCertificates[0].DNSNames[0]; got != "*.example.com" {
+		t.Fatalf("the client got %q", got)
+	}
+}
+
 func TestReadsItsCertificatesAgainWhenTheyChange(t *testing.T) {
 	before := issue(t, "db.example.com")
-	h := start(t, protocolTLS, 8, 5*time.Second, before)
+	orders := issue(t, "orders.example.net")
+	h := start(t, protocolTLS, 8, 5*time.Second, before, orders)
 	secure(t, h.connect(t), "db.example.com", before.trust)
 
-	// Caught partway through being written, the last good ones serve.
-	if err := os.WriteFile(h.certificates, before.pem[:len(before.pem)/2], 0o600); err != nil {
+	// Caught partway through being written, even just past its first name,
+	// the last good ones serve.
+	whole := certificatesFile(t, before, orders)
+	if err := os.WriteFile(h.certificates, whole[:len(whole)*2/3], 0o600); err != nil {
 		t.Fatal(err)
 	}
 	secure(t, h.connect(t), "db.example.com", before.trust)
+	secure(t, h.connect(t), "orders.example.net", orders.trust)
 
 	// Renewed, as Docker writes it: a new file, with the same time and,
 	// as often as not, the same size.
@@ -297,7 +337,7 @@ func TestReadsItsCertificatesAgainWhenTheyChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := h.certificates + ".next"
-	writeCertificates(t, next, renewed)
+	writeCertificates(t, next, renewed, orders)
 	os.Chtimes(next, stale.ModTime(), stale.ModTime())
 	if err := os.Rename(next, h.certificates); err != nil {
 		t.Fatal(err)

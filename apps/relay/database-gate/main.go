@@ -15,14 +15,15 @@
 // database's private network and a network of its own that publishes the
 // port. It reaches the database by its name there for every connection, so
 // it carries on while the database is deployed again. The Relay writes its
-// certificates into one file, which it reads again when it changes.
+// names and their certificates into one file, which it reads again when it
+// changes.
 package main
 
 import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
-	"encoding/pem"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -55,7 +56,7 @@ func main() {
 	protocol := flag.String("protocol", "", "postgres, mysql or tls")
 	listen := flag.String("listen", "", "the address to listen on, such as :5432")
 	target := flag.String("target", "", "the database, such as database-1234:5432")
-	certificates := flag.String("certificates", "", "a PEM file of each name's certificate chain, then its key")
+	certificates := flag.String("certificates", "", "a JSON file of each name and its certificate chain and key, as PEM")
 	maxConnections := flag.Int("max-connections", 512, "connections open at once")
 	handshake := flag.Duration("handshake-timeout", 10*time.Second, "how long a client has to ask for TLS")
 	flag.Parse()
@@ -522,17 +523,24 @@ func serverName(connection net.Conn) string {
 	return ""
 }
 
-// certificates are the database's public names', read from the file the
-// Relay writes whenever it changes. A file caught partway through being
-// written, or empty, leaves the last good ones in use.
+// certificates are the database's public names', each with its own, read
+// from the file the Relay writes whenever it changes: JSON, so one caught
+// partway through being written doesn't parse, and the last good ones stay
+// in use.
 type certificates struct {
 	path  string
 	mutex sync.Mutex
 	stamp string
-	held  []tls.Certificate
+	held  []named
 }
 
-func (c *certificates) current() ([]tls.Certificate, error) {
+// named is one of the database's names and the certificate it's served.
+type named struct {
+	name        string
+	certificate *tls.Certificate
+}
+
+func (c *certificates) current() ([]named, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	info, err := os.Stat(c.path)
@@ -552,7 +560,7 @@ func (c *certificates) current() ([]tls.Certificate, error) {
 		return c.held, nil
 	}
 	file, err := os.ReadFile(c.path)
-	var held []tls.Certificate
+	var held []named
 	if err == nil {
 		held, err = parseCertificates(file)
 	}
@@ -567,50 +575,57 @@ func (c *certificates) current() ([]tls.Certificate, error) {
 	return held, nil
 }
 
-// forClient picks the certificate for the name the client asked for, or the
-// first, which is the database's first name's, for one that named none.
+// forClient picks the certificate for the name the client asked for, or,
+// for one that named none or a name of its own, the first name's. A name
+// that isn't one of the database's never gets a certificate that would
+// pass for it, as a wildcard's could: it may be another database's, at
+// another port.
 func (c *certificates) forClient(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	held, err := c.current()
 	if err != nil {
 		return nil, fmt.Errorf("no certificate: %w", err)
 	}
 	name := strings.ToLower(strings.TrimSuffix(hello.ServerName, "."))
-	if name != "" {
-		for index := range held {
-			if held[index].Leaf != nil && held[index].Leaf.VerifyHostname(name) == nil {
-				return &held[index], nil
-			}
+	for _, entry := range held {
+		if entry.name == name {
+			return entry.certificate, nil
 		}
 	}
-	return &held[0], nil
+	first := held[0].certificate
+	if name != "" && first.Leaf != nil && first.Leaf.VerifyHostname(name) == nil {
+		return nil, fmt.Errorf("%s isn't one of this database's names", name)
+	}
+	return first, nil
 }
 
-// parseCertificates reads each certificate's chain, leaf first, then its
-// key, one after another.
-func parseCertificates(file []byte) ([]tls.Certificate, error) {
-	var held []tls.Certificate
-	var chain []byte
-	for {
-		block, rest := pem.Decode(file)
-		if block == nil {
-			break
-		}
-		file = rest
-		encoded := pem.EncodeToMemory(block)
-		switch {
-		case block.Type == "CERTIFICATE":
-			chain = append(chain, encoded...)
-		case strings.HasSuffix(block.Type, "PRIVATE KEY"):
-			certificate, err := tls.X509KeyPair(chain, encoded)
-			if err != nil {
-				return nil, err
-			}
-			held = append(held, certificate)
-			chain = nil
-		}
+// parseCertificates reads each name and its certificate, its chain, leaf
+// first, then its key, as PEM.
+func parseCertificates(file []byte) ([]named, error) {
+	var stored struct {
+		Names []struct {
+			Name        string `json:"name"`
+			Certificate string `json:"certificate"`
+		} `json:"names"`
 	}
-	if len(held) == 0 || len(chain) > 0 {
-		return nil, errors.New("the certificates file is incomplete")
+	if err := json.Unmarshal(file, &stored); err != nil {
+		return nil, fmt.Errorf("the certificates file is incomplete: %w", err)
+	}
+	parsed := map[string]*tls.Certificate{}
+	var held []named
+	for _, entry := range stored.Names {
+		certificate, ok := parsed[entry.Certificate]
+		if !ok {
+			pair, err := tls.X509KeyPair([]byte(entry.Certificate), []byte(entry.Certificate))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", entry.Name, err)
+			}
+			certificate = &pair
+			parsed[entry.Certificate] = certificate
+		}
+		held = append(held, named{name: strings.ToLower(entry.Name), certificate: certificate})
+	}
+	if len(held) == 0 {
+		return nil, errors.New("the certificates file names none")
 	}
 	return held, nil
 }

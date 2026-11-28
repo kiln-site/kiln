@@ -117,10 +117,19 @@ describe("a public database", () => {
       running: true,
     })
     const databases = await publicDatabases(harness)
-    const gateFile = () =>
-      fakeDocker.volumes
+    // Each name the gate serves, and its certificate.
+    const gateFile = () => {
+      const file = fakeDocker.volumes
         .get(`${TEST_NAMESPACE}-kiln-db-${id}-certificates`)
-        ?.files.get("certificates.pem")
+        ?.files.get("certificates.json")
+      return file === undefined
+        ? undefined
+        : (
+            JSON.parse(file) as {
+              names: Array<{ certificate: string; name: string }>
+            }
+          ).names
+    }
     await databases.write(id, {
       hostnames: ["data.example.com", "db.example.com"],
       port: 25_432,
@@ -134,21 +143,37 @@ describe("a public database", () => {
     const first = await traefikHolds(harness, ["db.example.com"])
     await databases.reconcile(id)
     expect(fakeDocker.container(gate)?.state.running).toBe(true)
-    expect(gateFile()).toContain(first.get("db.example.com")?.trim())
-    expect(gateFile()).toContain("PRIVATE KEY")
+    expect(gateFile()?.map(({ name }) => name)).toEqual(["db.example.com"])
+    expect(gateFile()?.[0]?.certificate).toContain(
+      first.get("db.example.com")?.trim()
+    )
+    expect(gateFile()?.[0]?.certificate).toContain("PRIVATE KEY")
     expect(databases.status({ id })).toMatchObject({ state: "open" })
 
-    // Both: each its own, the first name's first, for a client that names
+    // Both: each its own, the first name first, for a client that names
     // none.
     const both = await traefikHolds(harness, [
       "data.example.com",
       "db.example.com",
     ])
     await databases.reconcile(id)
-    const file = String(gateFile())
-    expect(file.indexOf(String(both.get("data.example.com")?.trim()))).toBe(0)
-    expect(file).toContain(both.get("db.example.com")?.trim())
-    expect(file).not.toContain(first.get("db.example.com")?.trim())
+    expect(gateFile()?.map(({ name }) => name)).toEqual([
+      "data.example.com",
+      "db.example.com",
+    ])
+    expect(gateFile()?.[0]?.certificate).toContain(
+      both.get("data.example.com")?.trim()
+    )
+    expect(gateFile()?.[1]?.certificate).toContain(
+      both.get("db.example.com")?.trim()
+    )
+
+    // Traefik's store caught partway through being written says nothing:
+    // the gate stays as it is.
+    await writeFile(webCertificateStorePath(harness.config), '{"kiln": {')
+    await databases.reconcile(id)
+    expect(fakeDocker.container(gate)?.state.running).toBe(true)
+    expect(gateFile()).toHaveLength(2)
 
     // Postgres reaches its gate in the clear on its own network: it runs
     // as it did, with no certificate of its own.
@@ -161,6 +186,38 @@ describe("a public database", () => {
     await databases.write(id, null)
     expect(fakeDocker.container(gate)).toBeUndefined()
     expect(gateFile()).toBeUndefined()
+  })
+
+  it("moves a database opened before its gate ended TLS itself off its names' certificate", async () => {
+    const harness = await withDatabase()
+    fakeDocker.addContainer({
+      image: "kiln/relay:test",
+      name: harness.config.selfContainer ?? hostname(),
+      running: true,
+    })
+    const databases = await publicDatabases(harness)
+    await databases.write(id, opened)
+    await traefikHolds(harness, ["db.example.com"])
+    // As the Relay before the update left it: Postgres running with the
+    // name's certificate and key in a volume of its own.
+    const before = await harness.databases.target(id)
+    const container = fakeDocker.container(String(before.containerId))
+    if (!container) throw new Error("no database container")
+    container.labels["kiln.database.tls"] = "public"
+    const tlsVolume = `${TEST_NAMESPACE}-kiln-db-${id}-tls`
+    fakeDocker.addVolume({ name: tlsVolume })
+
+    await databases.reconcile(id)
+
+    const after = await harness.databases.target(id)
+    expect(after.containerId).not.toBe(before.containerId)
+    expect(
+      fakeDocker.container(String(after.containerId))?.labels[
+        "kiln.database.tls"
+      ]
+    ).toBeUndefined()
+    expect(fakeDocker.volumes.has(tlsVolume)).toBe(false)
+    expect(fakeDocker.container(gate)?.state.running).toBe(true)
   })
 
   it("stays public, and kept, when its gate can't be removed as it closes", async () => {

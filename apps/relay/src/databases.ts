@@ -754,9 +754,13 @@ export class DatabaseDriver {
     )
   }
 
-  /** Whether the database's container runs with TLS for its gate. */
-  async hasPublicTls(databaseId: string): Promise<boolean> {
-    return (await this.#labels(databaseId))[TLS_LABEL] === "public"
+  /**
+   * The TLS the database's container runs with: `gate` for its gate's, or
+   * another value, as a public database's before its gate ended TLS itself
+   * had; null without.
+   */
+  async tls(databaseId: string): Promise<string | null> {
+    return (await this.#labels(databaseId))[TLS_LABEL] ?? null
   }
 
   /**
@@ -840,7 +844,7 @@ export class DatabaseDriver {
                   label !== WORKLOAD_SLICE_LABEL && label !== TLS_LABEL
               )
             ),
-            ...(tls && { [TLS_LABEL]: "public" }),
+            ...(tls && { [TLS_LABEL]: GATE_TLS }),
           },
           ...this.#docker.allocations.workloadSpec(),
           mounts: [
@@ -1741,8 +1745,10 @@ export interface DatabaseTls {
 
 /** Where a public database's certificate is, in its container. */
 export const TLS_FOLDER = "/kiln-tls"
-// A container made to run with it.
+// A container made to run with it, and the value that says it's for its
+// gate.
 const TLS_LABEL = "kiln.database.tls"
+export const GATE_TLS = "gate"
 
 // Its command with TLS turned on, from the files in TLS_FOLDER. Clients
 // choose TLS or not; only its gate uses it.

@@ -474,13 +474,16 @@ export class WebCertificates {
    * afresh, one for each name or null: the one that runs out last of those
    * whose leaf names it. Their keys go into the database's gate, which the
    * Relay keeps, never the database, so one naming more, or a wildcard's,
-   * serves a name as one serves a route.
+   * serves a name as one serves a route. Null while the store can't be
+   * read, as while Traefik writes it, which says nothing of what it holds.
    */
   async certificates(
     hostnames: ReadonlyArray<string>
-  ): Promise<Array<HeldCertificate | null>> {
+  ): Promise<Array<HeldCertificate | null> | null> {
     const now = Date.now()
-    const held = (await this.#heldCertificates())
+    const stored = await this.#heldCertificates()
+    if (!stored) return null
+    const held = stored
       .filter(({ expiresAt }) => expiresAt > now)
       .sort((left, right) => right.expiresAt - left.expiresAt)
     return hostnames.map(
@@ -490,19 +493,20 @@ export class WebCertificates {
   }
 
   // Each certificate in Traefik's store, as PEM, with its leaf parsed; one
-  // that doesn't parse is left out.
-  async #heldCertificates(): Promise<
-    Array<HeldCertificate & { readonly leaf: X509Certificate }>
-  > {
+  // that doesn't parse is left out. Null when the store can't be read, or
+  // is empty or partway written, as before Traefik first writes it.
+  async #heldCertificates(): Promise<Array<
+    HeldCertificate & { readonly leaf: X509Certificate }
+  > | null> {
     const text = await recoverPromise(
       () => readFile(this.#storePath, "utf8"),
       () => null
     )
-    if (!text?.trim()) return []
+    if (!text?.trim()) return null
     const parsed = acmeCertificatesSchema.safeParse(
       Result.getOrNull(Result.try(() => JSON.parse(text) as unknown))
     )
-    if (!parsed.success) return []
+    if (!parsed.success) return null
     return Object.values(parsed.data).flatMap((resolver) =>
       (resolver?.Certificates ?? []).flatMap((stored) => {
         const chain = Buffer.from(stored.certificate, "base64").toString("utf8")

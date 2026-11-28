@@ -289,7 +289,7 @@ describe("bundled Traefik certificates", () => {
     )
     const given = await certificates.certificates(database.hostnames)
     expect(
-      given.map((held) =>
+      given?.map((held) =>
         held ? new NodeX509Certificate(held.chain).subject : null
       )
     ).toEqual([
@@ -297,6 +297,10 @@ describe("bundled Traefik certificates", () => {
       "CN=*.example.com for 20",
     ])
     expect(await certificates.certificates(["db.example.org"])).toEqual([null])
+
+    // Caught partway through Traefik writing it, the store says nothing.
+    await writeFile(webCertificateStorePath(config), '{"kiln": {"Certific')
+    expect(await certificates.certificates(database.hostnames)).toBeNull()
   })
 
   it("asks again when someone checks, a few times an hour for the whole Relay", async () => {

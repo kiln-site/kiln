@@ -286,12 +286,18 @@ private network or a tunnel don't go through the gate.
   `/kiln-tls`): one restart. The gate checks no name on it, as it reaches
   the database on its private network. Their `root` login is then limited
   to the database's own container, as Kiln uses it. Postgres, Redis and
-  Valkey run as they were.
-- **Renewal and new names.** The Relay writes each name's certificate,
-  chain then key, into one file in a volume of the gate's own
-  (`kiln-db-<id>-certificates`), readable only by the user the gate runs
+  Valkey run as they were. A database opened before the gate ended TLS
+  itself, which runs with its names' certificate, is deployed again once
+  without it, and its old TLS volume removed; one closed then keeps it until
+  it's next deployed, its certificate running out within 90 days.
+- **Renewal and new names.** The Relay writes each name and its
+  certificate, chain then key, into one JSON file in a volume of the gate's
+  own (`kiln-db-<id>-certificates`), readable only by the user the gate runs
   as; the gate reads it again when it changes, keeping the last good one
-  while it's being written. The keys stay with the gate: the database never
+  while it's being written. It serves each name its own, and never gives a
+  name that isn't the database's a certificate that would pass for it, as a
+  wildcard's could: that name may be another database's, at another port.
+  Traefik's store caught partway through being written changes nothing. The keys stay with the gate: the database never
   has them, so whoever can read the database's files can't take them, and a
   certificate that names more, or a wildcard's, serves a name as it would a
   route. A renewed certificate, or one for a name added since, is in use at

@@ -42,6 +42,7 @@ import {
   tapPromiseError,
 } from "./effect/promise.js"
 import {
+  GATE_TLS,
   TLS_FOLDER,
   type DatabaseDriver,
   type DatabaseTls,
@@ -75,7 +76,7 @@ const GATE_PORT_LABEL = "kiln.database.gate-port"
 // Where the gate reads its names' certificates, each chain then its key, in
 // a volume of its own: its container's filesystem is read-only.
 const GATE_CERTIFICATES = "/kiln-certificates"
-const GATE_CERTIFICATES_FILE = "certificates.pem"
+const GATE_CERTIFICATES_FILE = "certificates.json"
 // The user the gate runs as, which must be able to read them.
 const GATE_USER = 65_534
 
@@ -93,6 +94,12 @@ const gateProtocols: Record<DatabaseEngine, "mysql" | "postgres" | "tls"> = {
   postgres: "postgres",
   redis: "tls",
   valkey: "tls",
+}
+
+// One of a public database's names, and the certificate its gate serves.
+interface Served {
+  readonly held: HeldCertificate
+  readonly name: string
 }
 
 export interface PublicDatabaseOptions {
@@ -235,19 +242,33 @@ export class PublicDatabases {
     const { databases, state } = this.#options
     const id = saved.databaseId
     const served = await this.#served(saved)
+    // Traefik's store couldn't be read: nothing has changed.
+    if (served === null) return
     // Never open without TLS: the gate waits for a certificate.
     if (served.length === 0) {
       await this.#removeGate(id)
       return
     }
     const database = await databases.target(id)
-    if (ownTls(database.engine) && !(await databases.hasPublicTls(id))) {
+    // MySQL and MariaDB run with TLS for their gate; the others without.
+    // One opened before its gate ended TLS itself runs with its names'
+    // certificate, and is deployed again without it, its volume gone.
+    const tls = await databases.tls(id)
+    const wanted = ownTls(database.engine) ? GATE_TLS : null
+    if (tls !== wanted) {
       await databases.redeployForPublic(id)
+      if (wanted === null) {
+        await Effect.runPromise(
+          this.#options.engine
+            .removeVolume(this.#name(id, "tls"))
+            .pipe(Effect.ignore)
+        )
+      }
     }
     this.#expires.set(
       id,
       new Date(
-        Math.min(...served.map(({ expiresAt }) => expiresAt))
+        Math.min(...served.map(({ held }) => held.expiresAt))
       ).toISOString()
     )
     if (!saved.rootLocal) {
@@ -389,20 +410,18 @@ export class PublicDatabases {
     this.#saved = saved
   }
 
-  // Each of its names' certificates, its first name's first, each once: a
-  // client that names none gets the first.
+  // Each of its names that has a certificate, and that certificate, its
+  // first name first: a client that names none gets the first. Null while
+  // Traefik's store can't be read.
   async #served(
     saved: RelayStoredDatabasePublic
-  ): Promise<Array<HeldCertificate>> {
-    const served: Array<HeldCertificate> = []
-    for (const held of await this.#options.certificates.certificates(
-      saved.hostnames
-    )) {
-      if (held && !served.some(({ chain }) => chain === held.chain)) {
-        served.push(held)
-      }
-    }
-    return served
+  ): Promise<Array<Served> | null> {
+    const held = await this.#options.certificates.certificates(saved.hostnames)
+    if (!held) return null
+    return saved.hostnames.flatMap((name, index) => {
+      const certificate = held[index]
+      return certificate ? [{ held: certificate, name }] : []
+    })
   }
 
   #portUnclaimed(databaseId: string, port: number): void {
@@ -443,15 +462,20 @@ export class PublicDatabases {
     )
   }
 
-  // Writes its names' certificates into its gate, which reads them again
-  // when they change, unless they're what it has.
+  // Writes its names and their certificates into its gate, which reads
+  // them again when they change, unless they're what it has. The gate
+  // serves each name only its own, and no other name one that would pass
+  // for it.
   async #writeCertificates(
     databaseId: string,
-    served: ReadonlyArray<HeldCertificate>
+    served: ReadonlyArray<Served>
   ): Promise<void> {
-    const file = served
-      .map(({ chain, key }) => `${chain.trim()}\n${key.trim()}\n`)
-      .join("")
+    const file = JSON.stringify({
+      names: served.map(({ held, name }) => ({
+        certificate: `${held.chain.trim()}\n${held.key.trim()}\n`,
+        name,
+      })),
+    })
     const written = createHash("sha256").update(file).digest("hex")
     if (this.#written.get(databaseId) === written) return
     const archive = tarPack()
@@ -496,7 +520,7 @@ export class PublicDatabases {
     databaseId: string,
     port: number,
     database: RelayManagedDatabase,
-    served: ReadonlyArray<HeldCertificate>
+    served: ReadonlyArray<Served>
   ): Promise<void> {
     const { config, engine, hostPorts } = this.#options
     const name = this.#name(databaseId, "public")
@@ -586,7 +610,8 @@ export class PublicDatabases {
             [GATE_VERSION_LABEL]: GATE_VERSION,
             ...ownerLabels,
           },
-          memory: "64m",
+          // TLS on both sides of each of 512 connections, as MySQL's are.
+          memory: "192m",
           mounts: [
             {
               source: this.#name(databaseId, "certificates"),
