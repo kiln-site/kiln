@@ -31,8 +31,8 @@ import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 // added, renamed and deleted there, each held by it alone, with a record that
 // points at its Relay and never goes through Cloudflare's proxy. One with a
 // name is open to the internet at a port, the same for each; one without is
-// closed. Its Relay's Traefik gets one certificate for all its names, and its
-// gate holds the port. The Relay keeps the port and the names it was given,
+// closed. Its Relay's Traefik gets a certificate for each name, and its gate
+// holds the port and serves them. The Relay keeps the port and the names it was given,
 // and says how opening it stands in the database's listing.
 
 interface DatabasePublicScope {
@@ -167,7 +167,7 @@ export interface DatabaseNamesChange {
  * and one without is closed: its first name opens it, and deleting its last
  * closes it. Each new name is claimed as a web route's is, and refused the
  * same way; one it no longer lists is let go, its record deleted. Its Relay
- * gets them first, for one certificate for them all. A change its Relay
+ * gets them first, for their certificates. A change its Relay
  * refuses leaves it as it was. The caller holds `databasePublicLocks`.
  */
 export const saveDatabaseNamesEffect = Effect.fn("databases.names.save")(

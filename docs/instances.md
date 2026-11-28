@@ -598,8 +598,8 @@ from a tag or an image name today.
    sees, and a Brick goes by its ID after whose it is. Done.
 9. Domains for every kind. Done: a database's public domains are rows of
    its Domains table, beside its tunnel names. Its first opens it to the
-   internet at a port, one certificate's TLS required by a gate that holds
-   the port ([Public databases](relay-runtime.md#public-databases)), and
+   internet at a port, through a gate that holds the port and serves each
+   domain's certificate ([Public databases](relay-runtime.md#public-databases)), and
    deleting its last closes it. One that's open can't be moved, only closed
    first. An IP allowlist comes as a feature of every instance.
 10. One instance page, with each kind's own tabs.

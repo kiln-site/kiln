@@ -391,16 +391,13 @@ export function traefikDynamicConfiguration(
   }
   const routeConfiguration = traefikFileRoutes(resources, served, certificates)
   lines.push(...routeConfiguration.routers)
-  // A router of its own is how Traefik asks for a database's certificate,
-  // one for its names, as the database serves only one; its gate serves it,
-  // with the database's own TLS. A name that doesn't resolve yet is left
-  // out, as a route's is, so one never set up can't stop the others'
-  // certificate renewing.
+  // A router of its own is how Traefik asks for a database's names'
+  // certificates, one for each, as for a route's; its gate serves them. A
+  // name that doesn't resolve yet is left out, as a route's is.
   if (config.proxyMode === "traefik") {
     for (const { databaseId, hostnames } of databaseNames) {
       const requested = hostnames.filter((name) => certificates.requests(name))
-      const [main, ...sans] = requested
-      if (!main) continue
+      if (requested.length === 0) continue
       lines.push(
         `    kiln-database-${databaseId}:`,
         `      rule: ${JSON.stringify(
@@ -412,13 +409,7 @@ export function traefikDynamicConfiguration(
         "      tls:",
         "        certResolver: kiln",
         "        domains:",
-        `          - main: ${JSON.stringify(main)}`,
-        ...(sans.length > 0
-          ? [
-              "            sans:",
-              ...sans.map((name) => `              - ${JSON.stringify(name)}`),
-            ]
-          : [])
+        ...requested.map((name) => `          - main: ${JSON.stringify(name)}`)
       )
     }
   }

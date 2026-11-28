@@ -16,7 +16,7 @@ import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js
 
 describe("Relay state", () => {
   stateTest(
-    "keeps a public database's certificate and root as its names and port change",
+    "keeps a public database's root login local as its names and port change",
     () =>
       Effect.gen(function* () {
         const store = yield* RelayStateStore
@@ -24,19 +24,13 @@ describe("Relay state", () => {
           hostnames: ["shop.example.com"],
           port: 5432,
         })
-        yield* store.markDatabasePublic("aaaaaaaaaaaa", {
-          certificate: "first",
-          rootLocal: true,
-        })
-        // The database serves the certificate it has until one for its new
-        // names comes.
+        yield* store.markDatabaseRootLocal("aaaaaaaaaaaa")
         yield* store.setDatabasePublic("aaaaaaaaaaaa", {
           hostnames: ["orders.example.com", "shop.example.com"],
           port: 15432,
         })
         assert.deepStrictEqual(yield* store.listDatabasePublic(), [
           {
-            certificate: "first",
             databaseId: "aaaaaaaaaaaa",
             hostnames: ["orders.example.com", "shop.example.com"],
             port: 15432,
@@ -87,7 +81,6 @@ describe("Relay state", () => {
           }).pipe(Effect.provide(makeRelayStateLayer(filename)))
           assert.deepStrictEqual(kept, [
             {
-              certificate: "first",
               databaseId: "aaaaaaaaaaaa",
               hostnames: ["shop.example.com"],
               port: 25432,

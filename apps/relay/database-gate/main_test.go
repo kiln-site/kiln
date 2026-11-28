@@ -2,25 +2,107 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
+// A certificate for some names, as PEM, chain then key, the way the Relay
+// writes each one, and a pool that trusts it. It's served for its first.
+type issued struct {
+	name  string
+	pem   []byte
+	trust *x509.CertPool
+}
+
+func issue(t *testing.T, names ...string) issued {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		DNSNames:     names,
+		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    time.Now().Add(-time.Hour),
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: names[0]},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedKey, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := x509.NewCertPool()
+	trust.AddCert(leaf)
+	return issued{
+		name: names[0],
+		pem: append(
+			pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encodedKey})...,
+		),
+		trust: trust,
+	}
+}
+
+// The Relay's file: each name and the certificate it's served.
+func certificatesFile(t *testing.T, held ...issued) []byte {
+	t.Helper()
+	type entry struct {
+		Name        string `json:"name"`
+		Certificate string `json:"certificate"`
+	}
+	var names []entry
+	for _, one := range held {
+		names = append(names, entry{Name: one.name, Certificate: string(one.pem)})
+	}
+	file, err := json.Marshal(map[string]any{"names": names})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func writeCertificates(t *testing.T, path string, held ...issued) {
+	t.Helper()
+	if err := os.WriteFile(path, certificatesFile(t, held...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A gate in front of a fake database, which records what reaches it and
 // answers as the test says.
 type harness struct {
-	gate     string
-	output   *output
-	upstream chan net.Conn
+	certificates string
+	gate         string
+	output       *output
+	upstream     chan net.Conn
 }
 
-func start(t *testing.T, protocol string, maxConnections int, timeout time.Duration) *harness {
+func start(t *testing.T, protocol string, maxConnections int, timeout time.Duration, held ...issued) *harness {
 	t.Helper()
 	database, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -37,8 +119,13 @@ func start(t *testing.T, protocol string, maxConnections int, timeout time.Durat
 			accepted <- connection
 		}
 	}()
+	path := filepath.Join(t.TempDir(), "certificates.pem")
+	if len(held) == 0 {
+		held = []issued{issue(t, "db.example.com")}
+	}
+	writeCertificates(t, path, held...)
 	said := &output{}
-	g, err := newGate(protocol, database.Addr().String(), maxConnections, timeout, log.New(said, "", 0))
+	g, err := newGate(protocol, database.Addr().String(), path, maxConnections, timeout, log.New(said, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +135,7 @@ func start(t *testing.T, protocol string, maxConnections int, timeout time.Durat
 	}
 	t.Cleanup(func() { listener.Close() })
 	go g.serve(listener)
-	return &harness{gate: listener.Addr().String(), output: said, upstream: accepted}
+	return &harness{certificates: path, gate: listener.Addr().String(), output: said, upstream: accepted}
 }
 
 // What the gate printed, written from its connections' goroutines.
@@ -119,6 +206,22 @@ func write(t *testing.T, connection net.Conn, payload []byte) {
 	}
 }
 
+// secure starts the client's TLS with the gate, checking its certificate
+// for `name` against `trust`; an empty name sends none.
+func secure(t *testing.T, connection net.Conn, name string, trust *x509.CertPool, protocols ...string) *tls.Conn {
+	t.Helper()
+	config := &tls.Config{NextProtos: protocols, RootCAs: trust, ServerName: name}
+	if name == "" {
+		// Checked by hand below: Go sends the name it checks.
+		config.InsecureSkipVerify = true
+	}
+	client := tls.Client(connection, config)
+	if err := client.Handshake(); err != nil {
+		t.Fatalf("TLS with the gate: %v", err)
+	}
+	return client
+}
+
 // closed checks the other end hung up, after any bytes it sent first.
 func closed(t *testing.T, connection net.Conn) []byte {
 	t.Helper()
@@ -139,8 +242,6 @@ func eventually(t *testing.T, done func() bool) {
 	t.Fatal("it never happened")
 }
 
-var clientHello = []byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01}
-
 func postgresMessage(code uint32) []byte {
 	message := make([]byte, 8)
 	binary.BigEndian.PutUint32(message[0:4], 8)
@@ -155,26 +256,93 @@ func postgresStartup() []byte {
 	return append(message, body...)
 }
 
-func TestPostgresPassesTLSThrough(t *testing.T) {
-	h := start(t, protocolPostgres, 8, 5*time.Second)
+func TestPostgresEndsTLSAndPassesTheStartupOnInTheClear(t *testing.T) {
+	certificate := issue(t, "db.example.com")
+	h := start(t, protocolPostgres, 8, 5*time.Second, certificate)
 	client := h.connect(t)
 	write(t, client, postgresMessage(postgresSSLRequest))
-	database := h.database(t)
-	if got := read(t, database, 8); !bytes.Equal(got, postgresMessage(postgresSSLRequest)) {
-		t.Fatalf("the database got %x", got)
-	}
-	write(t, database, []byte{'S'})
 	if got := read(t, client, 1); got[0] != 'S' {
 		t.Fatalf("the client got %q", got)
 	}
-	write(t, client, clientHello)
-	if got := read(t, database, len(clientHello)); !bytes.Equal(got, clientHello) {
+	secured := secure(t, client, "db.example.com", certificate.trust, "postgresql")
+	write(t, secured, postgresStartup())
+	database := h.database(t)
+	if got := read(t, database, len(postgresStartup())); !bytes.Equal(got, postgresStartup()) {
 		t.Fatalf("the database got %x", got)
 	}
-	write(t, database, []byte("server hello"))
-	if got := read(t, client, 12); string(got) != "server hello" {
+	write(t, database, []byte("R\x00\x00\x00\x08\x00\x00\x00\x00"))
+	if got := read(t, secured, 9); got[0] != 'R' {
 		t.Fatalf("the client got %q", got)
 	}
+	eventually(t, func() bool {
+		return strings.Contains(h.output.String(), "connected 127.0.0.1 to db.example.com")
+	})
+}
+
+func TestGivesEachNameItsOwnCertificate(t *testing.T) {
+	first := issue(t, "db.example.com")
+	second := issue(t, "orders.example.net")
+	h := start(t, protocolTLS, 8, 5*time.Second, first, second)
+
+	named := secure(t, h.connect(t), "orders.example.net", second.trust)
+	if got := named.ConnectionState().PeerCertificates[0].DNSNames; got[0] != "orders.example.net" {
+		t.Fatalf("the client got %v", got)
+	}
+	// A client that names none gets the first name's.
+	unnamed := secure(t, h.connect(t), "", nil)
+	if got := unnamed.ConnectionState().PeerCertificates[0].DNSNames; got[0] != "db.example.com" {
+		t.Fatalf("the client got %v", got)
+	}
+}
+
+func TestNeverPassesForANameThatIsntTheDatabases(t *testing.T) {
+	wildcard := issue(t, "*.example.com")
+	wildcard.name = "db.example.com"
+	h := start(t, protocolTLS, 8, 5*time.Second, wildcard)
+	secure(t, h.connect(t), "db.example.com", wildcard.trust)
+
+	// Another database's name, at this one's port: no certificate that
+	// would pass for it.
+	other := tls.Client(h.connect(t), &tls.Config{RootCAs: wildcard.trust, ServerName: "shop.example.com"})
+	if err := other.Handshake(); err == nil {
+		t.Fatal("the gate passed for another name")
+	}
+	// A name of the client's own, as a CNAME's, gets the first name's.
+	alias := secure(t, h.connect(t), "", nil)
+	if got := alias.ConnectionState().PeerCertificates[0].DNSNames[0]; got != "*.example.com" {
+		t.Fatalf("the client got %q", got)
+	}
+}
+
+func TestReadsItsCertificatesAgainWhenTheyChange(t *testing.T) {
+	before := issue(t, "db.example.com")
+	orders := issue(t, "orders.example.net")
+	h := start(t, protocolTLS, 8, 5*time.Second, before, orders)
+	secure(t, h.connect(t), "db.example.com", before.trust)
+
+	// Caught partway through being written, even just past its first name,
+	// the last good ones serve.
+	whole := certificatesFile(t, before, orders)
+	if err := os.WriteFile(h.certificates, whole[:len(whole)*2/3], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secure(t, h.connect(t), "db.example.com", before.trust)
+	secure(t, h.connect(t), "orders.example.net", orders.trust)
+
+	// Renewed, as Docker writes it: a new file, with the same time and,
+	// as often as not, the same size.
+	renewed := issue(t, "db.example.com")
+	stale, err := os.Stat(h.certificates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := h.certificates + ".next"
+	writeCertificates(t, next, renewed, orders)
+	os.Chtimes(next, stale.ModTime(), stale.ModTime())
+	if err := os.Rename(next, h.certificates); err != nil {
+		t.Fatal(err)
+	}
+	secure(t, h.connect(t), "db.example.com", renewed.trust)
 }
 
 func TestPostgresRefusesAPlainStartup(t *testing.T) {
@@ -192,39 +360,31 @@ func TestPostgresRefusesAPlainStartup(t *testing.T) {
 }
 
 func TestPostgresDeclinesGSSAPIThenTakesTLS(t *testing.T) {
-	h := start(t, protocolPostgres, 8, 5*time.Second)
+	certificate := issue(t, "db.example.com")
+	h := start(t, protocolPostgres, 8, 5*time.Second, certificate)
 	client := h.connect(t)
 	write(t, client, postgresMessage(postgresGSSRequest))
 	if got := read(t, client, 1); got[0] != 'N' {
 		t.Fatalf("the client got %q", got)
 	}
 	write(t, client, postgresMessage(postgresSSLRequest))
-	database := h.database(t)
-	if got := read(t, database, 8); !bytes.Equal(got, postgresMessage(postgresSSLRequest)) {
-		t.Fatalf("the database got %x", got)
+	if got := read(t, client, 1); got[0] != 'S' {
+		t.Fatalf("the client got %q", got)
 	}
+	secure(t, client, "db.example.com", certificate.trust)
 }
 
 func TestPostgresTakesDirectTLS(t *testing.T) {
-	h := start(t, protocolPostgres, 8, 5*time.Second)
-	client := h.connect(t)
-	write(t, client, clientHello)
-	database := h.database(t)
-	if got := read(t, database, len(clientHello)); !bytes.Equal(got, clientHello) {
-		t.Fatalf("the database got %x", got)
+	certificate := issue(t, "db.example.com")
+	h := start(t, protocolPostgres, 8, 5*time.Second, certificate)
+	secured := secure(t, h.connect(t), "db.example.com", certificate.trust, "postgresql")
+	if got := secured.ConnectionState().NegotiatedProtocol; got != "postgresql" {
+		t.Fatalf("it agreed on %q", got)
 	}
-}
-
-func TestPostgresRefusesWhenTheDatabaseHasNoTLS(t *testing.T) {
-	h := start(t, protocolPostgres, 8, 5*time.Second)
-	client := h.connect(t)
-	write(t, client, postgresMessage(postgresSSLRequest))
+	write(t, secured, postgresStartup())
 	database := h.database(t)
-	read(t, database, 8)
-	write(t, database, []byte{'N'})
-	answer := closed(t, client)
-	if len(answer) == 0 || answer[0] != 'E' {
-		t.Fatalf("the client got %q", answer)
+	if got := read(t, database, len(postgresStartup())); !bytes.Equal(got, postgresStartup()) {
+		t.Fatalf("the database got %x", got)
 	}
 }
 
@@ -232,12 +392,10 @@ func TestPostgresRefusesPlainBytesAfterAgreeingToTLS(t *testing.T) {
 	h := start(t, protocolPostgres, 8, 5*time.Second)
 	client := h.connect(t)
 	write(t, client, postgresMessage(postgresSSLRequest))
-	database := h.database(t)
-	read(t, database, 8)
-	write(t, database, []byte{'S'})
 	read(t, client, 1)
 	write(t, client, postgresStartup())
 	closed(t, client)
+	database := h.database(t)
 	if rest := closed(t, database); len(rest) != 0 {
 		t.Fatalf("the database got %q", rest)
 	}
@@ -259,27 +417,59 @@ func mysqlPacket(sequence byte, payload []byte) []byte {
 	return append(header, payload...)
 }
 
+// A server's greeting: its version, connection ID, the first part of its
+// challenge, then its capabilities.
+func mysqlGreeting(capabilities uint16) []byte {
+	payload := []byte("\x0a8.4.13\x00\x01\x00\x00\x00challeng\x00")
+	payload = binary.LittleEndian.AppendUint16(payload, capabilities)
+	payload = append(payload, "\xff\x02\x00\xff\xc3rest"...)
+	return mysqlPacket(0, payload)
+}
+
 func mysqlLogin(capabilities uint32, length int) []byte {
 	payload := make([]byte, length)
 	binary.LittleEndian.PutUint32(payload[0:4], capabilities)
 	return mysqlPacket(1, payload)
 }
 
-func TestMySQLPassesTLSThrough(t *testing.T) {
-	h := start(t, protocolMySQL, 8, 5*time.Second)
+func TestMySQLEndsTLSAndStartsItsOwnToTheDatabase(t *testing.T) {
+	certificate := issue(t, "db.example.com")
+	h := start(t, protocolMySQL, 8, 5*time.Second, certificate)
 	client := h.connect(t)
 	database := h.database(t)
-	greeting := mysqlPacket(0, []byte("\x0a8.4.13\x00greeting"))
+	greeting := mysqlGreeting(0xffff)
 	write(t, database, greeting)
 	if got := read(t, client, len(greeting)); !bytes.Equal(got, greeting) {
 		t.Fatalf("the client got %q", got)
 	}
 	request := mysqlLogin(0x000aa200|mysqlClientSSL, mysqlSSLRequestBytes)
 	write(t, client, request)
-	write(t, client, clientHello)
-	want := append(append([]byte{}, request...), clientHello[0])
-	if got := read(t, database, len(want)); !bytes.Equal(got, want) {
+	secured := make(chan *tls.Conn, 1)
+	go func() { secured <- secure(t, client, "db.example.com", certificate.trust) }()
+
+	// The database is asked for TLS in the client's words, then starts it
+	// with its own certificate, whatever its name.
+	if got := read(t, database, len(request)); !bytes.Equal(got, request) {
 		t.Fatalf("the database got %x", got)
+	}
+	own := issue(t, "database-1234")
+	ownCertificate, err := tls.X509KeyPair(own.pem, own.pem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := tls.Server(database, &tls.Config{Certificates: []tls.Certificate{ownCertificate}})
+	if err := server.Handshake(); err != nil {
+		t.Fatalf("TLS with the database: %v", err)
+	}
+	front := <-secured
+	login := mysqlPacket(2, []byte("login: kiln and its scrambled password"))
+	write(t, front, login)
+	if got := read(t, server, len(login)); !bytes.Equal(got, login) {
+		t.Fatalf("the database got %q", got)
+	}
+	write(t, server, mysqlPacket(3, []byte{0, 0, 0, 2, 0}))
+	if got := read(t, front, 9); got[3] != 3 || got[4] != 0 {
+		t.Fatalf("the client got %x", got)
 	}
 }
 
@@ -287,8 +477,9 @@ func TestMySQLRefusesAPlainLogin(t *testing.T) {
 	h := start(t, protocolMySQL, 8, 5*time.Second)
 	client := h.connect(t)
 	database := h.database(t)
-	write(t, database, mysqlPacket(0, []byte("\x0a8.4.13\x00greeting")))
-	read(t, client, 4+len("\x0a8.4.13\x00greeting"))
+	greeting := mysqlGreeting(0xffff)
+	write(t, database, greeting)
+	read(t, client, len(greeting))
 	// A login: its user and password hash, in the clear.
 	write(t, client, mysqlLogin(0x000aa200, 60))
 	answer := closed(t, client)
@@ -307,8 +498,9 @@ func TestMySQLRefusesA32ByteLoginWithoutTLS(t *testing.T) {
 	h := start(t, protocolMySQL, 8, 5*time.Second)
 	client := h.connect(t)
 	database := h.database(t)
-	write(t, database, mysqlPacket(0, []byte("\x0a8.4.13\x00greeting")))
-	read(t, client, 4+len("\x0a8.4.13\x00greeting"))
+	greeting := mysqlGreeting(0xffff)
+	write(t, database, greeting)
+	read(t, client, len(greeting))
 	write(t, client, mysqlLogin(0x000aa200, mysqlSSLRequestBytes))
 	answer := closed(t, client)
 	if len(answer) < 5 || answer[4] != 0xff {
@@ -316,6 +508,17 @@ func TestMySQLRefusesA32ByteLoginWithoutTLS(t *testing.T) {
 	}
 	if rest := closed(t, database); len(rest) != 0 {
 		t.Fatalf("the database got %q", rest)
+	}
+}
+
+func TestMySQLSaysWhenTheDatabaseHasNoTLS(t *testing.T) {
+	h := start(t, protocolMySQL, 8, 5*time.Second)
+	client := h.connect(t)
+	database := h.database(t)
+	write(t, database, mysqlGreeting(0xffff&^mysqlClientSSL))
+	answer := closed(t, client)
+	if len(answer) < 5 || answer[4] != 0xff || !bytes.Contains(answer, []byte("isn't ready for TLS")) {
+		t.Fatalf("the client got %q", answer)
 	}
 }
 
@@ -330,23 +533,21 @@ func TestMySQLPassesOnTheDatabasesOwnRefusal(t *testing.T) {
 	}
 }
 
-func TestTLSPortPassesTLSThrough(t *testing.T) {
-	h := start(t, protocolTLS, 8, 5*time.Second)
-	client := h.connect(t)
-	write(t, client, clientHello)
+func TestTLSPortEndsTLSAndPassesCommandsOnInTheClear(t *testing.T) {
+	certificate := issue(t, "db.example.com")
+	h := start(t, protocolTLS, 8, 5*time.Second, certificate)
+	secured := secure(t, h.connect(t), "db.example.com", certificate.trust)
+	write(t, secured, []byte("AUTH kiln secret\r\n"))
 	database := h.database(t)
-	if got := read(t, database, len(clientHello)); !bytes.Equal(got, clientHello) {
-		t.Fatalf("the database got %x", got)
+	if got := read(t, database, 18); string(got) != "AUTH kiln secret\r\n" {
+		t.Fatalf("the database got %q", got)
 	}
 	// Each side's end of sending reaches the other, and the gate is done
 	// once both have ended.
 	database.Close()
-	closed(t, client)
-	client.Close()
+	closed(t, secured)
+	secured.Close()
 	eventually(t, func() bool { return strings.Contains(h.output.String(), "closed 127.0.0.1") })
-	if out := h.output.String(); !strings.Contains(out, "connected 127.0.0.1") {
-		t.Fatalf("the gate said %q", out)
-	}
 }
 
 func TestTLSPortRefusesAPlainCommand(t *testing.T) {
@@ -371,9 +572,9 @@ func TestClosesAClientThatNeverAsks(t *testing.T) {
 }
 
 func TestClosesConnectionsPastTheLimit(t *testing.T) {
-	h := start(t, protocolTLS, 1, 5*time.Second)
-	first := h.connect(t)
-	write(t, first, clientHello)
+	certificate := issue(t, "db.example.com")
+	h := start(t, protocolTLS, 1, 5*time.Second, certificate)
+	secure(t, h.connect(t), "db.example.com", certificate.trust)
 	h.database(t)
 	second := h.connect(t)
 	closed(t, second)
@@ -389,7 +590,9 @@ func TestSaysWhenTheDatabaseIsAway(t *testing.T) {
 			}
 			target := away.Addr().String()
 			away.Close()
-			g, err := newGate(protocol, target, 8, 2*time.Second, log.New(io.Discard, "", 0))
+			path := filepath.Join(t.TempDir(), "certificates.pem")
+			writeCertificates(t, path, issue(t, "db.example.com"))
+			g, err := newGate(protocol, target, path, 8, 2*time.Second, log.New(io.Discard, "", 0))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -416,7 +619,7 @@ func TestSaysWhenTheDatabaseIsAway(t *testing.T) {
 }
 
 func TestRefusesAnUnknownProtocol(t *testing.T) {
-	if _, err := newGate("http", "127.0.0.1:1", 1, time.Second, log.New(io.Discard, "", 0)); err == nil {
+	if _, err := newGate("http", "127.0.0.1:1", "certificates.pem", 1, time.Second, log.New(io.Discard, "", 0)); err == nil {
 		t.Fatal("the gate took an unknown protocol")
 	}
 }

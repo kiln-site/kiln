@@ -11,7 +11,7 @@
  * a changed record takes a while to reach everyone, and a proxied one's proxy
  * longer, so it's asked for again a few times while it's missing.
  */
-import { createHash, X509Certificate } from "node:crypto"
+import { X509Certificate } from "node:crypto"
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
 import { isIP } from "node:net"
@@ -43,17 +43,21 @@ export interface TraefikCertificateGate {
 }
 
 /**
- * A public database's names, which need one certificate for them all, as a
- * route's do: the database serves only one.
+ * A public database's names, each needing a certificate of its own, as a
+ * route's do: its gate serves each name's.
  */
 export interface DatabaseCertificateName {
   readonly databaseId: string
   readonly hostnames: ReadonlyArray<string>
 }
 
-/** A certificate Traefik holds, as PEM: its chain, leaf first, and key. */
+/**
+ * A certificate Traefik holds, as PEM: its chain, leaf first, and key, and
+ * when it runs out, in milliseconds.
+ */
 export interface HeldCertificate {
   readonly chain: string
+  readonly expiresAt: number
   readonly key: string
 }
 
@@ -466,79 +470,53 @@ export class WebCertificates {
   }
 
   /**
-   * The certificate Traefik holds for a database's names, read afresh, or
-   * null: one for exactly `hostnames`, else the one for the most of them.
-   * Never one naming anything else, as its key goes into the database's
-   * container, nor a wildcard's or one that's run out.
+   * The certificates Traefik holds for a public database's names, read
+   * afresh, one for each name or null: the one that runs out last of those
+   * whose leaf names it. Their keys go into the database's gate, which the
+   * Relay keeps, never the database, so one naming more, or a wildcard's,
+   * serves a name as one serves a route. Null while the store can't be
+   * read, as while Traefik writes it, which says nothing of what it holds.
    */
-  async certificate(
+  async certificates(
     hostnames: ReadonlyArray<string>
-  ): Promise<HeldCertificate | null> {
-    const wanted = new Set(hostnames.map((hostname) => hostname.toLowerCase()))
+  ): Promise<Array<HeldCertificate | null> | null> {
     const now = Date.now()
-    const best = (await this.#heldCertificates())
-      .filter(
-        ({ expiresAt, names }) =>
-          expiresAt > now && [...names].every((name) => wanted.has(name))
-      )
-      .sort(
-        (left, right) =>
-          right.names.size - left.names.size || right.expiresAt - left.expiresAt
-      )[0]
-    return best?.held ?? null
-  }
-
-  /**
-   * The certificate Traefik holds whose chain has this SHA-256, read
-   * afresh, or null once it's gone.
-   */
-  async certificateWithFingerprint(
-    fingerprint: string
-  ): Promise<HeldCertificate | null> {
-    const found = (await this.#heldCertificates()).find(
-      ({ held }) =>
-        createHash("sha256").update(held.chain).digest("hex") === fingerprint
+    const stored = await this.#heldCertificates()
+    if (!stored) return null
+    const held = stored
+      .filter(({ expiresAt }) => expiresAt > now)
+      .sort((left, right) => right.expiresAt - left.expiresAt)
+    return hostnames.map(
+      (hostname) =>
+        held.find(({ leaf }) => leaf.checkHost(hostname) !== undefined) ?? null
     )
-    return found?.held ?? null
   }
 
-  // Each certificate in Traefik's store, as PEM, with the names it's for.
-  async #heldCertificates(): Promise<
-    Array<{
-      expiresAt: number
-      held: HeldCertificate
-      names: ReadonlySet<string>
-    }>
-  > {
+  // Each certificate in Traefik's store, as PEM, with its leaf parsed; one
+  // that doesn't parse is left out. Null when the store can't be read, or
+  // is empty or partway written, as before Traefik first writes it.
+  async #heldCertificates(): Promise<Array<
+    HeldCertificate & { readonly leaf: X509Certificate }
+  > | null> {
     const text = await recoverPromise(
       () => readFile(this.#storePath, "utf8"),
       () => null
     )
-    if (!text?.trim()) return []
+    if (!text?.trim()) return null
     const parsed = acmeCertificatesSchema.safeParse(
       Result.getOrNull(Result.try(() => JSON.parse(text) as unknown))
     )
-    if (!parsed.success) return []
+    if (!parsed.success) return null
     return Object.values(parsed.data).flatMap((resolver) =>
       (resolver?.Certificates ?? []).flatMap((stored) => {
         const chain = Buffer.from(stored.certificate, "base64").toString("utf8")
         const key = Buffer.from(stored.key, "base64").toString("utf8")
-        if (
-          !chain.includes("BEGIN CERTIFICATE") ||
-          !key.includes("PRIVATE KEY")
-        ) {
-          return []
-        }
-        const expiresAt = Result.getOrNull(
-          Result.try(() => Date.parse(new X509Certificate(chain).validTo))
+        if (!key.includes("PRIVATE KEY")) return []
+        const leaf = Result.getOrNull(
+          Result.try(() => new X509Certificate(chain))
         )
-        if (expiresAt === null || Number.isNaN(expiresAt)) return []
-        const names = new Set(
-          [stored.domain.main, ...(stored.domain.sans ?? [])].map((name) =>
-            name.toLowerCase()
-          )
-        )
-        return [{ expiresAt, held: { chain, key }, names }]
+        if (!leaf) return []
+        return [{ chain, expiresAt: Date.parse(leaf.validTo), key, leaf }]
       })
     )
   }

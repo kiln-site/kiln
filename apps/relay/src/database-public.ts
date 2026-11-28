@@ -4,30 +4,36 @@
  * A public database keeps its private network and its clients there. Its
  * public port is held by a gate, a container of its own from the Relay's
  * image (database-gate/), on that network and one of its own that publishes
- * the port. The gate refuses a client that doesn't ask for TLS and passes
- * everything else through untouched: TLS ends in the database, which runs
- * with the certificate the Relay's Traefik got for its public names.
+ * the port. The gate refuses a client that doesn't ask for TLS and ends TLS
+ * itself, with the certificate the Relay's Traefik got for the name the
+ * client asked for, each name having its own, then passes the connection on
+ * to the database on its private network. The keys stay in the gate, which
+ * the Relay keeps; the database never has them.
  *
- * Opening one waits for one certificate for the names that resolve, then
- * deploys the
- * database again with it (one restart), keeps MySQL's and MariaDB's root
- * login to their own container, and starts the gate last. A renewed
- * certificate, or one for names added since, is written over the old one
- * and reloaded; until it comes, the old one keeps the database open. Closing one removes its gate, then
- * forgets it; the database keeps TLS on until it's next deployed.
+ * Opening one waits for a certificate for one of its names, then starts the
+ * gate. MySQL and MariaDB take a password only on a connection they see as
+ * secure, so they're deployed again first with a certificate the Relay makes
+ * for them (one restart), and their root login is kept to their own
+ * container. A renewed certificate, or one for a name added since, is
+ * written into the gate, which reads it again. Closing one removes its gate,
+ * then forgets it.
  */
-import { createHash, X509Certificate } from "node:crypto"
-import { Readable } from "node:stream"
-import { rootCertificates } from "node:tls"
+import "reflect-metadata"
 
+import { createHash, randomBytes, webcrypto } from "node:crypto"
+import { Readable } from "node:stream"
+
+import { X509CertificateGenerator } from "@peculiar/x509"
 import type {
   DatabaseEngine,
   RelayDatabasePublic,
+  RelayPendingCertificate,
   RelayDatabasePublicStatus,
   RelayManagedDatabase,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { pack as tarPack } from "tar-stream"
+import { z } from "zod"
 
 import { helpersInDevelopment, relayContainer } from "./backups/tar-archives.js"
 import type { RelayConfig } from "./config.js"
@@ -37,7 +43,7 @@ import {
   tapPromiseError,
 } from "./effect/promise.js"
 import {
-  databaseTlsPort,
+  GATE_TLS,
   TLS_FOLDER,
   type DatabaseDriver,
   type DatabaseTls,
@@ -64,18 +70,22 @@ const GATE_PORT = 5432
  * Raised when the gate's program or how it runs changes, so each running
  * gate is replaced once; a Relay update alone leaves gates running.
  */
-const GATE_VERSION = "1"
+const GATE_VERSION = "2"
 const GATE_LABEL = "kiln.database.gate"
 const GATE_VERSION_LABEL = "kiln.database.gate-version"
 const GATE_PORT_LABEL = "kiln.database.gate-port"
+// Where the gate reads its names' certificates, each chain then its key, in
+// a volume of its own: its container's filesystem is read-only.
+const GATE_CERTIFICATES = "/kiln-certificates"
+const GATE_CERTIFICATES_FILE = "certificates.json"
+// The user the gate runs as, which must be able to read them.
+const GATE_USER = 65_534
 
-// Who each official image's server runs as, which must own its key.
-const engineUsers: Record<DatabaseEngine, string> = {
+// Who MySQL's and MariaDB's official images run their server as, which
+// must own its key.
+const engineUsers: Partial<Record<DatabaseEngine, string>> = {
   mariadb: "mysql",
   mysql: "mysql",
-  postgres: "postgres",
-  redis: "redis",
-  valkey: "valkey",
 }
 
 // What the gate tells TLS apart in, by engine.
@@ -85,6 +95,21 @@ const gateProtocols: Record<DatabaseEngine, "mysql" | "postgres" | "tls"> = {
   postgres: "postgres",
   redis: "tls",
   valkey: "tls",
+}
+
+// The gate's certificates file, as the Relay writes it.
+const gateCertificatesSchema = z.object({
+  names: z
+    .array(
+      z.object({ certificate: z.string().min(1), name: z.string().min(1) })
+    )
+    .min(1),
+})
+
+// One of a public database's names, and the certificate its gate serves.
+interface Served {
+  readonly held: HeldCertificate
+  readonly name: string
 }
 
 export interface PublicDatabaseOptions {
@@ -104,8 +129,11 @@ export class PublicDatabases {
   readonly #errors = new Map<string, string>()
   // Databases whose gate was running at their last check.
   readonly #open = new Set<string>()
-  // When each one's certificate runs out, as last given.
+  // When the first of each one's certificates runs out, as last given.
   readonly #expires = new Map<string, string>()
+  // What each gate's certificates file holds, by its SHA-256, as last
+  // written; none after the Relay starts, so each is written once again.
+  readonly #written = new Map<string, string>()
   // Ports being given to databases whose writes haven't saved yet; writes
   // for different databases run at once.
   readonly #claiming = new Map<string, number>()
@@ -155,9 +183,9 @@ export class PublicDatabases {
    * Opens a database at its names and a port, changes them, or closes it.
    * The caller holds the database's lane. Saving it is the one change made
    * here, so a write that fails changed nothing; the loop then has Traefik
-   * ask for a certificate for its names, and opens it once that comes. Closing removes its
-   * gate before it forgets it, so a close that fails leaves it public and
-   * still kept, never reachable while forgotten.
+   * ask for each of its names' certificates, and opens it once one comes.
+   * Closing removes its gate before it forgets it, so a close that fails
+   * leaves it public and still kept, never reachable while forgotten.
    */
   async write(
     databaseId: string,
@@ -223,49 +251,61 @@ export class PublicDatabases {
   async #bringOpen(saved: RelayStoredDatabasePublic): Promise<void> {
     const { databases, state } = this.#options
     const id = saved.databaseId
-    const held = await this.#held(saved)
-    // Never open without TLS: the gate waits for the certificate.
-    if (!held) {
+    const served = await this.#served(saved)
+    // Traefik's store couldn't be read, which says nothing of its
+    // certificates: its gate keeps those it has, unless it's at a port, or
+    // serves a name, the database no longer has.
+    if (served === null) {
+      if (!(await this.#gateFits(saved))) await this.#removeGate(id)
+      return
+    }
+    // Never open without TLS: the gate waits for a certificate.
+    if (served.length === 0) {
       await this.#removeGate(id)
       return
     }
-    const fingerprint = createHash("sha256").update(held.chain).digest("hex")
-    if (!(await databases.hasPublicTls(id))) {
+    const database = await databases.target(id)
+    // MySQL and MariaDB run with TLS for their gate; the others without.
+    // One opened before its gate ended TLS itself runs with its names'
+    // certificate, and is deployed again without it, its volume gone.
+    const tls = await databases.tls(id)
+    const wanted = ownTls(database.engine) ? GATE_TLS : null
+    if (tls !== wanted) {
       await databases.redeployForPublic(id)
-      await Effect.runPromise(
-        state.markDatabasePublic(id, { certificate: fingerprint })
-      )
-    } else if (saved.certificate !== fingerprint) {
-      const database = await databases.target(id)
-      if (database.containerId) {
-        await this.#fill(database.containerId, database.engine, held)
-        await databases.reloadPublicTls(id)
+      if (wanted === null) {
+        await Effect.runPromise(
+          this.#options.engine
+            .removeVolume(this.#name(id, "tls"))
+            .pipe(Effect.ignore)
+        )
       }
-      await Effect.runPromise(
-        state.markDatabasePublic(id, { certificate: fingerprint })
-      )
     }
-    this.#expires.set(id, expiry(held))
+    this.#expires.set(
+      id,
+      new Date(
+        Math.min(...served.map(({ held }) => held.expiresAt))
+      ).toISOString()
+    )
     if (!saved.rootLocal) {
       if (!(await databases.keepRootLocal(id))) return
-      await Effect.runPromise(state.markDatabasePublic(id, { rootLocal: true }))
+      await Effect.runPromise(state.markDatabaseRootLocal(id))
     }
     await this.load()
-    await this.#ensureGate(id, saved.port, await databases.target(id))
+    await this.#ensureGate(id, saved.port, await databases.target(id), served)
   }
 
   /**
-   * What a public database's container gets for TLS, once its certificate
-   * is there; null otherwise. DatabaseDriver asks as it deploys one.
+   * What a public MySQL or MariaDB database's container gets for TLS, which
+   * its gate's connections use; null for other engines, and while it's
+   * private. DatabaseDriver asks as it deploys one.
    */
   async tls(databaseId: string): Promise<DatabaseTls | null> {
     const saved = this.#saved.get(databaseId)
     if (!saved || !this.#options.proxy.runsTraefik) return null
-    const held = await this.#held(saved)
-    if (!held) return null
     const { engine } = await this.#options.databases.target(databaseId)
+    if (!ownTls(engine)) return null
     return {
-      fill: (container) => this.#fill(container, engine, held),
+      fill: (container) => this.#fill(container, engine, databaseId),
       volume: this.#name(databaseId, "tls"),
     }
   }
@@ -291,21 +331,20 @@ export class PublicDatabases {
     }
     const error = this.#errors.get(database.id)
     if (error) return { ...base, error, state: "failed" }
-    // Open at the names its certificate has while one for a new name comes;
-    // each name's row says where its own stands.
+    // Open at the names it has certificates for while one for a new name
+    // comes; each name's row says where its own stands.
     if (this.#open.has(database.id)) {
       return { ...base, error: null, state: "open" }
     }
+    // It opens with its first certificate, so it says where the name
+    // nearest one stands.
     const names = new Set(saved.hostnames)
+    const nearness = (pending: RelayPendingCertificate) =>
+      pending.waitingFor === "dns" ? 2 : pending.failed ? 1 : 0
     const pending = this.#options.certificates
       .pending()
       .filter(({ hostname }) => names.has(hostname))
-      .sort(
-        (left, right) =>
-          Number(right.waitingFor === "dns") -
-            Number(left.waitingFor === "dns") ||
-          Number(right.failed) - Number(left.failed)
-      )[0]
+      .sort((left, right) => nearness(left) - nearness(right))[0]
     if (pending?.waitingFor === "dns") {
       return { ...base, error: null, state: "waiting_for_dns" }
     }
@@ -331,8 +370,8 @@ export class PublicDatabases {
   }
 
   /**
-   * Forgets a deleted database: its gate, its certificate's volume, and
-   * that it was public. The caller holds the database's lane, after the
+   * Forgets a deleted database: its gate, its TLS volume, and that it was
+   * public. The caller holds the database's lane, after the
    * database's container is gone; Traefik stops asking for its name on the
    * next pass, which holds the routes.
    */
@@ -369,8 +408,7 @@ export class PublicDatabases {
 
   // What was just saved, as setDatabasePublic saves it, without reading it
   // back: nothing that can fail comes between saving a port and others
-  // seeing it taken. The certificate it has stays named, as the one its
-  // database serves until one for its new names comes.
+  // seeing it taken.
   #remember(databaseId: string, value: RelayDatabasePublic | null): void {
     const saved = new Map(this.#saved)
     if (value === null) {
@@ -378,7 +416,6 @@ export class PublicDatabases {
     } else {
       const before = saved.get(databaseId)
       saved.set(databaseId, {
-        certificate: before?.certificate ?? null,
         databaseId,
         hostnames: value.hostnames,
         port: value.port,
@@ -388,19 +425,18 @@ export class PublicDatabases {
     this.#saved = saved
   }
 
-  // The certificate for its names, or the most of them, or, until one
-  // comes, the one it was last given, so a name changed on an open database
-  // keeps it open at the others.
-  async #held(
+  // Each of its names that has a certificate, and that certificate, its
+  // first name first: a client that names none gets the first. Null while
+  // Traefik's store can't be read.
+  async #served(
     saved: RelayStoredDatabasePublic
-  ): Promise<HeldCertificate | null> {
-    const { certificates } = this.#options
-    return (
-      (await certificates.certificate(saved.hostnames)) ??
-      (saved.certificate
-        ? await certificates.certificateWithFingerprint(saved.certificate)
-        : null)
-    )
+  ): Promise<Array<Served> | null> {
+    const held = await this.#options.certificates.certificates(saved.hostnames)
+    if (!held) return null
+    return saved.hostnames.flatMap((name, index) => {
+      const certificate = held[index]
+      return certificate ? [{ held: certificate, name }] : []
+    })
   }
 
   #portUnclaimed(databaseId: string, port: number): void {
@@ -413,20 +449,24 @@ export class PublicDatabases {
     }
   }
 
-  // Writes the certificate, its chain and its key into the database's
-  // container, owned by the user its server runs as.
+  // Writes a certificate the Relay makes for the database, and its key,
+  // into its container, owned by the user its server runs as. Its gate
+  // checks no name, so a new one each time it's deployed serves.
   async #fill(
     container: string,
     engine: DatabaseEngine,
-    held: HeldCertificate
+    databaseId: string
   ): Promise<void> {
-    const { uid, gid } = await this.#user(container, engineUsers[engine])
+    const user = engineUsers[engine]
+    if (!user) return
+    const { uid, gid } = await this.#user(container, user)
+    const own = await selfSigned(
+      databaseMemberAliases({ id: databaseId, kind: "database" })[0] ??
+        databaseId
+    )
     const archive = tarPack()
-    const entry = (name: string, body: string, mode: number) =>
-      archive.entry({ gid, mode, name, uid }, body)
-    entry("server.crt", held.chain, 0o644)
-    entry("server.key", held.key, 0o600)
-    entry("ca.crt", issuers(held.chain), 0o644)
+    archive.entry({ gid, mode: 0o644, name: "server.crt", uid }, own.chain)
+    archive.entry({ gid, mode: 0o600, name: "server.key", uid }, own.key)
     archive.finalize()
     await Effect.runPromise(
       this.#options.engine.putContainerArchive(
@@ -435,6 +475,82 @@ export class PublicDatabases {
         Readable.from(archive)
       )
     )
+  }
+
+  // Whether its gate, if it has one, is at its port and serves only its
+  // names, as its file in the gate says, which outlasts a Relay restart.
+  async #gateFits(saved: RelayStoredDatabasePublic): Promise<boolean> {
+    const { engine } = this.#options
+    const name = this.#name(saved.databaseId, "public")
+    const existing = await Effect.runPromise(
+      engine
+        .inspectContainer<{
+          Config: { Labels: Record<string, string> | null }
+        }>(name)
+        .pipe(Effect.catchIf(isDockerNotFound, () => Effect.succeed(null)))
+    )
+    if (!existing) return true
+    if (existing.Config.Labels?.[GATE_PORT_LABEL] !== String(saved.port)) {
+      return false
+    }
+    const file = await Effect.runPromise(
+      engine
+        .readContainerFile(
+          name,
+          `${GATE_CERTIFICATES}/${GATE_CERTIFICATES_FILE}`,
+          1024 * 1024
+        )
+        .pipe(Effect.orElseSucceed(() => null))
+    )
+    // One it can't read as it reads it fits nothing: the gate keeps what
+    // it last read, which could be anything.
+    const parsed = gateCertificatesSchema.safeParse(
+      Result.getOrNull(
+        Result.try(
+          () => JSON.parse(file?.bytes.toString("utf8") ?? "") as unknown
+        )
+      )
+    )
+    if (!parsed.success) return false
+    const kept = new Set(saved.hostnames)
+    return parsed.data.names.every(({ name: served }) => kept.has(served))
+  }
+
+  // Writes its names and their certificates into its gate, which reads
+  // them again when they change, unless they're what it has. The gate
+  // serves each name only its own, and no other name one that would pass
+  // for it.
+  async #writeCertificates(
+    databaseId: string,
+    served: ReadonlyArray<Served>
+  ): Promise<void> {
+    const file = JSON.stringify({
+      names: served.map(({ held, name }) => ({
+        certificate: `${held.chain.trim()}\n${held.key.trim()}\n`,
+        name,
+      })),
+    })
+    const written = createHash("sha256").update(file).digest("hex")
+    if (this.#written.get(databaseId) === written) return
+    const archive = tarPack()
+    archive.entry(
+      {
+        gid: GATE_USER,
+        mode: 0o400,
+        name: GATE_CERTIFICATES_FILE,
+        uid: GATE_USER,
+      },
+      file
+    )
+    archive.finalize()
+    await Effect.runPromise(
+      this.#options.engine.putContainerArchive(
+        this.#name(databaseId, "public"),
+        GATE_CERTIFICATES,
+        Readable.from(archive)
+      )
+    )
+    this.#written.set(databaseId, written)
   }
 
   // A user's IDs, from the container's own /etc/passwd.
@@ -457,7 +573,8 @@ export class PublicDatabases {
   async #ensureGate(
     databaseId: string,
     port: number,
-    database: RelayManagedDatabase
+    database: RelayManagedDatabase,
+    served: ReadonlyArray<Served>
   ): Promise<void> {
     const { config, engine, hostPorts } = this.#options
     const name = this.#name(databaseId, "public")
@@ -483,6 +600,7 @@ export class PublicDatabases {
       networks.includes(network) &&
       networks.includes(target)
     ) {
+      await this.#writeCertificates(databaseId, served)
       if (!existing.State.Running) {
         await Effect.runPromise(engine.startContainer(name))
       }
@@ -513,6 +631,12 @@ export class PublicDatabases {
     const development = helpersInDevelopment()
     const made = async () => {
       await Effect.runPromise(
+        engine.createVolume({
+          labels: networkLabels,
+          name: this.#name(databaseId, "certificates"),
+        })
+      )
+      await Effect.runPromise(
         createContainer(engine, {
           capDrop: ["ALL"],
           command: [
@@ -521,7 +645,9 @@ export class PublicDatabases {
             "-listen",
             `:${GATE_PORT}`,
             "-target",
-            `${databaseMemberAliases({ id: databaseId, kind: "database" })[0]}:${databaseTlsPort(database.engine, database.internalPort)}`,
+            `${databaseMemberAliases({ id: databaseId, kind: "database" })[0]}:${database.internalPort}`,
+            "-certificates",
+            `${GATE_CERTIFICATES}/${GATE_CERTIFICATES_FILE}`,
           ],
           entrypoint: config.databaseGatePath,
           healthcheck: "none",
@@ -538,7 +664,15 @@ export class PublicDatabases {
             [GATE_VERSION_LABEL]: GATE_VERSION,
             ...ownerLabels,
           },
-          memory: "64m",
+          // TLS on both sides of each of 512 connections, as MySQL's are.
+          memory: "192m",
+          mounts: [
+            {
+              source: this.#name(databaseId, "certificates"),
+              target: GATE_CERTIFICATES,
+              type: "volume",
+            },
+          ],
           name,
           network: { name: network },
           pidsLimit: 64,
@@ -555,6 +689,7 @@ export class PublicDatabases {
         })
       )
       await Effect.runPromise(engine.connectNetwork(target, name, {}))
+      await this.#writeCertificates(databaseId, served)
       await Effect.runPromise(engine.startContainer(name))
     }
     // The port is the gate's once it's made, or free again if it isn't; a
@@ -573,10 +708,17 @@ export class PublicDatabases {
   async #removeGate(databaseId: string): Promise<void> {
     const { engine } = this.#options
     this.#open.delete(databaseId)
+    this.#written.delete(databaseId)
     await Effect.runPromise(
       engine
         .removeContainer(this.#name(databaseId, "public"), { force: true })
         .pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
+    )
+    // Its keys go with it.
+    await Effect.runPromise(
+      engine
+        .removeVolume(this.#name(databaseId, "certificates"))
+        .pipe(Effect.ignore)
     )
     await Effect.runPromise(
       engine
@@ -585,11 +727,21 @@ export class PublicDatabases {
     )
   }
 
-  #name(databaseId: string, suffix: "public" | "public-network" | "tls") {
+  #name(
+    databaseId: string,
+    suffix: "certificates" | "public" | "public-network" | "tls"
+  ) {
+    return this.#keyed(physicalKey(databaseId), suffix)
+  }
+
+  #keyed(
+    key: string,
+    suffix: "certificates" | "public" | "public-network" | "tls"
+  ) {
     const prefix = this.#options.config.resourceNamespace
       ? `${this.#options.config.resourceNamespace}-`
       : ""
-    return `${prefix}kiln-db-${physicalKey(databaseId)}-${suffix}`
+    return `${prefix}kiln-db-${key}-${suffix}`
   }
 
   /** Gates whose database is gone or private, for the Relay's start. */
@@ -608,30 +760,55 @@ export class PublicDatabases {
             .removeContainer(container.Id, { force: true })
             .pipe(Effect.ignore)
         )
+        if (key) {
+          await Effect.runPromise(
+            engine
+              .removeVolume(this.#keyed(key, "certificates"))
+              .pipe(Effect.ignore)
+          )
+        }
       }
     }
   }
 }
 
-// The issuers of a certificate chain, its leaf left out, ending with the root
-// that signed the last one: MySQL checks a certificate against the whole
-// chain in its CA file before it reloads one. The root comes from Node's
-// own store, which Let's Encrypt's roots are in.
-function issuers(chain: string): string {
-  const certificates = chain.match(
-    /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/gu
-  )
-  if (!certificates || certificates.length === 0) return chain
-  const intermediates = certificates.slice(1)
-  const last = new X509Certificate(certificates[certificates.length - 1] ?? "")
-  const root = rootCertificates.find((candidate) => {
-    const authority = new X509Certificate(candidate)
-    return authority.subject === last.issuer && last.checkIssued(authority)
-  })
-  return [...intermediates, ...(root ? [root] : [])].join("\n") + "\n"
+// MySQL and MariaDB run with TLS of their own for their gate.
+function ownTls(engine: DatabaseEngine): boolean {
+  return engine === "mysql" || engine === "mariadb"
 }
 
-// When a certificate runs out, as an ISO date.
-function expiry(held: HeldCertificate): string {
-  return new Date(new X509Certificate(held.chain).validTo).toISOString()
+// A certificate the Relay makes for a database's own TLS, for ten years:
+// its gate checks no name or date, as it reaches it on its private network.
+async function selfSigned(
+  name: string
+): Promise<{ readonly chain: string; readonly key: string }> {
+  const keys = (await webcrypto.subtle.generateKey(
+    {
+      hash: "SHA-256",
+      modulusLength: 2048,
+      name: "RSASSA-PKCS1-v1_5",
+      publicExponent: new Uint8Array([1, 0, 1]),
+    },
+    true,
+    ["sign", "verify"]
+  )) as webcrypto.CryptoKeyPair
+  const now = Date.now()
+  const certificate = await X509CertificateGenerator.createSelfSigned(
+    {
+      keys,
+      name: `CN=${name}`,
+      notAfter: new Date(now + 10 * 365 * 24 * 60 * 60_000),
+      notBefore: new Date(now - 5 * 60_000),
+      serialNumber: `01${randomBytes(15).toString("hex")}`,
+      signingAlgorithm: { hash: "SHA-256", name: "RSASSA-PKCS1-v1_5" },
+    },
+    webcrypto
+  )
+  const key = Buffer.from(
+    await webcrypto.subtle.exportKey("pkcs8", keys.privateKey)
+  ).toString("base64")
+  return {
+    chain: certificate.toString("pem"),
+    key: `-----BEGIN PRIVATE KEY-----\n${key.match(/.{1,64}/gu)?.join("\n") ?? key}\n-----END PRIVATE KEY-----\n`,
+  }
 }

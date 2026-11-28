@@ -36,11 +36,10 @@ reached at, to open it, renames and deletes them as an App's, and deletes
 its last to close it. Each is under any domain they may use, or generated
 under its owner's default vanity domain, or Kiln's, as an App's first
 address; each has a record that points at the Relay and never goes
-through Cloudflare's proxy. The Relay's Traefik gets one certificate for
-all its domains, which the database itself serves; a gate on the port
-refuses clients that don't ask for TLS. A domain added while it's open
-works once the new certificate comes; until then it stays open at the
-others. The table's header says where opening it stands and copies a
+through Cloudflare's proxy. The Relay's Traefik gets a certificate for
+each domain, as for an App's, and a gate on the port serves it, refusing
+clients that don't ask for TLS. A domain added while it's open works once
+its certificate comes. The table's header says where opening it stands and copies a
 connection URL that checks the certificate. It needs a Relay running
 Kiln's Traefik.
 
