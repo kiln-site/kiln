@@ -184,6 +184,15 @@ describe("a public database", () => {
     await databases.reconcile(id)
     expect(gateFile()?.map(({ name }) => name)).toEqual(["db.example.com"])
 
+    // So does one whose file it can't read: there's no telling what the
+    // gate serves.
+    fakeDocker.volumes
+      .get(`${TEST_NAMESPACE}-kiln-db-${id}-certificates`)
+      ?.files.set("certificates.json", '{"names": []}')
+    await writeFile(webCertificateStorePath(harness.config), '{"kiln": {')
+    await databases.reconcile(id)
+    expect(fakeDocker.container(gate)).toBeUndefined()
+
     // Postgres reaches its gate in the clear on its own network: it runs
     // as it did, with no certificate of its own.
     const database = await harness.databases.target(id)

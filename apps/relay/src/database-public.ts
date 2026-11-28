@@ -33,6 +33,7 @@ import type {
 } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { pack as tarPack } from "tar-stream"
+import { z } from "zod"
 
 import { helpersInDevelopment, relayContainer } from "./backups/tar-archives.js"
 import type { RelayConfig } from "./config.js"
@@ -95,6 +96,15 @@ const gateProtocols: Record<DatabaseEngine, "mysql" | "postgres" | "tls"> = {
   redis: "tls",
   valkey: "tls",
 }
+
+// The gate's certificates file, as the Relay writes it.
+const gateCertificatesSchema = z.object({
+  names: z
+    .array(
+      z.object({ certificate: z.string().min(1), name: z.string().min(1) })
+    )
+    .min(1),
+})
 
 // One of a public database's names, and the certificate its gate serves.
 interface Served {
@@ -492,19 +502,18 @@ export class PublicDatabases {
         )
         .pipe(Effect.orElseSucceed(() => null))
     )
-    const names = Result.getOrNull(
-      Result.try(
-        () =>
-          (
-            JSON.parse(file?.bytes.toString("utf8") ?? "") as {
-              names: Array<{ name: string }>
-            }
-          ).names
+    // One it can't read as it reads it fits nothing: the gate keeps what
+    // it last read, which could be anything.
+    const parsed = gateCertificatesSchema.safeParse(
+      Result.getOrNull(
+        Result.try(
+          () => JSON.parse(file?.bytes.toString("utf8") ?? "") as unknown
+        )
       )
     )
-    if (!Array.isArray(names)) return false
+    if (!parsed.success) return false
     const kept = new Set(saved.hostnames)
-    return names.every(({ name: served }) => kept.has(served))
+    return parsed.data.names.every(({ name: served }) => kept.has(served))
   }
 
   // Writes its names and their certificates into its gate, which reads
